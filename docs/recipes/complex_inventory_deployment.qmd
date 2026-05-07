@@ -1,0 +1,362 @@
+---
+title: Inventory For A Complex Deployment
+execute:
+  warning: false
+---
+
+This recipe follows a trenched DAS deployment through several metadata updates:
+
+1. A trench with three linear fiber segments starts acquisition on June 1, 2026.
+2. The acquisition parameters are corrected after the first inventory was written.
+3. In August, the team learns that a fiber break actually occurred in July, so the optical path history is updated retrospectively.
+4. After a splice repair, a new optical path segment is added from the repair date forward.
+
+The important pattern is that the patch points at one `data_source_id` for inventory context. The inventory resolves the right historical records for that source at the data time.
+
+## Part 1: Create The Initial Inventory
+
+Start with a simple map: four trench vertices define three straight fiber segments.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dascore as dc
+from dascore.core import inventory as inv
+
+trench_vertices = np.array(
+    [
+        [0.0, 0.0, 0.0],
+        [100.0, 0.0, 0.0],
+        [100.0, 80.0, 0.0],
+        [220.0, 80.0, 0.0],
+    ]
+)
+segment_lengths = np.linalg.norm(np.diff(trench_vertices, axis=0), axis=1)
+distance_edges = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+
+fig, ax = plt.subplots(figsize=(6, 3))
+ax.plot(trench_vertices[:, 0], trench_vertices[:, 1], marker="o")
+for index, (x, y, _) in enumerate(trench_vertices):
+    ax.text(x, y + 4, f"P{index}")
+ax.set_title("Three-segment trenched fiber")
+ax.set_xlabel("x (m)")
+ax.set_ylabel("y (m)")
+ax.set_aspect("equal", adjustable="box")
+```
+
+Now create records for the interrogator, acquisition settings, fiber segments, geometry, coupling, annotations, and the patch-resolvable fiber array.
+
+```python
+interrogator = inv.Interrogator(
+    resource_id="trench_interrogator",
+    manufacturer="Example Instruments",
+    model="DAS-1000",
+    serial_number="EX-2026-01",
+)
+
+acquisition = inv.Acquisition(
+    resource_id="trench_acquisition",
+    code="RAW",
+    location_code="00",
+    data_category="DAS",
+    data_type="strain",
+    data_units="strain",
+    interrogator=interrogator,
+    start_time="2026-06-01",
+    acquisition_sample_rate=500.0,
+    gauge_length=10.0,
+    pulse_rate=10_000.0,
+    spatial_sampling_interval=1.0,
+    first_channel_distance=0.0,
+)
+
+crs = inv.CoordinateReferenceSystem(
+    resource_id="trench_local_crs",
+    authority="LOCAL",
+    code="trench_local_cartesian",
+    axis_order=("x", "y", "z"),
+    units="m",
+)
+
+fibers = tuple(
+    inv.FiberSegment(
+        resource_id=f"trench_fiber_{index}",
+        name=f"Trench fiber segment {index}",
+        optical_length=float(length),
+        fiber_type="single_mode",
+    )
+    for index, length in enumerate(segment_lengths, start=1)
+)
+geometries = tuple(
+    inv.Geometry(
+        resource_id=f"trench_geometry_{index}",
+        optical_length=float(length),
+        geometry_type="linear",
+        coordinate_reference_system=crs,
+        coordinates=(tuple(start), tuple(stop)),
+    )
+    for index, (length, start, stop) in enumerate(
+        zip(segment_lengths, trench_vertices[:-1], trench_vertices[1:]),
+        start=1,
+    )
+)
+coupling = tuple(
+    inv.CouplingCondition(
+        resource_id=f"trench_coupling_{index}",
+        optical_length=float(length),
+        coupling_type="buried",
+        deployment_type="trench",
+        quality="unknown",
+    )
+    for index, length in enumerate(segment_lengths, start=1)
+)
+annotations = tuple(
+    inv.OpticalPathAnnotation(
+        resource_id=f"trench_annotation_{index}",
+        distance=(float(start), float(stop)),
+        label=f"trench_{index}",
+        category="segment",
+    )
+    for index, (start, stop) in enumerate(
+        zip(distance_edges[:-1], distance_edges[1:]),
+        start=1,
+    )
+)
+
+optical_path = inv.OpticalPath(
+    resource_id="trench_optical_path",
+    name="Trench optical path",
+    start_time="2026-06-01",
+    optical_length=float(distance_edges[-1]),
+    optical_components=fibers,
+    geometries=geometries,
+    coupling_conditions=coupling,
+    annotations=annotations,
+).validate()
+
+fiber_array = inv.FiberArray(
+    resource_id="trench_array",
+    code="TRN",
+    name="Three-segment trench array",
+    start_time="2026-06-01",
+    acquisitions=(acquisition,),
+    optical_paths=(optical_path,),
+    dims="distance,time",
+    tag="trench",
+)
+
+network = inv.Network(
+    resource_id="trench_network",
+    code="XX",
+    name="Example trench network",
+    description="Example three-segment trench deployment.",
+    fiber_arrays=(fiber_array,),
+)
+
+inventory = inv.Inventory(
+    resource_id="trench_inventory",
+    records=(network,),
+)
+
+print(inventory.get_record_dicts(record_ids="trench_array")[0])
+```
+
+## Part 2: Correct Acquisition Parameters
+
+Later, the team finds the acquisition settings in the first inventory were wrong. The deployment still started on June 1, so replace the acquisition epoch by writing a record with the same `resource_id` and `start_time`.
+
+```python
+corrected_acquisition = acquisition.model_copy(
+    update={
+        "acquisition_sample_rate": 250.0,
+        "spatial_sampling_interval": 1.25,
+        "comment": "Corrected from field notes after initial inventory creation.",
+    }
+)
+
+inventory = inventory.put_records(
+    records=(corrected_acquisition,),
+    author_id="field_team",
+)
+
+resolved = inventory.get_records(
+    record_ids="trench_array",
+    record_types=inv.FiberArray,
+    time="2026-06-15",
+)[0]
+
+print(resolved.acquisitions[0].acquisition_sample_rate)
+print(resolved.acquisitions[0].spatial_sampling_interval)
+```
+
+The acquisition history still has one epoch because the corrected record replaced the matching `resource_id` and `start_time`.
+
+```python
+history = inventory.get_record_dicts(
+    record_ids="trench_acquisition",
+    include_history=True,
+)
+
+print(len(history))
+print(history[0]["acquisition_sample_rate"])
+```
+
+## Part 3: Add A Retrospective Fiber Break
+
+In August, the team discovers that the fiber actually broke on July 10 at the end of the second trench segment. The old optical path should remain valid before the break, and a shorter path should apply after the break.
+
+First cap the original open-ended path epoch.
+
+```python
+break_time = "2026-07-10"
+break_distance = float(distance_edges[2])
+
+capped_path = optical_path.model_copy(
+    update={
+        "end_time": break_time,
+        "comment": "Capped after retrospective fiber-break interpretation.",
+    }
+)
+
+broken_path = optical_path.select(distance=(0.0, break_distance)).model_copy(
+    update={
+        "resource_id": "trench_optical_path",
+        "start_time": break_time,
+        "end_time": "2026-08-20",
+        "comment": "Fiber break at the end of trench segment 2.",
+    }
+)
+
+inventory = inventory.put_records(
+    records=(capped_path, broken_path),
+    author_id="field_team",
+)
+
+before_break = inventory.get_records(
+    record_ids="trench_array",
+    record_types=inv.FiberArray,
+    time="2026-07-01",
+)[0]
+after_break = inventory.get_records(
+    record_ids="trench_array",
+    record_types=inv.FiberArray,
+    time="2026-08-01",
+)[0]
+
+print(before_break.optical_paths[0].optical_length)
+print(after_break.optical_paths[0].optical_length)
+```
+
+The `FiberArray` record did not change. It still references `trench_optical_path`; inventory time resolution chooses the path epoch.
+
+```python
+fiber_array_history = inventory.get_record_dicts(
+    record_ids="trench_array",
+    include_history=True,
+)
+path_history = inventory.get_record_dicts(
+    record_ids="trench_optical_path",
+    include_history=True,
+)
+
+print(len(fiber_array_history))
+print(len(path_history))
+```
+
+## Part 4: Add The Splice Repair Segment
+
+On August 20, the break is repaired by splicing in a replacement segment. Add a new optical path epoch that starts on the repair date and includes the replacement segment.
+
+```python
+repair_start = trench_vertices[2]
+repair_stop = np.array([235.0, 92.0, 0.0])
+repair_length = float(np.linalg.norm(repair_stop - repair_start))
+repaired_length = break_distance + repair_length
+
+repair_fiber = inv.FiberSegment(
+    resource_id="trench_repair_fiber",
+    name="Spliced replacement segment",
+    optical_length=repair_length,
+    fiber_type="single_mode",
+    comment="Installed after July fiber break.",
+)
+repair_geometry = inv.Geometry(
+    resource_id="trench_repair_geometry",
+    optical_length=repair_length,
+    geometry_type="linear",
+    coordinate_reference_system=crs,
+    coordinates=(tuple(repair_start), tuple(repair_stop)),
+)
+repair_coupling = inv.CouplingCondition(
+    resource_id="trench_repair_coupling",
+    optical_length=repair_length,
+    coupling_type="buried",
+    deployment_type="trench",
+    quality="repaired",
+)
+repair_annotation = inv.OpticalPathAnnotation(
+    resource_id="trench_repair_annotation",
+    distance=(break_distance, repaired_length),
+    label="splice_repair",
+    category="repair",
+)
+
+repaired_path = inv.OpticalPath(
+    resource_id="trench_optical_path",
+    start_time="2026-08-20",
+    optical_length=repaired_length,
+    optical_components=(*broken_path.optical_components, repair_fiber),
+    geometries=(*broken_path.geometries, repair_geometry),
+    coupling_conditions=(*broken_path.coupling_conditions, repair_coupling),
+    annotations=(*broken_path.annotations, repair_annotation),
+).validate()
+
+inventory = inventory.put_records(
+    records=(repaired_path,),
+    author_id="field_team",
+)
+
+repaired = inventory.get_records(
+    record_ids="trench_array",
+    record_types=inv.FiberArray,
+    time="2026-09-01",
+)[0]
+
+print(repaired.optical_paths[0].optical_length)
+print(repaired.optical_paths[0].annotations[-1].label)
+```
+
+## Resolve Metadata For Patch Times
+
+The same patch-level `data_source_id` resolves to different histories depending on data time.
+
+```python
+patch = dc.get_example_patch("random_das").update_attrs(
+    data_source_id="XX.TRN.00.RAW",
+)
+
+june_patch = patch.update_coords(time_min="2026-06-15")
+august_patch = patch.update_coords(time_min="2026-08-01")
+september_patch = patch.update_coords(time_min="2026-09-01")
+
+june_labels = june_patch.add_inventory_coords(
+    inventory,
+    coords=("label",),
+    on_boundary="ignore",
+)
+august_labels = august_patch.select(distance=(0, break_distance)).add_inventory_coords(
+    inventory,
+    coords=("label",),
+    on_boundary="ignore",
+)
+september_labels = september_patch.select(distance=(0, repaired_length)).add_inventory_coords(
+    inventory,
+    coords=("label",),
+    on_boundary="ignore",
+)
+
+print(np.unique(june_labels.get_array("label")))
+print(np.unique(august_labels.get_array("label")))
+print(np.unique(september_labels.get_array("label")))
+```

@@ -61,6 +61,18 @@ class TestSetConfig:
             assert get_config().patch_history == "disabled"
         assert get_config() == previous
 
+    def test_inventory_resource_id_prefix_can_be_overridden(self):
+        """Inventory generated resource id prefix should be configurable."""
+        previous = get_config()
+        with set_config(inventory_resource_id_prefix="smi:local/custom/"):
+            assert get_config().inventory_resource_id_prefix == "smi:local/custom"
+        assert get_config() == previous
+
+    def test_invalid_inventory_resource_id_prefix_raises(self):
+        """Generated inventory id prefixes cannot be empty."""
+        with pytest.raises(ValueError, match="inventory_resource_id_prefix"):
+            set_config(inventory_resource_id_prefix="")
+
     def test_invalid_patch_history_raises(self):
         """Unsupported patch history policies should be rejected."""
         with pytest.raises(ValueError, match="patch_history"):

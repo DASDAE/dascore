@@ -107,6 +107,51 @@ class TestPatchAttrs:
         assert pat.dims == ("channel", "time")
         assert "dims" not in pat.attrs.model_dump()
 
+    def test_data_source_id_from_parts(self):
+        """Data source id should be composed from its component attrs."""
+        attrs = PatchAttrs(
+            network="FF",
+            fiber_array="STA",
+            location="01",
+            acquisition="Bob_has_DAS",
+        )
+
+        assert attrs.data_source_id == "FF.STA.01.Bob_has_DAS"
+
+    def test_data_source_id_parses_to_parts(self):
+        """Data source id input should populate its component attrs."""
+        attrs = PatchAttrs(data_source_id="FF.STA.01.Bob_has_DAS")
+
+        assert attrs.network == "FF"
+        assert attrs.fiber_array == "STA"
+        assert attrs.location == "01"
+        assert attrs.acquisition == "Bob_has_DAS"
+
+    def test_data_source_id_allows_empty_location(self):
+        """Empty location codes should preserve the empty dotted component."""
+        attrs = PatchAttrs(data_source_id="FF.STA..Bob_has_DAS")
+
+        assert attrs.location == ""
+        assert attrs.data_source_id == "FF.STA..Bob_has_DAS"
+
+    def test_data_source_id_rejects_dot_in_component(self):
+        """Component attrs should not contain the data_source_id delimiter."""
+        with pytest.raises(ValueError, match="cannot contain"):
+            PatchAttrs(network="FF", fiber_array="S.TA", acquisition="RAW")
+
+    def test_data_source_id_rejects_conflicting_parts(self):
+        """Data source id should not disagree with explicitly supplied parts."""
+        with pytest.raises(ValueError, match="conflicts"):
+            PatchAttrs(data_source_id="FF.STA.01.RAW", acquisition="PROC")
+
+    def test_data_source_id_recomputes_after_update(self):
+        """Data source id should stay consistent with component updates."""
+        attrs = PatchAttrs(data_source_id="FF.STA.01.RAW")
+
+        out = attrs.update(acquisition="PROC")
+
+        assert out.data_source_id == "FF.STA.01.PROC"
+
 
 class TestSummaryAttrs:
     """Tests for summarizing a schema."""
@@ -223,6 +268,16 @@ class TestUpdateAttrs:
         """Passing dimensions directly should be ignored by normalization."""
         out = PatchAttrs.from_dict(random_attrs).update(dims=("time", "distance"))
         assert "dims" not in out.model_dump()
+
+    def test_patch_update_attrs_can_set_data_source_id(self, random_patch):
+        """Patch.update_attrs should parse data_source_id into component attrs."""
+        out = random_patch.update_attrs(data_source_id="FF.STA.01.Bob_has_DAS")
+
+        assert out.attrs.network == "FF"
+        assert out.attrs.fiber_array == "STA"
+        assert out.attrs.location == "01"
+        assert out.attrs.acquisition == "Bob_has_DAS"
+        assert out.attrs.data_source_id == "FF.STA.01.Bob_has_DAS"
 
 
 class TestGetAttrSummary:

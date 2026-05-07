@@ -9,96 +9,101 @@ import dascore as dc
 from dascore.core import inventory as inv
 from dascore.exceptions import ParameterError
 
+DATA_SOURCE_ID = "XX.FA.00.RAW"
 
-def get_channel_patch(*, fiber_array_id="fiber_array_1", time=None):
+
+def get_channel_patch(*, data_source_id=DATA_SOURCE_ID, time=None):
     """Return a small patch with channel and time dimensions."""
     time = np.arange(2) if time is None else np.asarray(time)
     data = np.ones((3, len(time)))
     return dc.Patch(
         data=data,
-        coords={"channel": np.asarray([10, 11, 12]), "time": time},
+        coords={"channel": np.asarray([0, 1, 2]), "time": time},
         dims=("channel", "time"),
-        attrs={"fiber_array_id": fiber_array_id},
+        attrs={"data_source_id": data_source_id},
     )
 
 
-def get_distance_patch(*, fiber_array_id="fiber_array_1"):
+def get_distance_patch(*, data_source_id=DATA_SOURCE_ID):
     """Return a small patch with a distance coordinate."""
     data = np.ones((3, 2))
     return dc.Patch(
         data=data,
         coords={"distance": np.asarray([0.0, 1.0, 2.0]), "time": [0, 1]},
         dims=("distance", "time"),
-        attrs={"fiber_array_id": fiber_array_id},
+        attrs={"data_source_id": data_source_id},
     )
 
 
-def get_legacy_channel_patch():
-    """Return a channel patch with only the old acquisition id extra attr."""
-    patch = get_channel_patch(fiber_array_id="")
-    return patch.update_attrs(acquisition_id="fiber_array_1")
-
-
-def get_legacy_distance_patch():
-    """Return a distance patch with only the old acquisition id extra attr."""
-    patch = get_distance_patch(fiber_array_id="")
-    return patch.update_attrs(acquisition_id="fiber_array_1")
-
-
-def get_inventory(*, tag="raw", sample_rate=100.0):
+def get_inventory(*, tag="raw", acquisition_sample_rate=100.0):
     """Return an inventory with fiber_array, config, interrogator, and path links."""
     interrogator = inv.Interrogator(
         resource_id="interrogator_1",
-        interrogator_id="IU001",
         model="SyntheticInterrogator",
         serial_number="SN001",
     )
-    config = inv.AcquisitionConfiguration(
+    config = inv.Acquisition(
         resource_id="cfg_1",
+        code="RAW",
+        location_code="00",
+        data_category="DAS",
+        data_type="strain_rate",
+        data_units="m/s",
         interrogator=interrogator,
-        sample_rate=sample_rate,
+        acquisition_sample_rate=acquisition_sample_rate,
+        pulse_width=1.0e-8,
+        comment="Test acquisition.",
         spatial_sampling_interval=2.0,
-        first_channel_index=10,
         first_channel_distance=100.0,
     )
-    crs = inv.CoordinateReferenceSystem(resource_id="crs_1", axis_order=("x",))
+    crs = inv.CoordinateReferenceSystem(
+        resource_id="crs_1",
+        authority="LOCAL",
+        code="test_axis",
+        axis_order=("x",),
+        units="m",
+    )
     geometry = inv.Geometry(
         resource_id="geo_1",
-        length=2.0,
+        optical_length=2.0,
         geometry_type="linear",
         coordinate_reference_system=crs,
         coordinates=((0.0,), (2.0,)),
     )
     fiber = inv.FiberSegment(
         resource_id="fiber_1",
-        length=2.0,
+        optical_length=2.0,
         fiber_type="single_mode",
     )
     annotation = inv.OpticalPathAnnotation(
         resource_id="annotation_1",
-        start_distance=0.0,
-        end_distance=2.0,
+        distance=(0.0, 2.0),
         label="line",
     )
     path = inv.OpticalPath(
         resource_id="path_1",
-        length=2.0,
+        optical_length=2.0,
         optical_components=(fiber,),
         geometries=(geometry,),
         annotations=(annotation,),
     )
     fiber_array = inv.FiberArray(
         resource_id="fiber_array_1",
-        acquisition_configuration=config,
-        optical_path=path,
+        code="FA",
+        acquisitions=(config,),
+        optical_paths=(path,),
         tag=tag,
-        data_units="m/s",
     )
-    return inv.Inventory(records=(fiber_array,))
+    network = inv.Network(
+        resource_id="network_1",
+        code="XX",
+        fiber_arrays=(fiber_array,),
+    )
+    return inv.Inventory(records=(network,))
 
 
 class TestDistanceFromInventory:
-    """Tests for deriving distance from fiber array configuration."""
+    """Tests for deriving distance from an acquisition."""
 
     def test_default_channel_dim(self):
         """The default channel dimension should produce a distance coordinate."""
@@ -107,37 +112,30 @@ class TestDistanceFromInventory:
         assert np.allclose(out.get_array("distance"), [100.0, 102.0, 104.0])
         assert out.coords.dim_map["distance"] == ("channel",)
 
-    def test_explicit_fiber_array_id(self):
-        """An explicit fiber array id should override patch attrs."""
-        patch = get_channel_patch(fiber_array_id="")
+    def test_explicit_data_source_id(self):
+        """An explicit data source id should override patch attrs."""
+        patch = get_channel_patch(data_source_id="")
         out = patch.distance_from_inventory(
             get_inventory(),
-            fiber_array_id="fiber_array_1",
+            data_source_id=DATA_SOURCE_ID,
         )
 
         assert np.allclose(out.get_array("distance"), [100.0, 102.0, 104.0])
 
-    def test_legacy_acquisition_id_fallback(self):
-        """The old acquisition_id extra attr can still link legacy patches."""
-        out = get_legacy_channel_patch().distance_from_inventory(get_inventory())
-
-        assert np.allclose(out.get_array("distance"), [100.0, 102.0, 104.0])
-
-    def test_missing_fiber_array_id_raises(self):
-        """A fiber array id is required."""
-        with pytest.raises(ParameterError, match="fiber_array_id"):
-            get_channel_patch(fiber_array_id="").distance_from_inventory(
+    def test_missing_data_source_id_raises(self):
+        """A data source id is required."""
+        with pytest.raises(ParameterError, match="data_source_id"):
+            get_channel_patch(data_source_id="").distance_from_inventory(
                 get_inventory()
             )
 
-    def test_time_selects_configuration_history(self):
-        """Absolute patch time should select the effective configuration state."""
+    def test_time_selects_acquisition_history(self):
+        """Absolute patch time should select the effective acquisition state."""
         patch = get_channel_patch(
             time=np.array(["2020-01-03", "2020-01-04"], dtype="datetime64[D]")
         )
         inventory = get_inventory()
-        fiber_array = inventory.get_records(record_ids="fiber_array_1")[0]
-        config = fiber_array.acquisition_configuration.model_copy(
+        config = inventory.get_records(record_ids="cfg_1")[0].model_copy(
             update={
                 "start_time": "2020-01-02",
                 "spatial_sampling_interval": 3.0,
@@ -176,34 +174,33 @@ class TestAddInventoryCoords:
 
         assert np.isnan(out.get_array("y")).all()
 
-    def test_legacy_acquisition_id_fallback(self):
-        """Coordinate projection can use the old acquisition_id extra attr."""
-        out = get_legacy_distance_patch().add_inventory_coords(
-            get_inventory(),
-            coords=("label",),
-        )
-
-        assert tuple(out.get_array("label")) == ("line", "line", "line")
-
 
 class TestAddInventoryAttrs:
     """Tests for adding attrs from fiber array relationships."""
 
     def test_add_unqualified_and_qualified_attrs(self):
-        """Attrs should resolve across fiber_array, config, and interrogator."""
+        """Attrs should resolve across fiber_array, acquisition, and interrogator."""
         out = get_distance_patch().add_inventory_attrs(
             get_inventory(),
             attrs=(
                 "tag",
-                "sample_rate",
-                "acquisition_configuration.first_channel_index",
+                "acquisition_sample_rate",
+                "pulse_width",
+                "acquisition.comment",
+                "acquisition.code",
+                "acquisition.location_code",
+                "acquisition.first_channel_distance",
                 "interrogator.model",
             ),
         )
 
         assert out.attrs.tag == "raw"
-        assert out.attrs.sample_rate == 100.0
-        assert out.attrs.acquisition_configuration_first_channel_index == 10
+        assert out.attrs.acquisition_sample_rate == 100.0
+        assert out.attrs.pulse_width == 1.0e-8
+        assert out.attrs.acquisition_comment == "Test acquisition."
+        assert out.attrs.acquisition_code == "RAW"
+        assert out.attrs.acquisition_location_code == "00"
+        assert out.attrs.acquisition_first_channel_distance == 100.0
         assert out.attrs.interrogator_model == "SyntheticInterrogator"
 
     def test_ambiguous_attr_raises(self):
@@ -213,12 +210,3 @@ class TestAddInventoryAttrs:
                 get_inventory(),
                 attrs=("resource_id",),
             )
-
-    def test_legacy_acquisition_id_fallback(self):
-        """Attr projection can use the old acquisition_id extra attr."""
-        out = get_legacy_distance_patch().add_inventory_attrs(
-            get_inventory(),
-            attrs=("tag",),
-        )
-
-        assert out.attrs.tag == "raw"

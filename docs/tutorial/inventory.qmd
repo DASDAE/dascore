@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-An [`Inventory`](`dascore.core.inventory.Inventory`) stores richer metadata than a [`Patch`](`dascore.core.patch.Patch`) normally carries. It can describe networks, fiber arrays, interrogators, acquisition configurations, optical paths, fiber geometry, coupling conditions, and annotations.
+An [`Inventory`](`dascore.core.inventory.Inventory`) stores richer metadata than a [`Patch`](`dascore.core.patch.Patch`) normally carries. It can describe networks, fiber arrays, interrogators, acquisitions, optical paths, fiber geometry, coupling conditions, and annotations.
 
 Inventory metadata is not automatically applied to patches. The patch remains the primary data object, and inventory context is added explicitly when you want it.
 
@@ -23,7 +23,7 @@ Inventory support is time-aware. If multiple records with the same resource id e
 
 DASCore includes example inventories which describe some example patches.
 
-```{python}
+```python
 import dascore as dc
 
 patch = dc.get_example_patch("random_das")
@@ -32,35 +32,37 @@ inventory = dc.get_example_inventory("random_das")
 print(inventory)
 ```
 
-An inventory usually contains many record types. A [`Network`](`dascore.core.inventory.Network`) groups observing objects, and a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the fiber-specific observing identity that links patch-like data to an acquisition configuration and an optical path.
+An inventory usually contains many record types. A [`Network`](`dascore.core.inventory.Network`) groups observing objects, and a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the fiber-specific observing identity that links patch-like data to an acquisition and an optical path.
 
-```{python}
+```python
 network = inventory.get_records(record_ids="random_das_network")[0]
 fiber_array = inventory.get_records(record_ids="random_das_fiber_array")[0]
 
 print(network.fiber_arrays)
-print(fiber_array.acquisition_configuration)
-print(fiber_array.optical_path)
+print(fiber_array.acquisitions)
+print(fiber_array.optical_paths[0])
 ```
 
-Patch methods use `patch.attrs.fiber_array_id` by default, so set it when the patch does not already have one.
+Patch methods use `patch.attrs.data_source_id` to resolve inventory context. The value is `network.fiber_array.location.acquisition`; empty location codes keep an empty component.
 
-```{python}
-patch = patch.update_attrs(fiber_array_id="random_das_fiber_array")
+```python
+patch = patch.update_attrs(
+    data_source_id="RD.RDAS..RAW",
+)
 ```
 
 # Add attrs from inventory
 
-Use [`Patch.add_inventory_attrs`](`dascore.proc.inventory.add_inventory_attrs`) to copy selected fiber array, acquisition configuration, or interrogator fields into patch attrs.
+Use [`Patch.add_inventory_attrs`](`dascore.proc.inventory.add_inventory_attrs`) to copy selected fiber array, acquisition, or interrogator fields into patch attrs.
 
-```{python}
+```python
 patch_with_attrs = patch.add_inventory_attrs(
     inventory,
-    attrs=("tag", "sample_rate", "gauge_length", "interrogator.model"),
+    attrs=("tag", "acquisition_sample_rate", "gauge_length", "interrogator.model"),
 )
 
 print(patch_with_attrs.attrs.tag)
-print(patch_with_attrs.attrs.sample_rate)
+print(patch_with_attrs.attrs.acquisition_sample_rate)
 print(patch_with_attrs.attrs.gauge_length)
 print(patch_with_attrs.attrs.interrogator_model)
 ```
@@ -68,7 +70,7 @@ print(patch_with_attrs.attrs.interrogator_model)
 Simple attr names are accepted only when they are unambiguous across the fiber array graph. Qualified names use one of these prefixes:
 
 - `fiber_array.`
-- `acquisition_configuration.`
+- `acquisition.`
 - `interrogator.`
 
 For example, `interrogator.model` is stored on the output patch as `interrogator_model`.
@@ -79,7 +81,7 @@ Use [`Patch.add_inventory_coords`](`dascore.proc.inventory.add_inventory_coords`
 
 By default, only `label` is added.
 
-```{python}
+```python
 patch_with_label = patch.add_inventory_coords(inventory)
 
 print(patch_with_label.get_array("label")[:5])
@@ -87,7 +89,7 @@ print(patch_with_label.get_array("label")[:5])
 
 Geometry axes are explicit. This is important because one inventory may use local `x, y, z` axes while another may use `latitude, longitude, elevation`.
 
-```{python}
+```python
 patch_with_xyz = patch.add_inventory_coords(
     inventory,
     coords=("label", "x", "y", "z"),
@@ -99,7 +101,7 @@ print(patch_with_xyz.get_array("z")[:5])
 
 If an axis is requested but unavailable, DASCore raises by default. Use `on_missing="nan"` when missing geometry axes should be represented by `NaN`.
 
-```{python}
+```python
 patch_with_missing_geo = patch.add_inventory_coords(
     inventory,
     coords=("latitude", "longitude", "elevation"),
@@ -117,39 +119,48 @@ There is intentionally no `"geometry"` wildcard shortcut in the first implementa
 
 Inventory records are ordinary Pydantic models. Relationship fields use linked objects, not id strings. When records are placed into an inventory, DASCore stores a canonical id-only manifest internally.
 
-```{python}
+`resource_id` values are the stable identifiers in that manifest, but they are usually API-managed. DASCore generates random local ids when they are omitted. The explicit ids in this section make the examples easy to read and query; use explicit ids when patches, external systems, or long-lived archives need to reference the same records later.
+
+```python
 from dascore.core import inventory as inv
 
 crs = inv.CoordinateReferenceSystem(
     resource_id="survey_1_crs",
+    authority="LOCAL",
+    code="survey_1_local_cartesian",
     axis_order=("x", "y", "z"),
+    units="m",
 )
 geometry_1 = inv.Geometry(
     resource_id="survey_1_geometry_1",
-    length=100.0,
+    optical_length=100.0,
     geometry_type="linear",
     coordinate_reference_system=crs,
     coordinates=((0.0, 0.0, 0.0), (0.0, 10.0, -100.0)),
 )
 geometry_2 = inv.Geometry(
     resource_id="survey_1_geometry_2",
-    length=150.0,
+    optical_length=150.0,
     geometry_type="linear",
     coordinate_reference_system=crs,
     coordinates=((0.0, 10.0, -100.0), (50.0, 30.0, -180.0)),
 )
 survey_path = inv.OpticalPath(
     resource_id="survey_1_optical_path",
-    length=250.0,
+    name="Survey optical path",
+    optical_length=250.0,
     geometries=(geometry_1, geometry_2),
 )
 survey_fiber_array = inv.FiberArray(
     resource_id="survey_1_fiber_array",
-    optical_path=survey_path,
+    code="SURV",
+    name="Survey fiber array",
+    optical_paths=(survey_path,),
 )
 survey_network = inv.Network(
     resource_id="survey_1_network",
     code="XX",
+    name="Survey network",
     fiber_arrays=(survey_fiber_array,),
 )
 survey_inventory = inv.Inventory(records=(survey_network,))
@@ -159,13 +170,13 @@ print(survey_inventory.get_records(record_ids="survey_1_optical_path")[0])
 
 Use `get_record_dicts` when you want the canonical id-only records which will be written to JSON or YAML.
 
-```{python}
+```python
 print(survey_inventory.get_record_dicts(record_ids="survey_1_fiber_array")[0])
 ```
 
-Use [`Inventory.put_records`](`dascore.core.inventory.Inventory.put_records`) to add or replace records. A record with the same `resource_id` and `start_time` replaces that validity epoch; a different `start_time` adds another epoch.
+Use [`Inventory.put_records`](`dascore.core.inventory.Inventory.put_records`) to add or replace records. A timed record with the same `resource_id` and `start_time` replaces that validity epoch; a different `start_time` adds another epoch.
 
-```{python}
+```python
 updated_fiber_array = survey_fiber_array.model_copy(
     update={"start_time": "2024-01-01", "tag": "survey"}
 )
@@ -173,7 +184,7 @@ survey_inventory = survey_inventory.put_records(
     records=(updated_fiber_array,),
 )
 
-survey_patch = patch.update_attrs(fiber_array_id="survey_1_fiber_array")
+survey_patch = patch.update_attrs(data_source_id="XX.SURV..RAW")
 survey_patch = survey_patch.select(distance=(0, 250))
 survey_patch = survey_patch.add_inventory_coords(
     survey_inventory,
@@ -188,7 +199,7 @@ print(survey_patch.get_array("x")[:5])
 
 Inventory coordinate projection can also attach metadata from optical path interval records. Simple field names work when they are unambiguous.
 
-```{python}
+```python
 patch_with_fiber = patch.add_inventory_coords(
     inventory,
     coords=("label", "fiber_type", "coupling_type"),
@@ -206,7 +217,7 @@ Qualified interval metadata can be requested with one of these prefixes:
 
 Qualified names are stored on the patch using the requested coordinate name.
 
-```{python}
+```python
 patch_with_meta = patch.add_inventory_coords(
     inventory,
     coords=("geometry.geometry_type", "coupling_condition.quality"),
@@ -218,9 +229,9 @@ print(patch_with_meta.get_array("coupling_condition.quality")[:5])
 
 # Channel-indexed data
 
-Some formats store an integer channel or index dimension rather than optical distance. In that case, first derive `distance` from the fiber array's acquisition configuration with [`Patch.distance_from_inventory`](`dascore.proc.inventory.distance_from_inventory`).
+Some formats store an integer channel or index dimension rather than optical distance. In that case, first derive `distance` from the fiber array's acquisition with [`Patch.distance_from_inventory`](`dascore.proc.inventory.distance_from_inventory`). The input coordinate should be a positional index into the acquisition, not an arbitrary native channel id. If a file format stores native channel ids, normalize them to positional indices before this step or preserve the native ids separately. The channel-to-distance parameters align primitive patch coordinates to the modeled optical path; they are not a replacement for modeling lead-in, telemetry, unknown, or other non-sensing path intervals when those intervals matter.
 
-```{python}
+```python
 import numpy as np
 
 channel_patch = dc.get_example_patch("random_das")
@@ -229,7 +240,7 @@ channel_patch = channel_patch.rename_coords(distance="channel")
 channel_patch = channel_patch.update_coords(
     channel=np.arange(n_channels),
 )
-channel_patch = channel_patch.update_attrs(fiber_array_id="random_das_fiber_array")
+channel_patch = channel_patch.update_attrs(data_source_id="RD.RDAS..RAW")
 
 distance_patch = channel_patch.distance_from_inventory(inventory, dim="channel")
 
@@ -238,7 +249,7 @@ print(distance_patch.get_array("distance")[:5])
 
 Once `distance` exists, use the same coordinate projection methods as before.
 
-```{python}
+```python
 enriched = distance_patch.add_inventory_coords(
     inventory,
     coords=("label", "x", "fiber_type"),
@@ -253,14 +264,16 @@ print(enriched.get_array("fiber_type")[:5])
 
 The `example_event_2` inventory describes a borehole-style optical path. It uses the same inventory methods, but the geometry and annotations come from a different fiber array context.
 
-```{python}
+```python
 event_patch = dc.get_example_patch("example_event_2")
 event_inventory = dc.get_example_inventory("example_event_2")
-event_patch = event_patch.update_attrs(fiber_array_id="example_event_2_fiber_array")
+event_patch = event_patch.update_attrs(
+    data_source_id="EX.EV2.00.PROC",
+)
 
 event_patch = event_patch.add_inventory_attrs(
     event_inventory,
-    attrs=("tag", "data_units", "sample_rate"),
+    attrs=("tag", "data_units", "acquisition_sample_rate"),
 )
 event_patch = event_patch.add_inventory_coords(
     event_inventory,
@@ -277,7 +290,7 @@ print(event_patch.get_array("coupling_type")[:5])
 
 For attrs, missing fields or missing linked records raise by default. Use `on_missing="ignore"` to skip unavailable attrs.
 
-```{python}
+```python
 patch_ignore = patch.add_inventory_attrs(
     inventory,
     attrs=("tag", "interrogator.serial_number"),
@@ -289,7 +302,7 @@ print(patch_ignore.attrs.tag)
 
 For geometry coordinates, use `on_missing="nan"` to add requested axes even when the inventory cannot provide them.
 
-```{python}
+```python
 patch_nan = patch.add_inventory_coords(
     inventory,
     coords=("latitude",),

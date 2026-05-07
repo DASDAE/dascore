@@ -10,15 +10,27 @@ enabling the decoupling of metadata from data for DAS archives.
 
 The Inventory itself is the canonical storage layer. Its ``records`` field is
 an id-only collection of plain dictionaries, with relationships stored as ids
-such as ``optical_path_id`` or ``geometry_ids``. This is the durable form used
+such as ``optical_path_ids`` or ``geometry_ids``. This is the durable form used
 by ``to_dict``, JSON, and YAML.
 
 Resolved Pydantic records are materialized views over that storage. Calling
 ``Inventory.get_records`` returns object graphs with relationships resolved,
-such as a ``FiberArray`` whose ``optical_path`` is an ``OpticalPath`` object.
+such as a ``FiberArray`` whose ``optical_paths`` contain ``OpticalPath`` objects.
 Those objects are ergonomic views, not the source of truth. To write them back,
 use ``Inventory.put_records``; it extracts linked objects recursively, stores
 canonical id-only records, and validates the resulting inventory.
+
+
+## user stories
+  1. As a DASCore user with raw or lightly processed patches, I want to attach a data_source_id to a patch so that later processing can resolve the correct inventory context.
+  2. As a user with channel-indexed DAS data, I want to derive optical distance from an inventory acquisition so that geometry and fiber metadata can be projected onto the patch.
+  3. As a user with an inventory and a distance-indexed patch, I want to add selected optical-path metadata as patch coordinates so that I can process, select, and visualize data by labels, geometry, coupling, or fiber
+     properties.
+  4. As a user, I want to add selected fiber array, acquisition, and interrogator fields to patch attrs so that downstream workflows can carry compact metadata without embedding the whole inventory.
+  5. As a user managing evolving deployments, I want inventory records to be valid over time so that the same data_source_id can resolve to different configurations or paths for different data epochs.
+  6. As a user building an inventory, I want to write records as linked Pydantic objects but store them as stable id-based records so that inventories are ergonomic in Python and durable in JSON/YAML.
+  7. As a user exchanging or archiving metadata, I want inventories to round-trip through dict, JSON, and YAML so that I can store metadata beside data files.
+
 """
 # ruff: noqa: E501
 
@@ -29,15 +41,21 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeAlias
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
 import yaml
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
-from dascore.constants import path_types
+from dascore.config import get_config
+from dascore.constants import (
+    VALID_DATA_CATEGORIES,
+    VALID_DATA_TYPES,
+    path_types,
+)
 from dascore.exceptions import ParameterError
 from dascore.utils.inventory import (
     _IntervalSequence,
@@ -46,25 +64,37 @@ from dascore.utils.inventory import (
     _merge_annotations,
     _reverse_annotations,
     _select_annotations,
+    _TimedInventoryRecord,
 )
 from dascore.utils.misc import sanitize_range_param
-from dascore.utils.models import DascoreBaseModel, DateTime64
+from dascore.utils.models import DascoreBaseModel, DateTime64, UnitQuantity
 from dascore.utils.time import to_datetime64
 
+ExtraFieldValue: TypeAlias = str | int | float | bool
 
-class FiberArray(_InventoryRecord):
+
+def _inventory_type_slug(record_type: str) -> str:
+    """Return a compact snake_case slug for one inventory record type."""
+    chars = []
+    for index, char in enumerate(record_type):
+        if char.isupper() and index:
+            chars.append("_")
+        chars.append(char.lower())
+    return "".join(chars)
+
+
+class FiberArray(_TimedInventoryRecord):
     """Durable fiber-optic observing identity anchored by an optical path."""
 
-    acquisition_configuration: AcquisitionConfiguration | None = Field(
-        default=None,
-        description="Acquisition configuration used for the fiber array.",
+    code: str = Field(default="", description="Station-like fiber array code.")
+    name: str = Field(default="", description="Human-readable fiber array name.")
+    acquisitions: tuple[Acquisition, ...] = Field(
+        default=(),
+        description="Acquisitions associated with this fiber array.",
     )
-    optical_path: OpticalPath | None = Field(
-        default=None,
-        description="Optical path observed by this fiber array.",
-    )
-    data_units: str = Field(
-        default="", description="Default units for data produced by this fiber array."
+    optical_paths: tuple[OpticalPath, ...] = Field(
+        default=(),
+        description="Optical paths associated with this fiber array.",
     )
     dims: str = Field(
         default="", description="Comma-separated default patch dimensions."
@@ -76,6 +106,7 @@ class Network(_InventoryRecord):
     """FDSN-like organizational container for inventory observing objects."""
 
     code: str = Field(default="", description="Network code.")
+    name: str = Field(default="", description="Human-readable network name.")
     description: str = Field(default="", description="Network description.")
     fiber_arrays: tuple[FiberArray, ...] = Field(
         default=(),
@@ -87,10 +118,6 @@ class Network(_InventoryRecord):
 class Interrogator(_InventoryRecord):
     """DAS interrogator unit used for data collection."""
 
-    interrogator_id: str = Field(
-        default="",
-        description="Provider-assigned identifier for the interrogator unit.",
-    )
     manufacturer: str = Field(
         default="", description="Manufacturer name of the interrogator."
     )
@@ -101,19 +128,53 @@ class Interrogator(_InventoryRecord):
     firmware_version: str = Field(
         default="", description="Firmware version used within the interrogator."
     )
-    comment: str = Field(default="", description="Additional interrogator comments.")
     instrument_type: str = Field(
         default="interrogator",
         description="General instrument category.",
     )
 
 
-class AcquisitionConfiguration(_InventoryRecord):
-    """Interrogator and fiber array settings."""
+class Acquisition(_TimedInventoryRecord):
+    """
+    Channel-like DAS acquisition setup.
 
+    `Acquisition` is the inventory-side source of acquisition-derived patch
+    metadata. It is not a replacement for [`PatchAttrs`](
+    `dascore.core.attrs.PatchAttrs`); instead, patches use `data_source_id` to
+    resolve an acquisition and may copy selected acquisition fields onto patch
+    attrs. Fields such as `data_type`, `data_category`, `data_units`,
+    acquisition sample rate, gauge length, pulse width, and channel-to-distance
+    alignment describe the acquisition context. Patch-local values such as
+    processing `history`, `tag`, and post-processing unit changes remain on
+    `PatchAttrs`.
+    """
+
+    code: str = Field(
+        default="",
+        description="Channel-like acquisition code.",
+    )
+    location_code: str = Field(
+        default="",
+        description=(
+            "FDSN-style location code used to group or disambiguate acquisition "
+            "records within a fiber array. Empty location codes are allowed."
+        ),
+    )
+    data_type: str = Field(
+        default="",
+        description="Quantity measured or produced by this acquisition.",
+    )
+    data_category: str = Field(
+        default="",
+        description="Acquisition family such as DAS, DTS, or DSS.",
+    )
+    data_units: UnitQuantity | None = Field(
+        default=None,
+        description="Units of data produced by this acquisition.",
+    )
     interrogator: Interrogator | None = Field(
         default=None,
-        description="Interrogator configured for this fiber array.",
+        description="Interrogator used for this acquisition.",
     )
     gauge_length: float | None = Field(
         default=None, description="Gauge length used by the acquisition in meters."
@@ -121,92 +182,119 @@ class AcquisitionConfiguration(_InventoryRecord):
     pulse_rate: float | None = Field(
         default=None, description="Pulse repetition rate for the configuration in Hz."
     )
-    sample_rate: float | None = Field(
-        default=None, description="Temporal sample rate for acquired data in Hz."
+    pulse_width: float | None = Field(
+        default=None, description="Pulse width for the acquisition in seconds."
+    )
+    acquisition_sample_rate: float | None = Field(
+        default=None, description="FDSN-style acquisition sample rate in Hz."
     )
     spatial_sampling_interval: float | None = Field(
         default=None,
         description="Spatial sampling interval between channels in meters.",
     )
-    first_channel_index: int = Field(
-        default=0,
-        description="Index of the first channel used to anchor optical distance.",
-    )
     first_channel_distance: float = Field(
         default=0.0,
-        description="Optical distance in meters corresponding to first_channel_index.",
+        description=(
+            "Optical path distance in meters corresponding to patch channel/index "
+            "position 0. This is a channel-to-path alignment parameter for "
+            "primitive or partial file formats; it should not be used instead of "
+            "modeling lead-in, telemetry, unknown, or other non-sensing intervals "
+            "in OpticalPath when those intervals matter."
+        ),
+    )
+    extra_fields: dict[str, ExtraFieldValue] = Field(
+        default_factory=dict,
+        description=(
+            "Extra acquisition metadata not represented by standardized fields. "
+            "This maps to FDSN DAS Metadata native_headers when exporting."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_data_fields(self) -> Self:
+        """Validate acquisition data descriptors."""
+        if self.data_type not in VALID_DATA_TYPES:
+            msg = (
+                f"data_type must be one of {VALID_DATA_TYPES}, not {self.data_type!r}."
+            )
+            raise ValueError(msg)
+        if self.data_category not in VALID_DATA_CATEGORIES:
+            msg = (
+                f"data_category must be one of {VALID_DATA_CATEGORIES}, "
+                f"not {self.data_category!r}."
+            )
+            raise ValueError(msg)
+        return self
+
+
+class ExternalResource(_InventoryRecord):
+    """External resource identified but not otherwise modeled by DASCore."""
+
+    uri: str = Field(default="", description="URI or identifier for the resource.")
+    name: str = Field(default="", description="Human-readable resource name.")
+    description: str = Field(
+        default="", description="Free-form description of the external resource."
     )
 
 
 class _OpticalLengthRecord(_InventoryRecord):
-    """Base class for optical path records with SI-only lengths."""
+    """Base class for optical path records with SI-only optical lengths."""
 
     model_config = ConfigDict(extra="forbid")
 
-    length: float | None = Field(
-        default=None, description="Length of this optical path interval in meters."
+    optical_length: float | None = Field(
+        default=None,
+        description="Optical path interval length in meters.",
     )
 
 
 class Cable(_InventoryRecord):
     """Physical cable containing one or more fiber segments."""
 
-    cable_id: str = Field(
-        default="", description="Operator or vendor identifier for the cable."
-    )
     name: str = Field(default="", description="Human-readable cable name.")
+    owner: str = Field(default="", description="Proprietary owner of the cable.")
     manufacturer: str = Field(default="", description="Manufacturer of the cable.")
     model: str = Field(default="", description="Model name of the cable.")
     serial_number: str = Field(
         default="", description="Manufacturer serial number for the cable."
     )
-    cable_type: str = Field(
-        default="", description="Cable type or construction, if known."
-    )
-    specification: str = Field(
-        default="",
-        description=(
-            "Cable or fiber specification, standard, or vendor datasheet "
-            "designation, such as ITU-T G.652.D."
-        ),
-    )
-    cable_construction: str = Field(
-        default="",
-        description=(
-            "Whole-cable construction, such as armored, hybrid, tactical, "
-            "flat_drop, loose_tube, or unknown."
-        ),
-    )
-    jacket_material: str = Field(
-        default="", description="Outer jacket material, if known."
-    )
-    armor_type: str = Field(
-        default="", description="Cable armor type or strength member style."
-    )
-    outer_diameter: float | None = Field(
-        default=None, description="Outer cable diameter in meters."
-    )
-    minimum_bend_radius: float | None = Field(
-        default=None, description="Minimum allowable cable bend radius in meters."
-    )
-    maximum_tensile_load: float | None = Field(
-        default=None, description="Maximum allowable cable tensile load in newtons."
-    )
-    datasheet_uri: str = Field(
-        default="", description="URI or path to the cable datasheet or specification."
+    specification: ExternalResource | None = Field(
+        default=None,
+        description="External cable specification, datasheet, or product page.",
     )
     fiber_count: int | None = Field(
         default=None, description="Number of fibers contained in the cable."
     )
 
 
+class Enclosure(_InventoryRecord):
+    """Physical housing for optical components."""
+
+    name: str = Field(default="", description="Human-readable enclosure name.")
+    owner: str = Field(default="", description="Proprietary owner of the enclosure.")
+    manufacturer: str = Field(default="", description="Manufacturer of the enclosure.")
+    model: str = Field(default="", description="Model name of the enclosure.")
+    serial_number: str = Field(
+        default="", description="Manufacturer serial number for the enclosure."
+    )
+    specification: ExternalResource | None = Field(
+        default=None,
+        description="External enclosure specification, datasheet, or product page.",
+    )
+
+
 class OpticalComponent(_OpticalLengthRecord):
     """Base class for physical optical components in an optical path."""
 
-    length: float | None = Field(
-        default=None, description="Length of this optical component in meters."
+    optical_length: float | None = Field(
+        default=None,
+        description="Optical component length along the optical path in meters.",
     )
     name: str = Field(default="", description="Human-readable component name.")
+    container: Cable | Enclosure | None = Field(
+        default=None,
+        description="Optional physical container housing this optical component.",
+    )
 
 
 class FiberSegment(OpticalComponent):
@@ -258,13 +346,6 @@ class FiberSegment(OpticalComponent):
         default=None,
         description="Optical attenuation coefficient in dB/km.",
     )
-    container: Cable | None = Field(
-        default=None,
-        description="Optional parent cable containing this fiber.",
-    )
-    fiber_id: str = Field(
-        default="", description="Operator or vendor identifier for the fiber."
-    )
 
 
 class Connector(OpticalComponent):
@@ -314,40 +395,70 @@ class Terminator(OpticalComponent):
 
 
 class CoordinateReferenceSystem(_InventoryRecord):
-    """Coordinate reference system used by geometry records."""
+    """
+    Coordinate reference system used by geometry records.
 
-    crs_type: str = Field(
-        default="",
-        description="Kind of coordinate system, such as epsg, local, or unknown.",
+    The default CRS is WGS84 geographic latitude/longitude (`EPSG:4326`). Custom
+    projected or local engineering coordinate systems can be represented with a
+    local authority/code pair, or with formal definitions in WKT, PROJJSON, or
+    CF grid-mapping form.
+    """
+
+    authority: str = Field(
+        default="EPSG",
+        description="CRS authority such as EPSG, OGC, CF, or LOCAL.",
+    )
+    code: str = Field(
+        default="4326",
+        description="Authority code or local project code for this CRS.",
     )
     name: str = Field(default="", description="Human-readable CRS name.")
-    definition: str = Field(
-        default="", description="CRS definition, such as an EPSG code or WKT string."
+    crs_wkt: str = Field(
+        default="",
+        description="Well-known text CRS definition, if available.",
+    )
+    projjson: dict[str, Any] = Field(
+        default_factory=dict,
+        description="PROJJSON CRS definition, if available.",
+    )
+    grid_mapping: dict[str, Any] = Field(
+        default_factory=dict,
+        description="CF grid-mapping attributes, if available.",
     )
     origin: tuple[float, ...] = Field(
         default=(), description="Origin for local coordinate systems."
     )
     axis_order: tuple[str, ...] = Field(
-        default=(), description="Coordinate axis order, such as x, y, z."
+        default=("latitude", "longitude", "elevation"),
+        description=(
+            "Coordinate axis order, such as latitude, longitude, elevation or x, y, z."
+        ),
     )
-    units: str = Field(default="", description="Coordinate units when not implied.")
+    units: str = Field(default="degree", description="Coordinate units when known.")
     vertical_datum: str = Field(
         default="", description="Vertical datum or reference surface, if known."
     )
 
 
+def _default_coordinate_reference_system() -> CoordinateReferenceSystem:
+    """Return the default WGS84 geographic CRS used by geometries."""
+    return CoordinateReferenceSystem(resource_id="EPSG:4326")
+
+
 class Geometry(_OpticalLengthRecord):
     """Geometry for an interval of an optical path."""
 
-    length: float | None = Field(
-        default=None, description="Length of the path interval described in meters."
+    name: str = Field(default="", description="Human-readable geometry name.")
+    optical_length: float | None = Field(
+        default=None,
+        description="Optical path interval length described by this geometry in meters.",
     )
     geometry_type: str = Field(
         default="",
         description="Kind of geometry, such as linear, curve, or unknown.",
     )
     coordinate_reference_system: CoordinateReferenceSystem | None = Field(
-        default=None,
+        default_factory=_default_coordinate_reference_system,
         description="Coordinate reference system used by this geometry.",
     )
     coordinates: tuple[tuple[float, ...], ...] = Field(
@@ -383,14 +494,15 @@ class ClampPoint(DascoreBaseModel):
     attachment: str = Field(
         default="", description="Attachment method used by this clamp point."
     )
-    notes: str = Field(default="", description="Free-form notes for this clamp point.")
+    comment: str = Field(default="", description="Additional comments.")
 
 
 class CouplingCondition(_OpticalLengthRecord):
     """Acoustic coupling condition for an interval of an optical path."""
 
-    length: float | None = Field(
-        default=None, description="Length of the path interval described in meters."
+    optical_length: float | None = Field(
+        default=None,
+        description="Optical path interval length described by this coupling in meters.",
     )
     coupling_type: str = Field(
         default="",
@@ -467,7 +579,7 @@ class CouplingCondition(_OpticalLengthRecord):
 
     def select(self, *, distance) -> Self:
         """Return this coupling condition selected by local distance."""
-        start, stop = OpticalPath._get_distance_limits(distance, self.length)
+        start, stop = OpticalPath._get_distance_limits(distance, self.optical_length)
         clamp_points = tuple(
             point.model_copy(update={"distance": point.distance - start})
             for point in self.clamp_points
@@ -475,7 +587,7 @@ class CouplingCondition(_OpticalLengthRecord):
         )
         return self.model_copy(
             update={
-                "length": stop - start,
+                "optical_length": stop - start,
                 "clamp_points": clamp_points,
             }
         )
@@ -484,13 +596,9 @@ class CouplingCondition(_OpticalLengthRecord):
 class OpticalPathAnnotation(_InventoryRecord):
     """Named or categorized interval on an optical path."""
 
-    start_distance: float = Field(
-        default=0.0,
-        description="Start distance of the annotation interval in meters.",
-    )
-    end_distance: float = Field(
-        default=0.0,
-        description="End distance of the annotation interval in meters.",
+    distance: tuple[float | None, float | None] = Field(
+        default=(None, None),
+        description="DASCore-style optical distance interval for this annotation.",
     )
     label: str = Field(
         default="", description="Human-readable label for this path annotation."
@@ -498,25 +606,39 @@ class OpticalPathAnnotation(_InventoryRecord):
     category: str = Field(
         default="", description="Optional annotation category or namespace."
     )
-    notes: str = Field(
-        default="", description="Free-form notes for this optical path annotation."
-    )
+
+    @field_validator("distance", mode="before")
+    @classmethod
+    def _normalize_distance(cls, value):
+        """Normalize DASCore open interval sentinels before type validation."""
+        start, stop = sanitize_range_param(value)
+        start = None if start is None else float(start)
+        stop = None if stop is None else float(stop)
+        return start, stop
 
     @model_validator(mode="after")
     def _validate_interval(self) -> Self:
-        """Ensure annotation intervals have positive length."""
-        if self.start_distance >= self.end_distance:
-            msg = "Annotation start_distance must be less than end_distance."
+        """Lightly validate the annotation interval."""
+        start, stop = self.distance
+        if start is not None and start < 0:
+            msg = "Annotation distance start must be greater than or equal to 0."
+            raise ValueError(msg)
+        if stop is not None and stop <= 0:
+            msg = "Annotation distance stop must be greater than 0."
+            raise ValueError(msg)
+        if start is not None and stop is not None and start >= stop:
+            msg = "Annotation distance start must be less than distance stop."
             raise ValueError(msg)
         return self
 
 
-class OpticalPath(_OpticalLengthRecord):
+class OpticalPath(_TimedInventoryRecord):
     """Continuous optical path described by independent component sequences."""
 
-    length: float | None = Field(
+    optical_length: float | None = Field(
         default=None, description="Declared total optical path length in meters."
     )
+    name: str = Field(default="", description="Human-readable optical path name.")
     optical_components: tuple[OpticalComponent, ...] = Field(
         default=(),
         description="Ordered optical components on this path.",
@@ -544,8 +666,8 @@ class OpticalPath(_OpticalLengthRecord):
     @property
     def is_empty(self) -> bool:
         """Return True if this optical path has no known interval length."""
-        if self.length is not None:
-            return self.length == 0
+        if self.optical_length is not None:
+            return self.optical_length == 0
         return not any(
             (
                 self.optical_components,
@@ -664,10 +786,11 @@ class OpticalPath(_OpticalLengthRecord):
         annotations = _merge_annotations(
             self.annotations,
             other.annotations,
-            self.length,
+            self.optical_length,
+            other.optical_length,
         )
         return self.__class__(
-            length=self._add_lengths(self.length, other.length),
+            optical_length=self._add_lengths(self.optical_length, other.optical_length),
             optical_components=(
                 *self.optical_components,
                 *other.optical_components,
@@ -688,9 +811,9 @@ class OpticalPath(_OpticalLengthRecord):
 
     def reverse(self) -> Self:
         """Return a new optical path with all ordered subcomponents reversed."""
-        annotations = _reverse_annotations(self.annotations, self.length)
+        annotations = _reverse_annotations(self.annotations, self.optical_length)
         return self.__class__(
-            length=self.length,
+            optical_length=self.optical_length,
             optical_components=tuple(reversed(self.optical_components)),
             geometries=tuple(reversed(self.geometries)),
             coupling_conditions=tuple(reversed(self.coupling_conditions)),
@@ -706,8 +829,10 @@ class OpticalPath(_OpticalLengthRecord):
             raise ParameterError(msg)
         if "distance" not in kwargs:
             return self
-        start, stop = self._get_distance_limits(kwargs["distance"], self.length)
-        full_selection = self._is_full_distance_selection(start, stop, self.length)
+        start, stop = self._get_distance_limits(kwargs["distance"], self.optical_length)
+        full_selection = self._is_full_distance_selection(
+            start, stop, self.optical_length
+        )
         _, optical_components = self._select_interval_sequence(
             "optical_component",
             start,
@@ -726,9 +851,14 @@ class OpticalPath(_OpticalLengthRecord):
             stop,
             full_selection,
         )
-        annotations = _select_annotations(self.annotations, start, stop)
+        annotations = _select_annotations(
+            self.annotations,
+            start,
+            stop,
+            length=self.optical_length,
+        )
         return self.__class__(
-            length=stop - start,
+            optical_length=stop - start,
             optical_components=optical_components,
             geometries=geometries,
             coupling_conditions=coupling_conditions,
@@ -770,9 +900,9 @@ class OpticalPath(_OpticalLengthRecord):
         sequence = self._get_interval_sequence(kind)
         return sequence.get_interval(target)
 
-    def validate_lengths(self, tolerance: float = 1e-9) -> Self:
-        """Validate that populated interval sequences match path length."""
-        expected = self.length
+    def validate(self, tolerance: float = 1e-9) -> Self:
+        """Validate that populated interval sequences match path optical length."""
+        expected = self.optical_length
         sequences = tuple(
             self._get_interval_sequence(name)
             for name in (
@@ -781,7 +911,7 @@ class OpticalPath(_OpticalLengthRecord):
                 "coupling_condition",
             )
         )
-        lengths = tuple(sequence.length for sequence in sequences)
+        lengths = tuple(sequence.optical_length for sequence in sequences)
         if expected is None:
             known_lengths = tuple(length for length in lengths if length is not None)
             expected = known_lengths[0] if known_lengths else None
@@ -794,7 +924,7 @@ class OpticalPath(_OpticalLengthRecord):
             if error
         )
         if errors:
-            msg = "Optical path length validation failed:\n" + "\n".join(errors)
+            msg = "Optical path optical length validation failed:\n" + "\n".join(errors)
             raise ParameterError(msg)
         return self
 
@@ -839,13 +969,15 @@ INVENTORY_RECORD_TYPES: dict[str, type[_InventoryRecord]] = {
         Network,
         Cable,
         CoordinateReferenceSystem,
+        Enclosure,
         Connector,
         CouplingCondition,
         Coupler,
+        ExternalResource,
         FiberSegment,
         Geometry,
         Interrogator,
-        AcquisitionConfiguration,
+        Acquisition,
         OpticalPathAnnotation,
         OpticalPath,
         Splice,
@@ -879,18 +1011,36 @@ INVENTORY_RELATIONSHIPS: tuple[_Relationship, ...] = (
     _Relationship(Network, "fiber_arrays", "fiber_array_ids", FiberArray, many=True),
     _Relationship(
         FiberArray,
-        "acquisition_configuration",
-        "acquisition_configuration_id",
-        AcquisitionConfiguration,
+        "acquisitions",
+        "acquisition_ids",
+        Acquisition,
+        many=True,
     ),
-    _Relationship(FiberArray, "optical_path", "optical_path_id", OpticalPath),
     _Relationship(
-        AcquisitionConfiguration,
+        FiberArray,
+        "optical_paths",
+        "optical_path_ids",
+        OpticalPath,
+        many=True,
+    ),
+    _Relationship(
+        Acquisition,
         "interrogator",
         "interrogator_resource_id",
         Interrogator,
     ),
-    _Relationship(FiberSegment, "container", "container_id", Cable),
+    _Relationship(
+        Cable, "specification", "specification_resource_id", ExternalResource
+    ),
+    _Relationship(
+        Enclosure, "specification", "specification_resource_id", ExternalResource
+    ),
+    _Relationship(
+        OpticalComponent,
+        "container",
+        "container_id",
+        (Cable, Enclosure),
+    ),
     _Relationship(
         Geometry,
         "coordinate_reference_system",
@@ -962,7 +1112,7 @@ class Inventory(DascoreBaseModel):
     author_id: str = Field(
         default="", description="Identifier for the manifest author."
     )
-    notes: str = Field(default="", description="Free-form notes for the manifest.")
+    comment: str = Field(default="", description="Additional comments.")
     _records: tuple[dict[str, Any], ...] = PrivateAttr(default_factory=tuple)
 
     def __init__(self, **data):
@@ -979,7 +1129,9 @@ class Inventory(DascoreBaseModel):
     @classmethod
     def _relationships_for(cls, record_cls: type[_InventoryRecord]):
         """Return relationship specs for a record class."""
-        return tuple(rel for rel in INVENTORY_RELATIONSHIPS if rel.owner is record_cls)
+        return tuple(
+            rel for rel in INVENTORY_RELATIONSHIPS if issubclass(record_cls, rel.owner)
+        )
 
     @property
     def records(self) -> tuple[dict[str, Any], ...]:
@@ -1031,10 +1183,25 @@ class Inventory(DascoreBaseModel):
         return tuple(out)
 
     @classmethod
-    def _canonicalize_record(cls, record, cache=None) -> tuple[dict[str, Any], ...]:
+    def _canonicalize_record(
+        cls,
+        record,
+        cache=None,
+    ) -> tuple[dict[str, Any], ...]:
         """Return supporting records plus one canonical id-only record."""
+        records, _ = cls._canonicalize_record_with_id(record, cache=cache)
+        return records
+
+    @classmethod
+    def _canonicalize_record_with_id(
+        cls,
+        record,
+        cache=None,
+    ) -> tuple[tuple[dict[str, Any], ...], str]:
+        """Return canonical records and the record id for one inventory object."""
         if isinstance(record, Mapping):
-            return (cls._canonicalize_mapping(record),)
+            out = cls._canonicalize_mapping(record)
+            return (out,), out["resource_id"]
         if not isinstance(record, _InventoryRecord):
             msg = "records must contain inventory record instances or mappings."
             raise ParameterError(msg)
@@ -1050,17 +1217,39 @@ class Inventory(DascoreBaseModel):
             if relationship.many:
                 values = tuple(getattr(record, relationship.field))
                 if values:
+                    resource_ids = []
                     for value in values:
-                        supporting.extend(cls._canonicalize_record(value, cache=cache))
-                    data[relationship.storage_field] = tuple(
-                        value.resource_id for value in values
-                    )
+                        records, resource_id = cls._canonicalize_record_with_id(
+                            value,
+                            cache=cache,
+                        )
+                        supporting.extend(records)
+                        resource_ids.append(resource_id)
+                    data[relationship.storage_field] = tuple(resource_ids)
             elif (value := getattr(record, relationship.field)) is not None:
-                supporting.extend(cls._canonicalize_record(value, cache=cache))
-                data[relationship.storage_field] = value.resource_id
-        out = (*supporting, cls._canonicalize_mapping(data))
-        cache[id(record)] = out
-        return out
+                records, resource_id = cls._canonicalize_record_with_id(
+                    value,
+                    cache=cache,
+                )
+                supporting.extend(records)
+                data[relationship.storage_field] = resource_id
+        if not data.get("resource_id"):
+            data["resource_id"] = cls._generated_resource_id(record.type)
+        canonical = cls._canonicalize_mapping(data)
+        out = (*supporting, canonical)
+        result = (out, canonical["resource_id"])
+        cache[id(record)] = result
+        return result
+
+    @classmethod
+    def _generated_resource_id(
+        cls,
+        record_type: str,
+    ) -> str:
+        """Return a generated local resource id for a canonical record."""
+        prefix = get_config().inventory_resource_id_prefix
+        type_slug = _inventory_type_slug(record_type)
+        return f"{prefix}/{type_slug}/{uuid4().hex}"
 
     @classmethod
     def _canonicalize_mapping(cls, record: Mapping[str, Any]) -> dict[str, Any]:
@@ -1403,7 +1592,7 @@ class Inventory(DascoreBaseModel):
         records,
         *,
         author_id: str | None = None,
-        notes: str | None = None,
+        comment: str | None = None,
     ) -> Self:
         """
         Return a new inventory with canonicalized records inserted.
@@ -1440,8 +1629,8 @@ class Inventory(DascoreBaseModel):
         for record in incoming:
             if author_id is not None:
                 record = {**record, "author_id": author_id}
-            if notes is not None:
-                record = {**record, "notes": notes}
+            if comment is not None:
+                record = {**record, "comment": comment}
             record = self._canonicalize_mapping(record)
             if (index := _find_matching_epoch(record)) is None:
                 current.append(record)

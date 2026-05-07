@@ -19,9 +19,9 @@ The main fiber-installation reference is PRODML. PRODML's optical path material 
 DASCore's inventory model is optimized for these use cases:
 
 - Add a small YAML inventory beside field data without rewriting raw files.
-- Resolve patch context by `fiber_array_id` and time.
+- Resolve patch context by `data_source_id` and time.
 - Keep patch data and inventory metadata separate until the user explicitly enriches a patch.
-- Preserve validity history by adding records with the same `resource_id` and new `start_time` values.
+- Preserve validity history by adding records for the same resource with new `start_time` values.
 - Support partial metadata because many field archives lack a complete standards-grade description.
 - Keep geometry, coupling, and optical-component descriptions reusable across fiber arrays.
 
@@ -31,19 +31,20 @@ This means DASCore's model is not a submission format for a data center. It is a
 
 The inventory structure is centered on a small set of records that can be resolved by id and data time.
 
-Each inventory record has a globally unique `resource_id` and an optional validity interval defined by `start_time` and `end_time`. Appending a record with the same `resource_id` and `start_time` replaces that validity epoch, which lets users explicitly cap or correct open-ended metadata. Appending the same `resource_id` with a different `start_time` adds another epoch. `creation_time` records when metadata was authored; it is not the data-time validity interval.
+Each inventory record has a globally unique `resource_id`. Assembly/configuration records which can change with data time, currently `FiberArray`, `OpticalPath`, and `Acquisition`, also have an optional validity interval defined by `start_time` and `end_time`. `resource_id` is the canonical identity stored in JSON/YAML, but users usually do not need to author it directly. When linked records are placed into an `Inventory`, DASCore generates random local ids for omitted values, preserves explicit ids, and keeps reused object instances shared within one inventory build. Generated ids are local identities, not content hashes, so rebuilding the same object graph will produce a different manifest unless explicit ids are supplied. Patches resolve inventory context through `data_source_id`, not direct `resource_id` values. Appending a timed record with the same `resource_id` and `start_time` replaces that validity epoch, which lets users cap or correct open-ended metadata. Appending the same `resource_id` with a different `start_time` adds another epoch. `creation_time` records when metadata was authored; it is not the data-time validity interval.
 
 | Object | Role in the inventory |
 |---|---|
 | [`Inventory`](`dascore.core.inventory.Inventory`) | The top-level catalog that stores records, validates references, reads/writes YAML, and creates resolved views. |
-| [`Network`](`dascore.core.inventory.Network`) | The FDSN-like organizational level below an inventory. It groups observing objects such as fiber arrays; point-sensor stations are deferred. |
-| [`FiberArray`](`dascore.core.inventory.FiberArray`) | The durable fiber-optic observing identity. It is anchored by an optical path and links patch-like data to an acquisition configuration. |
+| [`Network`](`dascore.core.inventory.Network`) | The FDSN-like organizational level below an inventory. It groups observing objects such as fiber arrays; point-sensor stations are deferred. Its `code` is a compact domain code, while `name` is display text. |
+| [`FiberArray`](`dascore.core.inventory.FiberArray`) | The durable fiber-optic observing identity. It is anchored by an optical path and can list acquisitions associated with the array. Its `code` is the station-like part of `data_source_id`; its `name` is display text and is not used for identity or lookup. |
 | [`Interrogator`](`dascore.core.inventory.Interrogator`) | The DAS interrogator unit, following the FDSN DAS Interrogator metadata fields where practical. |
-| [`AcquisitionConfiguration`](`dascore.core.inventory.AcquisitionConfiguration`) | The time-aware acquisition setup, including channel-to-distance information such as spacing and first-channel distance. |
-| [`OpticalPath`](`dascore.core.inventory.OpticalPath`) | The ordered optical-distance path observed by a fiber array, with independent component, geometry, coupling, and annotation tracks. |
+| [`Acquisition`](`dascore.core.inventory.Acquisition`) | The time-aware acquisition setup, including FDSN-like `code` and `location_code` fields plus channel-to-distance information such as spacing and first-channel distance. |
+| [`ExternalResource`](`dascore.core.inventory.ExternalResource`) | A typed inventory wrapper for resources DASCore should identify but does not otherwise model, such as external registry entries or documents. |
+| [`OpticalPath`](`dascore.core.inventory.OpticalPath`) | The ordered optical-distance path observed by a fiber array, with independent component, geometry, coupling, and annotation tracks. Its `name` is display text for maps, docs, and inspection. |
 | [`Cable`](`dascore.core.inventory.Cable`) | Cable-level manufacturing and identity metadata that can be shared by many optical components. |
 | [`OpticalComponent`](`dascore.core.inventory.OpticalComponent`) | The base interval component for fiber, connectors, splices, couplers, turnarounds, and terminators. |
-| [`FiberSegment`](`dascore.core.inventory.FiberSegment`) | A reusable length of fiber in the optical path, with fiber-specific properties such as fiber type and buffer type. |
+| [`FiberSegment`](`dascore.core.inventory.FiberSegment`) | A reusable optical interval of fiber in the optical path, with fiber-specific properties such as fiber type and buffer type. |
 | [`Connector`](`dascore.core.inventory.Connector`), [`Splice`](`dascore.core.inventory.Splice`), [`Coupler`](`dascore.core.inventory.Coupler`), [`Turnaround`](`dascore.core.inventory.Turnaround`), [`Terminator`](`dascore.core.inventory.Terminator`) | Explicit optical component subclasses for common installation features. |
 | [`Geometry`](`dascore.core.inventory.Geometry`) | A reusable optical-distance interval that describes physical coordinates or an unknown geometry section. |
 | [`CoordinateReferenceSystem`](`dascore.core.inventory.CoordinateReferenceSystem`) | CRS metadata referenced by geometry records; CRS transformations are informational in the first implementation. |
@@ -67,7 +68,7 @@ DASCore uses the same top-level `Inventory -> Network` shape, but a DAS sensing 
 Inventory -> Network -> FiberArray -> OpticalPath
 ```
 
-A `FiberArray` is station-like because it represents a stable monitoring intent and identity. It differs from a Station because its physical aperture is an extended optical path. The interrogator, acquisition configuration, and even optical path metadata can change through effective-time history while the `FiberArray.resource_id` remains the same, as long as users would still regard the data as coming from the same fiber monitoring system.
+A `FiberArray` is station-like because it represents a stable monitoring intent and identity. It differs from a Station because its physical aperture is an extended optical path. The interrogator, acquisition, and even optical path metadata can change through effective-time history while the `FiberArray.resource_id` remains the same, as long as users would still regard the data as coming from the same fiber monitoring system.
 
 Point-sensor `Station` and `Channel` records are intentionally not part of the first inventory schema. The `Station` name is reserved for that future FDSN-like point-sensor model instead of being stretched to mean a fiber aperture.
 
@@ -76,12 +77,12 @@ Point-sensor `Station` and `Channel` records are intentionally not part of the f
 FDSN DAS Metadata separates DAS descriptions into major components such as interrogator, data acquisition, channels, cable, and fiber. DASCore keeps those concepts, but collapses and relocates some details:
 
 - FDSN's interrogator concept maps to DASCore `Interrogator`.
-- FDSN's data acquisition context maps mostly to DASCore `FiberArray` plus time-effective `AcquisitionConfiguration` records.
-- Interrogator settings map to DASCore `AcquisitionConfiguration`.
+- FDSN's data acquisition context maps mostly to DASCore `FiberArray` plus time-effective `Acquisition` records.
+- Interrogator settings map to DASCore `Acquisition`.
 - Cable and fiber concepts map to `Cable` and `FiberSegment`.
 - Per-channel metadata is not a first-class inventory record in the first DASCore model.
 
-The main deviation is channel modeling. DASCore instead treats channel-to-distance conversion as an acquisition configuration operation. A patch may have `channel`, `index`, or `distance`; the inventory can derive `distance` from `AcquisitionConfiguration`, and all downstream geometry/coupling lookup happens in optical distance.
+The main deviation is channel modeling. DASCore instead treats channel-to-distance conversion as an acquisition operation. A patch may have `channel`, `index`, or `distance`; the inventory can derive `distance` from `Acquisition`, and all downstream geometry/coupling lookup happens in optical distance.
 
 This avoids storing large or redundant channel tables in a lightweight inventory file. It allows modeling the physical system (fiber path, geometry, coupling conditions) without mixing interrogator configurations (eg channel spacing).
 
@@ -112,19 +113,31 @@ DASCore instead models an `OpticalPath` as parallel interval tracks:
 - coupling conditions
 - annotations
 
-Each track has lengths in optical distance. The tracks must cover the same path length when populated, but their internal boundaries can differ. This is more convenient for concatenation, selection, field updates, and patch coordinate projection.
+Each track has `optical_length` values in optical distance. The tracks must cover the same path optical length when populated, but their internal boundaries can differ. This is more convenient for concatenation, selection, field updates, and patch coordinate projection.
+
+`FiberSegment`, `Geometry`, and `CouplingCondition` can each be created with only `optical_length`. This is the intended way to represent unknown intervals while preserving the optical distance budget:
+
+```python
+inv.FiberSegment(optical_length=100.0)
+inv.Geometry(optical_length=100.0)
+inv.CouplingCondition(optical_length=100.0)
+```
+
+Those records mean "100 m of fiber/component, geometry, or coupling context exists here, but the detailed metadata are unknown."
 
 # FiberArray As The Station-Like Join Record
 
-A `FiberArray` links a patch-like data product to an `AcquisitionConfiguration` and an `OpticalPath`.
+A patch-like data product can point directly to an `Acquisition` for channel-to-distance conversion and to a `FiberArray` for optical-path context. A `FiberArray` can list acquisitions associated with the array for discovery and serialization.
 
 ```text
-Patch channel/index -> AcquisitionConfiguration -> optical distance
+Patch channel/index -> Acquisition -> optical distance
 optical distance    -> OpticalPath             -> geometry, annotations, coupling, components
-FiberArray          -> context                 -> configuration + path
+FiberArray          -> context                 -> acquisitions + path
 ```
 
-This is why `AcquisitionConfiguration` can contain fields like `spatial_sampling_interval`, `first_channel_index`, and `first_channel_distance` without directly referencing an optical path. Those values are interpreted in the context supplied by the fiber array. The same optical path can be observed under different configurations, and the same configuration pattern can be reused when appropriate.
+This is why `Acquisition` can contain fields like `spatial_sampling_interval` and `first_channel_distance` without directly referencing an optical path. These are channel-to-path alignment parameters for primitive or partial file formats whose patch coordinate is a positional integer channel/index rather than true optical distance. They should not be used as a shortcut for omitting lead-in, telemetry, unknown, or other non-sensing intervals from an `OpticalPath` when those intervals matter. Native channel identifiers should be normalized to positional indices before this conversion, or preserved separately as metadata. Those values are interpreted in the context supplied by the fiber array. The same optical path can be observed under different configurations, and the same configuration pattern can be reused when appropriate.
+
+`Acquisition.code` is the channel-like acquisition code. `Acquisition.location_code` follows the FDSN convention of grouping or disambiguating channel-like configurations within a station-like record; it may be an empty string.
 
 
 # Known Tradeoffs

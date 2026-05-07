@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.core.inventory import (
-    AcquisitionConfiguration,
+    Acquisition,
     FiberArray,
     Geometry,
     Inventory,
+    Network,
 )
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import iterate
@@ -36,8 +39,17 @@ _TRACK_NAMES: tuple[_TrackName, ...] = (
     "annotation",
 )
 _QUALIFIED_TRACKS = set(_TRACK_NAMES)
-_ATTR_SOURCE_NAMES = ("fiber_array", "acquisition_configuration", "interrogator")
+_ATTR_SOURCE_NAMES = ("fiber_array", "acquisition", "interrogator")
 _XYZ_INDEX = {"x": 0, "y": 1, "z": 2}
+
+
+@dataclass(frozen=True)
+class _InventoryContext:
+    """Resolved inventory objects for one patch data source."""
+
+    fiber_array: FiberArray
+    acquisition: Acquisition
+    patch_time: object
 
 
 def _validate_inventory(inventory) -> Inventory:
@@ -48,12 +60,11 @@ def _validate_inventory(inventory) -> Inventory:
     return inventory
 
 
-def _get_fiber_array_id(patch: PatchType, fiber_array_id: str | None) -> str:
-    """Return an explicit or patch-stored fiber array id."""
-    legacy_id = patch.attrs.get("acquisition_id", "")
-    out = fiber_array_id or patch.attrs.fiber_array_id or legacy_id
+def _get_data_source_id(patch: PatchType, data_source_id: str | None) -> str:
+    """Return an explicit or patch-stored data source id."""
+    out = data_source_id or patch.attrs.data_source_id
     if not out:
-        msg = "A fiber_array_id is required to derive distance from inventory."
+        msg = "A data_source_id is required to resolve inventory context."
         raise ParameterError(msg)
     return out
 
@@ -68,43 +79,82 @@ def _get_patch_time(patch: PatchType):
     return time
 
 
-def _view_fiber_array(
+def _get_unique_match(items, predicate, description: str):
+    """Return the unique item matching predicate or raise."""
+    matches = tuple(item for item in items if predicate(item))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        msg = f"No inventory {description} found."
+        raise ParameterError(msg)
+    msg = f"Multiple inventory {description} records found."
+    raise ParameterError(msg)
+
+
+def _resolve_inventory_context(
     patch: PatchType,
-    inventory: Inventory,
-    fiber_array_id: str,
-) -> FiberArray:
-    """Return the time-aware fiber array view for a patch."""
+    inventory,
+    data_source_id: str | None,
+) -> _InventoryContext:
+    """Resolve patch inventory context by traversing Network/FiberArray/Acquisition."""
+    source_attrs, fiber_array = _resolve_fiber_array(patch, inventory, data_source_id)
+    acquisition = _get_unique_match(
+        fiber_array.acquisitions,
+        lambda item: (
+            item.location_code == source_attrs.location
+            and item.code == source_attrs.acquisition
+        ),
+        (
+            "acquisition with location "
+            f"{source_attrs.location!r} and code {source_attrs.acquisition!r}"
+        ),
+    )
+    return _InventoryContext(
+        fiber_array=fiber_array,
+        acquisition=acquisition,
+        patch_time=_get_patch_time(patch),
+    )
+
+
+def _resolve_fiber_array(
+    patch: PatchType,
+    inventory,
+    data_source_id: str | None,
+) -> tuple[PatchAttrs, FiberArray]:
+    """Resolve the network and fiber array from a data source id."""
+    inventory = _validate_inventory(inventory)
+    source_attrs = PatchAttrs(data_source_id=_get_data_source_id(patch, data_source_id))
     time = _get_patch_time(patch)
-    try:
-        return inventory.get_records(
-            record_ids=fiber_array_id,
-            record_types=FiberArray,
-            time=time,
-        )[0]
-    except IndexError:
-        msg = f"No fiber array {fiber_array_id!r} found in inventory."
-        raise ParameterError(msg) from None
+    networks = inventory.get_records(record_types=Network, time=time)
+    network = _get_unique_match(
+        networks,
+        lambda item: item.code == source_attrs.network,
+        f"network with code {source_attrs.network!r}",
+    )
+    fiber_array = _get_unique_match(
+        network.fiber_arrays,
+        lambda item: item.code == source_attrs.fiber_array,
+        f"fiber array with code {source_attrs.fiber_array!r}",
+    )
+    return source_attrs, fiber_array
 
 
 def _get_fiber_array(
     patch: PatchType,
     inventory,
-    fiber_array_id: str | None,
+    data_source_id: str | None,
 ) -> FiberArray:
     """Return the resolved fiber array view for a patch."""
-    inventory = _validate_inventory(inventory)
-    fiber_array_id = _get_fiber_array_id(patch, fiber_array_id)
-    return _view_fiber_array(patch, inventory, fiber_array_id)
+    return _resolve_fiber_array(patch, inventory, data_source_id)[1]
 
 
-def _get_acquisition_configuration(
-    fiber_array: FiberArray,
-) -> AcquisitionConfiguration:
-    """Return the resolved acquisition configuration from a fiber array."""
-    if (config := fiber_array.acquisition_configuration) is None:
-        msg = "FiberArray must resolve to an acquisition configuration."
-        raise ParameterError(msg)
-    return config
+def _get_acquisition(
+    patch: PatchType,
+    inventory: Inventory,
+    data_source_id: str | None,
+) -> Acquisition:
+    """Return the resolved acquisition view for a patch."""
+    return _resolve_inventory_context(patch, inventory, data_source_id).acquisition
 
 
 def _get_integer_dim_array(patch: PatchType, dim: str) -> np.ndarray:
@@ -133,16 +183,14 @@ def _validate_distance_update(patch: PatchType, dim: str) -> None:
 
 def _distance_from_config(
     values: np.ndarray,
-    config: AcquisitionConfiguration,
+    config: Acquisition,
 ) -> np.ndarray:
-    """Return optical distance from integer channel/index values and config."""
+    """Return optical distance from positional integer channel/index values."""
     interval = config.spatial_sampling_interval
     if interval is None:
-        msg = "AcquisitionConfiguration.spatial_sampling_interval is required."
+        msg = "Acquisition.spatial_sampling_interval is required."
         raise ParameterError(msg)
-    return (
-        config.first_channel_distance + (values - config.first_channel_index) * interval
-    )
+    return config.first_channel_distance + values * interval
 
 
 def _normalize_coord_requests(coords) -> tuple[str, ...]:
@@ -177,12 +225,18 @@ def _validate_policy(value: str, valid: set[str], name: str) -> None:
         raise ParameterError(msg)
 
 
-def _get_optical_path(fiber_array: FiberArray):
-    """Return the resolved optical path from a fiber array."""
-    if (path := fiber_array.optical_path) is None:
+def _get_optical_path(fiber_array: FiberArray, time=None):
+    """Return the single optical path valid for a fiber array and time."""
+    matches = tuple(
+        path for path in fiber_array.optical_paths if path.is_effective_at(time)
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
         msg = "FiberArray must resolve to an optical path."
         raise ParameterError(msg)
-    return path
+    msg = "FiberArray resolves to multiple optical paths."
+    raise ParameterError(msg)
 
 
 def _get_distance_values_and_dim(patch: PatchType) -> tuple[np.ndarray, str]:
@@ -207,9 +261,9 @@ def _get_distance_values_and_dim(patch: PatchType) -> tuple[np.ndarray, str]:
 
 def _check_distance_bounds(distance: np.ndarray, path) -> None:
     """Ensure distance values are within known optical path length."""
-    if path.length is None:
+    if path.optical_length is None:
         return
-    bad = (distance < 0.0) | (distance > float(path.length))
+    bad = (distance < 0.0) | (distance > float(path.optical_length))
     if np.any(bad):
         msg = "Patch distance values must fall within the optical path length."
         raise ParameterError(msg)
@@ -222,15 +276,19 @@ def _get_track_edges(path, track: _TrackName) -> tuple[tuple, np.ndarray]:
     if not records:
         msg = f"Optical path has no {sequence.display_name} records."
         raise ParameterError(msg)
-    lengths = np.asarray([record.length for record in records], dtype=float)
+    lengths = np.asarray([record.optical_length for record in records], dtype=float)
     if np.any(np.isnan(lengths)):
         msg = f"Projecting {sequence.display_name} requires all records to have length."
         raise ParameterError(msg)
     total = float(np.sum(lengths))
-    if path.length is not None and not np.isclose(total, float(path.length), atol=1e-9):
+    if path.optical_length is not None and not np.isclose(
+        total,
+        float(path.optical_length),
+        atol=1e-9,
+    ):
         msg = (
-            f"{sequence.display_name} length {total} does not match optical path "
-            f"length {path.length}."
+            f"{sequence.display_name} optical length {total} does not match "
+            f"optical path length {path.optical_length}."
         )
         raise ParameterError(msg)
     return records, np.concatenate([[0.0], np.cumsum(lengths)])
@@ -285,15 +343,19 @@ def _project_annotation_field(path, distance: np.ndarray, field: str) -> np.ndar
     """Project overlapping annotation fields onto distance values."""
     out = []
     for value in distance:
-        matches = tuple(
-            getattr(annotation, field, None)
-            for annotation in path.annotations
-            if annotation.start_distance <= value < annotation.end_distance
-            or (
-                path.length is not None
-                and value == path.length == annotation.end_distance
-            )
-        )
+        matches = []
+        for annotation in path.annotations:
+            start, stop = annotation.distance
+            start = 0.0 if start is None else start
+            stop = path.optical_length if stop is None else stop
+            if stop is None:
+                msg = "Open-ended annotation intervals require optical path length."
+                raise ParameterError(msg)
+            if start <= value < stop or (
+                path.optical_length is not None and value == path.optical_length == stop
+            ):
+                matches.append(getattr(annotation, field, None))
+        matches = tuple(matches)
         matches = tuple(item for item in matches if item not in ("", None))
         if len(matches) == 0:
             out.append("")
@@ -365,11 +427,11 @@ def _project_geometry_axis(
             msg = f"Geometry axis {axis!r} is not available for all intervals."
             _raise_or_nan(out, mask, msg, on_missing)
             continue
-        if coordinates.shape[0] == 1 or geometry.length == 0:
+        if coordinates.shape[0] == 1 or geometry.optical_length == 0:
             out[mask] = coordinates[0, axis_index]
             continue
         start = edges[geo_index]
-        local_fraction = (distance[mask] - start) / float(geometry.length)
+        local_fraction = (distance[mask] - start) / float(geometry.optical_length)
         axis_values = coordinates[[0, -1], axis_index]
         out[mask] = axis_values[0] + local_fraction * (axis_values[1] - axis_values[0])
     return out
@@ -422,15 +484,22 @@ def _project_inventory_coord(
     )
 
 
-def _get_attr_sources(fiber_array: FiberArray) -> dict[str, object | None]:
+def _get_attr_sources(
+    fiber_array: FiberArray | None,
+    acquisition: Acquisition | None,
+) -> dict[str, object | None]:
     """Return supported inventory attr source objects."""
-    config = fiber_array.acquisition_configuration
-    interrogator = None if config is None else config.interrogator
+    interrogator = None if acquisition is None else acquisition.interrogator
     return {
         "fiber_array": fiber_array,
-        "acquisition_configuration": config,
+        "acquisition": acquisition,
         "interrogator": interrogator,
     }
+
+
+def _requests_source(requests: tuple[str, ...], source_name: str) -> bool:
+    """Return True if attr requests explicitly need one source."""
+    return any(request.split(".", 1)[0] == source_name for request in requests)
 
 
 def _handle_missing_attr(name: str, on_missing: _AttrMissingPolicy) -> None:
@@ -495,19 +564,19 @@ def distance_from_inventory(
     patch: PatchType,
     inventory: Inventory,
     dim: str = "channel",
-    fiber_array_id: str | None = None,
+    data_source_id: str | None = None,
 ) -> PatchType:
     """
-    Add optical distance derived from an inventory fiber array.
+    Add optical distance derived from an inventory acquisition.
 
     Parameters
     ----------
     inventory
-        Inventory containing the fiber array and acquisition configuration.
+        Inventory containing the acquisition.
     dim
-        Integer patch dimension used as channel or index values.
-    fiber_array_id
-        FiberArray resource id. Defaults to ``patch.attrs.fiber_array_id``.
+        Positional integer patch dimension used as channel or index values.
+    data_source_id
+        Dot-delimited data source id. Defaults to ``patch.attrs.data_source_id``.
 
     See Also
     --------
@@ -517,12 +586,10 @@ def distance_from_inventory(
         Rationale for the inventory model and standard deviations.
     """
     inventory = _validate_inventory(inventory)
-    fiber_array_id = _get_fiber_array_id(patch, fiber_array_id)
-    fiber_array = _view_fiber_array(patch, inventory, fiber_array_id)
-    config = _get_acquisition_configuration(fiber_array)
+    acquisition = _get_acquisition(patch, inventory, data_source_id)
     _validate_distance_update(patch, dim)
     values = _get_integer_dim_array(patch, dim)
-    distance = _distance_from_config(values, config)
+    distance = _distance_from_config(values, acquisition)
     return patch.update_coords(distance=(dim, distance))
 
 
@@ -531,7 +598,7 @@ def add_inventory_coords(
     patch: PatchType,
     inventory: Inventory,
     coords: str | Sequence[str] = ("label",),
-    fiber_array_id: str | None = None,
+    data_source_id: str | None = None,
     on_boundary: _BoundaryPolicy = "raise",
     on_missing: _MissingPolicy = "raise",
 ) -> PatchType:
@@ -546,8 +613,8 @@ def add_inventory_coords(
         Inventory coordinates to add. ``"label"`` projects annotation labels.
         Geometry axes must be requested explicitly, such as ``"x"``, ``"y"``,
         ``"z"``, ``"latitude"``, ``"longitude"``, or ``"elevation"``.
-    fiber_array_id
-        FiberArray resource id. Defaults to ``patch.attrs.fiber_array_id``.
+    data_source_id
+        Dot-delimited data source id. Defaults to ``patch.attrs.data_source_id``.
     on_boundary
         How to handle distance samples on interior inventory interval boundaries.
         Options are ``"raise"``, ``"warn"``, and ``"ignore"``.
@@ -559,7 +626,7 @@ def add_inventory_coords(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch().update_attrs(
-    ...     fiber_array_id="random_das_fiber_array",
+    ...     data_source_id="RD.RDAS..RAW",
     ... )
     >>> inventory = dc.get_example_inventory("random_das")
     >>> out = patch.add_inventory_coords(inventory, coords=("label", "x", "y", "z"))
@@ -580,8 +647,8 @@ def add_inventory_coords(
     _validate_policy(on_boundary, {"raise", "warn", "ignore"}, "on_boundary")
     _validate_policy(on_missing, {"raise", "nan"}, "on_missing")
     coord_requests = _normalize_coord_requests(coords)
-    fiber_array = _get_fiber_array(patch, inventory, fiber_array_id)
-    path = _get_optical_path(fiber_array)
+    fiber_array = _get_fiber_array(patch, inventory, data_source_id)
+    path = _get_optical_path(fiber_array, _get_patch_time(patch))
     distance, dim = _get_distance_values_and_dim(patch)
     _check_distance_bounds(distance, path)
     warned = [False]
@@ -604,7 +671,7 @@ def add_inventory_attrs(
     patch: PatchType,
     inventory: Inventory,
     attrs: str | Sequence[str],
-    fiber_array_id: str | None = None,
+    data_source_id: str | None = None,
     on_missing: _AttrMissingPolicy = "raise",
 ) -> PatchType:
     """
@@ -613,14 +680,14 @@ def add_inventory_attrs(
     Parameters
     ----------
     inventory
-        Inventory containing the fiber array, acquisition configuration, and
-        optionally linked interrogator.
+        Inventory containing the fiber array, acquisition, and optionally linked
+        interrogator.
     attrs
         Inventory attrs to add. Simple names must be unambiguous across the
         fiber array graph. Qualified names can use ``fiber_array.``,
-        ``acquisition_configuration.``, or ``interrogator.`` prefixes.
-    fiber_array_id
-        FiberArray resource id. Defaults to ``patch.attrs.fiber_array_id``.
+        ``acquisition.``, or ``interrogator.`` prefixes.
+    data_source_id
+        Dot-delimited data source id. Defaults to ``patch.attrs.data_source_id``.
     on_missing
         How to handle missing requested attrs or linked objects. Options are
         ``"raise"`` and ``"ignore"``.
@@ -629,16 +696,16 @@ def add_inventory_attrs(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch().update_attrs(
-    ...     fiber_array_id="random_das_fiber_array",
+    ...     data_source_id="RD.RDAS..RAW",
     ... )
     >>> inventory = dc.get_example_inventory("random_das")
     >>> out = patch.add_inventory_attrs(
     ...     inventory,
-    ...     attrs=("tag", "sample_rate", "interrogator.model"),
+    ...     attrs=("tag", "acquisition_sample_rate", "interrogator.model"),
     ... )
     >>> out.attrs.tag
     'random'
-    >>> out.attrs.sample_rate
+    >>> out.attrs.acquisition_sample_rate
     250.0
     >>> out.attrs.interrogator_model
     'SyntheticInterrogator'
@@ -648,12 +715,24 @@ def add_inventory_attrs(
     [Inventory tutorial](/tutorial/inventory.qmd)
         Examples of adding fiber array and interrogator attrs to patches.
     [Inventory design note](/notes/inventory_design.qmd)
-        Rationale for fiber array and acquisition configuration relationships.
+        Rationale for fiber array and acquisition relationships.
     """
     _validate_policy(on_missing, {"raise", "ignore"}, "on_missing")
     attr_requests = _normalize_attr_requests(attrs)
-    fiber_array = _get_fiber_array(patch, inventory, fiber_array_id)
-    sources = _get_attr_sources(fiber_array)
+    inventory = _validate_inventory(inventory)
+    fiber_array = None
+    acquisition = None
+    has_source = bool(data_source_id or patch.attrs.data_source_id)
+    needs_fiber_array = _requests_source(attr_requests, "fiber_array") or has_source
+    if needs_fiber_array:
+        fiber_array = _get_fiber_array(patch, inventory, data_source_id)
+    if (
+        _requests_source(attr_requests, "acquisition")
+        or _requests_source(attr_requests, "interrogator")
+        or has_source
+    ):
+        acquisition = _get_acquisition(patch, inventory, data_source_id)
+    sources = _get_attr_sources(fiber_array, acquisition)
     new_attrs = {}
     for request in attr_requests:
         if resolved := _get_inventory_attr(sources, request, on_missing):

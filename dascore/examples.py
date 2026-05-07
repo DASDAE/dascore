@@ -561,36 +561,38 @@ def random_das_inventory() -> inv.Inventory:
     """
     interrogator = inv.Interrogator(
         resource_id="random_das_interrogator",
-        interrogator_id="IU001",
         manufacturer="DASCore",
         model="SyntheticInterrogator",
         instrument_type="DAS interrogator",
     )
-    configuration = inv.AcquisitionConfiguration(
+    configuration = inv.Acquisition(
         resource_id="random_das_configuration",
+        code="RAW",
+        location_code="",
+        data_category="DAS",
+        data_type="strain_rate",
+        data_units="",
         interrogator=interrogator,
         gauge_length=10.0,
-        sample_rate=250.0,
+        acquisition_sample_rate=250.0,
         spatial_sampling_interval=1.0,
     )
     cable = inv.Cable(
         resource_id="random_das_cable",
-        cable_id="random_das_cable",
         name="Synthetic straight fiber",
-        cable_type="synthetic",
-        cable_construction="single_fiber",
         fiber_count=1,
     )
     fiber = inv.FiberSegment(
         resource_id="random_das_fiber",
-        length=300.0,
+        optical_length=300.0,
         name="Synthetic sensing fiber",
         fiber_type="single_mode",
         container=cable,
     )
     crs = inv.CoordinateReferenceSystem(
         resource_id="random_das_local_crs",
-        crs_type="local",
+        authority="LOCAL",
+        code="random_das_local_cartesian",
         name="Synthetic local Cartesian",
         origin=(0.0, 0.0, 0.0),
         axis_order=("x", "y", "z"),
@@ -598,14 +600,14 @@ def random_das_inventory() -> inv.Inventory:
     )
     geometry = inv.Geometry(
         resource_id="random_das_geometry",
-        length=fiber.length,
+        optical_length=fiber.optical_length,
         geometry_type="linear",
         coordinate_reference_system=crs,
         coordinates=((0.0, 0.0, 0.0), (300.0, 0.0, 0.0)),
     )
     coupling = inv.CouplingCondition(
         resource_id="random_das_coupling",
-        length=fiber.length,
+        optical_length=fiber.optical_length,
         coupling_type="synthetic",
         deployment_type="synthetic",
         installation_method="not_applicable",
@@ -614,13 +616,13 @@ def random_das_inventory() -> inv.Inventory:
     )
     annotation = inv.OpticalPathAnnotation(
         resource_id="random_das_annotation",
-        start_distance=0.0,
-        end_distance=fiber.length,
+        distance=(0.0, fiber.optical_length),
         label="random patch aperture",
     )
     optical_path = inv.OpticalPath(
         resource_id="random_das_optical_path",
-        length=fiber.length,
+        name="Synthetic straight optical path",
+        optical_length=fiber.optical_length,
         optical_components=(fiber,),
         geometries=(geometry,),
         coupling_conditions=(coupling,),
@@ -628,15 +630,17 @@ def random_das_inventory() -> inv.Inventory:
     )
     fiber_array = inv.FiberArray(
         resource_id="random_das_fiber_array",
-        acquisition_configuration=configuration,
-        optical_path=optical_path,
-        data_units="",
+        code="RDAS",
+        name="Random DAS synthetic array",
+        acquisitions=(configuration,),
+        optical_paths=(optical_path,),
         dims="distance,time",
         tag="random",
     )
     network = inv.Network(
         resource_id="random_das_network",
-        code="",
+        code="RD",
+        name="Random DAS example network",
         description="Default random DAS example network.",
         fiber_arrays=(fiber_array,),
     )
@@ -653,37 +657,39 @@ def example_event_2_inventory() -> inv.Inventory:
     """
     interrogator = inv.Interrogator(
         resource_id="example_event_2_interrogator",
-        interrogator_id="IU001",
         manufacturer="unknown",
         model="unknown",
         instrument_type="DAS interrogator",
-        notes="Public example from Stanek et al. induced seismicity data.",
+        comment="Public example from Stanek et al. induced seismicity data.",
     )
-    configuration = inv.AcquisitionConfiguration(
+    configuration = inv.Acquisition(
         resource_id="example_event_2_configuration",
+        code="PROC",
+        location_code="00",
+        data_category="DAS",
+        data_type="strain_rate",
+        data_units="strain/s",
         interrogator=interrogator,
         gauge_length=10.0,
-        sample_rate=1000.0,
+        acquisition_sample_rate=1000.0,
         spatial_sampling_interval=1.0,
     )
     cable = inv.Cable(
         resource_id="example_event_2_cable",
-        cable_id="stanek_borehole_cable",
         name="Borehole monitoring cable",
-        cable_type="fiber_optic",
-        cable_construction="borehole",
         fiber_count=1,
     )
     fiber = inv.FiberSegment(
         resource_id="example_event_2_fiber",
-        length=1000.0,
+        optical_length=1000.0,
         name="Borehole sensing fiber",
         fiber_type="single_mode",
         container=cable,
     )
     crs = inv.CoordinateReferenceSystem(
         resource_id="example_event_2_local_crs",
-        crs_type="local",
+        authority="LOCAL",
+        code="example_event_2_local_depth",
         name="Borehole local depth coordinates",
         origin=(0.0, 0.0, 0.0),
         axis_order=("x", "y", "z"),
@@ -692,14 +698,14 @@ def example_event_2_inventory() -> inv.Inventory:
     )
     geometry = inv.Geometry(
         resource_id="example_event_2_geometry",
-        length=fiber.length,
+        optical_length=fiber.optical_length,
         geometry_type="linear",
         coordinate_reference_system=crs,
         coordinates=((0.0, 0.0, 0.0), (0.0, 0.0, -1000.0)),
     )
     coupling = inv.CouplingCondition(
         resource_id="example_event_2_coupling",
-        length=fiber.length,
+        optical_length=fiber.optical_length,
         coupling_type="clamped",
         deployment_type="borehole",
         installation_method="clamped",
@@ -714,13 +720,13 @@ def example_event_2_inventory() -> inv.Inventory:
     )
     annotation = inv.OpticalPathAnnotation(
         resource_id="example_event_2_annotation",
-        start_distance=0.0,
-        end_distance=fiber.length,
+        distance=(0.0, fiber.optical_length),
         label="borehole monitoring interval",
     )
     optical_path = inv.OpticalPath(
         resource_id="example_event_2_optical_path",
-        length=fiber.length,
+        name="Example event borehole optical path",
+        optical_length=fiber.optical_length,
         optical_components=(fiber,),
         geometries=(geometry,),
         coupling_conditions=(coupling,),
@@ -728,19 +734,21 @@ def example_event_2_inventory() -> inv.Inventory:
     )
     fiber_array = inv.FiberArray(
         resource_id="example_event_2_fiber_array",
-        acquisition_configuration=configuration,
-        optical_path=optical_path,
-        data_units="strain/s",
+        code="EV2",
+        name="Example event borehole array",
+        acquisitions=(configuration,),
+        optical_paths=(optical_path,),
         dims="distance,time",
         tag="example_event_2",
-        notes=(
+        comment=(
             "The example_event_2 patch uses relative time in seconds after "
             "preprocessing; inventory time fields are therefore left open."
         ),
     )
     network = inv.Network(
         resource_id="example_event_2_network",
-        code="",
+        code="EX",
+        name="Example event network",
         description="Example event fiber array network.",
         fiber_arrays=(fiber_array,),
     )

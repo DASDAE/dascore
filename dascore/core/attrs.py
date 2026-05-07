@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
-from pydantic import ConfigDict, Field, PlainValidator, model_validator
+from pydantic import ConfigDict, Field, PlainValidator, computed_field, model_validator
 from typing_extensions import Self
 
-from dascore.constants import (
-    VALID_DATA_CATEGORIES,
-    VALID_DATA_TYPES,
-    max_lens,
-)
+from dascore.constants import max_lens
 from dascore.utils.attrs import _raise_if_coord_attr_updates
 from dascore.utils.misc import (
     to_str,
@@ -20,6 +16,35 @@ from dascore.utils.misc import (
 from dascore.utils.models import DascoreBaseModel, UnitQuantity
 
 str_validator = PlainValidator(to_str)
+_DATA_SOURCE_ID_FIELDS = ("network", "fiber_array", "location", "acquisition")
+
+
+def _parse_data_source_id(value: str) -> tuple[str, str, str, str]:
+    """Parse and validate a dot-delimited data source id."""
+    parts = tuple(value.split("."))
+    if len(parts) != 4:
+        msg = (
+            "data_source_id must have exactly four dot-delimited components: "
+            "network.fiber_array.location.acquisition."
+        )
+        raise ValueError(msg)
+    network, fiber_array, location, acquisition = parts
+    if not network or not fiber_array or not acquisition:
+        msg = (
+            "data_source_id network, fiber_array, and acquisition components "
+            "must be non-empty."
+        )
+        raise ValueError(msg)
+    return network, fiber_array, location, acquisition
+
+
+def _validate_data_source_id_component(name: str, value) -> str:
+    """Return a string component after validating delimiter safety."""
+    value = to_str(value)
+    if "." in value:
+        msg = f"PatchAttrs {name!r} cannot contain '.'."
+        raise ValueError(msg)
+    return value
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -29,6 +54,14 @@ class PatchAttrs(DascoreBaseModel):
     `PatchAttrs` stores non-structural metadata. Nested coordinate payloads in
     `coords` are rejected, while flat coord-like keys are treated like any
     other extra attrs. `dims` is ignored during normalization.
+
+    Patch attrs are the metadata snapshot carried by one concrete patch. They
+    are not a replacement for inventory records. Acquisition-derived defaults
+    such as data type, data category, acquisition units, sample rate, and gauge
+    length belong on [`Acquisition`](`dascore.core.inventory.Acquisition`) and
+    can be copied onto a patch when needed. Patch attrs keep patch-local values
+    and overrides such as `data_units`, `tag`, processing `history`, and the
+    `data_source_id` used to resolve inventory context.
 
     The default attributes are:
     ```{python}
@@ -53,34 +86,23 @@ class PatchAttrs(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = Field(
-        description="Describes the quantity being measured.", default=""
-    )
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = Field(
-        description="Describes the type of data.",
-        default="",
-    )
     data_units: UnitQuantity | None = Field(
         default=None, description="The units of the data measurements"
-    )
-    instrument_id: str = Field(
-        description="A unique id for the instrument which generated the data.",
-        default="",
-        max_length=max_lens["instrument_id"],
-    )
-    fiber_array_id: str = Field(
-        description="A unique identifier linking this data to a fiber array.",
-        default="",
-        max_length=max_lens["experiment_id"],
     )
     tag: str = Field(
         default="", max_length=max_lens["tag"], description="A custom string field."
     )
-    station: str = Field(
-        default="", max_length=max_lens["station"], description="A station code."
-    )
     network: str = Field(
         default="", max_length=max_lens["network"], description="A network code."
+    )
+    fiber_array: Annotated[str, str_validator] = Field(
+        default="", description="A fiber array code."
+    )
+    location: Annotated[str, str_validator] = Field(
+        default="", description="A location code within a fiber array."
+    )
+    acquisition: Annotated[str, str_validator] = Field(
+        default="", description="An acquisition code."
     )
     history: str | tuple[str, ...] = Field(
         default_factory=tuple,
@@ -100,7 +122,32 @@ class PatchAttrs(DascoreBaseModel):
             )
             raise ValueError(msg)
         data.pop("dims", None)
+        data_source_id = data.pop("data_source_id", "")
+        if data_source_id:
+            parsed = _parse_data_source_id(to_str(data_source_id))
+            for name, value in zip(_DATA_SOURCE_ID_FIELDS, parsed, strict=True):
+                old_value = data.get(name, "")
+                if old_value and old_value != value:
+                    msg = (
+                        f"PatchAttrs {name!r} conflicts with data_source_id "
+                        f"{data_source_id!r}."
+                    )
+                    raise ValueError(msg)
+                data[name] = value
+        for name in _DATA_SOURCE_ID_FIELDS:
+            if name in data:
+                data[name] = _validate_data_source_id_component(name, data[name])
         return data
+
+    @computed_field
+    @property
+    def data_source_id(self) -> str:
+        """Return network.fiber_array.location.acquisition when available."""
+        if not (self.network and self.fiber_array and self.acquisition):
+            return ""
+        return ".".join(
+            (self.network, self.fiber_array, self.location, self.acquisition)
+        )
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -149,7 +196,7 @@ class PatchAttrs(DascoreBaseModel):
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""
         _raise_if_coord_attr_updates(kwargs)
-        out = self.model_dump(exclude_unset=True)
+        out = self.model_dump(exclude={"data_source_id"}, exclude_unset=True)
         out.update(kwargs)
         return self.from_dict(out)
 

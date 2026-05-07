@@ -89,7 +89,6 @@ class TestMergeAttrs:
         out = combine_patch_attrs([pa1, pa2], conflicts="drop")
         defaults = PatchAttrs()
         assert out.tag == defaults.tag
-        assert out.station == defaults.station
 
     def test_keep_disjoint_values(self, random_patch):
         """Ensure disjoint values can be kept."""

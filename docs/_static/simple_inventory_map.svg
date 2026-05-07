@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 860.56079 225.81357"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg15"
+   sodipodi:docname="simple_inventory_map.svg"
+   inkscape:version="1.4.3 (1:1.4.3+202512261035+0d15f75042)"
+   width="860.56079"
+   height="225.81357"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <defs
+     id="defs15">
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect22" />
+    <rect
+       x="422.71188"
+       y="60.676346"
+       width="167.87123"
+       height="38.428352"
+       id="rect16" />
+    <rect
+       x="422.71188"
+       y="60.676346"
+       width="167.87123"
+       height="38.428352"
+       id="rect16-3" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect22-8" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect22-1" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect22-0" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect23" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="91.688705"
+       height="70.114891"
+       id="rect23-2" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2-6" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2-6-0" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2-7" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2-9" />
+    <rect
+       x="351.24863"
+       y="216.41229"
+       width="187.4225"
+       height="31.012356"
+       id="rect22-2-65" />
+  </defs>
+  <sodipodi:namedview
+     id="namedview15"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="1.4832798"
+     inkscape:cx="395.07044"
+     inkscape:cy="56.968348"
+     inkscape:window-width="1854"
+     inkscape:window-height="1011"
+     inkscape:window-x="66"
+     inkscape:window-y="32"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g25" />
+  <title
+     id="title">Straight fiber deployment with two coupling conditions</title>
+  <desc
+     id="desc">An interrogator connects through coiled telemetry cable to a 300 meter sensing fiber. The first 200 meters are trenched with a 90 degree bend, and the final 100 meters are loose.</desc>
+  <rect
+     style="fill:#a4a4a5;fill-opacity:0.41819248;stroke:none;stroke-width:3.77953;stroke-opacity:1"
+     id="rect24"
+     width="860.56079"
+     height="225.81357"
+     x="0"
+     y="0"
+     rx="3.0561676" />
+  <text
+     x="387.67365"
+     y="31.366051"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="20px"
+     font-weight="700"
+     fill="#0f172a"
+     id="text1">Simple Fiber Deployment</text>
+  <rect
+     x="23.173088"
+     y="119.33159"
+     width="93.911003"
+     height="60.060059"
+     rx="5.6346602"
+     fill="#e2e8f0"
+     stroke="#334155"
+     stroke-width="2"
+     id="rect2" />
+  <rect
+     x="37.259743"
+     y="132.46974"
+     width="65.737701"
+     height="20.645645"
+     rx="2.8173301"
+     fill="#f8fafc"
+     stroke="#64748b"
+     id="rect3"
+     style="stroke-width:1" />
+  <ellipse
+     cx="44.772629"
+     cy="167.19196"
+     fill="#22c55e"
+     id="circle3"
+     style="stroke-width:1"
+     rx="4.6955504"
+     ry="4.6921926" />
+  <ellipse
+     cx="61.676613"
+     cy="167.19196"
+     fill="#f59e0b"
+     id="circle4"
+     style="stroke-width:1"
+     rx="4.6955504"
+     ry="4.6921926" />
+  <ellipse
+     cx="78.580574"
+     cy="167.19196"
+     fill="#ef4444"
+     id="circle5"
+     style="stroke-width:1"
+     rx="4.6955504"
+     ry="4.6921926" />
+  <path
+     d="m 119.13621,150.24264 c 20,0 20,-32 40,-32 20,0 20,64 40,64 20,0 20,-64 40,-64 20,0 20,64 40,64 20,0 20,-32 40,-32"
+     fill="none"
+     stroke="#475569"
+     stroke-width="5"
+     stroke-linecap="round"
+     id="path5"
+     style="stroke:#1f1f1f;stroke-opacity:1" />
+  <line
+     x1="326.40579"
+     y1="150.21825"
+     x2="607.24146"
+     y2="150.21825"
+     stroke="#f97316"
+     stroke-width="9.99997"
+     stroke-linecap="round"
+     id="line6-0-2-7"
+     style="stroke:#2563eb;stroke-opacity:1;stroke-width:10;stroke-dasharray:none" />
+  <line
+     x1="607.24146"
+     y1="47.818844"
+     x2="607.24146"
+     y2="150.21825"
+     stroke="#f97316"
+     stroke-width="9.99995"
+     stroke-linecap="round"
+     id="line6-0-2-7-4"
+     style="stroke:#2563eb;stroke-opacity:1" />
+  <line
+     x1="834.94269"
+     y1="47.818844"
+     x2="607.24146"
+     y2="47.818844"
+     stroke="#f97316"
+     stroke-width="9.99996"
+     stroke-linecap="round"
+     id="line6-0-2-7-4-0"
+     style="stroke:#f97316;stroke-opacity:1" />
+  <circle
+     cx="319.1362"
+     cy="150.24265"
+     r="8"
+     fill="#0f172a"
+     id="circle7" />
+  <circle
+     cx="605.35956"
+     cy="150.21825"
+     r="8"
+     fill="#0f172a"
+     id="circle8" />
+  <circle
+     cx="608.66608"
+     cy="47.818844"
+     r="8"
+     fill="#0f172a"
+     id="circle8-8"
+     inkscape:transform-center-x="-32.89357"
+     inkscape:transform-center-y="49.101996" />
+  <circle
+     cx="834.44543"
+     cy="47.818844"
+     r="8"
+     fill="#0f172a"
+     id="circle8-8-8"
+     inkscape:transform-center-x="-32.89357"
+     inkscape:transform-center-y="49.101996" />
+  <text
+     x="153.54863"
+     y="266.54419"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="18px"
+     fill="#1d4ed8"
+     id="text14" />
+  <text
+     x="387.87234"
+     y="269.40451"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="18px"
+     fill="#c2410c"
+     id="text15" />
+  <text
+     x="467.20761"
+     y="138.47998"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="16px"
+     fill="#0f172a"
+     id="text10-6"
+     style="font-size:21.3333px"><tspan
+       style="fill:#181818;fill-opacity:1"
+       id="tspan23">300m</tspan></text>
+  <text
+     x="98.93322"
+     y="-618.68787"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="16px"
+     fill="#0f172a"
+     id="text10-6-5"
+     style="font-size:21.3333px"
+     transform="rotate(90)"><tspan
+       style="fill:#181818;fill-opacity:1"
+       id="tspan23-0">120m</tspan></text>
+  <text
+     x="721.47607"
+     y="36.63488"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="16px"
+     fill="#0f172a"
+     id="text10-6-5-8"
+     style="font-size:21.3333px"><tspan
+       style="fill:#181818;fill-opacity:1"
+       id="tspan23-0-7">300m</tspan></text>
+  <text
+     xml:space="preserve"
+     id="text22"
+     style="font-size:24px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22);display:inline"
+     transform="translate(-39.234694,-101.17769)"><tspan
+       x="351.24805"
+       y="238.24911"
+       id="tspan2">A</tspan></text>
+  <g
+     id="g25"
+     transform="translate(85.605539)">
+    <line
+       x1="338.5394"
+       y1="208.85591"
+       x2="349.86069"
+       y2="208.85591"
+       stroke="#f97316"
+       stroke-width="9.99996"
+       stroke-linecap="round"
+       id="line6-0-2-7-7"
+       style="stroke:#2563eb;stroke-opacity:1" />
+    <line
+       x1="172.02794"
+       y1="208.85591"
+       x2="183.34923"
+       y2="208.85591"
+       stroke="#f97316"
+       stroke-width="9.99996"
+       stroke-linecap="round"
+       id="line6-0-2-7-7-3"
+       style="stroke:#1f1f1f;stroke-width:5;stroke-dasharray:none;stroke-opacity:1" />
+    <line
+       x1="511.44583"
+       y1="209.53009"
+       x2="522.76721"
+       y2="209.53009"
+       stroke="#f97316"
+       stroke-width="9.99996"
+       stroke-linecap="round"
+       id="line6-0-2-7-7-0"
+       style="stroke:#f97316;stroke-opacity:1" />
+    <circle
+       cx="670.34399"
+       cy="209.61189"
+       r="8"
+       fill="#0f172a"
+       id="circle8-9" />
+    <text
+       xml:space="preserve"
+       id="text22-2"
+       style="font-size:18.6667px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-2);display:inline"
+       transform="translate(6.8770378,-18.214745)"><tspan
+         x="351.24805"
+         y="233.39648"
+         id="tspan3">Trenched  Cable</tspan></text>
+    <text
+       xml:space="preserve"
+       id="text22-2-3"
+       style="font-size:18.6667px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-2-65);display:inline"
+       transform="translate(-163.88216,-18.931274)"><tspan
+         x="351.24805"
+         y="233.39648"
+         id="tspan4">Telemetry Cable</tspan></text>
+    <text
+       xml:space="preserve"
+       id="text22-2-5"
+       style="font-size:18.6667px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-2-6);display:inline"
+       transform="translate(182.04449,-18.168069)"><tspan
+         x="351.24805"
+         y="233.39648"
+         id="tspan5">Surface Cable</tspan></text>
+    <text
+       xml:space="preserve"
+       id="text22-2-5-1"
+       style="font-size:18.6667px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-2-6-0);display:inline"
+       transform="translate(331.69607,-17.715775)"><tspan
+         x="351.24805"
+         y="233.39648"
+         id="tspan6">Tap Point</tspan></text>
+  </g>
+  <text
+     xml:space="preserve"
+     id="text22-3"
+     style="font-size:24px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-8);display:inline"
+     transform="translate(232.01324,-98.066871)"><tspan
+       x="351.24805"
+       y="238.24911"
+       id="tspan7">B</tspan></text>
+  <text
+     xml:space="preserve"
+     id="text22-9"
+     style="font-size:24px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-1);display:inline"
+     transform="translate(245.95688,-205.61815)"><tspan
+       x="351.24805"
+       y="238.24911"
+       id="tspan8">C</tspan></text>
+  <text
+     xml:space="preserve"
+     id="text23"
+     style="font-size:24px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect23);display:inline"
+     transform="translate(245.95688,-205.61815)"><tspan
+       x="351.24805"
+       y="238.24911"
+       id="tspan9">C</tspan></text>
+  <text
+     xml:space="preserve"
+     id="text23-6"
+     style="font-size:24px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect23-2);display:inline"
+     transform="translate(473.26746,-205.29233)"><tspan
+       x="351.24805"
+       y="238.24911"
+       id="tspan10">D</tspan></text>
+  <text
+     xml:space="preserve"
+     id="text22-2-1"
+     style="font-size:18.6667px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect22-2-7);display:inline"
+     transform="translate(-333.8794,-27.532576)"><tspan
+       x="351.24805"
+       y="233.39648"
+       id="tspan11">Interrogator</tspan></text>
+  <metadata
+     id="metadata23">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>Straight fiber deployment with two coupling conditions</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>

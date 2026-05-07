@@ -26,11 +26,6 @@ _IntervalTrackName = Literal[
 ]
 
 
-def _get_default_resource_id() -> str:
-    """Return a default inventory resource id."""
-    return f"inventory_{uuid4().hex}"
-
-
 class _InventoryRecord(DascoreBaseModel):
     """Base class for immutable records stored in an Inventory."""
 
@@ -44,15 +39,11 @@ class _InventoryRecord(DascoreBaseModel):
     )
 
     resource_id: str = Field(
-        default_factory=_get_default_resource_id,
+        default="",
         description=(
-            "Stable identifier for the real-world or logical metadata resource."
-        ),
-    )
-    schema_version: int = Field(
-        default=1,
-        description=(
-            "Version of this record class schema; used for metadata model migration."
+            "Stable inventory identifier for the real-world or logical metadata "
+            "resource. DASCore generates random local ids for omitted values when "
+            "records are stored in an Inventory."
         ),
     )
     creation_time: DateTime64 = Field(
@@ -63,9 +54,21 @@ class _InventoryRecord(DascoreBaseModel):
         default="",
         description="Identifier for the person or process creating the record.",
     )
-    notes: str = Field(
-        default="", description="Free-form notes describing this metadata record."
+    comment: str = Field(
+        default="",
+        description="Additional comments.",
     )
+
+    @computed_field
+    @property
+    def type(self) -> str:
+        """Return the inventory type name."""
+        return self.__class__.__name__.lstrip("_")
+
+
+class _TimedInventoryRecord(_InventoryRecord):
+    """Base class for records with data-time validity intervals."""
+
     start_time: DateTime64 = Field(
         default=np.datetime64("NaT"),
         description="Start time for which this metadata record is valid.",
@@ -74,12 +77,6 @@ class _InventoryRecord(DascoreBaseModel):
         default=np.datetime64("NaT"),
         description="End time for which this metadata record is valid.",
     )
-
-    @computed_field
-    @property
-    def type(self) -> str:
-        """Return the inventory type name."""
-        return self.__class__.__name__.lstrip("_")
 
     def is_effective_at(self, time) -> bool:
         """Return True if this record is valid at the supplied time."""
@@ -131,38 +128,72 @@ def _new_derived_annotation_id(resource_id: str) -> str:
 
 def _annotation_interval(annotation) -> _DistanceInterval:
     """Return the path interval occupied by an annotation."""
-    return _DistanceInterval(annotation.start_distance, annotation.end_distance)
+    start, stop = annotation.distance
+    if start is None or stop is None:
+        msg = "Open annotation intervals require optical path context."
+        raise ParameterError(msg)
+    return _DistanceInterval(start, stop)
+
+
+def _resolve_annotation_interval(annotation, length: float | None) -> _DistanceInterval:
+    """Return the concrete path interval occupied by an annotation."""
+    start, stop = annotation.distance
+    start = 0.0 if start is None else float(start)
+    if stop is None:
+        if length is None:
+            msg = "Open-ended annotation intervals require optical path length."
+            raise ParameterError(msg)
+        stop = float(length)
+    else:
+        stop = float(stop)
+    if length is not None:
+        if start >= float(length):
+            msg = "Annotation distance start must be less than optical path length."
+            raise ParameterError(msg)
+        stop = min(stop, float(length))
+    return _DistanceInterval(start, stop)
 
 
 def _copy_annotation(annotation, interval: _DistanceInterval, *, preserve_id: bool):
     """Return an annotation copy with updated interval and identity."""
     updates = {
-        "start_distance": interval.start,
-        "end_distance": interval.stop,
+        "distance": (interval.start, interval.stop),
     }
     if not preserve_id:
         updates["resource_id"] = _new_derived_annotation_id(annotation.resource_id)
     return annotation.model_copy(update=updates)
 
 
-def _shift_annotations(annotations, offset: float, *, preserve_ids: bool = False):
+def _shift_annotations(
+    annotations,
+    offset: float,
+    *,
+    length: float | None,
+    preserve_ids: bool = False,
+):
     """Return annotations shifted by an offset."""
     return tuple(
         _copy_annotation(
             annotation,
-            _annotation_interval(annotation).shift(offset),
+            _resolve_annotation_interval(annotation, length).shift(offset),
             preserve_id=preserve_ids,
         )
         for annotation in annotations
     )
 
 
-def _select_annotations(annotations, start: float, stop: float):
+def _select_annotations(
+    annotations,
+    start: float,
+    stop: float,
+    *,
+    length: float | None,
+):
     """Return annotations clipped and shifted to a selected interval."""
     selection = _DistanceInterval(start, stop)
     out = []
     for annotation in annotations:
-        interval = _annotation_interval(annotation)
+        interval = _resolve_annotation_interval(annotation, length)
         if (overlap := interval.intersect(selection)) is None:
             continue
         new_interval = overlap.shift(-start)
@@ -181,21 +212,30 @@ def _reverse_annotations(annotations, length: float | None):
     return tuple(
         _copy_annotation(
             annotation,
-            _annotation_interval(annotation).reverse(float(length)),
+            _resolve_annotation_interval(annotation, length).reverse(float(length)),
             preserve_id=False,
         )
         for annotation in reversed(annotations)
     )
 
 
-def _merge_annotations(left_annotations, right_annotations, left_length: float | None):
+def _merge_annotations(
+    left_annotations,
+    right_annotations,
+    left_length: float | None,
+    right_length: float | None,
+):
     """Return annotations for a concatenated optical path."""
     if not right_annotations:
         return tuple(left_annotations)
     if right_annotations and left_length is None:
         msg = "Concatenating shifted annotations requires left path length."
         raise ParameterError(msg)
-    shifted = _shift_annotations(right_annotations, float(left_length))
+    shifted = _shift_annotations(
+        right_annotations,
+        float(left_length),
+        length=right_length,
+    )
     return (*left_annotations, *shifted)
 
 
@@ -223,13 +263,16 @@ class _IntervalSequence:
         }[self.name]
 
     @property
-    def length(self) -> float | None:
-        """Return summed sequence length, or None when no records are present."""
+    def optical_length(self) -> float | None:
+        """Return summed optical length, or None when no records are present."""
         if not self.records:
             return None
-        lengths = tuple(item.length for item in self.records)
+        lengths = tuple(item.optical_length for item in self.records)
         if any(length is None for length in lengths):
-            msg = f"Cannot validate {self.display_name}; all records must have length."
+            msg = (
+                f"Cannot validate {self.display_name}; all records must have "
+                "optical_length."
+            )
             raise ParameterError(msg)
         return sum(lengths)
 
@@ -240,18 +283,18 @@ class _IntervalSequence:
         tolerance: float,
     ) -> str | None:
         """Return a mismatch message, or None if length matches expected."""
-        actual = self.length
+        actual = self.optical_length
         if actual is None or expected is None:
             return None
         if math.isclose(actual, expected, rel_tol=0.0, abs_tol=tolerance):
             return None
         return (
-            f"{self.display_name} length {actual} does not match optical path "
-            f"length {expected}."
+            f"{self.display_name} optical_length {actual} does not match optical "
+            f"path optical_length {expected}."
         )
 
     def _check_supported_geometries(self) -> None:
-        """Ensure geometry records can be safely clipped by length."""
+        """Ensure geometry records can be safely clipped by optical length."""
         if self.name != "geometry":
             return
         unsupported = tuple(
@@ -273,16 +316,16 @@ class _IntervalSequence:
         start: float,
         stop: float,
     ) -> tuple[tuple, tuple[int, ...]]:
-        """Return length-clipped records and their original positions."""
+        """Return optical-length-clipped records and their original positions."""
         out = []
         indexes = []
         position = 0.0
         for index, item in enumerate(self.records):
-            length = item.length
+            length = item.optical_length
             if length is None:
                 msg = (
                     f"Distance selection requires all {self.display_name} records "
-                    "to have length."
+                    "to have optical_length."
                 )
                 raise ParameterError(msg)
             next_position = position + float(length)
@@ -298,7 +341,7 @@ class _IntervalSequence:
                 if hasattr(item, "select"):
                     out.append(item.select(distance=(local_start, local_stop)))
                 else:
-                    out.append(item.model_copy(update={"length": overlap}))
+                    out.append(item.model_copy(update={"optical_length": overlap}))
                 indexes.append(index)
             position = next_position
         return tuple(out), tuple(indexes)
@@ -310,7 +353,7 @@ class _IntervalSequence:
         *,
         full_selection: bool,
     ) -> tuple[tuple[str, ...], tuple]:
-        """Clip a paired id/runtime sequence by cumulative record length."""
+        """Clip a paired id/runtime sequence by cumulative optical length."""
         if self.records:
             self._check_supported_geometries()
             clipped, indexes = self._clip_records(start, stop)
@@ -339,11 +382,11 @@ class _IntervalSequence:
         target_id = _get_resource_id(target)
         position = 0.0
         for index, record in enumerate(self.records):
-            length = record.length
+            length = record.optical_length
             if length is None:
                 msg = (
                     f"Finding {self.name} intervals requires all records "
-                    "to have length."
+                    "to have optical_length."
                 )
                 raise ParameterError(msg)
             record_id = self.ids[index] if self.ids else record.resource_id

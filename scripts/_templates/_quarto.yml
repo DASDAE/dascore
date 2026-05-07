@@ -145,6 +145,12 @@ website:
             - recipes/add_spatial_coordinates_to_patch.qmd
             - recipes/plotting_channel_number.qmd
 
+        - section: "Inventory"
+          contents:
+
+            - recipes/simple_inventory.qmd
+            - recipes/complex_inventory_deployment.qmd
+
         - section: "Processing"
           contents:
 

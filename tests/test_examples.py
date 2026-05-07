@@ -129,8 +129,8 @@ class TestGetExampleInventory:
         distance_max = patch.coords.coord_map["distance"].max()
         assert network.fiber_arrays[0].resource_id == "random_das_fiber_array"
         assert fiber_array.tag == patch.attrs.tag
-        assert fiber_array.optical_path.length == distance_max + 1
-        assert fiber_array.acquisition_configuration.sample_rate == 250.0
+        assert fiber_array.optical_paths[0].optical_length == distance_max + 1
+        assert fiber_array.acquisitions[0].acquisition_sample_rate == 250.0
 
     def test_event_inventory_describes_processed_event(self):
         """The event inventory should resolve context for example_event_2."""
@@ -138,10 +138,10 @@ class TestGetExampleInventory:
         network = inventory.get_records(record_ids="example_event_2_network")[0]
         fiber_array = inventory.get_records(record_ids="example_event_2_fiber_array")[0]
         assert network.fiber_arrays[0].resource_id == "example_event_2_fiber_array"
-        assert fiber_array.data_units == "strain/s"
-        label = fiber_array.optical_path.annotations[0].label
+        assert fiber_array.acquisitions[0].data_units == dc.get_quantity("strain/s")
+        label = fiber_array.optical_paths[0].annotations[0].label
         assert label == "borehole monitoring interval"
-        assert fiber_array.optical_path.coupling_conditions[0].clamp_points
+        assert fiber_array.optical_paths[0].coupling_conditions[0].clamp_points
 
 
 class TestRickerMoveout:

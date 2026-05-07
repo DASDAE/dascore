@@ -52,6 +52,10 @@ class DascoreConfig(BaseModel):
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
     )
+    inventory_resource_id_prefix: str = Field(
+        default="smi:local/dascore",
+        description="Prefix used for generated Inventory record resource ids.",
+    )
 
     # Local cache and index locations.
     downloader_cache_dir: Path = Field(
@@ -140,6 +144,19 @@ class DascoreConfig(BaseModel):
     def _coerce_timedelta(cls, value):
         """Normalize timedelta-like config values."""
         return np.timedelta64(value)
+
+    @field_validator("inventory_resource_id_prefix", mode="before")
+    @classmethod
+    def _normalize_inventory_resource_id_prefix(cls, value):
+        """Normalize the generated inventory resource id prefix."""
+        if value is None:
+            msg = "inventory_resource_id_prefix cannot be empty."
+            raise ValueError(msg)
+        value = str(value).rstrip("/")
+        if not value:
+            msg = "inventory_resource_id_prefix cannot be empty."
+            raise ValueError(msg)
+        return value
 
 
 _CONFIG = DascoreConfig()
