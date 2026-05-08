@@ -100,6 +100,14 @@ my_ext = "dascore_extra.patch_namespace:MyPatchNamespace"
 
 After installation, DASCore loads the namespace the first time `patch.my_ext` is accessed.
 
+## Registered namespace plugins
+
+DASCore discovers namespace plugins from installed Python packages through entry points. These plugins are distributed separately from DASCore, so install the package you need before using its namespace.
+
+| Package | Namespace | Entry point | Purpose |
+| --- | --- | --- | --- |
+| [`dascorepy`](https://dasdae.github.io/dascorepy/) | `patch.daspy` | `dascore.patch_namespace` | DASPy algorithms exposed on DASCore patches. |
+
 ### Spool namespaces
 
 Spool namespaces use the same pattern. The only changes are:
