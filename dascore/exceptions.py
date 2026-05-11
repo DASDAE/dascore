@@ -111,6 +111,10 @@ class InvalidSpoolError(ValueError, DASCoreError):
     """Raised when something is wrong with a spool."""
 
 
+class InvalidInventoryError(ValueError, DASCoreError):
+    """Raise when something is wrong with a DASCore inventory."""
+
+
 class UnitError(ValueError, DASCoreError):
     """Raised when an issue is encountered with unit handling."""
 

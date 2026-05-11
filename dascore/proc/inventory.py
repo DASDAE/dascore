@@ -363,7 +363,7 @@ def _project_annotation_field(path, distance: np.ndarray, field: str) -> np.ndar
 
 def _get_axis_index(path, axis: str) -> int | None:
     """Return coordinate tuple index for a requested geometry axis."""
-    crs = path.coordinate_reference_system
+    crs = path.crs
     if crs is not None and crs.axis_order:
         try:
             return crs.axis_order.index(axis)

@@ -77,7 +77,7 @@ def get_inventory(*, tag="raw", acquisition_sample_rate=100.0):
     )
     path = inv.OpticalPath(
         optical_length=2.0,
-        coordinate_reference_system=crs,
+        crs=crs,
         optical_components=(fiber,),
         geometries=(geometry,),
         annotations=(annotation,),

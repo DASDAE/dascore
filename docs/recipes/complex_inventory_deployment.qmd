@@ -1,4 +1,4 @@
----
+from dascore.core import annotationsfrom dascore.core import annotations---
 title: Inventory For A Complex Deployment
 execute:
   warning: false
@@ -107,7 +107,7 @@ coupling = tuple(
     for index, length in enumerate(segment_lengths, start=1)
 )
 annotations = tuple(
-    inv.OpticalPathAnnotation(
+    annotations.OpticalPathAnnotation(
         distance=(float(start), float(stop)),
         label=f"trench_{index}",
         category="segment",

@@ -616,7 +616,7 @@ def random_das_inventory() -> inv.Inventory:
     optical_path = inv.OpticalPath(
         name="Synthetic straight optical path",
         optical_length=fiber.optical_length,
-        coordinate_reference_system=crs,
+        crs=crs,
         optical_components=(fiber,),
         geometries=(geometry,),
         coupling_conditions=(coupling,),
@@ -712,7 +712,7 @@ def example_event_2_inventory() -> inv.Inventory:
     optical_path = inv.OpticalPath(
         name="Example event borehole optical path",
         optical_length=fiber.optical_length,
-        coordinate_reference_system=crs,
+        crs=crs,
         optical_components=(fiber,),
         geometries=(geometry,),
         coupling_conditions=(coupling,),

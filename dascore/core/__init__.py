@@ -24,10 +24,10 @@ from .inventory import (  # noqa
     Inventory,
     Network,
     OpticalPath,
-    OpticalPathAnnotation,
     Splice,
     Terminator,
     Turnaround,
 )
+from .annotations import OpticalPathAnnotation
 from .patch import Patch as Patch
 from .summary import PatchSummary as PatchSummary

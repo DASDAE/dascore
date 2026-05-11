@@ -142,7 +142,7 @@ geometry_2 = inv.Geometry(
 survey_path = inv.OpticalPath(
     name="Survey optical path",
     optical_length=250.0,
-    coordinate_reference_system=crs,
+    crs=crs,
     geometries=(geometry_1, geometry_2),
 )
 survey_fiber_array = inv.FiberArray(

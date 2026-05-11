@@ -6,19 +6,17 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 from uuid import uuid4
+from itertools import accumulate
 
 import numpy as np
-import pandas as pd
 from pydantic import (
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    computed_field,
+    Field, ConfigDict,
 )
 
 from dascore.exceptions import ParameterError
-from dascore.utils.models import DascoreBaseModel, DateTime64
-from dascore.utils.time import to_datetime64
+from dascore.utils.models import CommentableModel
+from dascore.utils.misc import sanitize_range_param
+from dascore.utils.inventory import _trim_sequence
 
 _IntervalTrackName = Literal[
     "optical_component",
@@ -27,74 +25,29 @@ _IntervalTrackName = Literal[
 ]
 
 
-class _InventoryItem(DascoreBaseModel):
-    """Base class for immutable objects stored in an Inventory."""
 
-    model_config = ConfigDict(
-        title="Inventory Item",
-        extra="forbid",
-        frozen=True,
-        validate_assignment=True,
-        validate_default=True,
-        arbitrary_types_allowed=True,
-    )
-
-    comment: str = Field(
-        default="",
-        description="Additional comments.",
-    )
-    _inventory_id: str = PrivateAttr(default="")
-
-    @computed_field
-    @property
-    def type(self) -> str:
-        """Return the inventory type name."""
-        return self.__class__.__name__.lstrip("_")
-
-    @property
-    def inventory_id(self) -> str:
-        """Return the runtime-only inventory identity for this item."""
-        return self._inventory_id
-
-    def revise(self, **updates):
-        """Return a revised copy while preserving runtime inventory identity."""
-        out = self.model_copy(update=updates)
-        object.__setattr__(out, "_inventory_id", self._inventory_id)
-        return out
-
-
-class _PublicInventoryItem(_InventoryItem):
+class _PublicInventoryItem(CommentableModel):
     """Base class for objects with public reusable resource identifiers."""
 
     resource_id: str = Field(
-        default="",
         description="Stable identifier for a shareable inventory resource.",
+        default_factory=lambda: str(uuid4()),
     )
-    name: str = Field(default="", description="Human-readable resource name.")
-
-
-class _TimedInventoryItem(_InventoryItem):
-    """Base class for objects with data-time validity intervals."""
-
-    start_time: DateTime64 = Field(
-        default=np.datetime64("NaT"),
-        description="Start time for which this metadata item is valid.",
-    )
-    end_time: DateTime64 = Field(
-        default=np.datetime64("NaT"),
-        description="End time for which this metadata item is valid.",
+    name: str = Field(
+        default="", description="Human-readable resource name."
     )
 
-    def is_effective_at(self, time) -> bool:
-        """Return True if this item is valid at the supplied time."""
-        time = to_datetime64(time)
-        if pd.isnull(time):
-            return True
-        start = to_datetime64(self.start_time)
-        end = to_datetime64(self.end_time)
-        after_start = pd.isnull(start) or start <= time
-        before_end = pd.isnull(end) or time < end
-        return after_start and before_end
+
+class _OpticalLengthItem(CommentableModel):
+    """Base class for optical path items with SI-only optical lengths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    optical_length: float = Field(
+        default=0,
+        description="Optical path interval length in meters.",
+    )
+
 
 
 def _get_resource_id(item_or_id) -> str:
@@ -131,6 +84,35 @@ class _DistanceInterval:
 def _new_derived_annotation_id(resource_id: str) -> str:
     """Return a new id for an annotation derived from another annotation."""
     return f"{resource_id}:derived:{uuid4().hex}"
+
+
+def _trim_sequence(
+       distance, length_items: tuple[_OpticalLengthItem, ...],
+) -> tuple[_OpticalLengthItem, ...]:
+    """
+    Trim a sequence that has optical lengths.
+    """
+    segment_stop = np.array(accumulate([x.optical_length for x in length_items]))
+    segment_start = np.concatenate([0], segment_stop[:-1])
+    # get values to remove, and the new lengths for each component.
+    start, stop = sanitize_range_param(distance)
+    start = 0 if start is None else start
+    stop = segment_stop.max() if stop is None else stop
+    new_lengths = segment_stop - segment_start
+    adjustments = np.zeros_like(new_lengths)
+    # handle ranges completely outside select range.
+    new_lengths[((segment_stop < start) | (segment_start > stop))] = 0
+    # next handle dynamic adjustments to length
+    in_start = (segment_start > start) & (segment_start < start)
+    in_stop = (segment_stop > start) & (segment_stop < start)
+    adjustments[in_start] = new_lengths[in_start] - (start - segment_start)[in_start]
+    adjustments[in_stop] = new_lengths[in_stop] - (segment_stop - stop)[in_stop]
+    new_lengths += adjustments
+    # package up and return.
+    return tuple(
+        x.new(optical_length=new_lengths)
+        for x, new_len in zip(length_items, new_lengths)
+    )
 
 
 def _annotation_interval(annotation) -> _DistanceInterval:
@@ -274,26 +256,17 @@ class _IntervalSequence:
     def optical_length(self) -> float | None:
         """Return summed optical length, or None when no items are present."""
         if not self.items:
-            return None
-        lengths = tuple(item.optical_length for item in self.items)
-        if any(length is None for length in lengths):
-            msg = (
-                f"Cannot validate {self.display_name}; all items must have "
-                "optical_length."
-            )
-            raise ParameterError(msg)
-        return sum(lengths)
+            return 0
+        return sum(tuple(item.optical_length for item in self.items))
 
     def validate_length(
         self,
-        expected: float | None,
+        expected: float,
         *,
         tolerance: float,
     ) -> str | None:
         """Return a mismatch message, or None if length matches expected."""
         actual = self.optical_length
-        if actual is None or expected is None:
-            return None
         if math.isclose(actual, expected, rel_tol=0.0, abs_tol=tolerance):
             return None
         return (
@@ -408,3 +381,4 @@ class _IntervalSequence:
             position = next_position
         msg = f"{self.name} {target_id!r} was not found in this optical path."
         raise ParameterError(msg)
+

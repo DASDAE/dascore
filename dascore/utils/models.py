@@ -8,9 +8,10 @@ from typing import Annotated
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
+from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator, Field, PrivateAttr, computed_field
 from typing_extensions import Self
 
+from dascore import to_datetime64
 from dascore.compat import array, is_array
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
@@ -91,7 +92,7 @@ class DascoreBaseModel(BaseModel):
     _cache = {}
 
     model_config = ConfigDict(
-        extra="ignore",  # TODO: change to raise, then let subclass overwrite
+        extra="ignore",
         validate_assignment=True,
         ignored_types=(cached_property,),
         frozen=True,
@@ -119,3 +120,66 @@ class DascoreBaseModel(BaseModel):
         return out
 
     __eq__ = sensible_model_equals
+
+
+class InternallyKeyedModel(DascoreBaseModel):
+    """
+    A type-aware model designed to track it's own unique place in hierarchy.
+    """
+    model_config = ConfigDict(
+        title="Inventory Item",
+        extra="forbid",
+        frozen=True,
+        validate_assignment=True,
+        validate_default=True,
+        arbitrary_types_allowed=True,
+    )
+
+    _internal_id: str = PrivateAttr(default="")
+
+    @computed_field
+    @property
+    def type(self) -> str:
+        """Return the inventory type name."""
+        return self.__class__.__name__.lstrip("_")
+
+    @property
+    def inventory_id(self) -> str:
+        """Return the runtime-only inventory identity for this item."""
+        return self._internal_id
+
+
+
+class CommentableModel(InternallyKeyedModel):
+    """
+    Base class for immutable that support comments stored in a hierarchy."""
+
+
+    comment: str = Field(
+        default="",
+        description="Additional comments.",
+    )
+
+
+class TimeRangedModel(CommentableModel):
+    """Base class for objects with data-time validity intervals."""
+
+    start_time: DateTime64 = Field(
+        default=np.datetime64("NaT"),
+        description="Start time for which this metadata item is valid.",
+    )
+    end_time: DateTime64 = Field(
+        default=np.datetime64("NaT"),
+        description="End time for which this metadata item is valid.",
+    )
+
+    def is_effective_at(self, time) -> bool:
+        """Return True if this item is valid at the supplied time."""
+        time = to_datetime64(time)
+        if pd.isnull(time):
+            return True
+        start = to_datetime64(self.start_time)
+        end = to_datetime64(self.end_time)
+        after_start = pd.isnull(start) or start <= time
+        before_end = pd.isnull(end) or time < end
+        return after_start and before_end
