@@ -43,7 +43,6 @@ def get_inventory(*, tag="raw", acquisition_sample_rate=100.0):
         serial_number="SN001",
     )
     config = inv.Acquisition(
-        resource_id="cfg_1",
         code="RAW",
         location_code="00",
         data_category="DAS",
@@ -64,42 +63,36 @@ def get_inventory(*, tag="raw", acquisition_sample_rate=100.0):
         units="m",
     )
     geometry = inv.Geometry(
-        resource_id="geo_1",
         optical_length=2.0,
         geometry_type="linear",
-        coordinate_reference_system=crs,
         coordinates=((0.0,), (2.0,)),
     )
     fiber = inv.FiberSegment(
-        resource_id="fiber_1",
         optical_length=2.0,
         fiber_type="single_mode",
     )
     annotation = inv.OpticalPathAnnotation(
-        resource_id="annotation_1",
         distance=(0.0, 2.0),
         label="line",
     )
     path = inv.OpticalPath(
-        resource_id="path_1",
         optical_length=2.0,
+        coordinate_reference_system=crs,
         optical_components=(fiber,),
         geometries=(geometry,),
         annotations=(annotation,),
     )
     fiber_array = inv.FiberArray(
-        resource_id="fiber_array_1",
         code="FA",
         acquisitions=(config,),
         optical_paths=(path,),
         tag=tag,
     )
     network = inv.Network(
-        resource_id="network_1",
         code="XX",
         fiber_arrays=(fiber_array,),
     )
-    return inv.Inventory(records=(network,))
+    return inv.Inventory(networks=(network,))
 
 
 class TestDistanceFromInventory:
@@ -135,14 +128,17 @@ class TestDistanceFromInventory:
             time=np.array(["2020-01-03", "2020-01-04"], dtype="datetime64[D]")
         )
         inventory = get_inventory()
-        config = inventory.get_records(record_ids="cfg_1")[0].model_copy(
-            update={
-                "start_time": "2020-01-02",
-                "spatial_sampling_interval": 3.0,
-                "first_channel_distance": 50.0,
-            }
+        config = (
+            inventory.networks[0]
+            .fiber_arrays[0]
+            .acquisitions[0]
+            .revise(
+                start_time="2020-01-02",
+                spatial_sampling_interval=3.0,
+                first_channel_distance=50.0,
+            )
         )
-        inventory = inventory.put_records(records=(config,))
+        inventory = inventory.replace(config)
 
         out = patch.distance_from_inventory(inventory)
 
@@ -173,6 +169,40 @@ class TestAddInventoryCoords:
         )
 
         assert np.isnan(out.get_array("y")).all()
+
+    def test_path_crs_applies_to_all_geometries(self):
+        """Every geometry interval on a path should share the path CRS."""
+        inventory = get_inventory()
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        crs = inv.CoordinateReferenceSystem(
+            resource_id="crs_xy",
+            authority="LOCAL",
+            code="xy",
+            axis_order=("x", "y"),
+            units="m",
+        )
+        geometries = (
+            inv.Geometry(
+                optical_length=1.0,
+                geometry_type="linear",
+                coordinates=((0.0, 10.0), (0.0, 11.0)),
+            ),
+            inv.Geometry(
+                optical_length=1.0,
+                geometry_type="linear",
+                coordinates=((0.0, 11.0), (0.0, 12.0)),
+            ),
+        )
+        path = path.revise(coordinate_reference_system=crs, geometries=geometries)
+        inventory = inventory.replace(path)
+
+        out = get_distance_patch().add_inventory_coords(
+            inventory,
+            coords=("y",),
+            on_boundary="ignore",
+        )
+
+        assert np.allclose(out.get_array("y"), [10.0, 11.0, 12.0])
 
 
 class TestAddInventoryAttrs:
@@ -208,5 +238,5 @@ class TestAddInventoryAttrs:
         with pytest.raises(ParameterError, match="ambiguous"):
             get_distance_patch().add_inventory_attrs(
                 get_inventory(),
-                attrs=("resource_id",),
+                attrs=("code",),
             )

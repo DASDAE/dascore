@@ -12,6 +12,7 @@ import pandas as pd
 from pydantic import (
     ConfigDict,
     Field,
+    PrivateAttr,
     computed_field,
 )
 
@@ -26,11 +27,11 @@ _IntervalTrackName = Literal[
 ]
 
 
-class _InventoryRecord(DascoreBaseModel):
-    """Base class for immutable records stored in an Inventory."""
+class _InventoryItem(DascoreBaseModel):
+    """Base class for immutable objects stored in an Inventory."""
 
     model_config = ConfigDict(
-        title="Inventory Record",
+        title="Inventory Item",
         extra="forbid",
         frozen=True,
         validate_assignment=True,
@@ -38,26 +39,11 @@ class _InventoryRecord(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    resource_id: str = Field(
-        default="",
-        description=(
-            "Stable inventory identifier for the real-world or logical metadata "
-            "resource. DASCore generates random local ids for omitted values when "
-            "records are stored in an Inventory."
-        ),
-    )
-    creation_time: DateTime64 = Field(
-        default=np.datetime64("NaT"),
-        description="Time this metadata record was created.",
-    )
-    author_id: str = Field(
-        default="",
-        description="Identifier for the person or process creating the record.",
-    )
     comment: str = Field(
         default="",
         description="Additional comments.",
     )
+    _inventory_id: str = PrivateAttr(default="")
 
     @computed_field
     @property
@@ -65,21 +51,42 @@ class _InventoryRecord(DascoreBaseModel):
         """Return the inventory type name."""
         return self.__class__.__name__.lstrip("_")
 
+    @property
+    def inventory_id(self) -> str:
+        """Return the runtime-only inventory identity for this item."""
+        return self._inventory_id
 
-class _TimedInventoryRecord(_InventoryRecord):
-    """Base class for records with data-time validity intervals."""
+    def revise(self, **updates):
+        """Return a revised copy while preserving runtime inventory identity."""
+        out = self.model_copy(update=updates)
+        object.__setattr__(out, "_inventory_id", self._inventory_id)
+        return out
+
+
+class _PublicInventoryItem(_InventoryItem):
+    """Base class for objects with public reusable resource identifiers."""
+
+    resource_id: str = Field(
+        default="",
+        description="Stable identifier for a shareable inventory resource.",
+    )
+    name: str = Field(default="", description="Human-readable resource name.")
+
+
+class _TimedInventoryItem(_InventoryItem):
+    """Base class for objects with data-time validity intervals."""
 
     start_time: DateTime64 = Field(
         default=np.datetime64("NaT"),
-        description="Start time for which this metadata record is valid.",
+        description="Start time for which this metadata item is valid.",
     )
     end_time: DateTime64 = Field(
         default=np.datetime64("NaT"),
-        description="End time for which this metadata record is valid.",
+        description="End time for which this metadata item is valid.",
     )
 
     def is_effective_at(self, time) -> bool:
-        """Return True if this record is valid at the supplied time."""
+        """Return True if this item is valid at the supplied time."""
         time = to_datetime64(time)
         if pd.isnull(time):
             return True
@@ -90,11 +97,11 @@ class _TimedInventoryRecord(_InventoryRecord):
         return after_start and before_end
 
 
-def _get_resource_id(record_or_id) -> str:
-    """Return the resource id for an inventory record or id string."""
-    if isinstance(record_or_id, str):
-        return record_or_id
-    return record_or_id.resource_id
+def _get_resource_id(item_or_id) -> str:
+    """Return the resource id for an inventory object or id string."""
+    if isinstance(item_or_id, str):
+        return item_or_id
+    return getattr(item_or_id, "resource_id", "") or item_or_id.inventory_id
 
 
 @dataclass(frozen=True)
@@ -159,9 +166,10 @@ def _copy_annotation(annotation, interval: _DistanceInterval, *, preserve_id: bo
     updates = {
         "distance": (interval.start, interval.stop),
     }
+    out = annotation.model_copy(update=updates)
     if not preserve_id:
-        updates["resource_id"] = _new_derived_annotation_id(annotation.resource_id)
-    return annotation.model_copy(update=updates)
+        object.__setattr__(out, "_inventory_id", "")
+    return out
 
 
 def _shift_annotations(
@@ -244,13 +252,13 @@ class _IntervalSequence:
     """Private helper for length-based inventory interval sequences."""
 
     name: _IntervalTrackName
-    records: tuple
+    items: tuple
     ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate id/runtime pairing."""
-        if self.ids and self.records and len(self.ids) != len(self.records):
-            msg = "Runtime records and resource id sequences must have same length."
+        if self.ids and self.items and len(self.ids) != len(self.items):
+            msg = "Runtime items and resource id sequences must have same length."
             raise ParameterError(msg)
 
     @property
@@ -264,13 +272,13 @@ class _IntervalSequence:
 
     @property
     def optical_length(self) -> float | None:
-        """Return summed optical length, or None when no records are present."""
-        if not self.records:
+        """Return summed optical length, or None when no items are present."""
+        if not self.items:
             return None
-        lengths = tuple(item.optical_length for item in self.records)
+        lengths = tuple(item.optical_length for item in self.items)
         if any(length is None for length in lengths):
             msg = (
-                f"Cannot validate {self.display_name}; all records must have "
+                f"Cannot validate {self.display_name}; all items must have "
                 "optical_length."
             )
             raise ParameterError(msg)
@@ -294,14 +302,14 @@ class _IntervalSequence:
         )
 
     def _check_supported_geometries(self) -> None:
-        """Ensure geometry records can be safely clipped by optical length."""
+        """Ensure geometry items can be safely clipped by optical length."""
         if self.name != "geometry":
             return
         unsupported = tuple(
-            record.geometry_type
-            for record in self.records
-            if hasattr(record, "geometry_type")
-            and record.geometry_type not in {"", "linear", "unknown"}
+            item.geometry_type
+            for item in self.items
+            if hasattr(item, "geometry_type")
+            and item.geometry_type not in {"", "linear", "unknown"}
         )
         if unsupported:
             unsupported_str = ", ".join(sorted(set(unsupported)))
@@ -311,20 +319,20 @@ class _IntervalSequence:
             )
             raise ParameterError(msg)
 
-    def _clip_records(
+    def _clip_items(
         self,
         start: float,
         stop: float,
     ) -> tuple[tuple, tuple[int, ...]]:
-        """Return optical-length-clipped records and their original positions."""
+        """Return optical-length-clipped items and their original positions."""
         out = []
         indexes = []
         position = 0.0
-        for index, item in enumerate(self.records):
+        for index, item in enumerate(self.items):
             length = item.optical_length
             if length is None:
                 msg = (
-                    f"Distance selection requires all {self.display_name} records "
+                    f"Distance selection requires all {self.display_name} items "
                     "to have optical_length."
                 )
                 raise ParameterError(msg)
@@ -354,47 +362,47 @@ class _IntervalSequence:
         full_selection: bool,
     ) -> tuple[tuple[str, ...], tuple]:
         """Clip a paired id/runtime sequence by cumulative optical length."""
-        if self.records:
+        if self.items:
             self._check_supported_geometries()
-            clipped, indexes = self._clip_records(start, stop)
+            clipped, indexes = self._clip_items(start, stop)
             clipped_ids = (
                 tuple(self.ids[index] for index in indexes) if self.ids else ()
             )
             return clipped_ids, clipped
         if self.ids and not full_selection:
             msg = (
-                "Partial distance selections require runtime records with lengths. "
+                "Partial distance selections require runtime items with lengths. "
                 "Use an inventory view before selecting an optical path with id-only "
                 f"{self.display_name}."
             )
             raise ParameterError(msg)
-        return self.ids, self.records
+        return self.ids, self.items
 
     def get_interval(self, target) -> tuple[float, float]:
         """Return the distance interval occupied by a target sequence item."""
-        if not self.records:
+        if not self.items:
             msg = (
-                f"Finding {self.name} intervals requires runtime records with "
+                f"Finding {self.name} intervals requires runtime items with "
                 "lengths. Use an inventory view before operating on id-only "
                 "optical paths."
             )
             raise ParameterError(msg)
         target_id = _get_resource_id(target)
         position = 0.0
-        for index, record in enumerate(self.records):
-            length = record.optical_length
+        for index, item in enumerate(self.items):
+            length = item.optical_length
             if length is None:
                 msg = (
-                    f"Finding {self.name} intervals requires all records "
+                    f"Finding {self.name} intervals requires all items "
                     "to have optical_length."
                 )
                 raise ParameterError(msg)
-            record_id = self.ids[index] if self.ids else record.resource_id
+            item_id = self.ids[index] if self.ids else _get_resource_id(item)
             next_position = position + float(length)
             if (
-                record is target
-                or record.resource_id == target_id
-                or record_id == target_id
+                item is target
+                or _get_resource_id(item) == target_id
+                or item_id == target_id
             ):
                 return position, next_position
             position = next_position

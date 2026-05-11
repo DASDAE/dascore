@@ -1,24 +1,23 @@
 """
 DASCore's metadata model.
 
-Inventory is intended to be a mixed-record metadata catalog for describing
-patches and related fiber array context. Patch data, coordinates, and attrs
-remain the primary source of truth, while Inventory records provide richer
-context which can be resolved explicitly by fiber array id and time.
+Inventory is intended to be a metadata catalog for describing patches and
+related fiber array context. Patch data, coordinates, and attrs remain the
+primary source of truth, while Inventory objects provide richer context which
+can be resolved explicitly by fiber array id and time.
 Moreover, Patches can defer to specific fiber arrays for their metadata,
 enabling the decoupling of metadata from data for DAS archives.
 
-The Inventory itself is the canonical storage layer. Its ``records`` field is
-an id-only collection of plain dictionaries, with relationships stored as ids
-such as ``optical_path_ids`` or ``geometry_ids``. This is the durable form used
-by ``to_dict``, JSON, and YAML.
+The public Inventory shape is intentionally small: document metadata, a flat
+``resources`` mapping for shareable objects, and ``networks`` as the root
+container. DASCore keeps a private canonical index internally so the serialized
+JSON/YAML manifest can stay nested and ergonomic without exposing tree addresses.
 
-Resolved Pydantic records are materialized views over that storage. Calling
-``Inventory.get_records`` returns object graphs with relationships resolved,
-such as a ``FiberArray`` whose ``optical_paths`` contain ``OpticalPath`` objects.
-Those objects are ergonomic views, not the source of truth. To write them back,
-use ``Inventory.put_records``; it extracts linked objects recursively, stores
-canonical id-only records, and validates the resulting inventory.
+Resolved Pydantic objects are materialized views over that storage. A user can
+take an object from ``resources`` or ``networks``, call ``.revise(...)``, and
+write it back with ``Inventory.replace(...)``. Replacement preserves the
+inventory's internal identity and increments the inventory content version in
+``creation_info``.
 
 
 ## user stories
@@ -27,8 +26,8 @@ canonical id-only records, and validates the resulting inventory.
   3. As a user with an inventory and a distance-indexed patch, I want to add selected optical-path metadata as patch coordinates so that I can process, select, and visualize data by labels, geometry, coupling, or fiber
      properties.
   4. As a user, I want to add selected fiber array, acquisition, and interrogator fields to patch attrs so that downstream workflows can carry compact metadata without embedding the whole inventory.
-  5. As a user managing evolving deployments, I want inventory records to be valid over time so that the same data_source_id can resolve to different configurations or paths for different data epochs.
-  6. As a user building an inventory, I want to write records as linked Pydantic objects but store them as stable id-based records so that inventories are ergonomic in Python and durable in JSON/YAML.
+  5. As a user managing evolving deployments, I want inventory objects to be valid over time so that the same data_source_id can resolve to different configurations or paths for different data epochs.
+  6. As a user building an inventory, I want to write linked Pydantic objects while DASCore stores stable internal identities so that inventories are ergonomic in Python and durable in JSON/YAML.
   7. As a user exchanging or archiving metadata, I want inventories to round-trip through dict, JSON, and YAML so that I can store metadata beside data files.
 
 """
@@ -60,11 +59,12 @@ from dascore.exceptions import ParameterError
 from dascore.utils.inventory import (
     _IntervalSequence,
     _IntervalTrackName,
-    _InventoryRecord,
+    _InventoryItem,
     _merge_annotations,
+    _PublicInventoryItem,
     _reverse_annotations,
     _select_annotations,
-    _TimedInventoryRecord,
+    _TimedInventoryItem,
 )
 from dascore.utils.misc import sanitize_range_param
 from dascore.utils.models import DascoreBaseModel, DateTime64, UnitQuantity
@@ -73,17 +73,51 @@ from dascore.utils.time import to_datetime64
 ExtraFieldValue: TypeAlias = str | int | float | bool
 
 
-def _inventory_type_slug(record_type: str) -> str:
-    """Return a compact snake_case slug for one inventory record type."""
+class CreationInfo(DascoreBaseModel):
+    """QuakeML-style provenance for an inventory document."""
+
+    model_config = ConfigDict(
+        title="CreationInfo",
+        extra="forbid",
+        frozen=True,
+        validate_assignment=True,
+        validate_default=True,
+        arbitrary_types_allowed=True,
+    )
+
+    agency_id: str = Field(
+        default="",
+        description="Identifier for the agency responsible for the inventory.",
+    )
+    author: str = Field(
+        default="",
+        description="Author or process responsible for the inventory.",
+    )
+    creation_time: DateTime64 = Field(
+        default=np.datetime64("NaT"),
+        description="Time this inventory was originally created.",
+    )
+    update_time: DateTime64 = Field(
+        default=np.datetime64("NaT"),
+        description="Time this inventory was last updated.",
+    )
+    version: str = Field(
+        default="",
+        description="Content version of this inventory document.",
+    )
+
+
+def _inventory_type_slug(item_type: str) -> str:
+    """Return a compact snake_case slug for one inventory item type."""
     chars = []
-    for index, char in enumerate(record_type):
+    for index, char in enumerate(item_type):
         if char.isupper() and index:
             chars.append("_")
         chars.append(char.lower())
     return "".join(chars)
 
 
-class FiberArray(_TimedInventoryRecord):
+class FiberArray(_TimedInventoryItem):
     """Durable fiber-optic observing identity anchored by an optical path."""
 
     code: str = Field(default="", description="Station-like fiber array code.")
@@ -102,7 +136,7 @@ class FiberArray(_TimedInventoryRecord):
     tag: str = Field(default="", description="Default tag for acquired patches.")
 
 
-class Network(_InventoryRecord):
+class Network(_InventoryItem):
     """FDSN-like organizational container for inventory observing objects."""
 
     code: str = Field(default="", description="Network code.")
@@ -115,7 +149,7 @@ class Network(_InventoryRecord):
     stations: tuple[None, ...] = ()  # just a stub for now
 
 
-class Interrogator(_InventoryRecord):
+class Interrogator(_PublicInventoryItem):
     """DAS interrogator unit used for data collection."""
 
     manufacturer: str = Field(
@@ -134,7 +168,7 @@ class Interrogator(_InventoryRecord):
     )
 
 
-class Acquisition(_TimedInventoryRecord):
+class Acquisition(_TimedInventoryItem):
     """
     Channel-like DAS acquisition setup.
 
@@ -157,7 +191,7 @@ class Acquisition(_TimedInventoryRecord):
         default="",
         description=(
             "FDSN-style location code used to group or disambiguate acquisition "
-            "records within a fiber array. Empty location codes are allowed."
+            "items within a fiber array. Empty location codes are allowed."
         ),
     )
     data_type: str = Field(
@@ -227,7 +261,7 @@ class Acquisition(_TimedInventoryRecord):
         return self
 
 
-class ExternalResource(_InventoryRecord):
+class ExternalResource(_PublicInventoryItem):
     """External resource identified but not otherwise modeled by DASCore."""
 
     uri: str = Field(default="", description="URI or identifier for the resource.")
@@ -237,8 +271,8 @@ class ExternalResource(_InventoryRecord):
     )
 
 
-class _OpticalLengthRecord(_InventoryRecord):
-    """Base class for optical path records with SI-only optical lengths."""
+class _OpticalLengthItem(_InventoryItem):
+    """Base class for optical path items with SI-only optical lengths."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -248,7 +282,7 @@ class _OpticalLengthRecord(_InventoryRecord):
     )
 
 
-class Cable(_InventoryRecord):
+class Cable(_PublicInventoryItem):
     """Physical cable containing one or more fiber segments."""
 
     name: str = Field(default="", description="Human-readable cable name.")
@@ -267,7 +301,7 @@ class Cable(_InventoryRecord):
     )
 
 
-class Enclosure(_InventoryRecord):
+class Enclosure(_PublicInventoryItem):
     """Physical housing for optical components."""
 
     name: str = Field(default="", description="Human-readable enclosure name.")
@@ -283,7 +317,7 @@ class Enclosure(_InventoryRecord):
     )
 
 
-class OpticalComponent(_OpticalLengthRecord):
+class OpticalComponent(_OpticalLengthItem):
     """Base class for physical optical components in an optical path."""
 
     optical_length: float | None = Field(
@@ -394,9 +428,9 @@ class Terminator(OpticalComponent):
     )
 
 
-class CoordinateReferenceSystem(_InventoryRecord):
+class CoordinateReferenceSystem(_PublicInventoryItem):
     """
-    Coordinate reference system used by geometry records.
+    Coordinate reference system used by optical path geometries.
 
     The default CRS is WGS84 geographic latitude/longitude (`EPSG:4326`). Custom
     projected or local engineering coordinate systems can be represented with a
@@ -445,7 +479,7 @@ def _default_coordinate_reference_system() -> CoordinateReferenceSystem:
     return CoordinateReferenceSystem(resource_id="EPSG:4326")
 
 
-class Geometry(_OpticalLengthRecord):
+class Geometry(_OpticalLengthItem):
     """Geometry for an interval of an optical path."""
 
     name: str = Field(default="", description="Human-readable geometry name.")
@@ -456,10 +490,6 @@ class Geometry(_OpticalLengthRecord):
     geometry_type: str = Field(
         default="",
         description="Kind of geometry, such as linear, curve, or unknown.",
-    )
-    coordinate_reference_system: CoordinateReferenceSystem | None = Field(
-        default_factory=_default_coordinate_reference_system,
-        description="Coordinate reference system used by this geometry.",
     )
     coordinates: tuple[tuple[float, ...], ...] = Field(
         default=(), description="Coordinate points describing the geometry."
@@ -497,7 +527,7 @@ class ClampPoint(DascoreBaseModel):
     comment: str = Field(default="", description="Additional comments.")
 
 
-class CouplingCondition(_OpticalLengthRecord):
+class CouplingCondition(_OpticalLengthItem):
     """Acoustic coupling condition for an interval of an optical path."""
 
     optical_length: float | None = Field(
@@ -593,7 +623,7 @@ class CouplingCondition(_OpticalLengthRecord):
         )
 
 
-class OpticalPathAnnotation(_InventoryRecord):
+class OpticalPathAnnotation(_InventoryItem):
     """Named or categorized interval on an optical path."""
 
     distance: tuple[float | None, float | None] = Field(
@@ -632,13 +662,17 @@ class OpticalPathAnnotation(_InventoryRecord):
         return self
 
 
-class OpticalPath(_TimedInventoryRecord):
+class OpticalPath(_TimedInventoryItem):
     """Continuous optical path described by independent component sequences."""
 
     optical_length: float | None = Field(
         default=None, description="Declared total optical path length in meters."
     )
     name: str = Field(default="", description="Human-readable optical path name.")
+    coordinate_reference_system: CoordinateReferenceSystem | None = Field(
+        default_factory=_default_coordinate_reference_system,
+        description="Coordinate reference system shared by geometries on this path.",
+    )
     optical_components: tuple[OpticalComponent, ...] = Field(
         default=(),
         description="Ordered optical components on this path.",
@@ -662,6 +696,21 @@ class OpticalPath(_TimedInventoryRecord):
         if length_1 is None or length_2 is None:
             return None
         return length_1 + length_2
+
+    @staticmethod
+    def _check_compatible_crs(
+        left: CoordinateReferenceSystem | None,
+        right: CoordinateReferenceSystem | None,
+    ) -> CoordinateReferenceSystem | None:
+        """Return the shared CRS or raise for incompatible path concatenation."""
+        if left is None:
+            return right
+        if right is None:
+            return left
+        if left != right:
+            msg = "Cannot concatenate optical paths with different CRS definitions."
+            raise ParameterError(msg)
+        return left
 
     @property
     def is_empty(self) -> bool:
@@ -713,17 +762,17 @@ class OpticalPath(_TimedInventoryRecord):
             case "optical_component":
                 return _IntervalSequence(
                     name,
-                    records=self.optical_components,
+                    items=self.optical_components,
                 )
             case "geometry":
                 return _IntervalSequence(
                     name,
-                    records=self.geometries,
+                    items=self.geometries,
                 )
             case "coupling_condition":
                 return _IntervalSequence(
                     name,
-                    records=self.coupling_conditions,
+                    items=self.coupling_conditions,
                 )
             case _:
                 msg = (
@@ -783,14 +832,19 @@ class OpticalPath(_TimedInventoryRecord):
         """Concatenate two optical paths."""
         if not isinstance(other, OpticalPath):
             return NotImplemented
+        crs = self._check_compatible_crs(
+            self.coordinate_reference_system,
+            other.coordinate_reference_system,
+        )
         annotations = _merge_annotations(
             self.annotations,
             other.annotations,
             self.optical_length,
             other.optical_length,
         )
-        return self.__class__(
+        out = self.__class__(
             optical_length=self._add_lengths(self.optical_length, other.optical_length),
+            coordinate_reference_system=crs,
             optical_components=(
                 *self.optical_components,
                 *other.optical_components,
@@ -802,6 +856,7 @@ class OpticalPath(_TimedInventoryRecord):
             ),
             annotations=annotations,
         )
+        return out
 
     def __radd__(self, other):
         """Support summing optical path sequences."""
@@ -812,13 +867,16 @@ class OpticalPath(_TimedInventoryRecord):
     def reverse(self) -> Self:
         """Return a new optical path with all ordered subcomponents reversed."""
         annotations = _reverse_annotations(self.annotations, self.optical_length)
-        return self.__class__(
+        out = self.__class__(
             optical_length=self.optical_length,
+            coordinate_reference_system=self.coordinate_reference_system,
             optical_components=tuple(reversed(self.optical_components)),
             geometries=tuple(reversed(self.geometries)),
             coupling_conditions=tuple(reversed(self.coupling_conditions)),
             annotations=annotations,
         )
+        object.__setattr__(out, "_inventory_id", self.inventory_id)
+        return out
 
     def select(self, **kwargs) -> Self:
         """Return a new optical path selected by distance."""
@@ -857,13 +915,16 @@ class OpticalPath(_TimedInventoryRecord):
             stop,
             length=self.optical_length,
         )
-        return self.__class__(
+        out = self.__class__(
             optical_length=stop - start,
+            coordinate_reference_system=self.coordinate_reference_system,
             optical_components=optical_components,
             geometries=geometries,
             coupling_conditions=coupling_conditions,
             annotations=annotations,
         )
+        object.__setattr__(out, "_inventory_id", self.inventory_id)
+        return out
 
     def split_at(self, distance: float) -> tuple[Self, Self]:
         """Split the optical path into two paths at a distance."""
@@ -962,7 +1023,7 @@ class OpticalPath(_TimedInventoryRecord):
         return self.select(distance=(0.0, start)) + self.select(distance=(stop, None))
 
 
-INVENTORY_RECORD_TYPES: dict[str, type[_InventoryRecord]] = {
+INVENTORY_ITEM_TYPES: dict[str, type[_InventoryItem]] = {
     cls.__name__: cls
     for cls in (
         FiberArray,
@@ -995,15 +1056,25 @@ OPTICAL_COMPONENT_TYPES = (
     Turnaround,
 )
 
+PUBLIC_ITEM_TYPES = (
+    Cable,
+    CoordinateReferenceSystem,
+    Enclosure,
+    ExternalResource,
+    Interrogator,
+)
+
+ROOT_ITEM_TYPES = (Network,)
+
 
 @dataclass(frozen=True)
 class _Relationship:
     """Inventory relationship between an object field and a canonical id field."""
 
-    owner: type[_InventoryRecord]
+    owner: type[_InventoryItem]
     field: str
     storage_field: str
-    target: type[_InventoryRecord] | tuple[type[_InventoryRecord], ...]
+    target: type[_InventoryItem] | tuple[type[_InventoryItem], ...]
     many: bool = False
 
 
@@ -1042,7 +1113,7 @@ INVENTORY_RELATIONSHIPS: tuple[_Relationship, ...] = (
         (Cable, Enclosure),
     ),
     _Relationship(
-        Geometry,
+        OpticalPath,
         "coordinate_reference_system",
         "coordinate_reference_system_id",
         CoordinateReferenceSystem,
@@ -1074,7 +1145,7 @@ INVENTORY_RELATIONSHIPS: tuple[_Relationship, ...] = (
 
 class Inventory(DascoreBaseModel):
     """
-    A time-aware catalog of DASCore metadata records.
+    A time-aware catalog of FAS Inventory metadata objects.
 
     See the [inventory tutorial](/tutorial/inventory.qmd) for examples of
     enriching patches from inventories and the
@@ -1090,59 +1161,187 @@ class Inventory(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    default_file_name: ClassVar[str] = "dascore-inventory.yaml"
+    format_name: ClassVar[str] = "fas_inventory"
+    get_summary_df: ClassVar[None] = None
 
-    dascore_inventory: bool = Field(
-        default=True, description="Marker identifying a DASCore inventory manifest."
-    )
     schema_version: int = Field(
         default=1,
         description=(
-            "Version of the inventory manifest/envelope schema; used for "
+            "Version of the FAS Inventory manifest/envelope schema; used for "
             "manifest migration."
         ),
     )
     resource_id: str = Field(
         default="", description="Optional identifier for this inventory manifest."
     )
-    creation_time: DateTime64 = Field(
-        default=np.datetime64("NaT"),
-        description="Time this inventory manifest was created.",
-    )
-    author_id: str = Field(
-        default="", description="Identifier for the manifest author."
+    creation_info: CreationInfo = Field(
+        default_factory=CreationInfo,
+        description="QuakeML-style creation and update metadata.",
     )
     comment: str = Field(default="", description="Additional comments.")
-    _records: tuple[dict[str, Any], ...] = PrivateAttr(default_factory=tuple)
+    resources: dict[str, _PublicInventoryItem] = Field(
+        default_factory=dict,
+        description="Shareable resources keyed by resource_id.",
+    )
+    networks: tuple[Network, ...] = Field(
+        default=(),
+        description="Network containers in this inventory.",
+    )
+    _items: tuple[dict[str, Any], ...] = PrivateAttr(default_factory=tuple)
 
     def __init__(self, **data):
-        """Create an inventory and store canonical records privately."""
-        records = data.pop("records", ())
+        """Create an inventory and store a private canonical index."""
+        indexed_items = data.pop("_indexed_items", None)
+        resources = self._normalize_resources(data.pop("resources", {}))
+        networks = tuple(data.pop("networks", ()))
+        items = (*resources, *networks)
+        data["resources"] = {}
+        data["networks"] = ()
         super().__init__(**data)
-        object.__setattr__(self, "_records", tuple(self._canonicalize_many(records)))
-        if not self.dascore_inventory:
-            msg = "Inventory manifest must set dascore_inventory to true."
-            raise ValueError(msg)
-        self._validate_resource_ids()
+        if indexed_items is None:
+            indexed_items = self._canonicalize_many(items)
+        object.__setattr__(self, "_items", tuple(indexed_items))
+        self._validate_ids()
         self._validate_references()
+        self._set_public_containers()
 
     @classmethod
-    def _relationships_for(cls, record_cls: type[_InventoryRecord]):
-        """Return relationship specs for a record class."""
+    def _normalize_resources(cls, resources) -> tuple[_PublicInventoryItem, ...]:
+        """Return resources from a public resource_id mapping."""
+        if resources is None:
+            return ()
+        if not isinstance(resources, Mapping):
+            msg = "resources must be a mapping of resource_id to resource object."
+            raise ParameterError(msg)
+        out = []
+        for resource_id, resource in resources.items():
+            resource_id = str(resource_id)
+            if isinstance(resource, Mapping):
+                data = dict(resource)
+                if data.get("resource_id", resource_id) != resource_id:
+                    msg = "Resource mapping keys must match payload resource_id values."
+                    raise ValueError(msg)
+                item_type = data.pop("type")
+                data["resource_id"] = resource_id
+                resource = cls._item_cls(item_type).model_validate(data)
+            if not isinstance(resource, _PublicInventoryItem):
+                msg = "Inventory resources must be public resource objects."
+                raise ParameterError(msg)
+            if not resource.resource_id:
+                resource = resource.model_copy(update={"resource_id": resource_id})
+            elif resource.resource_id != resource_id:
+                msg = "Resource mapping keys must match resource.resource_id values."
+                raise ValueError(msg)
+            out.append(resource)
+        return tuple(out)
+
+    def _set_public_containers(self) -> None:
+        """Set public resources and networks from the private canonical index."""
+        cache = {}
+        resources = {}
+        for item in self._items:
+            item_cls = self._item_cls(item["type"])
+            if item_cls in PUBLIC_ITEM_TYPES:
+                resource = self._resolve_item(item, cache=cache)
+                resources[resource.resource_id] = resource
+        networks = tuple(
+            self._resolve_item(item, cache=cache)
+            for item in self._items
+            if item["type"] == "Network"
+        )
+        object.__setattr__(self, "resources", resources)
+        object.__setattr__(self, "networks", networks)
+
+    @classmethod
+    def _relationships_for(cls, item_cls: type[_InventoryItem]):
+        """Return relationship specs for an item class."""
         return tuple(
-            rel for rel in INVENTORY_RELATIONSHIPS if issubclass(record_cls, rel.owner)
+            rel for rel in INVENTORY_RELATIONSHIPS if issubclass(item_cls, rel.owner)
         )
 
     @property
-    def records(self) -> tuple[dict[str, Any], ...]:
-        """Return copies of canonical id-only inventory records."""
-        return tuple(dict(record) for record in self._records)
+    def _indexed_items(self) -> tuple[dict[str, Any], ...]:
+        """Return copies of canonical id-only inventory items."""
+        return tuple(dict(item) for item in self._items)
 
     def new(self, **kwargs) -> Self:
         """Create a new Inventory with updated attributes."""
-        if "records" not in kwargs:
-            kwargs["records"] = self.records
-        return self.__class__(**(self.to_dict() | kwargs))
+        if "items" in kwargs:
+            msg = "Use resources or networks to update an Inventory."
+            raise ParameterError(msg)
+        data = {
+            "schema_version": self.schema_version,
+            "resource_id": self.resource_id,
+            "creation_info": self.creation_info,
+            "comment": self.comment,
+            "resources": self.resources,
+            "networks": self.networks,
+        }
+        if "creation_info" not in kwargs:
+            data["creation_info"] = self._increment_creation_info_version(
+                self.creation_info
+            )
+        return self.__class__(**(data | kwargs))
+
+    def replace(self, item: _InventoryItem) -> Self:
+        """Return a new inventory with one existing item replaced."""
+        if not isinstance(item, _InventoryItem):
+            msg = "replace requires an inventory object."
+            raise ParameterError(msg)
+        if not isinstance(item, _PublicInventoryItem) and not item.inventory_id:
+            msg = f"No inventory item found for identity {item.type!r}."
+            raise KeyError(msg)
+        incoming = list(self._canonicalize_many((item,)))
+        current = list(self._indexed_items)
+        target = incoming[-1]
+        target_identity = self._item_identity(target)
+        found_target = False
+        for new_item in incoming:
+            identity = self._item_identity(new_item)
+            match = None
+            for index, old_item in enumerate(current):
+                if self._item_identity(old_item) != identity:
+                    continue
+                if old_item["type"] != new_item["type"]:
+                    msg = (
+                        f"Inventory identity {identity!r} is already used for "
+                        f"{old_item['type']!r}, not {new_item['type']!r}."
+                    )
+                    raise ValueError(msg)
+                match = index
+                break
+            if match is None:
+                if identity == target_identity:
+                    msg = f"No inventory item found for identity {identity!r}."
+                    raise KeyError(msg)
+                current.append(new_item)
+                continue
+            current[match] = new_item
+            found_target = found_target or identity == target_identity
+        if not found_target:
+            msg = f"No inventory item found for identity {target_identity!r}."
+            raise KeyError(msg)
+        creation_info = self._increment_creation_info_version(self.creation_info)
+        return self.__class__(
+            schema_version=self.schema_version,
+            resource_id=self.resource_id,
+            creation_info=creation_info,
+            comment=self.comment,
+            _indexed_items=tuple(current),
+        )
+
+    @staticmethod
+    def _increment_creation_info_version(creation_info: CreationInfo) -> CreationInfo:
+        """Return creation info with integer-like content version incremented."""
+        version = creation_info.version
+        if version == "":
+            version = "1"
+        else:
+            try:
+                version = str(int(version) + 1)
+            except ValueError:
+                return creation_info
+        return creation_info.model_copy(update={"version": version})
 
     @staticmethod
     def _normalize_filter(value) -> tuple | None:
@@ -1154,116 +1353,243 @@ class Inventory(DascoreBaseModel):
         return tuple(value)
 
     @staticmethod
-    def _type_name(record_type) -> str:
-        """Return canonical record type name."""
-        return record_type if isinstance(record_type, str) else record_type.__name__
+    def _type_name(item_type) -> str:
+        """Return canonical item type name."""
+        return item_type if isinstance(item_type, str) else item_type.__name__
 
     @classmethod
-    def _record_cls(cls, record_type: str) -> type[_InventoryRecord]:
-        """Return record class for a canonical record type."""
+    def _item_cls(cls, item_type: str) -> type[_InventoryItem]:
+        """Return item class for a canonical item type."""
         try:
-            return INVENTORY_RECORD_TYPES[record_type]
+            return INVENTORY_ITEM_TYPES[item_type]
         except KeyError:
-            valid = sorted(INVENTORY_RECORD_TYPES)
-            msg = f"Unknown inventory object type {record_type!r}. Valid types are {valid}."
+            valid = sorted(INVENTORY_ITEM_TYPES)
+            msg = (
+                f"Unknown inventory object type {item_type!r}. Valid types are {valid}."
+            )
             raise ValueError(msg) from None
 
     @classmethod
-    def _canonicalize_many(cls, records) -> tuple[dict[str, Any], ...]:
-        """Return canonical records for mappings or inventory record objects."""
+    def _canonicalize_many(cls, items) -> tuple[dict[str, Any], ...]:
+        """Return canonical items for mappings or inventory item objects."""
         out = []
         seen = set()
         cache = {}
-        for record in records:
-            for item in cls._canonicalize_record(record, cache=cache):
-                key = cls._record_cache_key(item)
+        for index, item in enumerate(items):
+            path = cls._root_path(item, index)
+            for item in cls._canonicalize_item(item, cache=cache, path=path):
+                key = cls._item_cache_key(item)
                 if key not in seen:
                     out.append(item)
                     seen.add(key)
         return tuple(out)
 
     @classmethod
-    def _canonicalize_record(
-        cls,
-        record,
-        cache=None,
-    ) -> tuple[dict[str, Any], ...]:
-        """Return supporting records plus one canonical id-only record."""
-        records, _ = cls._canonicalize_record_with_id(record, cache=cache)
-        return records
+    def _root_path(cls, item, index: int) -> str | None:
+        """Return the deterministic internal path for a top-level item."""
+        item_type = item.get("type", "") if isinstance(item, Mapping) else item.type
+        item_cls = cls._item_cls(str(item_type))
+        if (
+            not issubclass(item_cls, (*PUBLIC_ITEM_TYPES, *ROOT_ITEM_TYPES))
+            and not (isinstance(item, Mapping) and item.get("id", ""))
+            and not (not isinstance(item, Mapping) and item.inventory_id)
+        ):
+            return None
+        type_slug = _inventory_type_slug(str(item_type) or "item")
+        label = ""
+        if isinstance(item, Mapping):
+            label = str(item.get("code") or item.get("resource_id") or index)
+        elif hasattr(item, "code") and getattr(item, "code"):
+            label = str(getattr(item, "code"))
+        elif hasattr(item, "resource_id") and getattr(item, "resource_id"):
+            label = str(getattr(item, "resource_id"))
+        else:
+            label = str(index)
+        return f"/{type_slug}/{label}"
 
     @classmethod
-    def _canonicalize_record_with_id(
+    def _canonicalize_item(
         cls,
-        record,
+        item,
         cache=None,
+        path: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return supporting items plus one canonical id-only item."""
+        items, _ = cls._canonicalize_item_with_id(item, cache=cache, path=path)
+        return items
+
+    @classmethod
+    def _canonicalize_item_with_id(
+        cls,
+        item,
+        cache=None,
+        path: str | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], str]:
-        """Return canonical records and the record id for one inventory object."""
-        if isinstance(record, Mapping):
-            out = cls._canonicalize_mapping(record)
-            return (out,), out["resource_id"]
-        if not isinstance(record, _InventoryRecord):
-            msg = "records must contain inventory record instances or mappings."
+        """Return canonical items and the item id for one inventory object."""
+        if isinstance(item, Mapping):
+            if any(rel.field in item for rel in INVENTORY_RELATIONSHIPS):
+                items, resource_id = cls._canonicalize_nested_mapping(item, cache, path)
+                return items, resource_id
+            out = cls._canonicalize_mapping(item, path=path)
+            return (out,), out["id"]
+        if not isinstance(item, _InventoryItem):
+            msg = "items must contain inventory item instances or mappings."
             raise ParameterError(msg)
         if cache is None:
             cache = {}
-        if id(record) in cache:
-            return cache[id(record)]
+        if id(item) in cache:
+            return cache[id(item)]
         supporting = []
-        data = record.model_dump(mode="json", exclude_none=True)
-        data["type"] = record.type
-        for relationship in cls._relationships_for(record.__class__):
+        data = item.model_dump(mode="json", exclude_none=True)
+        data["type"] = item.type
+        item_id = cls._get_item_id(item, data, path=path)
+        data["id"] = item_id
+        for relationship in cls._relationships_for(item.__class__):
             data.pop(relationship.field, None)
             if relationship.many:
-                values = tuple(getattr(record, relationship.field))
+                values = tuple(getattr(item, relationship.field))
                 if values:
                     resource_ids = []
-                    for value in values:
-                        records, resource_id = cls._canonicalize_record_with_id(
+                    for index, value in enumerate(values):
+                        child_path = f"{item_id}/{relationship.field}/{index}"
+                        items, resource_id = cls._canonicalize_item_with_id(
                             value,
                             cache=cache,
+                            path=child_path,
                         )
-                        supporting.extend(records)
+                        supporting.extend(items)
                         resource_ids.append(resource_id)
                     data[relationship.storage_field] = tuple(resource_ids)
-            elif (value := getattr(record, relationship.field)) is not None:
-                records, resource_id = cls._canonicalize_record_with_id(
+            elif (value := getattr(item, relationship.field)) is not None:
+                child_path = f"{item_id}/{relationship.field}"
+                items, resource_id = cls._canonicalize_item_with_id(
                     value,
                     cache=cache,
+                    path=child_path,
                 )
-                supporting.extend(records)
+                supporting.extend(items)
                 data[relationship.storage_field] = resource_id
-        if not data.get("resource_id"):
-            data["resource_id"] = cls._generated_resource_id(record.type)
         canonical = cls._canonicalize_mapping(data)
         out = (*supporting, canonical)
-        result = (out, canonical["resource_id"])
-        cache[id(record)] = result
+        result = (out, canonical["id"])
+        cache[id(item)] = result
         return result
+
+    @classmethod
+    def _canonicalize_nested_mapping(
+        cls,
+        item: Mapping[str, Any],
+        cache=None,
+        path: str | None = None,
+    ) -> tuple[tuple[dict[str, Any], ...], str]:
+        """Canonicalize a nested serialized mapping into flat runtime items."""
+        data = dict(item)
+        item_type = data.get("type", "")
+        item_cls = cls._item_cls(item_type)
+        item_id = cls._get_mapping_id(data, item_cls, path=path)
+        data["id"] = item_id
+        supporting = []
+        for relationship in cls._relationships_for(item_cls):
+            if relationship.many:
+                values = tuple(data.pop(relationship.field, ()))
+                if values:
+                    ids = []
+                    for index, value in enumerate(values):
+                        child_path = f"{item_id}/{relationship.field}/{index}"
+                        items, child_id = cls._canonicalize_item_with_id(
+                            value,
+                            cache=cache,
+                            path=child_path,
+                        )
+                        supporting.extend(items)
+                        ids.append(child_id)
+                    data[relationship.storage_field] = tuple(ids)
+            elif relationship.field in data:
+                value = data.pop(relationship.field)
+                if value is not None:
+                    child_path = f"{item_id}/{relationship.field}"
+                    items, child_id = cls._canonicalize_item_with_id(
+                        value,
+                        cache=cache,
+                        path=child_path,
+                    )
+                    supporting.extend(items)
+                    data[relationship.storage_field] = child_id
+        canonical = cls._canonicalize_mapping(data, path=path)
+        return (*supporting, canonical), canonical["id"]
+
+    @classmethod
+    def _get_item_id(
+        cls,
+        item: _InventoryItem,
+        data: Mapping[str, Any],
+        *,
+        path: str | None,
+    ) -> str:
+        """Return public or runtime id for an item being canonicalized."""
+        if item.inventory_id:
+            return item.inventory_id
+        if isinstance(item, _PublicInventoryItem):
+            return data.get("resource_id") or cls._generated_resource_id(item.type)
+        if path is None:
+            msg = (
+                f"{item.type} objects without public resource_id must be nested "
+                "or come from an Inventory view before replacement."
+            )
+            raise ParameterError(msg)
+        return path
+
+    @classmethod
+    def _get_mapping_id(
+        cls,
+        data: Mapping[str, Any],
+        item_cls: type[_InventoryItem],
+        *,
+        path: str | None,
+    ) -> str:
+        """Return id for a canonical or nested mapping."""
+        if value := data.get("id", ""):
+            return str(value)
+        if issubclass(item_cls, _PublicInventoryItem):
+            return str(
+                data.get("resource_id") or cls._generated_resource_id(data["type"])
+            )
+        if path is None:
+            msg = (
+                f"{data['type']} objects without public resource_id must be nested "
+                "inside the inventory tree."
+            )
+            raise ParameterError(msg)
+        return path
 
     @classmethod
     def _generated_resource_id(
         cls,
-        record_type: str,
+        item_type: str,
     ) -> str:
-        """Return a generated local resource id for a canonical record."""
+        """Return a generated local resource id for a canonical item."""
         prefix = get_config().inventory_resource_id_prefix
-        type_slug = _inventory_type_slug(record_type)
+        type_slug = _inventory_type_slug(item_type)
         return f"{prefix}/{type_slug}/{uuid4().hex}"
 
     @classmethod
-    def _canonicalize_mapping(cls, record: Mapping[str, Any]) -> dict[str, Any]:
-        """Validate and normalize one canonical id-only record mapping."""
-        data = dict(record)
-        if not data.get("resource_id"):
-            msg = "Inventory records must include a non-empty resource_id."
+    def _canonicalize_mapping(
+        cls,
+        item: Mapping[str, Any],
+        *,
+        path: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate and normalize one canonical id-only item mapping."""
+        data = dict(item)
+        item_type = str(data.get("type", ""))
+        if not item_type:
+            msg = "Inventory objects must include a type."
             raise ValueError(msg)
-        record_type = str(data.get("type", ""))
-        if not record_type:
-            msg = "Inventory records must include a type."
-            raise ValueError(msg)
-        record_cls = cls._record_cls(record_type)
-        relationships = cls._relationships_for(record_cls)
+        item_cls = cls._item_cls(item_type)
+        data["id"] = cls._get_mapping_id(data, item_cls, path=path)
+        if issubclass(item_cls, _PublicInventoryItem) and not data.get("resource_id"):
+            data["resource_id"] = data["id"]
+        relationships = cls._relationships_for(item_cls)
         object_fields = tuple(
             relationship.field
             for relationship in relationships
@@ -1272,19 +1598,21 @@ class Inventory(DascoreBaseModel):
         if object_fields:
             fields = ", ".join(repr(field) for field in object_fields)
             msg = (
-                "Canonical inventory record mappings must use id relationship "
+                "Canonical inventory item mappings must use id relationship "
                 f"fields, not object relationship fields: {fields}."
             )
             raise ValueError(msg)
         validate_data = dict(data)
+        validate_data.pop("id", None)
         for relationship in relationships:
             validate_data.pop(relationship.storage_field, None)
         validate_data.pop("type", None)
-        record_cls.model_validate(validate_data)
-        out = record_cls.model_validate(validate_data).model_dump(
+        item_cls.model_validate(validate_data)
+        out = item_cls.model_validate(validate_data).model_dump(
             mode="json", exclude_none=True
         )
-        out["type"] = record_type
+        out["id"] = data["id"]
+        out["type"] = item_type
         for relationship in relationships:
             out.pop(relationship.field, None)
             if relationship.many:
@@ -1298,208 +1626,164 @@ class Inventory(DascoreBaseModel):
         return out
 
     @staticmethod
-    def _record_cache_key(record: Mapping[str, Any]) -> str:
-        """Return a stable key for one canonical record mapping."""
-        return json.dumps(record, sort_keys=True, default=str)
+    def _item_cache_key(item: Mapping[str, Any]) -> str:
+        """Return a stable key for one canonical item mapping."""
+        return json.dumps(item, sort_keys=True, default=str)
 
     @staticmethod
-    def _time_key(value) -> str | None:
-        """Return a comparable key for a datetime-like value."""
-        value = to_datetime64(value)
-        return None if pd.isnull(value) else str(value)
+    def _item_identity(item: Mapping[str, Any]) -> str:
+        """Return public identity when present, otherwise runtime id."""
+        return item.get("resource_id", "") or item["id"]
 
     @staticmethod
-    def _record_start_key(record: Mapping[str, Any]) -> str | None:
-        """Return the validity start key for a canonical record."""
-        return Inventory._time_key(record.get("start_time", None))
-
-    @staticmethod
-    def _is_valid_at(record: Mapping[str, Any], time) -> bool:
-        """Return True if a canonical record is valid at a supplied time."""
+    def _is_valid_at(item: Mapping[str, Any], time) -> bool:
+        """Return True if a canonical item is valid at a supplied time."""
         time = to_datetime64(time)
         if pd.isnull(time):
             return True
-        start = to_datetime64(record.get("start_time", None))
-        end = to_datetime64(record.get("end_time", None))
+        start = to_datetime64(item.get("start_time", None))
+        end = to_datetime64(item.get("end_time", None))
         after_start = pd.isnull(start) or start <= time
         before_end = pd.isnull(end) or time < end
         return after_start and before_end
 
     @staticmethod
-    def _select_current_record(records: tuple[dict[str, Any], ...], time=None):
-        """Return the current record from one resource lineage."""
-        if not records:
+    def _select_current_item(items: tuple[dict[str, Any], ...], time=None):
+        """Return the current item from one resource lineage."""
+        if not items:
             return None
         if pd.isnull(to_datetime64(time)):
-            return records[-1]
-        for record in reversed(records):
-            if Inventory._is_valid_at(record, time):
-                return record
+            return items[-1]
+        for item in reversed(items):
+            if Inventory._is_valid_at(item, time):
+                return item
         return None
 
-    def _validate_resource_ids(self) -> None:
-        """Ensure resource ids identify exactly one record type."""
+    def _validate_ids(self) -> None:
+        """Ensure runtime ids and public resource ids identify one item type."""
+        ids = {}
         types = {}
-        for record in self._records:
-            resource_id = record["resource_id"]
-            record_type = record["type"]
+        for item in self._items:
+            item_id = item["id"]
+            item_type = item["type"]
+            if (old_type := ids.get(item_id)) is None:
+                ids[item_id] = item_type
+            elif old_type != item_type:
+                msg = (
+                    f"Inventory internal id {item_id!r} is used for both "
+                    f"{old_type!r} and {item_type!r}."
+                )
+                raise ValueError(msg)
+            resource_id = item.get("resource_id", "")
+            if not resource_id:
+                continue
             if (old_type := types.get(resource_id)) is None:
-                types[resource_id] = record_type
-            elif old_type != record_type:
+                types[resource_id] = item_type
+            elif old_type != item_type:
                 msg = (
                     f"Inventory resource_id {resource_id!r} is used for both "
-                    f"{old_type!r} and {record_type!r}."
+                    f"{old_type!r} and {item_type!r}."
                 )
                 raise ValueError(msg)
 
-    def _current_record(
+    def _current_item(
         self,
         resource_id: str,
         time=None,
         *,
-        record_type: str
-        | type[_InventoryRecord]
-        | tuple[type[_InventoryRecord], ...]
+        item_type: str
+        | type[_InventoryItem]
+        | tuple[type[_InventoryItem], ...]
         | None = None,
     ) -> dict[str, Any]:
-        """Return the current canonical record for one resource id."""
-        type_filters = self._normalize_filter(record_type)
+        """Return the current canonical item for one resource id."""
+        type_filters = self._normalize_filter(item_type)
         type_names = (
             None
             if type_filters is None
-            else {self._type_name(record_type) for record_type in type_filters}
+            else {self._type_name(item_type) for item_type in type_filters}
         )
-        all_records = tuple(
-            record for record in self._records if record["resource_id"] == resource_id
+        all_items = tuple(
+            item
+            for item in self._items
+            if item["id"] == resource_id or item.get("resource_id", "") == resource_id
         )
-        records = tuple(
-            record
-            for record in all_records
-            if type_names is None or record["type"] in type_names
+        items = tuple(
+            item
+            for item in all_items
+            if type_names is None or item["type"] in type_names
         )
-        if not records:
-            msg = f"No inventory record found for resource_id {resource_id!r}."
-            if record_type is not None:
-                msg = f"{msg} and record_type {record_type!r}."
+        if not items:
+            msg = f"No inventory item found for resource_id {resource_id!r}."
+            if item_type is not None:
+                msg = f"{msg} and item_type {item_type!r}."
             raise KeyError(msg)
-        out = self._select_current_record(records, time)
+        out = self._select_current_item(items, time)
         if out is None:
             msg = (
-                f"No inventory record found for resource_id {resource_id!r} "
+                f"No inventory item found for resource_id {resource_id!r} "
                 f"valid at {to_datetime64(time)!r}."
             )
             raise KeyError(msg)
         return out
 
-    def get_records(
-        self,
-        record_ids=None,
-        *,
-        record_types=None,
-        time=None,
-    ) -> tuple[_InventoryRecord, ...]:
-        """Return resolved records filtered by id, type, and time."""
-        records = self.get_record_dicts(
-            record_ids=record_ids,
-            record_types=record_types,
-            time=time,
-        )
-        cache = {}
-        return tuple(
-            self._resolve_record(record, time=time, cache=cache) for record in records
-        )
-
-    def get_record_dicts(
-        self,
-        record_ids=None,
-        *,
-        record_types=None,
-        time=None,
-        include_history: bool = False,
-    ) -> tuple[dict[str, Any], ...]:
-        """Return canonical id-only records filtered by id, type, and time."""
-        if include_history and time is not None:
-            msg = "time and include_history=True are mutually exclusive."
-            raise ParameterError(msg)
-        ids = self._normalize_filter(record_ids)
-        type_filters = self._normalize_filter(record_types)
-        type_names = (
-            None
-            if type_filters is None
-            else {self._type_name(record_type) for record_type in type_filters}
-        )
-        records = tuple(
-            record
-            for record in self._records
-            if (ids is None or record["resource_id"] in ids)
-            and (type_names is None or record["type"] in type_names)
-        )
-        if not include_history:
-            grouped = defaultdict(list)
-            for record in records:
-                grouped[record["resource_id"]].append(record)
-            selected = []
-            for resource_id, values in grouped.items():
-                current = self._select_current_record(tuple(values), time)
-                if current is None:
-                    if ids is not None:
-                        msg = (
-                            f"No inventory record found for resource_id "
-                            f"{resource_id!r} valid at {to_datetime64(time)!r}."
-                        )
-                        raise KeyError(msg)
-                    continue
-                selected.append(current)
-            records = tuple(selected)
-        return tuple(dict(record) for record in records)
+    def _current_index(self, time=None) -> tuple[dict[str, Any], ...]:
+        """Return current canonical items for each inventory identity."""
+        grouped = defaultdict(list)
+        for item in self._items:
+            grouped[self._item_identity(item)].append(item)
+        out = []
+        for values in grouped.values():
+            current = self._select_current_item(tuple(values), time)
+            if current is not None:
+                out.append(dict(current))
+        return tuple(out)
 
     def _validate_references(self, time=None) -> Self:
-        """Validate that inventory id references point to expected record types."""
+        """Validate that inventory id references point to expected item types."""
         time = to_datetime64(time)
         errors: list[str] = []
 
         def _check(
-            owner: _InventoryRecord,
+            owner: _InventoryItem,
             field: str,
             resource_id: str,
-            expected_type: type[_InventoryRecord] | tuple[type[_InventoryRecord], ...],
+            expected_type: type[_InventoryItem] | tuple[type[_InventoryItem], ...],
             time=None,
         ) -> None:
-            """Record an error if a referenced resource is missing or mistyped."""
+            """Add an error if a referenced resource is missing or mistyped."""
             if not resource_id:
                 return
             try:
-                current = self._current_record(
+                current = self._current_item(
                     resource_id,
                     time=time,
-                    record_type=expected_type,
+                    item_type=expected_type,
                 )
-                record = self._storage_object(current)
+                item = self._storage_object(current)
             except KeyError:
+                owner_id = getattr(owner, "resource_id", "") or owner.inventory_id
                 errors.append(
-                    f"{owner.type} {owner.resource_id!r} field {field!r} "
+                    f"{owner.type} {owner_id!r} field {field!r} "
                     f"references missing resource_id {resource_id!r}."
                 )
                 return
-            if not isinstance(record, expected_type):
+            if not isinstance(item, expected_type):
+                owner_id = getattr(owner, "resource_id", "") or owner.inventory_id
                 expected = (
                     expected_type.__name__
                     if isinstance(expected_type, type)
                     else ", ".join(cls.__name__ for cls in expected_type)
                 )
                 errors.append(
-                    f"{owner.type} {owner.resource_id!r} field {field!r} "
-                    f"references {record.type} {resource_id!r}; expected {expected}."
+                    f"{owner.type} {owner_id!r} field {field!r} "
+                    f"references {item.type} {resource_id!r}; expected {expected}."
                 )
 
-        records = (
-            self.get_record_dicts(time=time)
-            if not pd.isnull(time)
-            else self.get_record_dicts(include_history=True)
-        )
-        for obj in records:
-            record_time = to_datetime64(obj.get("start_time", None))
-            check_time = time if not pd.isnull(time) else record_time
+        items = self._current_index(time=time) if not pd.isnull(time) else self._items
+        for obj in items:
+            item_time = to_datetime64(obj.get("start_time", None))
+            check_time = time if not pd.isnull(time) else item_time
             if pd.isnull(check_time):
                 check_time = None
             owner = self._storage_object(obj)
@@ -1527,42 +1811,46 @@ class Inventory(DascoreBaseModel):
             raise ValueError(msg)
         return self
 
-    def _storage_object(self, record: Mapping[str, Any]) -> _InventoryRecord:
-        """Return unresolved pydantic object for a canonical record."""
-        data = dict(record)
-        record_type = data.pop("type")
-        record_cls = self._record_cls(record_type)
-        for relationship in self._relationships_for(record_cls):
+    def _storage_object(self, item: Mapping[str, Any]) -> _InventoryItem:
+        """Return unresolved pydantic object for a canonical item."""
+        data = dict(item)
+        item_id = data.pop("id")
+        item_type = data.pop("type")
+        item_cls = self._item_cls(item_type)
+        for relationship in self._relationships_for(item_cls):
             data.pop(relationship.storage_field, None)
-        return record_cls.model_validate(data)
+        out = item_cls.model_validate(data)
+        object.__setattr__(out, "_inventory_id", item_id)
+        return out
 
-    def _resolve_reference(self, resource_id: str, time, record_type=None, cache=None):
+    def _resolve_reference(self, resource_id: str, time, item_type=None, cache=None):
         """Resolve one required reference."""
         if not resource_id:
             return None
-        record = self._current_record(resource_id, time=time, record_type=record_type)
-        return self._resolve_record(record, time=time, cache=cache)
+        item = self._current_item(resource_id, time=time, item_type=item_type)
+        return self._resolve_item(item, time=time, cache=cache)
 
-    def _resolve_record(
+    def _resolve_item(
         self,
-        record: Mapping[str, Any],
+        item: Mapping[str, Any],
         time=None,
         cache=None,
-    ) -> _InventoryRecord:
-        """Return a resolved pydantic object from a canonical record."""
+    ) -> _InventoryItem:
+        """Return a resolved pydantic object from a canonical item."""
         if cache is None:
             cache = {}
-        key = self._record_cache_key(record)
+        key = self._item_cache_key(item)
         if key in cache:
             return cache[key]
-        record_time = to_datetime64(record.get("start_time", None))
-        resolve_time = time if not pd.isnull(to_datetime64(time)) else record_time
+        item_time = to_datetime64(item.get("start_time", None))
+        resolve_time = time if not pd.isnull(to_datetime64(time)) else item_time
         if pd.isnull(resolve_time):
             resolve_time = None
-        data = dict(record)
-        record_type = data.pop("type")
-        record_cls = self._record_cls(record_type)
-        for relationship in self._relationships_for(record_cls):
+        data = dict(item)
+        item_id = data.pop("id")
+        item_type = data.pop("type")
+        item_cls = self._item_cls(item_type)
+        for relationship in self._relationships_for(item_cls):
             if relationship.many:
                 resource_ids = data.pop(relationship.storage_field, ())
                 data[relationship.field] = tuple(
@@ -1583,71 +1871,79 @@ class Inventory(DascoreBaseModel):
                     relationship.target,
                     cache=cache,
                 )
-        out = record_cls.model_validate(data)
+        out = item_cls.model_validate(data)
+        object.__setattr__(out, "_inventory_id", item_id)
         cache[key] = out
         return out
 
-    def put_records(
-        self,
-        records,
-        *,
-        author_id: str | None = None,
-        comment: str | None = None,
-    ) -> Self:
-        """
-        Return a new inventory with canonicalized records inserted.
-
-        Records may be canonical id-only mappings or resolved inventory objects.
-        Linked inventory objects are recursively extracted and stored as canonical
-        records before the object that references them. A record replaces an
-        existing epoch when ``resource_id`` and ``start_time`` both match.
-        """
-        if isinstance(records, _InventoryRecord) or isinstance(records, Mapping):
-            msg = (
-                "records must be a sequence of inventory record instances or mappings."
-            )
-            raise ParameterError(msg)
-        incoming = list(self._canonicalize_many(records))
-        current = list(self.records)
-
-        def _find_matching_epoch(record: Mapping[str, Any]) -> int | None:
-            """Return index of matching resource/start epoch, if present."""
-            start_key = self._record_start_key(record)
-            for index, old in enumerate(current):
-                if old["resource_id"] != record["resource_id"]:
-                    continue
-                if old["type"] != record["type"]:
-                    msg = (
-                        f"Inventory resource_id {record['resource_id']!r} is "
-                        f"already used for {old['type']!r}, not {record['type']!r}."
-                    )
-                    raise ValueError(msg)
-                if self._record_start_key(old) == start_key:
-                    return index
-            return None
-
-        for record in incoming:
-            if author_id is not None:
-                record = {**record, "author_id": author_id}
-            if comment is not None:
-                record = {**record, "comment": comment}
-            record = self._canonicalize_mapping(record)
-            if (index := _find_matching_epoch(record)) is None:
-                current.append(record)
-            elif current[index] != record:
-                current[index] = record
-        return self.new(records=tuple(current))
-
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
-        """Load an inventory from a canonical manifest mapping."""
-        return cls.model_validate(data)
+        """Load an inventory from a FAS Inventory manifest mapping."""
+        data = dict(data)
+        format_name = data.pop("format", None)
+        if format_name != cls.format_name:
+            msg = (
+                f"Inventory manifest format must be {cls.format_name!r}, "
+                f"not {format_name!r}."
+            )
+            raise ValueError(msg)
+        return cls(**data)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible canonical manifest mapping."""
-        out = self.model_dump(mode="json", exclude_none=True)
-        out["records"] = [dict(record) for record in self._records]
+        """Return a JSON-compatible nested FAS Inventory manifest mapping."""
+        out = {
+            "format": self.format_name,
+            "schema_version": self.schema_version,
+            "resource_id": self.resource_id,
+            "creation_info": self.creation_info.model_dump(mode="json"),
+            "comment": self.comment,
+        }
+        public_items = [
+            self._serialize_item(item)
+            for item in self._items
+            if self._item_cls(item["type"]) in PUBLIC_ITEM_TYPES
+        ]
+        network_items = [
+            self._serialize_item(item)
+            for item in self._items
+            if item["type"] == "Network"
+        ]
+        if public_items:
+            out["resources"] = {
+                item["resource_id"]: {
+                    key: value for key, value in item.items() if key != "resource_id"
+                }
+                for item in public_items
+            }
+        out["networks"] = network_items
         return out
+
+    def _serialize_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a nested serialized item without runtime ids."""
+        data = dict(item)
+        data.pop("id", None)
+        item_cls = self._item_cls(data["type"])
+        for relationship in self._relationships_for(item_cls):
+            if relationship.many:
+                resource_ids = data.pop(relationship.storage_field, ())
+                if resource_ids:
+                    data[relationship.field] = [
+                        self._serialize_item(self._current_item(resource_id))
+                        for resource_id in resource_ids
+                    ]
+                continue
+            resource_id = data.get(relationship.storage_field, "")
+            if not resource_id:
+                continue
+            target = relationship.target
+            target_types = target if isinstance(target, tuple) else (target,)
+            if all(issubclass(item, _PublicInventoryItem) for item in target_types):
+                continue
+            data.pop(relationship.storage_field, None)
+            data[relationship.field] = self._serialize_item(
+                self._current_item(resource_id)
+            )
+        return data
 
     @classmethod
     def from_json(cls, source: path_types | Any) -> Self:

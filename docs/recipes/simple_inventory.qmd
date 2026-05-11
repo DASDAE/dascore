@@ -84,7 +84,6 @@ interrogator = inv.Interrogator(
 
 # The configuration of the interrogator
 acquisition = inv.Acquisition(
-    resource_id="simple_acquisition",
     code="RAW",
     location_code="",
     data_category="DAS",
@@ -143,12 +142,10 @@ telemetry_lead = inv.FiberSegment(
     container=telemetry_cable,
 )
 coupler = inv.Connector(
-    resource_id="simple_e2000_coupler",
     name="E2000 coupler",
     connector_type="E2000",
 )
 sensing_fiber = inv.FiberSegment(
-    resource_id="simple_sensing_fiber",
     name="Epsilon sensing fiber",
     optical_length=tap_points.loc["D", "distance"] - tap_points.loc["A", "distance"],
     fiber_type="composite_dfos_sensor",
@@ -283,13 +280,13 @@ network = inv.Network(
 )
 
 inventory = inv.Inventory(
-    records=(network,),
+    networks=(network,),
 )
 
 print(inventory)
 ```
 
-## Inspect Stored Records
+## Inspect Stored Items
 
 
 ## Use The Inventory With A Patch

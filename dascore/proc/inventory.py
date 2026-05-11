@@ -14,9 +14,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.inventory import (
     Acquisition,
     FiberArray,
-    Geometry,
     Inventory,
-    Network,
 )
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import iterate
@@ -87,7 +85,7 @@ def _get_unique_match(items, predicate, description: str):
     if not matches:
         msg = f"No inventory {description} found."
         raise ParameterError(msg)
-    msg = f"Multiple inventory {description} records found."
+    msg = f"Multiple inventory {description} items found."
     raise ParameterError(msg)
 
 
@@ -124,8 +122,7 @@ def _resolve_fiber_array(
     """Resolve the network and fiber array from a data source id."""
     inventory = _validate_inventory(inventory)
     source_attrs = PatchAttrs(data_source_id=_get_data_source_id(patch, data_source_id))
-    time = _get_patch_time(patch)
-    networks = inventory.get_records(record_types=Network, time=time)
+    networks = inventory.networks
     network = _get_unique_match(
         networks,
         lambda item: item.code == source_attrs.network,
@@ -270,15 +267,15 @@ def _check_distance_bounds(distance: np.ndarray, path) -> None:
 
 
 def _get_track_edges(path, track: _TrackName) -> tuple[tuple, np.ndarray]:
-    """Return records and cumulative distance edges for an optical path track."""
+    """Return items and cumulative distance edges for an optical path track."""
     sequence = path._get_interval_sequence(track)
-    records = sequence.records
-    if not records:
-        msg = f"Optical path has no {sequence.display_name} records."
+    items = sequence.items
+    if not items:
+        msg = f"Optical path has no {sequence.display_name} items."
         raise ParameterError(msg)
-    lengths = np.asarray([record.optical_length for record in records], dtype=float)
+    lengths = np.asarray([item.optical_length for item in items], dtype=float)
     if np.any(np.isnan(lengths)):
-        msg = f"Projecting {sequence.display_name} requires all records to have length."
+        msg = f"Projecting {sequence.display_name} requires all items to have length."
         raise ParameterError(msg)
     total = float(np.sum(lengths))
     if path.optical_length is not None and not np.isclose(
@@ -291,7 +288,7 @@ def _get_track_edges(path, track: _TrackName) -> tuple[tuple, np.ndarray]:
             f"optical path length {path.optical_length}."
         )
         raise ParameterError(msg)
-    return records, np.concatenate([[0.0], np.cumsum(lengths)])
+    return items, np.concatenate([[0.0], np.cumsum(lengths)])
 
 
 def _get_interval_indices(
@@ -301,8 +298,8 @@ def _get_interval_indices(
     on_boundary: _BoundaryPolicy,
     warned: list[bool],
 ) -> tuple[tuple, np.ndarray, np.ndarray]:
-    """Return records, edges, and assigned interval index for distance values."""
-    records, edges = _get_track_edges(path, track)
+    """Return items, edges, and assigned interval index for distance values."""
+    items, edges = _get_track_edges(path, track)
     interior = edges[1:-1]
     boundary = np.isin(distance, interior)
     if np.any(boundary):
@@ -317,8 +314,8 @@ def _get_interval_indices(
             )
             warned[0] = True
     index = np.searchsorted(edges, distance, side="right") - 1
-    index = np.clip(index, 0, len(records) - 1)
-    return records, edges, index
+    index = np.clip(index, 0, len(items) - 1)
+    return items, edges, index
 
 
 def _project_field(
@@ -329,13 +326,11 @@ def _project_field(
     on_boundary: _BoundaryPolicy,
     warned: list[bool],
 ) -> np.ndarray:
-    """Project one inventory record field onto patch distance values."""
+    """Project one inventory item field onto patch distance values."""
     if track == "annotation":
         return _project_annotation_field(path, distance, field)
-    records, _, index = _get_interval_indices(
-        path, track, distance, on_boundary, warned
-    )
-    values = [getattr(records[item], field, None) for item in index]
+    items, _, index = _get_interval_indices(path, track, distance, on_boundary, warned)
+    values = [getattr(items[item], field, None) for item in index]
     return np.asarray(values, dtype=object)
 
 
@@ -366,9 +361,9 @@ def _project_annotation_field(path, distance: np.ndarray, field: str) -> np.ndar
     return np.asarray(out, dtype=object)
 
 
-def _get_axis_index(geometry: Geometry, axis: str) -> int | None:
+def _get_axis_index(path, axis: str) -> int | None:
     """Return coordinate tuple index for a requested geometry axis."""
-    crs = geometry.coordinate_reference_system
+    crs = path.coordinate_reference_system
     if crs is not None and crs.axis_order:
         try:
             return crs.axis_order.index(axis)
@@ -398,11 +393,11 @@ def _project_geometry_axis(
     warned: list[bool],
 ) -> np.ndarray:
     """Project one named geometry axis onto patch distance values."""
-    records, edges, index = _get_interval_indices(
+    items, edges, index = _get_interval_indices(
         path, "geometry", distance, on_boundary, warned
     )
     out = np.full(distance.shape, np.nan, dtype=float)
-    for geo_index, geometry in enumerate(records):
+    for geo_index, geometry in enumerate(items):
         mask = index == geo_index
         if not np.any(mask):
             continue
@@ -416,7 +411,7 @@ def _project_geometry_axis(
             )
             raise ParameterError(msg)
         coordinates = np.asarray(geometry.coordinates, dtype=float)
-        axis_index = _get_axis_index(geometry, axis)
+        axis_index = _get_axis_index(path, axis)
         missing = (
             coordinates.ndim != 2
             or coordinates.shape[0] == 0
@@ -440,10 +435,10 @@ def _project_geometry_axis(
 def _track_has_field(path, track: _TrackName, field: str) -> bool:
     """Return True if a resolved path track exposes a field name."""
     if track == "annotation":
-        records = path.annotations
+        items = path.annotations
     else:
-        records = path._get_interval_sequence(track).records
-    return any(field in record.__class__.model_fields for record in records)
+        items = path._get_interval_sequence(track).items
+    return any(field in item.__class__.model_fields for item in items)
 
 
 def _resolve_metadata_track(path, field: str) -> _TrackName | None:

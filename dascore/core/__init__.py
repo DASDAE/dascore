@@ -15,6 +15,7 @@ from .inventory import (  # noqa
     CoordinateReferenceSystem,
     Coupler,
     CouplingCondition,
+    CreationInfo,
     ExternalResource,
     FiberArray,
     FiberSegment,

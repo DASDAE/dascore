@@ -124,10 +124,10 @@ class TestGetExampleInventory:
         """The random inventory should resolve context for the random patch."""
         patch = dc.get_example_patch("random_das")
         inventory = dc.get_example_inventory("random_das")
-        network = inventory.get_records(record_ids="random_das_network")[0]
-        fiber_array = inventory.get_records(record_ids="random_das_fiber_array")[0]
+        network = inventory.networks[0]
+        fiber_array = network.fiber_arrays[0]
         distance_max = patch.coords.coord_map["distance"].max()
-        assert network.fiber_arrays[0].resource_id == "random_das_fiber_array"
+        assert network.fiber_arrays[0].code == "RDAS"
         assert fiber_array.tag == patch.attrs.tag
         assert fiber_array.optical_paths[0].optical_length == distance_max + 1
         assert fiber_array.acquisitions[0].acquisition_sample_rate == 250.0
@@ -135,9 +135,9 @@ class TestGetExampleInventory:
     def test_event_inventory_describes_processed_event(self):
         """The event inventory should resolve context for example_event_2."""
         inventory = dc.get_example_inventory("example_event_2")
-        network = inventory.get_records(record_ids="example_event_2_network")[0]
-        fiber_array = inventory.get_records(record_ids="example_event_2_fiber_array")[0]
-        assert network.fiber_arrays[0].resource_id == "example_event_2_fiber_array"
+        network = inventory.networks[0]
+        fiber_array = network.fiber_arrays[0]
+        assert network.fiber_arrays[0].code == "EV2"
         assert fiber_array.acquisitions[0].data_units == dc.get_quantity("strain/s")
         label = fiber_array.optical_paths[0].annotations[0].label
         assert label == "borehole monitoring interval"

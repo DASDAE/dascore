@@ -2,9 +2,9 @@
 title: Inventory Design
 ---
 
-This note explains the design direction for DASCore's [`Inventory`](`dascore.core.inventory.Inventory`) model and why it intentionally does not mirror any external metadata standard exactly.
+This note explains the design direction for the FAS Inventory model, DASCore's [`Inventory`](`dascore.core.inventory.Inventory`) implementation, and why it intentionally does not mirror any external metadata standard exactly.
 
-DASCore inventories are intended to be practical metadata catalogs for working data archives. They should be easy to write near raw files, easy to resolve into patch context, and general enough to describe DAS and related fiber-optic monitoring systems. External standards are still important: the model borrows terminology and structure from FDSN StationXML, the FDSN/DAS-RCN DAS metadata work, and PRODML, but is slightly different.
+FAS inventories are intended to be practical metadata catalogs for working data archives. They should be easy to write near raw files, easy to resolve into patch context, and general enough to describe DAS, related fiber-optic monitoring systems, and conventional seismic networks as the model grows. External standards are still important: the model borrows terminology and structure from FDSN StationXML, the FDSN/DAS-RCN DAS metadata work, and PRODML, but is slightly different.
 
 # Standards Used As Reference
 
@@ -16,26 +16,39 @@ The main fiber-installation reference is PRODML. PRODML's optical path material 
 
 # Design Goals
 
-DASCore's inventory model is optimized for these use cases:
+FAS Inventory is optimized for these use cases:
 
 - Add a small YAML inventory beside field data without rewriting raw files.
 - Resolve patch context by `data_source_id` and time.
 - Keep patch data and inventory metadata separate until the user explicitly enriches a patch.
-- Preserve validity history by adding records for the same resource with new `start_time` values.
+- Preserve validity history by revising loaded items with new `start_time` values.
 - Support partial metadata because many field archives lack a complete standards-grade description.
 - Keep geometry, coupling, and optical-component descriptions reusable across fiber arrays.
 
 This means DASCore's model is not a submission format for a data center. It is a working model for local and programmatic metadata enrichment.
 
+Serialized files identify themselves with a format sentinel and schema version:
+
+```yaml
+format: fas_inventory
+schema_version: 1
+creation_info:
+  agency_id: ""
+  author: ""
+  creation_time: NaT
+  update_time: NaT
+  version: ""
+```
+
 # Key Objects
 
-The inventory structure is centered on a small set of records that can be resolved by id and data time.
+The inventory structure is centered on a nested tree that can be resolved by natural codes, runtime identity, and data time.
 
-Each inventory record has a globally unique `resource_id`. Assembly/configuration records which can change with data time, currently `FiberArray`, `OpticalPath`, and `Acquisition`, also have an optional validity interval defined by `start_time` and `end_time`. `resource_id` is the canonical identity stored in JSON/YAML, but users usually do not need to author it directly. When linked records are placed into an `Inventory`, DASCore generates random local ids for omitted values, preserves explicit ids, and keeps reused object instances shared within one inventory build. Generated ids are local identities, not content hashes, so rebuilding the same object graph will produce a different manifest unless explicit ids are supplied. Patches resolve inventory context through `data_source_id`, not direct `resource_id` values. Appending a timed record with the same `resource_id` and `start_time` replaces that validity epoch, which lets users cap or correct open-ended metadata. Appending the same `resource_id` with a different `start_time` adds another epoch. `creation_time` records when metadata was authored; it is not the data-time validity interval.
+Only items that can legitimately be shared across the tree expose public `resource_id` values: interrogators, cables, enclosures, coordinate reference systems, and external resources. Topology and interval items, such as `Network`, `FiberArray`, `Acquisition`, `OpticalPath`, `Geometry`, coupling items, annotations, and optical components, are nested in JSON/YAML and receive runtime-only identities when an `Inventory` is loaded. Runtime identities are based on tree address and are preserved on resolved objects, so a user can extract an object, call `.revise(...)`, and reinsert it with `Inventory.replace(...)` without knowing its exact tree address. Patches resolve inventory context through `data_source_id`, not direct `resource_id` values. `replace` swaps the matching inventory object and increments the inventory content version. Inventory-level provenance is stored in `creation_info`; data-time validity is represented by `start_time` and `end_time` on timed items.
 
 | Object | Role in the inventory |
 |---|---|
-| [`Inventory`](`dascore.core.inventory.Inventory`) | The top-level catalog that stores records, validates references, reads/writes YAML, and creates resolved views. |
+| [`Inventory`](`dascore.core.inventory.Inventory`) | The top-level catalog that stores items, validates references, reads/writes YAML, and creates resolved views. |
 | [`Network`](`dascore.core.inventory.Network`) | The FDSN-like organizational level below an inventory. It groups observing objects such as fiber arrays; point-sensor stations are deferred. Its `code` is a compact domain code, while `name` is display text. |
 | [`FiberArray`](`dascore.core.inventory.FiberArray`) | The durable fiber-optic observing identity. It is anchored by an optical path and can list acquisitions associated with the array. Its `code` is the station-like part of `data_source_id`; its `name` is display text and is not used for identity or lookup. |
 | [`Interrogator`](`dascore.core.inventory.Interrogator`) | The DAS interrogator unit, following the FDSN DAS Interrogator metadata fields where practical. |
@@ -47,7 +60,7 @@ Each inventory record has a globally unique `resource_id`. Assembly/configuratio
 | [`FiberSegment`](`dascore.core.inventory.FiberSegment`) | A reusable optical interval of fiber in the optical path, with fiber-specific properties such as fiber type and buffer type. |
 | [`Connector`](`dascore.core.inventory.Connector`), [`Splice`](`dascore.core.inventory.Splice`), [`Coupler`](`dascore.core.inventory.Coupler`), [`Turnaround`](`dascore.core.inventory.Turnaround`), [`Terminator`](`dascore.core.inventory.Terminator`) | Explicit optical component subclasses for common installation features. |
 | [`Geometry`](`dascore.core.inventory.Geometry`) | A reusable optical-distance interval that describes physical coordinates or an unknown geometry section. |
-| [`CoordinateReferenceSystem`](`dascore.core.inventory.CoordinateReferenceSystem`) | CRS metadata referenced by geometry records; CRS transformations are informational in the first implementation. |
+| [`CoordinateReferenceSystem`](`dascore.core.inventory.CoordinateReferenceSystem`) | CRS metadata referenced by optical paths and shared by every geometry interval on that path; CRS transformations are informational in the first implementation. |
 | [`CouplingCondition`](`dascore.core.inventory.CouplingCondition`) | A reusable optical-distance interval describing acoustic coupling, deployment type, quality, and clamp points. |
 | [`ClampPoint`](`dascore.core.inventory.ClampPoint`) | A point or short interval within a coupling condition where the cable is clamped or otherwise locally coupled. |
 | [`OpticalPathAnnotation`](`dascore.core.inventory.OpticalPathAnnotation`) | A named or categorized optical-distance interval used to attach labels such as borehole, trench, lead-in, or quality notes. |
@@ -68,19 +81,19 @@ DASCore uses the same top-level `Inventory -> Network` shape, but a DAS sensing 
 Inventory -> Network -> FiberArray -> OpticalPath
 ```
 
-A `FiberArray` is station-like because it represents a stable monitoring intent and identity. It differs from a Station because its physical aperture is an extended optical path. The interrogator, acquisition, and even optical path metadata can change through effective-time history while the `FiberArray.resource_id` remains the same, as long as users would still regard the data as coming from the same fiber monitoring system.
+A `FiberArray` is station-like because it represents a stable monitoring intent and identity. It differs from a Station because its physical aperture is an extended optical path. The interrogator, acquisition, and even optical path metadata can change through effective-time history while the fiber array's natural tree identity remains the same, as long as users would still regard the data as coming from the same fiber monitoring system.
 
-Point-sensor `Station` and `Channel` records are intentionally not part of the first inventory schema. The `Station` name is reserved for that future FDSN-like point-sensor model instead of being stretched to mean a fiber aperture.
+Point-sensor `Station` and `Channel` items are intentionally not part of the first inventory schema. The `Station` name is reserved for that future FDSN-like point-sensor model instead of being stretched to mean a fiber aperture.
 
 # Relationship To FDSN DAS Metadata
 
 FDSN DAS Metadata separates DAS descriptions into major components such as interrogator, data acquisition, channels, cable, and fiber. DASCore keeps those concepts, but collapses and relocates some details:
 
 - FDSN's interrogator concept maps to DASCore `Interrogator`.
-- FDSN's data acquisition context maps mostly to DASCore `FiberArray` plus time-effective `Acquisition` records.
+- FDSN's data acquisition context maps mostly to DASCore `FiberArray` plus time-effective `Acquisition` items.
 - Interrogator settings map to DASCore `Acquisition`.
 - Cable and fiber concepts map to `Cable` and `FiberSegment`.
-- Per-channel metadata is not a first-class inventory record in the first DASCore model.
+- Per-channel metadata is not a first-class inventory object in the first DASCore model.
 
 The main deviation is channel modeling. DASCore instead treats channel-to-distance conversion as an acquisition operation. A patch may have `channel`, `index`, or `distance`; the inventory can derive `distance` from `Acquisition`, and all downstream geometry/coupling lookup happens in optical distance.
 
@@ -94,11 +107,11 @@ DASCore deviates from PRODML in a few deliberate ways:
 
 - DASCore uses ordered interval sequences instead of a general connectivity network.
 - DASCore stores only the path components that matter for patch enrichment, not a full installation network.
-- DASCore does not model OTDR records in the first implementation.
+- DASCore does not model OTDR items in the first implementation.
 - DASCore separates acoustic coupling and geometry into independent interval tracks rather than nesting them under fiber segments.
 - DASCore keeps all optical path interval lengths in SI meters and avoids per-field unit fields.
 
-The ordered interval model is much simpler than PRODML's inventory plus network pattern, but it is enough for the first DASCore workflows: add annotations, interpolate geometry, project fiber metadata, project coupling metadata, split paths, reverse paths, and append new path versions through inventory history.
+The ordered interval model is much simpler than PRODML's inventory plus network pattern, but it is enough for the first DASCore workflows: add annotations, interpolate geometry, project fiber metadata, project coupling metadata, split paths, reverse paths, and replace corrected path interpretations.
 
 # Why Coupling And Geometry Are Independent Tracks
 
@@ -123,9 +136,9 @@ inv.Geometry(optical_length=100.0)
 inv.CouplingCondition(optical_length=100.0)
 ```
 
-Those records mean "100 m of fiber/component, geometry, or coupling context exists here, but the detailed metadata are unknown."
+Those items mean "100 m of fiber/component, geometry, or coupling context exists here, but the detailed metadata are unknown."
 
-# FiberArray As The Station-Like Join Record
+# FiberArray As The Station-Like Join Item
 
 A patch-like data product can point directly to an `Acquisition` for channel-to-distance conversion and to a `FiberArray` for optical-path context. A `FiberArray` can list acquisitions associated with the array for discovery and serialization.
 
@@ -137,13 +150,13 @@ FiberArray          -> context                 -> acquisitions + path
 
 This is why `Acquisition` can contain fields like `spatial_sampling_interval` and `first_channel_distance` without directly referencing an optical path. These are channel-to-path alignment parameters for primitive or partial file formats whose patch coordinate is a positional integer channel/index rather than true optical distance. They should not be used as a shortcut for omitting lead-in, telemetry, unknown, or other non-sensing intervals from an `OpticalPath` when those intervals matter. Native channel identifiers should be normalized to positional indices before this conversion, or preserved separately as metadata. Those values are interpreted in the context supplied by the fiber array. The same optical path can be observed under different configurations, and the same configuration pattern can be reused when appropriate.
 
-`Acquisition.code` is the channel-like acquisition code. `Acquisition.location_code` follows the FDSN convention of grouping or disambiguating channel-like configurations within a station-like record; it may be an empty string.
+`Acquisition.code` is the channel-like acquisition code. `Acquisition.location_code` follows the FDSN convention of grouping or disambiguating channel-like configurations within a station-like object; it may be an empty string.
 
 
 # Known Tradeoffs
 
 The current model favors a small, useful subset over complete standards coverage. That means:
 
-- Conversion from DASCore inventory to FDSN DAS Metadata or PRODML may require enrichment fields not present in the first DASCore schema.
+- Conversion from FAS Inventory to FDSN DAS Metadata or PRODML may require enrichment fields not present in the first FAS schema.
 - Full channel tables, arbitrary optical networks, OTDR tests, and data-center validation rules are out of scope for the first model.
 - Some names are intentionally DASCore-specific because they describe processing behavior, not exchange-schema structure.
