@@ -81,11 +81,6 @@ class _DistanceInterval:
         return self.__class__(length - self.stop, length - self.start)
 
 
-def _new_derived_annotation_id(resource_id: str) -> str:
-    """Return a new id for an annotation derived from another annotation."""
-    return f"{resource_id}:derived:{uuid4().hex}"
-
-
 def _trim_sequence(
        distance, length_items: tuple[_OpticalLengthItem, ...],
 ) -> tuple[_OpticalLengthItem, ...]:
@@ -113,15 +108,6 @@ def _trim_sequence(
         x.new(optical_length=new_lengths)
         for x, new_len in zip(length_items, new_lengths)
     )
-
-
-def _annotation_interval(annotation) -> _DistanceInterval:
-    """Return the path interval occupied by an annotation."""
-    start, stop = annotation.distance
-    if start is None or stop is None:
-        msg = "Open annotation intervals require optical path context."
-        raise ParameterError(msg)
-    return _DistanceInterval(start, stop)
 
 
 def _resolve_annotation_interval(annotation, length: float | None) -> _DistanceInterval:
