@@ -609,6 +609,10 @@ class TestChunkMerge:
 
         # Case 3: The patches should merge and a warning issued.
         match = "There is a gap in the patch along dimension time"
-        with pytest.warns(UserWarning, match=match):
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
             out = dc.spool((base, patch_w_gap)).chunk(time=None, tolerance=10)
+        assert len(caught_warnings) == 1
+        assert match in str(caught_warnings[0].message)
+        assert caught_warnings[0].filename == __file__
         assert len(out) == 1

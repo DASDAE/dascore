@@ -399,6 +399,19 @@ class ChunkManager:
         group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
         return reduce(lambda x, y: x + "_" + y, group_series)
 
+    def _groups_merge_default_groups(self, group, default_cont_g) -> bool:
+        """Return True if any final group contains multiple default groups."""
+        group_codes = pd.factorize(group, sort=False)[0]
+        default_codes = pd.factorize(default_cont_g, sort=False)[0]
+        order = np.argsort(group_codes, kind="stable")
+        group_sorted = group_codes[order]
+        default_sorted = default_codes[order]
+        new_group = np.r_[True, group_sorted[1:] != group_sorted[:-1]]
+        group_starts = np.flatnonzero(new_group)
+        default_min = np.minimum.reduceat(default_sorted, group_starts)
+        default_max = np.maximum.reduceat(default_sorted, group_starts)
+        return bool(np.any(default_min != default_max))
+
     def _get_group(self, df, start, stop, step):
         """
         Get the group designation for df. This accounts for both time intervals
@@ -415,15 +428,7 @@ class ChunkManager:
             default_cont_g = self._get_continuity_group_number(
                 start, stop, step, tolerance=_DEFAULT_TOLERANCE
             )
-            default_group = self._get_final_group(samp_g, col_g, default_cont_g)
-            merges_default_groups = (
-                pd.DataFrame({"group": group, "default_group": default_group})
-                .groupby("group")["default_group"]
-                .nunique()
-                .gt(1)
-                .any()
-            )
-            if merges_default_groups:
+            if self._groups_merge_default_groups(group, default_cont_g):
                 msg = (
                     f"There is a gap in the patch along dimension {self._name} "
                     f"but a merge tolerance of {self._tolerance} was used to force "
@@ -431,7 +436,7 @@ class ChunkManager:
                     "spool may be unevenly sampled, or have their sampling rate "
                     "increased."
                 )
-                warnings.warn(msg, UserWarning, stacklevel=3)
+                warnings.warn(msg, UserWarning, stacklevel=4)
         return group
 
     def _get_group_dfs(self, group, dur, overlap, group_mins, group_maxs, df, step):
