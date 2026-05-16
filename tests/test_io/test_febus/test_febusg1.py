@@ -123,7 +123,9 @@ class TestMisc:
         """Ensure chunk(time=None) merges both g1 files into one patch."""
         spool = dc.spool(g1_two_file_directory)
         # These weren't directly adjacent files so we adjust the tolerance.
-        merged = spool.chunk(time=None, tolerance=3)
+        match = "There is a gap in the patch along dimension time"
+        with pytest.warns(UserWarning, match=match):
+            merged = spool.chunk(time=None, tolerance=3)
         assert len(merged) == 1
 
     def test_mtx_read_raises(self, g1_mtx_buffer):

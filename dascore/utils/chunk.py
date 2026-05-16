@@ -29,6 +29,8 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
+_DEFAULT_TOLERANCE = 1.5
+
 
 def get_intervals(
     start,
@@ -150,7 +152,7 @@ class ChunkManager:
         group_columns: Collection[str] | None = None,
         keep_partial=False,
         snap_coords=True,
-        tolerance=1.5,
+        tolerance=_DEFAULT_TOLERANCE,
         conflict="raise",
         **kwargs,
     ):
@@ -206,15 +208,23 @@ class ChunkManager:
         stop_cum_max = stop_sorted.cummax()
         end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
         has_gap = start_sorted > end_markers
-        if has_gap.any():
-            msg = (
-                f"There is a gap in the patch along dimension {self._name}. "
-                f"As a result, some patches in the chunked spool may be "
-                f"unevenly sampled. However, they are still considered "
-                f"contiguous because a tolerance of {self._tolerance} "
-                f"was used in the chunk function."
-            )
-            warnings.warn(msg, UserWarning, stacklevel=3)
+
+        # Check for merging that might change coordinates from evenly sorted
+        # to simply monotonic. See #662.
+        if self._tolerance > _DEFAULT_TOLERANCE:
+            # See if gaps would have formed by default. Then alert on difference.
+            end_markers_d = stop_cum_max.shift() + step_sorted * _DEFAULT_TOLERANCE
+            has_gap_d = start_sorted > end_markers_d
+
+            if (has_gap != has_gap_d).any():
+                msg = (
+                    f"There is a gap in the patch along dimension {self._name} "
+                    f"but a merge tolerance of {self._tolerance} was used to force "
+                    "merging the patches. As a result, some patches in the chunked "
+                    "spool may be unevenly sampled, or have their sampling rate "
+                    "increased."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=3)
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
@@ -324,8 +334,10 @@ class ChunkManager:
         # need to make sure we don't have overlaps in source df. This implicitly
         # handles merging.
         sub_source = _remove_overlaps(sub_source, self._name)
-        src1, src2, src_step = get_interval_columns(sub_source, self._name, arrays=True)
-        chu1, chu2, chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
+        src1, src2, _src_step = get_interval_columns(
+            sub_source, self._name, arrays=True
+        )
+        chu1, chu2, _chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
         dims = get_dim_names_from_columns(sub_source)
         cols2keep = get_column_names_from_dim(dims)
         # next get index range for which chunk times belong to.
