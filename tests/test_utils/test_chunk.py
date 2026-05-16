@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -268,6 +270,22 @@ class TestChunkToMerge:
         expected_durations = df["time_max"] - df["time_min"]
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
+
+    def test_no_warning_when_final_groups_stay_separate(self, contiguous_df):
+        """No warning if other group components prevent final forced merge."""
+        df = contiguous_df.iloc[:2].copy()
+        step = df["time_step"]
+        df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step.iloc[0]
+        df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step.iloc[0]
+        df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step.iloc[1]
+        df["station"] = ["sta1", "sta2"]
+        cm = ChunkManager(time=None, tolerance=10, group_columns=("station",))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            _, out = cm.chunk(df)
+
+        assert len(out) == 2
 
     def test_modified_flag_after_merge(self, contiguous_df):
         """Test that the modified flag shows False for simple merge."""

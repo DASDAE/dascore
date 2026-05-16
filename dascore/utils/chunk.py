@@ -194,8 +194,11 @@ class ChunkManager:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
 
-    def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
+    def _get_continuity_group_number(
+        self, start, stop, step, tolerance=None
+    ) -> pd.Series:
         """Return a series of ints indicating continuity group."""
+        tolerance = self._tolerance if tolerance is None else tolerance
         # start by sorting according to start time
         # Use positional argsort to avoid pandas label/return-type changes
         args = np.argsort(start.to_numpy())
@@ -206,25 +209,8 @@ class ChunkManager:
         )
         # next get cummax of endtimes and detect gaps
         stop_cum_max = stop_sorted.cummax()
-        end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
+        end_markers = stop_cum_max.shift() + step_sorted * tolerance
         has_gap = start_sorted > end_markers
-
-        # Check for merging that might change coordinates from evenly sorted
-        # to simply monotonic. See #662.
-        if self._tolerance > _DEFAULT_TOLERANCE:
-            # See if gaps would have formed by default. Then alert on difference.
-            end_markers_d = stop_cum_max.shift() + step_sorted * _DEFAULT_TOLERANCE
-            has_gap_d = start_sorted > end_markers_d
-
-            if (has_gap != has_gap_d).any():
-                msg = (
-                    f"There is a gap in the patch along dimension {self._name} "
-                    f"but a merge tolerance of {self._tolerance} was used to force "
-                    "merging the patches. As a result, some patches in the chunked "
-                    "spool may be unevenly sampled, or have their sampling rate "
-                    "increased."
-                )
-                warnings.warn(msg, UserWarning, stacklevel=3)
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
@@ -408,6 +394,11 @@ class ChunkManager:
         col_g = cont_g * 0 if not columns else df.groupby(columns).ngroup()
         return col_g
 
+    def _get_final_group(self, samp_g, col_g, cont_g):
+        """Combine grouping components into final group labels."""
+        group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
+        return reduce(lambda x, y: x + "_" + y, group_series)
+
     def _get_group(self, df, start, stop, step):
         """
         Get the group designation for df. This accounts for both time intervals
@@ -416,8 +407,31 @@ class ChunkManager:
         cont_g = self._get_continuity_group_number(start, stop, step)
         samp_g = self._get_sampling_group_num(step)
         col_g = self._get_col_group(df, cont_g)
-        group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
-        group = reduce(lambda x, y: x + "_" + y, group_series)
+        group = self._get_final_group(samp_g, col_g, cont_g)
+
+        # Check for final merges that only occur because of a non-default
+        # tolerance. See #662.
+        if self._tolerance > _DEFAULT_TOLERANCE:
+            default_cont_g = self._get_continuity_group_number(
+                start, stop, step, tolerance=_DEFAULT_TOLERANCE
+            )
+            default_group = self._get_final_group(samp_g, col_g, default_cont_g)
+            merges_default_groups = (
+                pd.DataFrame({"group": group, "default_group": default_group})
+                .groupby("group")["default_group"]
+                .nunique()
+                .gt(1)
+                .any()
+            )
+            if merges_default_groups:
+                msg = (
+                    f"There is a gap in the patch along dimension {self._name} "
+                    f"but a merge tolerance of {self._tolerance} was used to force "
+                    "merging the patches. As a result, some patches in the chunked "
+                    "spool may be unevenly sampled, or have their sampling rate "
+                    "increased."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=3)
         return group
 
     def _get_group_dfs(self, group, dur, overlap, group_mins, group_maxs, df, step):
