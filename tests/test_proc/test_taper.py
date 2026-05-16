@@ -245,7 +245,7 @@ class TestTaperRange:
 
     def test_bad_use_of_none(self, random_patch):
         """Ensure bad use of None raises."""
-        with pytest.raises(ParameterError, match="Cannot use ... or None"):
+        with pytest.raises(ParameterError, match=r"Cannot use \.\.\. or None"):
             random_patch.taper_range(time=(1, None), relative=True)
 
     def test_use_none(self, random_patch):
