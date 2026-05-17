@@ -64,8 +64,6 @@ def _get_zone_time(feb):
     #if neither exist, default to 100 (according to the FEBUS template)
     overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 100))
     overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
-
-
     shape = feb.zone[feb.data_name].shape
     # We need to determine if this a v1 file (no version in attrs). See # 589
     # and # 587. This could perhaps be made more robust in the future.
@@ -370,7 +368,6 @@ def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the febus values into a patch."""
     out = []
     for attr, cm, febus in _yield_attrs_coords(fi):
-
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
             patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
