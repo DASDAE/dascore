@@ -209,6 +209,8 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
     out["dims"] = ("time", "distance")
+    out['data_type'] = 'strainrate'
+    out['data_units'] = 'nanostrain/s'
     return out
 
 
@@ -368,6 +370,7 @@ def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the febus values into a patch."""
     out = []
     for attr, cm, febus in _yield_attrs_coords(fi):
+
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
             patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
