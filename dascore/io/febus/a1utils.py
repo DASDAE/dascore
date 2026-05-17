@@ -60,8 +60,12 @@ def _get_zone_time(feb):
     zone = feb.zone
     block_time = _get_block_time(feb)
     extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
-    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 0))
+    #different version use "Overlap" or "BlockOverlap"
+    #if neither exist, default to 100 (according to the FEBUS template)
+    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 100))
     overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
+
+
     shape = feb.zone[feb.data_name].shape
     # We need to determine if this a v1 file (no version in attrs). See # 589
     # and # 587. This could perhaps be made more robust in the future.
@@ -74,8 +78,10 @@ def _get_zone_time(feb):
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
-        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
+        #some versions have the SamplingRate attribute wrong. using spacing[1] is safer
+        dt = float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.
         block_pad = shape[1]
+
     # Apparently, if the extents are set to 0 the overlapping edges are still
     # in the file, otherwise they have been removed.
     # This does not, however, mean the block dimension match the actual
