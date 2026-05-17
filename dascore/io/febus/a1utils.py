@@ -76,8 +76,13 @@ def _get_zone_time(feb):
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
-        #some versions have the SamplingRate attribute wrong. using spacing[1] is safer
-        dt = float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.
+        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
+
+        # Really early versions (< 2021) seem to have a hardcoded value of
+        # 250000000 stored in zone.attrs["SamplingRate"]
+        # We then use the second spacing instead
+        if dt < 1e-8:
+            dt = float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.
         block_pad = shape[1]
 
     # Apparently, if the extents are set to 0 the overlapping edges are still
