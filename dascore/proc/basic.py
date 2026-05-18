@@ -819,3 +819,107 @@ def full(patch, fill_value):
     """
     array = np.full(patch.data.shape, fill_value)
     return patch.update(data=array)
+
+
+@patch_function(
+    required_dims=(
+        "time",
+        "distance",
+    )
+)
+def demedian(patch, dim: str = "time"):
+    """
+    Remove the median along a given dimension of a DASCore patch.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the median from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example (note that the example patch is not ideal, but still shows improvements)
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 2, figsize=(16,8), layout='constrained')
+    >>>
+    >>> # Show original patch
+    >>> patch.viz.waterfall(ax = axs[0], show=False)
+    >>> axs[0].set_title('Original')
+    >>>
+    >>> # Show demedian applied patch
+    >>> patch.demedian(dim='distance').viz.waterfall(ax = axs[1], show=False)
+    >>> axs[1].set_title('Removed common-mode noise')
+    >>>
+    >>> plt.show()
+    """
+    if dim not in patch.dims:
+        raise ValueError(f"Dimension '{dim}' not found in patch.dims={patch.dims}")
+
+    axis = patch.dims.index(dim)
+
+    data = np.asarray(patch.data)
+
+    # Compute median along axis, keep dims for broadcasting
+    med = np.median(data, axis=axis, keepdims=True)
+
+    new_data = data - med
+
+    # Return a new patch with updated data
+    return patch.new(data=new_data)
+
+
+@patch_function(
+    required_dims=(
+        "time",
+        "distance",
+    )
+)
+def demean(patch, dim: str = "time"):
+    """
+    Remove the mean along a given dimension of a DASCore patch.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the mean from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example (note that the example patch is not ideal, but still shows improvements)
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 2, figsize=(16,8), layout='constrained')
+    >>>
+    >>> # Show original patch
+    >>> patch.viz.waterfall(ax = axs[0], show=False)
+    >>> axs[0].set_title('Original')
+    >>>
+    >>> # Show demean applied patch
+    >>> patch.demean(dim='distance').viz.waterfall(ax = axs[1], show=False)
+    >>> axs[1].set_title('Removed common-mode noise')
+    >>>
+    >>> plt.show()
+    """
+    if dim not in patch.dims:
+        raise ValueError(f"Dimension '{dim}' not found in patch.dims={patch.dims}")
+
+    axis = patch.dims.index(dim)
+
+    data = np.asarray(patch.data)
+
+    # Compute median along axis, keep dims for broadcasting
+    med = np.mean(data, axis=axis, keepdims=True)
+
+    new_data = data - med
+
+    # Return a new patch with updated data
+    return patch.new(data=new_data)
