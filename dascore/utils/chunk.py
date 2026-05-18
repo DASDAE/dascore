@@ -29,6 +29,8 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
+_DEFAULT_TOLERANCE = 1.5
+
 
 def get_intervals(
     start,
@@ -150,7 +152,7 @@ class ChunkManager:
         group_columns: Collection[str] | None = None,
         keep_partial=False,
         snap_coords=True,
-        tolerance=1.5,
+        tolerance=_DEFAULT_TOLERANCE,
         conflict="raise",
         **kwargs,
     ):
@@ -192,8 +194,11 @@ class ChunkManager:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
 
-    def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
+    def _get_continuity_group_number(
+        self, start, stop, step, tolerance=None
+    ) -> pd.Series:
         """Return a series of ints indicating continuity group."""
+        tolerance = self._tolerance if tolerance is None else tolerance
         # start by sorting according to start time
         # Use positional argsort to avoid pandas label/return-type changes
         args = np.argsort(start.to_numpy())
@@ -204,17 +209,8 @@ class ChunkManager:
         )
         # next get cummax of endtimes and detect gaps
         stop_cum_max = stop_sorted.cummax()
-        end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
+        end_markers = stop_cum_max.shift() + step_sorted * tolerance
         has_gap = start_sorted > end_markers
-        if has_gap.any():
-            msg = (
-                f"There is a gap in the patch along dimension {self._name}. "
-                f"As a result, some patches in the chunked spool may be "
-                f"unevenly sampled. However, they are still considered "
-                f"contiguous because a tolerance of {self._tolerance} "
-                f"was used in the chunk function."
-            )
-            warnings.warn(msg, UserWarning, stacklevel=3)
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
@@ -324,8 +320,10 @@ class ChunkManager:
         # need to make sure we don't have overlaps in source df. This implicitly
         # handles merging.
         sub_source = _remove_overlaps(sub_source, self._name)
-        src1, src2, src_step = get_interval_columns(sub_source, self._name, arrays=True)
-        chu1, chu2, chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
+        src1, src2, _src_step = get_interval_columns(
+            sub_source, self._name, arrays=True
+        )
+        chu1, chu2, _chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
         dims = get_dim_names_from_columns(sub_source)
         cols2keep = get_column_names_from_dim(dims)
         # next get index range for which chunk times belong to.
@@ -396,6 +394,24 @@ class ChunkManager:
         col_g = cont_g * 0 if not columns else df.groupby(columns).ngroup()
         return col_g
 
+    def _get_final_group(self, samp_g, col_g, cont_g):
+        """Combine grouping components into final group labels."""
+        group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
+        return reduce(lambda x, y: x + "_" + y, group_series)
+
+    def _groups_merge_default_groups(self, group, default_cont_g) -> bool:
+        """Return True if any final group contains multiple default groups."""
+        group_codes = pd.factorize(group, sort=False)[0]
+        default_codes = pd.factorize(default_cont_g, sort=False)[0]
+        order = np.argsort(group_codes, kind="stable")
+        group_sorted = group_codes[order]
+        default_sorted = default_codes[order]
+        new_group = np.r_[True, group_sorted[1:] != group_sorted[:-1]]
+        group_starts = np.flatnonzero(new_group)
+        default_min = np.minimum.reduceat(default_sorted, group_starts)
+        default_max = np.maximum.reduceat(default_sorted, group_starts)
+        return bool(np.any(default_min != default_max))
+
     def _get_group(self, df, start, stop, step):
         """
         Get the group designation for df. This accounts for both time intervals
@@ -404,8 +420,23 @@ class ChunkManager:
         cont_g = self._get_continuity_group_number(start, stop, step)
         samp_g = self._get_sampling_group_num(step)
         col_g = self._get_col_group(df, cont_g)
-        group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
-        group = reduce(lambda x, y: x + "_" + y, group_series)
+        group = self._get_final_group(samp_g, col_g, cont_g)
+
+        # Check for final merges that only occur because of a non-default
+        # tolerance. See #662.
+        if self._tolerance > _DEFAULT_TOLERANCE:
+            default_cont_g = self._get_continuity_group_number(
+                start, stop, step, tolerance=_DEFAULT_TOLERANCE
+            )
+            if self._groups_merge_default_groups(group, default_cont_g):
+                msg = (
+                    f"There is a gap in the patch along dimension {self._name} "
+                    f"but a merge tolerance of {self._tolerance} was used to force "
+                    "merging the patches. As a result, some patches in the chunked "
+                    "spool may be unevenly sampled, or have their sampling rate "
+                    "increased."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=4)
         return group
 
     def _get_group_dfs(self, group, dur, overlap, group_mins, group_maxs, df, step):

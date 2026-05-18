@@ -8,6 +8,7 @@ extensive.
 from __future__ import annotations
 
 import random
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -575,3 +576,43 @@ class TestChunkMerge:
             assert not pd.isna(df_time_min), f"DF row {i} has NaN time_min"
             assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
             assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
+
+    def test_chunk_non_adjacent_within_tolerance_warns(self, random_patch):
+        """
+        Non-adjacent patches can still merge, but the coordinate type may change.
+
+        In this case a warning should be issued. See #662.
+        """
+        base = random_patch.update_attrs(history="")
+        time = random_patch.get_coord("time")
+
+        # Case 1: the patches should in fact merge with no warning.
+        patch_no_gap = base.update_coords(time_min=time.max() + time.step).update_attrs(
+            history=""
+        )
+        # No warning should be raised.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            out = dc.spool((base, patch_no_gap)).chunk(time=None)
+        assert len(out) == 1
+        assert out[0].get_coord("time").step is not None
+
+        # Case 2: The patches should not merge.
+        patch_w_gap = base.update_coords(
+            time_min=time.max() + time.step * 5,
+        ).update_attrs(history="")
+        # No warning, no merge.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            out = dc.spool((base, patch_w_gap)).chunk(time=None)
+        assert len(out) == 2
+
+        # Case 3: The patches should merge and a warning issued.
+        match = "There is a gap in the patch along dimension time"
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
+            out = dc.spool((base, patch_w_gap)).chunk(time=None, tolerance=10)
+        assert len(caught_warnings) == 1
+        assert match in str(caught_warnings[0].message)
+        assert caught_warnings[0].filename == __file__
+        assert len(out) == 1
