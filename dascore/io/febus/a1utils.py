@@ -60,7 +60,9 @@ def _get_zone_time(feb):
     zone = feb.zone
     block_time = _get_block_time(feb)
     extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
-    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 0))
+    #different version use "Overlap" or "BlockOverlap"
+    #if neither exist, default to 100 (according to the FEBUS template)
+    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 100))
     overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
     shape = feb.zone[feb.data_name].shape
     # We need to determine if this a v1 file (no version in attrs). See # 589
@@ -74,8 +76,14 @@ def _get_zone_time(feb):
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
-        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
+
+        # Really early versions (< 2021) seem to have a hardcoded value of
+        # 250000000 stored in zone.attrs["SamplingRate"]
+        # We then use then spacing[1] instead (converted from milli-seconds)
+        fsamp = float(_maybe_unpack(zone.attrs["SamplingRate"]))
+        dt = 1/fsamp if fsamp<1e8 else float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.
         block_pad = shape[1]
+
     # Apparently, if the extents are set to 0 the overlapping edges are still
     # in the file, otherwise they have been removed.
     # This does not, however, mean the block dimension match the actual
@@ -203,6 +211,8 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
     out["dims"] = ("time", "distance")
+    out['data_type'] = 'strainrate'
+    out['data_units'] = 'nanostrain/s'
     return out
 
 
