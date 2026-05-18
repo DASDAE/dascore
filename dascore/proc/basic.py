@@ -838,22 +838,37 @@ def demedian(patch, dim: str = "time"):
     dim : str
         Dimension name (e.g., "time", "distance").
 
-    Example (note that the example patch is not ideal, but still shows improvements)
+    Example
     --------
     >>> import matplotlib.pyplot as plt
     >>> import dascore as dc
+    >>> import numpy as np
+    >>>
     >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
     >>>
     >>> # Prepare figure
-    >>> fig, axs = plt.subplots(1, 2, figsize=(16,8), layout='constrained')
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
     >>>
-    >>> # Show original patch
-    >>> patch.viz.waterfall(ax = axs[0], show=False)
-    >>> axs[0].set_title('Original')
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> ax0.set_title('Original with common-mode noise')
     >>>
     >>> # Show demedian applied patch
-    >>> patch.demedian(dim='distance').viz.waterfall(ax = axs[1], show=False)
-    >>> axs[1].set_title('Removed common-mode noise')
+    >>> patch1 = patch0.demedian(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> ax1.set_title('Removed common-mode noise')
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> ax2.set_title('difference')
     >>>
     >>> plt.show()
     """
@@ -894,18 +909,33 @@ def demean(patch, dim: str = "time"):
     --------
     >>> import matplotlib.pyplot as plt
     >>> import dascore as dc
+    >>> import numpy as np
+    >>>
     >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
     >>>
     >>> # Prepare figure
-    >>> fig, axs = plt.subplots(1, 2, figsize=(16,8), layout='constrained')
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
     >>>
-    >>> # Show original patch
-    >>> patch.viz.waterfall(ax = axs[0], show=False)
-    >>> axs[0].set_title('Original')
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> ax0.set_title('Original with common-mode noise')
     >>>
     >>> # Show demean applied patch
-    >>> patch.demean(dim='distance').viz.waterfall(ax = axs[1], show=False)
-    >>> axs[1].set_title('Removed common-mode noise')
+    >>> patch1 = patch0.demean(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> ax1.set_title('Removed common-mode noise')
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> ax2.set_title('difference')
     >>>
     >>> plt.show()
     """
