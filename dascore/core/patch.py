@@ -404,6 +404,8 @@ class Patch(NamespaceOwner):
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
+    demean = dascore.proc.demean
+    demedian = dascore.proc.demedian
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
     fillna = dascore.proc.fillna
