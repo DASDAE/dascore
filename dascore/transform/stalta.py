@@ -58,7 +58,7 @@ def stalta(
     if absolute:
         patch = patch.abs()
 
-    sta = patch.rolling(time=short_window).mean()
-    lta = patch.rolling(time=long_window).mean()
+    sta = patch.rolling(**{dim: short_window}).mean()
+    lta = patch.rolling(**{dim: long_window}).mean()
 
     return (sta / lta).update(attrs={"data_type": "STALTA", "data_units": ""})
