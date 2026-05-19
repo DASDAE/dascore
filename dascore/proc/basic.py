@@ -928,10 +928,10 @@ def demean(patch, dim: str = "time"):
     axis = patch.get_axis(dim)
     data = np.asarray(patch.data)
 
-    # Compute median along axis, keep dims for broadcasting
-    med = np.mean(data, axis=axis, keepdims=True)
+    # Compute mean along axis, keep dims for broadcasting
+    mea = np.mean(data, axis=axis, keepdims=True)
 
-    new_data = data - med
+    new_data = data - mea
 
     # Return a new patch with updated data
     return patch.new(data=new_data)
