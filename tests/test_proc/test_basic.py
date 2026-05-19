@@ -850,7 +850,7 @@ class TestDemedian:
 
 
 class TestDemean:
-    """Tests for demedian of data."""
+    """Tests for demean of data."""
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_demean(self, random_patch, dim):
