@@ -854,7 +854,7 @@ def demedian(patch, dim: str = "time"):
     >>>
     >>> # Show patch with common-mode noise
     >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
-    >>> ax0.set_title('Original with common-mode noise')
+    >>> _ = ax0.set_title('Original with common-mode noise')
     >>>
     >>> # Show demedian applied patch
     >>> patch1 = patch0.demedian(dim='distance')
@@ -863,7 +863,7 @@ def demedian(patch, dim: str = "time"):
     >>>
     >>> # Show difference
     >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
-    >>> ax2.set_title('difference')
+    >>> _ = ax2.set_title('Difference')
     >>>
     >>> plt.show()
     """
@@ -921,11 +921,11 @@ def demean(patch, dim: str = "time"):
     >>> # Show demean applied patch
     >>> patch1 = patch0.demean(dim='distance')
     >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
-    >>> ax1.set_title('Removed common-mode noise')
+    >>> _ = ax1.set_title('Removed common-mode noise')
     >>>
     >>> # Show difference
     >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
-    >>> ax2.set_title('difference')
+    >>> _ = ax2.set_title('Difference')
     >>>
     >>> plt.show()
     """
