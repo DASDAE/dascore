@@ -61,9 +61,6 @@ target/
 # pyenv python configuration file
 .python-version
 
-# pycharm
-.idea
-
 # Ipython stuff
 .ipynb_checkpoints
 
