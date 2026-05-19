@@ -868,7 +868,7 @@ def demedian(patch, dim: str = "time"):
     >>> plt.show()
     """
     axis = patch.get_axis(dim)
-    data = np.asarray(patch.data)
+    data = patch.data
 
     # Compute median along axis, keep dims for broadcasting
     med = np.median(data, axis=axis, keepdims=True)
@@ -926,7 +926,7 @@ def demean(patch, dim: str = "time"):
     >>> plt.show()
     """
     axis = patch.get_axis(dim)
-    data = np.asarray(patch.data)
+    data = patch.data
 
     # Compute mean along axis, keep dims for broadcasting
     mea = np.mean(data, axis=axis, keepdims=True)
