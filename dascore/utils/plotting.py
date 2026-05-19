@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import string
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,8 +17,9 @@ def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
     attrs = patch.attrs
     maybe_units = attrs.get(f"{dim}_units")
-    unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
-    return str(dim) + unit_str
+    dim_str = string.capwords(str(dim))
+    unit_str = f" [{get_quantity_str(maybe_units)}]" if maybe_units else ""
+    return dim_str + unit_str
 
 
 def _get_cmap(cmap):
@@ -89,7 +92,8 @@ def _format_time_axis(ax, dim, axis_name):
     start time.
     """
     # Set label to not include units
-    getattr(ax, f"set_{axis_name}label")(dim)
+    dim_str = string.capwords(str(dim))
+    getattr(ax, f"set_{axis_name}label")(dim_str)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter

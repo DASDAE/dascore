@@ -137,8 +137,8 @@ class TestWaterfall:
         pa = patch_two_times
         dims = pa.dims
         ax = pa.viz.waterfall()
-        assert ax.get_xlabel() == dims[1]
-        assert ax.get_ylabel() == dims[0]
+        assert ax.get_xlabel().casefold() == dims[1].casefold()
+        assert ax.get_ylabel().casefold() == dims[0].casefold()
 
     def test_patch_with_data_type(self, random_patch):
         """Ensure a patch with data_type titles the colorbar."""
