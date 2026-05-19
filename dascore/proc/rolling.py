@@ -314,6 +314,42 @@ def rolling(
     zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
     ```
 
+
+
+
+
+    If you want to pass additional arguments, you need a workaround using
+    [functools.partial](https://docs.python.org/3/library/functools.html#functools.partial)
+
+    ```python
+    import dascore as dc
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from functools import partial
+
+    # set parameter to input to the rolling function
+    percentile = 80
+
+    # define the function to apply
+    def _rolling_percentile(windowed_data, axis=None, p=None):
+        return np.percentile(windowed_data, p, axis=axis)
+
+    # create a "partial" function to allow arguments being parsed
+    # to the "apply" method or the rolling function
+    _fun  = partial( _rolling_percentile, p=percentile)
+
+    # now get the patch, and apply the rolling percentile ot the absolute amplitude
+    patch = dc.get_example_patch('example_event_2')
+    med_patch = patch.abs().rolling(time=50, step=10, samples=True).apply(_fun)
+
+    # plot
+    fig, axs = plt.subplots(1, 2, figsize=(12,8), layout='constrained')
+    ax1 = patch.viz.waterfall(ax=axs[0])
+    ax2 = med_patch.viz.waterfall(ax=axs[1], cmap='magma')
+    ```
+
+
+
     Examples
     --------
     >>> import dascore as dc
