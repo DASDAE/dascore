@@ -867,11 +867,7 @@ def demedian(patch, dim: str = "time"):
     >>>
     >>> plt.show()
     """
-    if dim not in patch.dims:
-        raise ValueError(f"Dimension '{dim}' not found in patch.dims={patch.dims}")
-
-    axis = patch.dims.index(dim)
-
+    axis = patch.get_axis(dim)
     data = np.asarray(patch.data)
 
     # Compute median along axis, keep dims for broadcasting
@@ -929,11 +925,7 @@ def demean(patch, dim: str = "time"):
     >>>
     >>> plt.show()
     """
-    if dim not in patch.dims:
-        raise ValueError(f"Dimension '{dim}' not found in patch.dims={patch.dims}")
-
-    axis = patch.dims.index(dim)
-
+    axis = patch.get_axis(dim)
     data = np.asarray(patch.data)
 
     # Compute median along axis, keep dims for broadcasting
