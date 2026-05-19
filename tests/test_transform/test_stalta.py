@@ -1,27 +1,39 @@
-"""
-Tests for stalta function.
-"""
+"""Tests for STA/LTA transform."""
 
 from __future__ import annotations
 
 import numpy as np
+from stalta import stalta
 
 
-class TestStalta:
-    """Tests for the Hilbert transform function."""
+class TestStaLta:
+    """Tests for short-term average / long-term average ratio."""
 
-    def test_stalta_basic(self, random_patch):
-        """Test basic Hilbert transform functionality."""
-        result = random_patch.hilbert(dim="time")
+    def test_runs(self, random_patch):
+        """Ensure stalta runs and returns a patch with the same shape."""
+        out = stalta(random_patch, short_window=0.01, long_window=0.05)
 
-        # Result should be complex
-        assert np.iscomplexobj(result.data)
+        assert out.data.shape == random_patch.data.shape
+        assert out.dims == random_patch.dims
 
-        # Real part should equal original data
-        assert np.allclose(result.data.real, random_patch.data)
+    def test_patch_method_runs(self, random_patch):
+        """Ensure stalta is registered as a patch method."""
+        out = random_patch.stalta(short_window=0.01, long_window=0.05)
 
-        # Shape should be preserved
-        assert result.shape == random_patch.shape
+        assert out.data.shape == random_patch.data.shape
+        assert out.attrs.data_type == "STALTA"
 
-        # Coordinates should be preserved
-        assert result.coords.equals(random_patch.coords)
+    def test_non_time_dim(self, random_patch):
+        """Ensure dim controls the rolling dimension."""
+        out = stalta(
+            random_patch,
+            short_window=1,
+            long_window=5,
+            dim="distance",
+        )
+        expected = (
+            random_patch.abs().rolling(distance=1).mean()
+            / random_patch.abs().rolling(distance=5).mean()
+        )
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
