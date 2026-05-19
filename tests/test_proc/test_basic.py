@@ -839,8 +839,8 @@ class TestFull:
 class TestDemedian:
     """Tests for demedian of data."""
 
-     @pytest.mark.parametrize("dim", ["time", "distance"])
-     def test_demedian(self, random_patch, dim):
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demedian(self, random_patch, dim):
         """Ensure detrending removes median."""
         new = random_patch.new(data=random_patch.data + 10)
         # perform detrend, ensure all mean values are close to zero
@@ -852,8 +852,8 @@ class TestDemedian:
 class TestDemean:
     """Tests for demedian of data."""
 
-     @pytest.mark.parametrize("dim", ["time", "distance"])
-     def test_demean(self, random_patch, dim):
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demean(self, random_patch, dim):
         """Ensure detrending removes mean."""
         new = random_patch.new(data=random_patch.data + 10)
         # perform detrend, ensure all mean values are close to zero
