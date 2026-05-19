@@ -834,3 +834,29 @@ class TestFull:
         patch = random_patch.full(1.0)
         assert patch.coords == random_patch.coords
         assert np.allclose(patch.data, 1.0)
+
+
+class TestDemedian:
+    """Tests for demedian of data."""
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demedian(self, random_patch, dim):
+        """Ensure detrending removes median."""
+        new = random_patch.new(data=random_patch.data + 10)
+        # perform detrend, ensure all mean values are close to zero
+        dem = new.demedian(dim=dim)
+        medians = np.median(dem.data, axis=dem.get_axis(dim))
+        assert np.allclose(medians, 0)
+
+
+class TestDemean:
+    """Tests for demean of data."""
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demean(self, random_patch, dim):
+        """Ensure detrending removes mean."""
+        new = random_patch.new(data=random_patch.data + 10)
+        # perform detrend, ensure all mean values are close to zero
+        dem = new.demean(dim=dim)
+        means = np.mean(dem.data, axis=dem.get_axis(dim))
+        assert np.allclose(means, 0)
