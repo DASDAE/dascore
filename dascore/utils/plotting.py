@@ -92,7 +92,8 @@ def _format_time_axis(ax, dim, axis_name):
     start time.
     """
     # Set label to not include units
-    getattr(ax, f"set_{axis_name}label")(dim)
+    dim_str = string.capwords(str(dim))
+    getattr(ax, f"set_{axis_name}label")(dim_str)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter
