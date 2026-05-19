@@ -61,9 +61,6 @@ target/
 # pyenv python configuration file
 .python-version
 
-# pycharm
-.idea
-
 # Ipython stuff
 .ipynb_checkpoints
 
@@ -100,3 +97,11 @@ CLAUDE.md
 
 # profile stuff
 prof/
+
+## Common IDE project files
+#Spyder
+*.spyproject
+#VScode
+.vscode/
+#JetBrains
+.idea/
