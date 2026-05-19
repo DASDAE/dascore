@@ -61,12 +61,20 @@ def fbe(
     if time is None:
         time = 20 * step
 
-    if any(x is not None for x in corners):
-        if not (corners[1] > corners[0]):
+    if len(corners) != 2:
+        raise ValueError(
+            "Corners must be a two-element tuple, with (low, high) frequency corners"
+        )
+
+    if corners != (None, None):
+        low, high = corners
+
+        if low is not None and high is not None and high <= low:
             raise ValueError(
                 "The second frequency corner must be larger than the first."
             )
-        patch = patch.pass_filter(time=corners)
+
+        patch = patch.pass_filter(time=(low, high))
 
     fbe = ((patch**2).rolling(time=time, step=step).mean() ** 0.5).update(
         attrs={"data_type": "Frequency-Band Energy"}
