@@ -480,6 +480,7 @@ class Patch(NamespaceOwner):
     differentiate = transform.differentiate
     rfft = transform.rfft
     dft = transform.dft
+    fbe = transform.fbe
     idft = transform.idft
     stft = transform.stft
     istft = transform.istft
