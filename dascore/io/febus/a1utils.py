@@ -60,8 +60,8 @@ def _get_zone_time(feb):
     zone = feb.zone
     block_time = _get_block_time(feb)
     extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
-    #different version use "Overlap" or "BlockOverlap"
-    #if neither exist, default to 100 (according to the FEBUS template)
+    # different version use "Overlap" or "BlockOverlap"
+    # if neither exist, default to 100 (according to the FEBUS template)
     overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 100))
     overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
     shape = feb.zone[feb.data_name].shape
@@ -81,7 +81,11 @@ def _get_zone_time(feb):
         # 250000000 stored in zone.attrs["SamplingRate"]
         # We then use then spacing[1] instead (converted from milli-seconds)
         fsamp = float(_maybe_unpack(zone.attrs["SamplingRate"]))
-        dt = 1/fsamp if fsamp<1e8 else float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.
+        dt = (
+            1 / fsamp
+            if fsamp < 1e8
+            else float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.0
+        )
         block_pad = shape[1]
 
     # Apparently, if the extents are set to 0 the overlapping edges are still
@@ -211,8 +215,8 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
     out["dims"] = ("time", "distance")
-    out['data_type'] = 'strainrate'
-    out['data_units'] = 'nanostrain/s'
+    out["data_type"] = "strainrate"
+    out["data_units"] = "nanostrain/s"
     return out
 
 
