@@ -487,6 +487,7 @@ class Patch(NamespaceOwner):
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     stalta = transform.stalta
+    kurtosis = transform.kurtosis
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift

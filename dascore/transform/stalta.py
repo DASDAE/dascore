@@ -44,8 +44,8 @@ def stalta(
     >>>
     >>> p = dc.examples.get_example_patch('example_event_2')
     >>>
-    >>> r = p.stalta(short_window = 0.001, long_window = 0.01, dim = 'time')
-    >>> ax = r.viz.waterfall(cmap = 'RdGy_r', scale = [0, 2], scale_type = 'absolute')
+    >>> s = p.stalta(sta = 0.001, lta = 0.01, dim = 'time')
+    >>> ax = s.viz.waterfall(cmap = 'RdGy_r', scale = [0, 2], scale_type = 'absolute')
 
     """
     # these default values are heuristically derived and may not work in all cases
