@@ -12,7 +12,8 @@ from dascore.utils.time import to_float
 @patch_function()
 def fbe(
     patch: PatchType,
-    corners: tuple[float, float] = (None, None),
+    freqmin: float | None = None,
+    freqmax: float | None = None,
     time: float | None = None,
     step: float | None = None,
     db: bool = True,
@@ -31,8 +32,12 @@ def fbe(
     ----------
     patch
         Input DASCore patch.
-    corners
-        Two-element tuple with frequencies to calculate energy in.
+    freqmin
+        Lower-end of the frequency band to calculate energy in.
+        If set to None a low-pass filter is applied
+    freqmax
+        Upper-end of the frequency band to calculate energy in.
+        If set to None a high-pass filter is applied
     time
         window length in which to caluclate engergy.
     step
@@ -61,20 +66,12 @@ def fbe(
     if time is None:
         time = 20 * step
 
-    if len(corners) != 2:
-        raise ValueError(
-            "Corners must be a two-element tuple, with (low, high) frequency corners"
-        )
-
+    corners = (freqmin, freqmax)
     if corners != (None, None):
-        low, high = corners
+        if freqmin is not None and freqmax is not None and freqmax <= freqmin:
+            raise ValueError("freqmax must be larger than freqmin.")
 
-        if low is not None and high is not None and high <= low:
-            raise ValueError(
-                "The second frequency corner must be larger than the first."
-            )
-
-        patch = patch.pass_filter(time=(low, high))
+        patch = patch.pass_filter(time=corners)
 
     fbe = ((patch**2).rolling(time=time, step=step).mean() ** 0.5).update(
         attrs={"data_type": "Frequency-Band Energy"}
