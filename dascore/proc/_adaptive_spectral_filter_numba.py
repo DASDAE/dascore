@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import numba as nb
 import numpy as np
-import rocket_fft  # noqa: F401  # registers FFT overloads with numba.
 
 from dascore.proc.adaptive_spectral_filter import (
     _finalize_output,
     _prepare_work_arrays,
     _validate_filter_inputs,
 )
+from dascore.utils.jit import maybe_numba_jit
+
+_JIT_DEPS = ("rocket_fft",)
 
 
 def _tile_indices_from_parity_index(
@@ -20,14 +21,14 @@ def _tile_indices_from_parity_index(
     parity1: int,
 ) -> tuple[int, int]:
     """Map a flattened parity-local index back to full-grid tile indices."""
-    ix = parity0 + 2 * (ind // count1)
-    iy = parity1 + 2 * (ind % count1)
-    return ix, iy
+    x_index = parity0 + 2 * (ind // count1)
+    y_index = parity1 + 2 * (ind % count1)
+    return x_index, y_index
 
 
 def _tile_bounds(
-    ix: int,
-    iy: int,
+    x_index: int,
+    y_index: int,
     wx: int,
     wy: int,
     stride0: int,
@@ -36,8 +37,8 @@ def _tile_bounds(
     shape1: int,
 ) -> tuple[int, int, int, int]:
     """Return padded-array origin and valid tile shape for one window."""
-    beg0 = ix * stride0
-    beg1 = iy * stride1
+    beg0 = x_index * stride0
+    beg1 = y_index * stride1
     end0 = min(beg0 + wx, shape0)
     end1 = min(beg1 + wy, shape1)
     return beg0, beg1, end0 - beg0, end1 - beg1
@@ -110,12 +111,18 @@ def _overlap_add_tile(
             filtered[beg0 + i, beg1 + j] += tile[i, j] * taper[i, j]
 
 
-_tile_indices_from_parity_index_numba = nb.njit(cache=True, inline="always")(
-    _tile_indices_from_parity_index
-)
-_tile_bounds_numba = nb.njit(cache=True, inline="always")(_tile_bounds)
-_copy_padded_tile_numba = nb.njit(cache=True, inline="always")(_copy_padded_tile)
-_complex_power_numba = nb.njit(cache=True, inline="always")(_complex_power)
+_tile_indices_from_parity_index_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_tile_indices_from_parity_index)
+_tile_bounds_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_tile_bounds)
+_copy_padded_tile_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_copy_padded_tile)
+_complex_power_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_complex_power)
 
 
 def _max_spectral_power_numba_impl(spec: np.ndarray) -> np.float32:
@@ -151,13 +158,15 @@ def _apply_spectral_weight_numba_impl(
             spec[i, j] *= weight
 
 
-_max_spectral_power_numba = nb.njit(cache=True, inline="always")(
-    _max_spectral_power_numba_impl
-)
-_apply_spectral_weight_numba = nb.njit(cache=True, inline="always")(
-    _apply_spectral_weight_numba_impl
-)
-_overlap_add_tile_numba = nb.njit(cache=True, inline="always")(_overlap_add_tile)
+_max_spectral_power_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_max_spectral_power_numba_impl)
+_apply_spectral_weight_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_apply_spectral_weight_numba_impl)
+_overlap_add_tile_numba = maybe_numba_jit(
+    required=True, deps=_JIT_DEPS, nopython=True, cache=True, inline="always"
+)(_overlap_add_tile)
 
 
 def _process_tile_group_python(
@@ -180,9 +189,18 @@ def _process_tile_group_python(
     count1 = (ny - parity1 + 1) // 2
     count = count0 * count1
     for ind in range(count):
-        ix, iy = _tile_indices_from_parity_index(ind, count1, parity0, parity1)
+        x_index, y_index = _tile_indices_from_parity_index(
+            ind, count1, parity0, parity1
+        )
         beg0, beg1, n0, n1 = _tile_bounds(
-            ix, iy, wx, wy, stride0, stride1, padded.shape[0], padded.shape[1]
+            x_index,
+            y_index,
+            wx,
+            wy,
+            stride0,
+            stride1,
+            padded.shape[0],
+            padded.shape[1],
         )
 
         tile = np.zeros((wx, wy), dtype=np.float32)
@@ -215,10 +233,19 @@ def _process_tile_group_numba_impl(
     count0 = (nx - parity0 + 1) // 2
     count1 = (ny - parity1 + 1) // 2
     count = count0 * count1
-    for ind in nb.prange(count):  # type: ignore[not-iterable]
-        ix, iy = _tile_indices_from_parity_index_numba(ind, count1, parity0, parity1)
+    for ind in numba.prange(count):  # noqa: F821
+        x_index, y_index = _tile_indices_from_parity_index_numba(
+            ind, count1, parity0, parity1
+        )
         beg0, beg1, n0, n1 = _tile_bounds_numba(
-            ix, iy, wx, wy, stride0, stride1, padded.shape[0], padded.shape[1]
+            x_index,
+            y_index,
+            wx,
+            wy,
+            stride0,
+            stride1,
+            padded.shape[0],
+            padded.shape[1],
         )
 
         tile = np.zeros((wx, wy), dtype=np.float32)
@@ -234,9 +261,15 @@ def _process_tile_group_numba_impl(
 
 # fastmath is intentional here: the weighting is approximate and tests allow
 # small SciPy/Numba differences from parallel floating-point evaluation.
-_process_tile_group_numba = nb.njit(cache=True, fastmath=True, parallel=True)(
-    _process_tile_group_numba_impl
-)
+_process_tile_group_numba = maybe_numba_jit(
+    required=True,
+    deps=_JIT_DEPS,
+    nopython=True,
+    cache=True,
+    fastmath=True,
+    parallel=True,
+)(_process_tile_group_numba_impl)
+_NUMBA_ENGINE_AVAILABLE = _process_tile_group_numba.jit_available
 
 
 def _adaptive_spectral_filter_numba(

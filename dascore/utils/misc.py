@@ -910,3 +910,20 @@ def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
     q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
     lower_and_top = np.asarray([q_lower, q_upper])
     return lower_and_top
+
+
+def is_power_of_two(value: int) -> bool:
+    """
+    Return ``True`` when *value* is a positive power of two.
+
+    Powers of two have exactly one set bit in their binary representation.
+    Subtracting one flips that bit and all lower bits, so ``value & (value - 1)``
+    is zero only when ``value`` had a single set bit. The ``value > 0`` check
+    excludes zero and negative values.
+
+    Parameters
+    ----------
+    values
+        The value to test.
+    """
+    return value > 0 and (value & (value - 1) == 0)

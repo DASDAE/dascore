@@ -44,16 +44,12 @@ from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
+from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import get_dim_axis_value, patch_function
 from dascore.utils.signal import _triangular_taper
 
 _AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
 __all__ = ("adaptive_spectral_filter",)
-
-
-def _is_power_of_two(value: int) -> bool:
-    """Return ``True`` when *value* is a positive power of two."""
-    return value > 0 and (value & (value - 1) == 0)
 
 
 def _validate_filter_inputs(
@@ -77,16 +73,16 @@ def _validate_filter_inputs(
         raise ValueError(msg)
 
     for axis, (window, axis_overlap) in enumerate(zip(window_size, overlap)):
-        if not isinstance(window, (int, np.integer)):
+        if not isinstance(window, int | np.integer):
             msg = f"window_size[{axis}] must be an integer; got {window!r}."
             raise ValueError(msg)
-        if not isinstance(axis_overlap, (int, np.integer)):
+        if not isinstance(axis_overlap, int | np.integer):
             msg = f"overlap[{axis}] must be an integer; got {axis_overlap!r}."
             raise ValueError(msg)
 
         window = int(window)
         axis_overlap = int(axis_overlap)
-        if window <= 4 or not _is_power_of_two(window):
+        if window <= 4 or not is_power_of_two(window):
             msg = (
                 f"window_size[{axis}] must be a power of two greater than 4; "
                 f"got {window!r}."
@@ -331,7 +327,7 @@ def _validate_window_and_overlap(
         msg = "exponent must be finite."
         raise ParameterError(msg)
     for dim, window, overlap in zip(dims, windows, overlaps):
-        if window <= 4 or not _is_power_of_two(window):
+        if window <= 4 or not is_power_of_two(window):
             msg = f"window size for {dim!r} must be a power of two and > 4."
             raise ParameterError(msg)
         if overlap < 0:
@@ -357,6 +353,7 @@ def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable
         raise ParameterError(msg)
     try:
         from dascore.proc._adaptive_spectral_filter_numba import (
+            _NUMBA_ENGINE_AVAILABLE,
             _adaptive_spectral_filter_numba,
         )
     except ImportError as exc:
@@ -366,6 +363,14 @@ def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable
                 "rocket-fft to be installed."
             )
             raise MissingOptionalDependencyError(msg) from exc
+        return _adaptive_spectral_filter_scipy
+    if not _NUMBA_ENGINE_AVAILABLE:
+        if engine == "numba":
+            msg = (
+                "engine='numba' requires optional dependencies numba and "
+                "rocket-fft to be installed."
+            )
+            raise MissingOptionalDependencyError(msg)
         return _adaptive_spectral_filter_scipy
     return _adaptive_spectral_filter_numba
 

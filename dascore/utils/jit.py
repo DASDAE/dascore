@@ -4,6 +4,7 @@ Module for applying just in time compilation to speed up functions.
 
 from __future__ import annotations
 
+import importlib
 import warnings
 from functools import wraps
 
@@ -18,17 +19,28 @@ class _DummyNumba:
         yield from range(count)
 
 
-def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
+def maybe_numba_jit(
+    required=False,
+    deps: str | tuple[str, ...] = (),
+    _missing_numba=False,
+    _missing_deps: str | tuple[str, ...] = (),
+    **compiler_kwargs,
+):
     """
     Use numba to apply JIT compilation to the decorated function.
 
     Parameters
     ----------
     required
-        If True an ImportError is raised if the wrapped function is called
-        and the compiler module is not installed. If False, issue a warning.
+        If True an ImportError is raised if the wrapped function is called and
+        the compiler module or required dependencies are not installed. If
+        False, issue a warning.
+    deps
+        Extra importable modules required before compilation can occur.
     _missing_numba
         If true, simulate missing the numba package. Only used for testing.
+    _missing_deps
+        Extra dependencies to treat as missing. Only used for testing.
     **compiler_kwargs
         Keyword arguments passed to the compiler function.
 
@@ -65,7 +77,12 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
     if callable(required):
         return maybe_numba_jit()(required)
 
-    has_numba = True
+    deps = (deps,) if isinstance(deps, str) else tuple(deps)
+    _missing_deps = (
+        (_missing_deps,) if isinstance(_missing_deps, str) else tuple(_missing_deps)
+    )
+
+    missing_modules = []
     try:
         import numba
 
@@ -73,7 +90,17 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
             raise ImportError("Simulating missing numba.")
     except ImportError:
         numba = _DummyNumba()
-        has_numba = False
+        missing_modules.append("numba")
+
+    for module_name in deps:
+        try:
+            if module_name in _missing_deps:
+                raise ImportError(f"Simulating missing {module_name}.")
+            importlib.import_module(module_name)
+        except ImportError:
+            missing_modules.append(module_name)
+
+    has_all_deps = not missing_modules
 
     def _wrapper(func):
         # Add numba to the functions global namespace so that it can be used
@@ -81,20 +108,21 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
         globs = getattr(func, "__globals__", {})
         globs["numba"] = numba
 
-        if not has_numba:
+        if not has_all_deps:
 
             @wraps(func)
             def decorated(*args, **kwargs):
+                module_names = ", ".join(missing_modules)
                 if required:
                     msg = (
                         f"{func.__name__} requires python module "
-                        f"numba but it is not installed. "
+                        f"{module_names} but it is not installed. "
                     )
                     raise ImportError(msg)
                 else:
                     msg = (
                         f"{func.__name__} can be compiled to improve performance. "
-                        f"Please install numba to enable JIT."
+                        f"Please install {module_names} to enable JIT."
                     )
                     warnings.warn(msg, UserWarning)
                 return func(*args, **kwargs)
@@ -103,6 +131,8 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
         else:
             out_func = numba.jit(**compiler_kwargs)(func)
         out_func.func = func  # make original func accessible via .func
+        out_func.jit_available = has_all_deps
+        out_func.missing_jit_deps = tuple(missing_modules)
         return out_func
 
     return _wrapper

@@ -2,6 +2,8 @@
 Utilities for signal processing.
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
 
 import numpy as np
