@@ -12,8 +12,8 @@ from dascore.utils.time import to_float
 @patch_function()
 def stalta(
     patch: PatchType,
-    short_window: float | None = None,
-    long_window: float | None = None,
+    sta: float | None = None,
+    lta: float | None = None,
     absolute: bool = True,
     dim: str = "time",
 ) -> PatchType:
@@ -24,9 +24,9 @@ def stalta(
     ----------
     patch :
         The input DASCore patch.
-    short_window : float
+    sta : float
         Short window length in seconds. If None, it defaults to 20 samples.
-    long_window : float
+    lta : float
         Long window length in seconds. If None it defaults to 5*short.
     absolute : boolean
         Uses the absolute value of the signal (default=True)
@@ -49,16 +49,16 @@ def stalta(
 
     """
     # these default values are heuristically derived and may not work in all cases
-    if short_window is None:
+    if sta is None:
         step = to_float(patch.get_coord(dim).step)
-        short_window = 20 * step
-    if long_window is None:
-        long_window = 5 * short_window
+        sta = 20 * step
+    if lta is None:
+        lta = 5 * sta
 
     if absolute:
         patch = patch.abs()
 
-    sta = patch.rolling(**{dim: short_window}).mean()
-    lta = patch.rolling(**{dim: long_window}).mean()
+    sta_data = patch.rolling(**{dim: sta}).mean()
+    lta_data = patch.rolling(**{dim: lta}).mean()
 
-    return (sta / lta).update(attrs={"data_type": "STALTA", "data_units": ""})
+    return (sta_data / lta_data).update(attrs={"data_type": "STALTA", "data_units": ""})

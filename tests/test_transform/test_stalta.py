@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-from stalta import stalta
 
 
 class TestStaLta:
@@ -11,26 +10,21 @@ class TestStaLta:
 
     def test_runs(self, random_patch):
         """Ensure stalta runs and returns a patch with the same shape."""
-        out = stalta(random_patch, short_window=0.01, long_window=0.05)
+        out = random_patch.stalta(sta=0.01, lta=0.05)
 
         assert out.data.shape == random_patch.data.shape
         assert out.dims == random_patch.dims
 
     def test_patch_method_runs(self, random_patch):
         """Ensure stalta is registered as a patch method."""
-        out = random_patch.stalta(short_window=0.01, long_window=0.05)
+        out = random_patch.stalta(sta=0.01, lta=0.05)
 
         assert out.data.shape == random_patch.data.shape
         assert out.attrs.data_type == "STALTA"
 
     def test_non_time_dim(self, random_patch):
         """Ensure dim controls the rolling dimension."""
-        out = stalta(
-            random_patch,
-            short_window=1,
-            long_window=5,
-            dim="distance",
-        )
+        out = random_patch.stalta(sta=1, lta=5, dim="distance")
         expected = (
             random_patch.abs().rolling(distance=1).mean()
             / random_patch.abs().rolling(distance=5).mean()
