@@ -16,3 +16,4 @@ from .dispersion import dispersion_phase_shift
 from .taup import tau_p
 from .stalta import stalta
 from .fbe import fbe
+from .kurtosis import kurtosis
