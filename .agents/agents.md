@@ -17,7 +17,7 @@ This file gives AI/code agents a practical checklist for contributing safely to 
 
 ## Environment setup
 
-First check if existing environment contains dascore. If not, create a new one with mamba or uv named the same as the current worktree.
+Use an environment named after the current worktree slug. If it is unavailable, create it with mamba or uv before running checks. This keeps editable installs isolated between worktrees.
 
 Typical setup:
 
@@ -81,7 +81,7 @@ If behavior or API changes, update docs in the same PR.
 - Documentation source lives in `docs/` (`.qmd` files).
 - API docs are generated from docstrings.
 - Build docs workflow:
-- Dont add newlines to markdown prose; let editors wrap.
+- Don't add newlines to markdown prose; let editors wrap.
 
 ```bash
 python scripts/build_api_docs.py
