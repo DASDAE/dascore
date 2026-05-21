@@ -239,7 +239,7 @@ def mean_frequency(
     winlen
         Window length in seconds.
     step
-        Step between windows in seconds. Defaults to `winlen`.
+        Step between windows in seconds. Defaults to original sampling rate.
     fmin
         Optional lower frequency bound in Hz, applied on calculated spectra
     fmax
@@ -349,7 +349,7 @@ def median_frequency(
     winlen
         Window length in seconds.
     step
-        Step between windows in seconds. Defaults to `winlen`.
+        Step between windows in seconds. Defaults to original sampling rate.
     fmin
         Optional lower frequency bound in Hz, applied on calculated spectra
     fmax
