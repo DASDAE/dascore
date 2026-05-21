@@ -12,7 +12,6 @@ import numpy as np
 from scipy import fftpack
 from scipy.signal import get_window
 
-import dascore as dc
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 
@@ -208,7 +207,7 @@ def _get_psd_in_window(data, method="WELCH", dt=1, fmin=None, fmax=None, nperseg
 @patch_function(required_dims=("time",), history="full")
 def mean_frequency(
     patch: PatchType,
-    winlen: float | None = None,
+    winlen: float,
     step: float | None = None,
     fmin: float | None = None,
     fmax: float | None = None,
@@ -265,13 +264,6 @@ def mean_frequency(
     >>> ax = mea.viz.waterfall(**para, ax=axs[1])
 
     """
-    do_collapse = False
-    if winlen is None:
-        do_collapse = True
-        winlen = (
-            patch.get_coord("time").max() - patch.get_coord("time").min()
-        ) / np.timedelta64(1, "s")
-
     if step is None:
         step = winlen
 
@@ -328,14 +320,6 @@ def mean_frequency(
     if patch.get_axis("distance") != mfr_patch.get_axis("distance"):
         mfr_patch = mfr_patch.transpose()
 
-    if do_collapse:
-        # remove first sample, which is only NaNs
-        mfr_patch = mfr_patch.select(time=(-1, 2), samples=True)
-
-        # now set timestamp to the center of the time-window
-        t_middle = patch.get_coord("time").min() + dc.to_timedelta64(winlen / 2)
-        mfr_patch = mfr_patch.update_coords(time=t_middle)
-
     return mfr_patch.update(attrs={"data_type": "Mean Frequency", "data_units": "Hz"})
 
 
@@ -343,7 +327,7 @@ def mean_frequency(
 @patch_function(required_dims=("time",), history="full")
 def median_frequency(
     patch: PatchType,
-    winlen: float | None = None,
+    winlen: float,
     step: float | None = None,
     fmin: float | None = None,
     fmax: float | None = None,
@@ -400,13 +384,6 @@ def median_frequency(
     >>> med = patch.mean_frequency(winlen=.010, step=.001, fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(**para, ax=axs[1] )
     """
-    do_collapse = False
-    if winlen is None:
-        do_collapse = True
-        winlen = (
-            patch.get_coord("time").max() - patch.get_coord("time").min()
-        ) / np.timedelta64(1, "s")
-
     if step is None:
         step = winlen
 
@@ -459,13 +436,5 @@ def median_frequency(
     )
     if patch.get_axis("distance") != med_patch.get_axis("distance"):
         med_patch = med_patch.transpose()
-
-    if do_collapse:
-        # remove first sample, which is only NaNs
-        med_patch = med_patch.select(time=(-1, 2), samples=True)
-
-        # now set timestamp to the center of the time-window
-        t_middle = patch.get_coord("time").min() + dc.to_timedelta64(winlen / 2)
-        med_patch = med_patch.update_coords(time=t_middle)
 
     return med_patch.update(attrs={"data_type": "Median Frequency", "data_units": "Hz"})
