@@ -490,6 +490,8 @@ class Patch(NamespaceOwner):
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
     hilbert = transform.hilbert
+    mean_frequency = transform.mean_frequency
+    median_frequency = transform.median_frequency
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
 
