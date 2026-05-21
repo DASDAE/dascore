@@ -65,6 +65,14 @@ class TestMeanFrequency:
         assert out.attrs.data_units == units.Hz
         assert out.data.shape != random_patch.data.shape
 
+    def test_winlen_too_short_for_fmin_raises(self, random_patch):
+        """Ensure low frequencies require sufficiently long windows."""
+        with pytest.raises(ValueError, match="too short for fmin"):
+            random_patch.mean_frequency(
+                winlen=0.01,
+                fmin=200,
+            )
+
 
 class TestMedianFrequency:
     """Tests for median_frequency patch function."""
@@ -122,3 +130,11 @@ class TestMedianFrequency:
         assert out.attrs.data_type == "Median Frequency"
         assert out.attrs.data_units == units.Hz
         assert out.data.shape != random_patch.data.shape
+
+    def test_winlen_too_short_for_fmin_raises(self, random_patch):
+        """Ensure low frequencies require sufficiently long windows."""
+        with pytest.raises(ValueError, match="too short for fmin"):
+            random_patch.median_frequency(
+                winlen=0.01,
+                fmin=200,
+            )
