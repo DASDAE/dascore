@@ -94,7 +94,7 @@ def kurtosis(
     >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
     >>> _ = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0]).set_title('Original')
     >>>
-    >>> _ = new.viz.waterfall(cmap = 'RdBu', ax=axs[0,1]).set_title('Modified')
+    >>> _ = modi.viz.waterfall(cmap = 'RdBu', ax=axs[0,1]).set_title('Modified')
     >>>
     >>> _ = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])\
     >>>     .set_title('Kurtosis')

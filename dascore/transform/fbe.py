@@ -57,7 +57,7 @@ def fbe(
     >>>
     >>> p = dc.examples.get_example_patch('example_event_2')
     >>>
-    >>> fbe = p.fbe(corners = (100, 200), time = 0.002)
+    >>> fbe = p.fbe(freqmin=100, freqmax=200, time = 0.002)
     >>> ax = fbe.viz.waterfall(cmap = 'Spectral_r')
     """
     if step is None:

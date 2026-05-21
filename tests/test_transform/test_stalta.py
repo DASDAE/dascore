@@ -14,12 +14,6 @@ class TestStaLta:
 
         assert out.data.shape == random_patch.data.shape
         assert out.dims == random_patch.dims
-
-    def test_patch_method_runs(self, random_patch):
-        """Ensure stalta is registered as a patch method."""
-        out = random_patch.stalta(sta=0.01, lta=0.05)
-
-        assert out.data.shape == random_patch.data.shape
         assert out.attrs.data_type == "STALTA"
 
     def test_non_time_dim(self, random_patch):
