@@ -238,9 +238,9 @@ def mean_frequency(
     step
         Step between windows in seconds. Defaults to `winlen`.
     fmin
-        Optional lower frequency bound in Hz.
+        Optional lower frequency bound in Hz, applied on calculated spectra
     fmax
-        Optional upper frequency bound in Hz.
+        Optional upper frequency bound in Hz, applied on calculated spectra
     method
         Method for calculating spectrum.
         Can be any of "welch" (default), "fft", or "dft"
@@ -264,22 +264,12 @@ def mean_frequency(
     >>> ax = mea.viz.waterfall(**para, ax=axs[1])
 
     """
-    if step is None:
-        step = winlen
-
-    if fmin is not None:
-        min_cycles = 3
-        min_winlen = min_cycles / fmin
-
-        if winlen < min_winlen:
-            raise ValueError(
-                f"winlen={winlen} s is too short for fmin={fmin} Hz. "
-                f"Need at least 3 cycles, i.e. {min_winlen:.4f} s."
-            )
-
     dt = patch.get_coord("time").step
     if isinstance(dt, np.timedelta64):
         dt = dt / np.timedelta64(1, "s")
+
+    if step is None:
+        step = dt
 
     def _get_mean_freq_in_window(
         data, axis=None, dt=dt, method=method, fmin=fmin, fmax=fmax, nperseg=nperseg
@@ -358,9 +348,9 @@ def median_frequency(
     step
         Step between windows in seconds. Defaults to `winlen`.
     fmin
-        Optional lower frequency bound in Hz.
+        Optional lower frequency bound in Hz, applied on calculated spectra
     fmax
-        Optional upper frequency bound in Hz.
+        Optional upper frequency bound in Hz, applied on calculated spectra
     method
         Method for calculating spectrum.
         Can be any of "welch" (default), "fft", or "dft"
@@ -381,25 +371,15 @@ def median_frequency(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
-    >>> med = patch.mean_frequency(winlen=.010, step=.001, fmin=50, fmax=300)
+    >>> med = patch.mean_frequency(winlen=.01, step=.001, fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(**para, ax=axs[1] )
     """
-    if step is None:
-        step = winlen
-
-    if fmin is not None:
-        min_cycles = 3
-        min_winlen = min_cycles / fmin
-
-        if winlen < min_winlen:
-            raise ValueError(
-                f"winlen={winlen} s is too short for fmin={fmin} Hz. "
-                f"Need at least 3 cycles, i.e. {min_winlen:.4f} s."
-            )
-
     dt = patch.get_coord("time").step
     if isinstance(dt, np.timedelta64):
         dt = dt / np.timedelta64(1, "s")
+
+    if step is None:
+        step = winlen
 
     def _get_median_freq_in_window(
         data, axis=None, dt=dt, method=method, fmin=fmin, fmax=fmax, nperseg=nperseg
