@@ -91,12 +91,14 @@ def kurtosis(
     >>> k = modi.kurtosis(winlen = 0.002, dim = 'time')
     >>>
     >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
-    >>> _ = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0]).set_title('Original')
+    >>> ax = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0])
+    >>> ax.set_title('Original')
     >>>
-    >>> _ = modi.viz.waterfall(cmap = 'RdBu', ax=axs[0,1]).set_title('Modified')
+    >>> ax = modi.viz.waterfall(cmap = 'RdBu', ax=axs[0,1])
+    >>> ax.set_title('Modified')
     >>>
-    >>> _ = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])\
-    >>>     .set_title('Kurtosis')
+    >>> ax = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])
+    >>> ax.set_title('Kurtosis')
     >>>
     >>> # plot histograms of both datasets. Note the modified has broader tail!
     >>> axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
