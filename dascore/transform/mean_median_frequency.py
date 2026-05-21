@@ -255,7 +255,7 @@ def mean_frequency(
     >>> import dascore as dc
     >>> import matplotlib.pyplot as plt
     >>>
-    >>> patch = dc.get_example_patch('example_event_2')
+    >>> patch = dc.examples.get_example_patch('example_event_2')
     >>>
     >>> fig, axs = plt.subplots(1,2, layout='constrained', figsize=(12,4))
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
@@ -381,7 +381,7 @@ def median_frequency(
     >>> import dascore as dc
     >>> import matplotlib.pyplot as plt
     >>>
-    >>> patch = dc.get_example_patch('example_event_2')
+    >>> patch = dc.examples.get_example_patch('example_event_2')
     >>>
     >>> fig, axs = plt.subplots(1,2, layout='constrained', figsize=(12,4))
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
