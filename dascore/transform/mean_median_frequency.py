@@ -275,6 +275,16 @@ def mean_frequency(
     if step is None:
         step = winlen
 
+    if fmin is not None:
+        min_cycles = 3
+        min_winlen = min_cycles / fmin
+
+        if winlen < min_winlen:
+            raise ValueError(
+                f"winlen={winlen} s is too short for fmin={fmin} Hz. "
+                f"Need at least 3 cycles, i.e. {min_winlen:.4f} s."
+            )
+
     dt = patch.get_coord("time").step
     if isinstance(dt, np.timedelta64):
         dt = dt / np.timedelta64(1, "s")
@@ -399,6 +409,16 @@ def median_frequency(
 
     if step is None:
         step = winlen
+
+    if fmin is not None:
+        min_cycles = 3
+        min_winlen = min_cycles / fmin
+
+        if winlen < min_winlen:
+            raise ValueError(
+                f"winlen={winlen} s is too short for fmin={fmin} Hz. "
+                f"Need at least 3 cycles, i.e. {min_winlen:.4f} s."
+            )
 
     dt = patch.get_coord("time").step
     if isinstance(dt, np.timedelta64):
