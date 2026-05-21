@@ -4,8 +4,107 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.signal import get_window, welch
 
 from dascore import units
+from dascore.transform.mean_median_frequency import _fft_psd, _welch
+
+
+class TestWelch:
+    """Tests for the specialized Welch PSD helper."""
+
+    def test_output_shapes(self):
+        """Ensure frequency and PSD arrays have expected shapes."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(4, 3, 128))
+        win = get_window("hann", 64)
+
+        freq, pxx = _welch(data, win=win, fs=100.0, nperseg=64)
+
+        assert freq.shape == (33,)
+        assert pxx.shape == (4, 3, 33)
+
+    def test_short_input_reduces_nperseg(self):
+        """Ensure nperseg is reduced when the signal is shorter."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(4, 3, 32))
+        win = get_window("hann", 64)
+
+        freq, pxx = _welch(data, win=win, fs=100.0, nperseg=64)
+
+        assert freq.shape == (17,)
+        assert pxx.shape == (4, 3, 17)
+
+    def test_matches_scipy_welch_even_nperseg(self):
+        """Ensure helper matches scipy.signal.welch for even nperseg."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(4, 3, 128))
+        nperseg = 64
+        fs = 100.0
+        win = get_window("hann", nperseg)
+
+        freq, pxx = _welch(data, win=win, fs=fs, nperseg=nperseg)
+        expected_freq, expected_pxx = welch(
+            data,
+            fs=fs,
+            window=win,
+            nperseg=nperseg,
+            noverlap=nperseg // 2,
+            detrend="constant",
+            scaling="density",
+            return_onesided=True,
+            axis=-1,
+        )
+
+        assert np.allclose(freq, expected_freq)
+        assert np.allclose(pxx, expected_pxx)
+
+    def test_matches_scipy_welch_odd_nperseg(self):
+        """Ensure helper matches scipy.signal.welch for odd nperseg."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(4, 3, 129))
+        nperseg = 63
+        fs = 100.0
+        win = get_window("hann", nperseg)
+
+        freq, pxx = _welch(data, win=win, fs=fs, nperseg=nperseg)
+        expected_freq, expected_pxx = welch(
+            data,
+            fs=fs,
+            window=win,
+            nperseg=nperseg,
+            noverlap=nperseg // 2,
+            detrend="constant",
+            scaling="density",
+            return_onesided=True,
+            axis=-1,
+        )
+
+        assert np.allclose(freq, expected_freq)
+        assert np.allclose(pxx, expected_pxx)
+
+    def test_constant_signal_has_zero_non_dc_power(self):
+        """Ensure detrending removes constant signal power."""
+        data = np.ones((2, 3, 128))
+        nperseg = 64
+        win = get_window("hann", nperseg)
+
+        _, pxx = _welch(data, win=win, fs=100.0, nperseg=nperseg)
+
+        assert np.allclose(pxx, 0.0)
+
+    def test_frequency_axis_uses_sampling_frequency(self):
+        """Ensure frequency spacing is fs / nperseg."""
+        data = np.ones((2, 3, 128))
+        nperseg = 64
+        fs = 200.0
+        win = get_window("hann", nperseg)
+
+        freq, _ = _welch(data, win=win, fs=fs, nperseg=nperseg)
+
+        assert np.allclose(np.diff(freq), fs / nperseg)
+        assert freq[0] == 0
+        assert freq[-1] == fs / 2
 
 
 class TestMeanFrequency:
@@ -50,6 +149,18 @@ class TestMeanFrequency:
                 fmax=10,
             )
 
+    def test_transposes_output_when_distance_axis_changes(self, random_patch):
+        """Ensure output is transposed back when rolling/apply changes axis order."""
+        patch = random_patch.transpose("time", "distance")
+
+        out = patch.mean_frequency(
+            winlen=0.01,
+            step=0.01,
+        )
+
+        assert out.get_axis("distance") == patch.get_axis("distance")
+        assert out.dims == patch.dims
+
 
 class TestMedianFrequency:
     """Tests for median_frequency patch function."""
@@ -92,3 +203,41 @@ class TestMedianFrequency:
                 fmin=100,
                 fmax=10,
             )
+
+    def test_transposes_output_when_distance_axis_changes(self, random_patch):
+        """Ensure output is transposed back when rolling/apply changes axis order."""
+        patch = random_patch.transpose("time", "distance")
+
+        out = patch.mean_frequency(
+            winlen=0.01,
+            step=0.01,
+        )
+
+        assert out.get_axis("distance") == patch.get_axis("distance")
+        assert out.dims == patch.dims
+
+
+class TestFFTPSD:
+    """Tests for simple FFT PSD helper."""
+
+    def test_even_length_doubles_only_interior_bins(self):
+        """Ensure even-length FFT excludes Nyquist from doubling."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(1, 1, 128))
+
+        _, pxx = _fft_psd(data, fs=100.0)
+
+        n = data.shape[-1]
+        x = data - np.mean(data, axis=-1, keepdims=True)
+        xft = np.fft.rfft(x, axis=-1)
+
+        raw = (np.abs(xft) ** 2) / (100.0 * n)
+
+        # DC unchanged
+        assert np.allclose(pxx[..., 0], raw[..., 0])
+
+        # Nyquist unchanged
+        assert np.allclose(pxx[..., -1], raw[..., -1])
+
+        # interior bins doubled
+        assert np.allclose(pxx[..., 1:-1], raw[..., 1:-1] * 2)

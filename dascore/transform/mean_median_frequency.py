@@ -114,8 +114,14 @@ def _welch(xx, win, fs=1.0, nperseg=256):
                 pxx[:, 0] += xft[:, 0] ** 2 / (k + 1)
                 pxx[:, 1:] += (xft[:, 1::2] ** 2 + xft[:, 2::2] ** 2) / (k + 1.0)
 
-        pxx[:, 1:-1] *= 2 * scale
-        pxx[:, (0, -1)] *= scale
+        if nfft % 2 == 0:
+            # even: DC and Nyquist not doubled
+            pxx[:, 1:-1] *= 2 * scale
+            pxx[:, (0, -1)] *= scale
+        else:
+            # odd: only DC excluded from doubling
+            pxx[:, 1:] *= 2 * scale
+            pxx[:, 0] *= scale
 
         psd[:, i, :] = pxx
     f = np.arange(pxx.shape[-1]) * (fs / nfft)
@@ -169,7 +175,7 @@ def _fft_psd(xx, fs=1.0):
 
 # %% define a wrapper function to call
 def _get_psd_in_window(data, method="WELCH", dt=1, fmin=None, fmax=None, nperseg=None):
-    allowed_methods = ["WELCH", "FFT", "DFT"]
+    allowed_methods = ["WELCH", "FFT"]
     assert (
         method.upper() in allowed_methods
     ), f"Invalid method: '{method}'. Must be one of {allowed_methods}"
@@ -187,9 +193,6 @@ def _get_psd_in_window(data, method="WELCH", dt=1, fmin=None, fmax=None, nperseg
 
     elif method.upper() == "FFT":
         frq, pxx = _fft_psd(data, fs=(1 / dt))
-
-    else:
-        raise ValueError(f"{method} method not implemented yet")
 
     # use only desired part of spectrum
     inf1 = 0 if fmin is None else np.searchsorted(frq, fmin)
@@ -243,7 +246,7 @@ def mean_frequency(
         Optional upper frequency bound in Hz, applied on calculated spectra
     method
         Method for calculating spectrum.
-        Can be any of "welch" (default), "fft", or "dft"
+        Can be any of "welch" (default), or "fft"
 
     Returns
     -------
@@ -353,7 +356,7 @@ def median_frequency(
         Optional upper frequency bound in Hz, applied on calculated spectra
     method
         Method for calculating spectrum.
-        Can be any of "welch" (default), "fft", or "dft"
+        Can be any of "welch" (default), or "fft"
 
     Returns
     -------
