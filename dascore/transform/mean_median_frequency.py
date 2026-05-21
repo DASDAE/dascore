@@ -257,7 +257,7 @@ def mean_frequency(
     >>>
     >>> patch = dc.get_example_patch('example_event_2')
     >>>
-    >>> fig, axs = plt.subplots(2,1, layout='constrained', figsize=(8,10))
+    >>> fig, axs = plt.subplots(1,2, layout='constrained', figsize=(12,4))
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
@@ -285,9 +285,15 @@ def mean_frequency(
         frq, pxx = _get_psd_in_window(
             data, dt=dt, method=method, fmin=fmin, fmax=fmax, nperseg=nperseg
         )
-
         # calculate mean frequency
+        """
         mfr = np.sum(frq * pxx, axis=-1) / np.sum(pxx, axis=-1)
+        """
+        numerator = np.sum(frq * pxx, axis=-1)
+        denominator = np.nansum(pxx, axis=-1)
+        mfr = np.divide(
+            numerator, denominator, out=np.zeros_like(numerator), where=denominator != 0
+        )
 
         return mfr
 
@@ -377,7 +383,7 @@ def median_frequency(
     >>>
     >>> patch = dc.get_example_patch('example_event_2')
     >>>
-    >>> fig, axs = plt.subplots(2,1, layout='constrained', figsize=(8,10))
+    >>> fig, axs = plt.subplots(1,2, layout='constrained', figsize=(12,4))
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
