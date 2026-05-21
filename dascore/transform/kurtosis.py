@@ -79,7 +79,7 @@ def kurtosis(
     >>>
     >>> p = dc.examples.get_example_patch('example_event_2')
     >>>
-    >>> # replace
+    >>> # replace event data with normal-distributed random values
     >>> rng = np.random.default_rng()
     >>> data = rng.normal(loc=0, scale=1, size=p.data.shape)
     >>> data0 = data.copy() # original
@@ -88,7 +88,7 @@ def kurtosis(
     >>> orig = p.update(data=data0)
     >>> modi = p.update(data=data)
     >>>
-    >>> # kurtosis on modified
+    >>> # calculate kurtosis on modified data
     >>> k = modi.kurtosis(winlen = 0.002, dim = 'time')
     >>>
     >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
@@ -99,7 +99,7 @@ def kurtosis(
     >>> _ = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])\
     >>>     .set_title('Kurtosis')
     >>>
-    >>> # plot histograms of both data. Note the modified has broader tail!
+    >>> # plot histograms of both datasets. Note the modified has broader tail!
     >>> axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
     >>> axs[1,0].hist(data0.ravel(), 100, alpha=0.5, label='Original', density=True)
     >>> axs[1,0].legend(loc='upper right')
@@ -107,7 +107,6 @@ def kurtosis(
     >>> axs[1,0].set_title('Amplitude Distributions')
     >>> axs[1,0].set_xlabel('Amplitude')
     >>> axs[1,0].set_ylabel('Probability of occurrence')
-    >>> plt.show()
     """
 
     def _validate_window(winlen: float, dt: float) -> int:
