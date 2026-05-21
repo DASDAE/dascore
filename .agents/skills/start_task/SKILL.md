@@ -22,10 +22,10 @@ Instructions for starting work on a task in this repo in an isolated git worktre
    - Collapse repeated `-`.
    - Trim leading/trailing `-`.
 4. Use branch name `{slug}` unless the user explicitly requested another branch naming convention.
-5. Create the worktree at `.agents/worktrees/{slug}`.
+5. Create the worktree at `worktrees/{slug}`.
 6. Preflight checks before creating anything:
    - Confirm the repo root exists and is a git repository.
-   - If `.agents/worktrees/{slug}` already exists, reuse it if it is attached to the intended branch; otherwise stop and report the conflict.
+   - If `worktrees/{slug}` already exists, reuse it if it is attached to the intended branch; otherwise stop and report the conflict.
    - If branch `{slug}` already exists, create the worktree from that branch instead of failing.
 7. Create the worktree:
    - If the branch does not exist: create it from the current default working branch.
@@ -43,6 +43,6 @@ Instructions for starting work on a task in this repo in an isolated git worktre
 
 ## Notes
 
-- Use `.agents/worktrees/` consistently. 
+- Use `worktrees/` consistently. 
 - Do not modify or delete existing worktrees unless the user explicitly asks.
 - If the repo already has unrelated uncommitted changes in the main worktree, leave them alone; creating a separate worktree is the isolation mechanism.

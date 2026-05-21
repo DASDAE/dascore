@@ -92,8 +92,9 @@ docs/index.quarto_ipynb
 
 # Agent stuff
 .claude
+.codex.bak
 CLAUDE.md
-.agents/worktrees/
+worktrees/
 
 # profile stuff
 prof/
