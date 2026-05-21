@@ -219,10 +219,6 @@ def kurtosis(
 
     coord = patch_t.get_coord(dim)
     dt = to_float(coord.step)
-    if dt is None or dt <= 0:
-        raise ValueError(
-            f"Coordinate step for dim={dim!r} must be defined and positive."
-        )
 
     nwin = _validate_window(winlen, dt)
     if recursive:
