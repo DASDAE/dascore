@@ -49,21 +49,65 @@ def kurtosis(
         the @langet2014 propose a recursive formulation. This acts like an
         exponentially weighted moving estimator, so the algorithm updates
         continuously without storing long windows of data.
+        If False, the common kurtosis calculation is used
 
     Returns
     -------
     PatchType
         A new patch with kurtosis traces.
 
-    Example
+    Examples
     --------
+    1) Kurtosis of example event
     >>> import dascore as dc
     >>>
     >>> p = dc.examples.get_example_patch('example_event_2')
     >>>
     >>> k = p.kurtosis(winlen = 0.002,dim = 'time')
-    >>> ax = k.viz.waterfall(cmap = 'magma')
+    >>> ax = k.viz.waterfall(cmap = 'inferno')
+    >>> plt.show()
 
+
+    2) To better understand how kutosis works, we replace the data with
+    normal-distributed random data. We then amplify a block of those
+    data. The modified data has a broader tail, since more high-amplitude
+    values are in the dataset. The kurtosis picks the onset accurately.
+
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>> import matplotlib.pyplot as plt
+    >>>
+    >>> p = dc.examples.get_example_patch('example_event_2')
+    >>>
+    >>> # replace
+    >>> rng = np.random.default_rng()
+    >>> data = rng.normal(loc=0, scale=1, size=p.data.shape)
+    >>> data0 = data.copy() # original
+    >>> data[:,300:450] = data[:, 300:450]*3 #modified
+    >>>
+    >>> orig = p.update(data=data0)
+    >>> modi = p.update(data=data)
+    >>>
+    >>> # kurtosis on modified
+    >>> k = modi.kurtosis(winlen = 0.002, dim = 'time')
+    >>>
+    >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
+    >>> _ = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0]).set_title('Original')
+    >>>
+    >>> _ = new.viz.waterfall(cmap = 'RdBu', ax=axs[0,1]).set_title('Modified')
+    >>>
+    >>> _ = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])\
+    >>>     .set_title('Kurtosis')
+    >>>
+    >>> # plot histograms of both data. Note the modified has broader tail!
+    >>> axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
+    >>> axs[1,0].hist(data0.ravel(), 100, alpha=0.5, label='Original', density=True)
+    >>> axs[1,0].legend(loc='upper right')
+    >>> axs[1,0].grid('on')
+    >>> axs[1,0].set_title('Amplitude Distributions')
+    >>> axs[1,0].set_xlabel('Amplitude')
+    >>> axs[1,0].set_ylabel('Probability of occurrence')
+    >>> plt.show()
     """
 
     def _validate_window(winlen: float, dt: float) -> int:
@@ -140,22 +184,20 @@ def kurtosis(
         """
         Recursive pseudo-kurtosis after Langet et al.-style formulation.
 
-        Acts along axis 0.
         """
-        fsamp = 1.0 / dt
-        c = 1.0 - 1.0 / (fsamp * winlen)
+        c = 1.0 - dt / winlen
 
+        # https://amaggi.github.io/waveloc/_modules/filters.html#rec_kurtosis_old
         npts = data.shape[0]
         out = np.empty_like(data, dtype=float)
 
         # Per-channel initialization
-        varx = np.std(data, axis=0)
+        varx = np.std(data, axis=0) ** 2  # the version on Maggi uses the std not var
         mean_value = np.zeros(data.shape[1:], dtype=float)
         var_value = np.zeros(data.shape[1:], dtype=float)
         kurt_value = np.zeros(data.shape[1:], dtype=float)
 
         varx2 = varx**2
-
         for i in range(npts):
             xi = data[i, ...]
 
@@ -163,6 +205,7 @@ def kurtosis(
             var_value = c * var_value + (1.0 - c) * (xi - mean_value) ** 2
 
             norm_factor = np.where(var_value > varx, var_value**2, varx2)
+
             kurt_value = (
                 c * kurt_value + (1.0 - c) * (xi - mean_value) ** 4 / norm_factor
             )
@@ -191,3 +234,39 @@ def kurtosis(
         .transpose(*patch.dims)
         .update(attrs={"data_type": "Kurtosis", "data_units": ""})
     )
+
+
+# %%
+# ================================================================
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    import dascore as dc
+
+    p = dc.examples.get_example_patch("example_event_2")
+
+    rng = np.random.default_rng()
+    data = rng.normal(loc=0, scale=1, size=p.data.shape)
+    data0 = data.copy()
+    data[:, 300:450] = data[:, 300:450] * 3
+
+    p = p.update(data=data0)
+    new = p.update(data=data)
+    k = new.kurtosis(winlen=0.002, dim="time")
+
+    fix, axs = plt.subplots(2, 2, figsize=(10, 8), layout="constrained")
+    _ = p.viz.waterfall(cmap="RdBu", ax=axs[0, 0]).set_title("Original")
+    _ = new.viz.waterfall(cmap="RdBu", ax=axs[0, 1]).set_title("Modified")
+    ax = k.viz.waterfall(cmap="inferno_r", scale=[0, 0.4], ax=axs[1, 1]).set_title(
+        "Kurtosis"
+    )
+
+    axs[1, 0].hist(data.ravel(), 100, alpha=0.5, label="modified", density=True)
+    axs[1, 0].hist(data0.ravel(), 100, alpha=0.5, label="original", density=True)
+    axs[1, 0].legend(loc="upper right")
+    axs[1, 0].grid("on")
+    axs[1, 0].set_title("Amplitude Distributions")
+    axs[1, 0].set_xlabel("Amplitude")
+    axs[1, 0].set_ylabel("Probability of occurrence")
+    plt.show()
