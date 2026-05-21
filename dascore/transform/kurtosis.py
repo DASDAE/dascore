@@ -92,22 +92,22 @@ def kurtosis(
     >>>
     >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
     >>> ax = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0])
-    >>> ax.set_title('Original')
+    >>> _ = ax.set_title('Original')
     >>>
     >>> ax = modi.viz.waterfall(cmap = 'RdBu', ax=axs[0,1])
-    >>> ax.set_title('Modified')
+    >>> _ = ax.set_title('Modified')
     >>>
     >>> ax = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])
-    >>> ax.set_title('Kurtosis')
+    >>> _ = ax.set_title('Kurtosis')
     >>>
     >>> # plot histograms of both datasets. Note the modified has broader tail!
-    >>> axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
-    >>> axs[1,0].hist(data0.ravel(), 100, alpha=0.5, label='Original', density=True)
-    >>> axs[1,0].legend(loc='upper right')
-    >>> axs[1,0].grid('on')
-    >>> axs[1,0].set_title('Amplitude Distributions')
-    >>> axs[1,0].set_xlabel('Amplitude')
-    >>> axs[1,0].set_ylabel('Probability of occurrence')
+    >>> _ = axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
+    >>> _ = axs[1,0].hist(data0.ravel(), 100, alpha=0.5, label='Original', density=True)
+    >>> _ = axs[1,0].legend(loc='upper right')
+    >>> _ = axs[1,0].grid('on')
+    >>> _ = axs[1,0].set_title('Amplitude Distributions')
+    >>> _ = axs[1,0].set_xlabel('Amplitude')
+    >>> _ = axs[1,0].set_ylabel('Probability of occurrence')
     """
 
     def _validate_window(winlen: float, dt: float) -> int:
