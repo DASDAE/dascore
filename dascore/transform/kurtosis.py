@@ -65,7 +65,6 @@ def kurtosis(
     >>>
     >>> k = p.kurtosis(winlen = 0.002,dim = 'time')
     >>> ax = k.viz.waterfall(cmap = 'inferno')
-    >>> plt.show()
 
 
     2) To better understand how kutosis works, we replace the data with
