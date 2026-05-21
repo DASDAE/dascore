@@ -25,3 +25,19 @@ class TestStaLta:
         )
 
         assert np.allclose(out.data, expected.data, equal_nan=True)
+
+    def test_default_sta_and_lta(self, random_patch):
+        """Ensure STA and LTA defaults are derived from coordinate step."""
+        step = random_patch.get_coord("time").step
+
+        out = random_patch.stalta(sta=None, lta=None)
+
+        sta = 20 * step
+        lta = 5 * sta
+
+        expected = (
+            random_patch.abs().rolling(time=sta).mean()
+            / random_patch.abs().rolling(time=lta).mean()
+        )
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)

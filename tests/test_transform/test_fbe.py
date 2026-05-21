@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import dascore.units as ureg
 
@@ -62,3 +63,29 @@ class TestFBE:
         expected = (filtered**2).rolling(time=0.01, step=0.01).mean() ** 0.5
 
         assert np.allclose(out.data, expected.data, equal_nan=True)
+
+    def test_defaults_and_invalid_frequency_bounds(self, random_patch):
+        """Ensure defaults are derived correctly and invalid bounds raise."""
+        step = random_patch.get_coord("time").step
+
+        # defaults: step from coord, time = 20 * step
+        out = random_patch.fbe(
+            step=None,
+            time=None,
+            freqmin=None,
+            freqmax=None,
+            db=False,
+        )
+
+        expected = (random_patch**2).rolling(time=20 * step, step=step).mean() ** 0.5
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+
+        # invalid bounds
+        with pytest.raises(ValueError, match="freqmax must be larger than freqmin"):
+            random_patch.fbe(
+                freqmin=20,
+                freqmax=10,
+                time=0.01,
+                step=0.01,
+            )
