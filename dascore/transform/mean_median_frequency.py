@@ -374,7 +374,7 @@ def median_frequency(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
-    >>> med = patch.mean_frequency(winlen=.01, step=.001, fmin=50, fmax=300)
+    >>> med = patch.median_frequency(winlen=.01, step=.001, fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(**para, ax=axs[1] )
     """
     dt = patch.get_coord("time").step
