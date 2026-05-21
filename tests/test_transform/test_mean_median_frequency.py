@@ -208,7 +208,7 @@ class TestMedianFrequency:
         """Ensure output is transposed back when rolling/apply changes axis order."""
         patch = random_patch.transpose("time", "distance")
 
-        out = patch.mean_frequency(
+        out = patch.median_frequency(
             winlen=0.01,
             step=0.01,
         )
