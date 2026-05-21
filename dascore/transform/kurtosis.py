@@ -213,6 +213,7 @@ def kurtosis(
 
         return out
 
+    orig_dims = patch.dims
     patch_t = patch.transpose(dim, ...)
     data = np.asarray(patch_t.data, dtype=float)
 
@@ -223,50 +224,15 @@ def kurtosis(
             f"Coordinate step for dim={dim!r} must be defined and positive."
         )
 
+    nwin = _validate_window(winlen, dt)
     if recursive:
         out = _recursive_kurtosis(data, dt=dt, winlen=winlen)
     else:
-        nwin = _validate_window(winlen, dt)
         out = _windowed_kurtosis(data, nwin=nwin)
 
-    return (
+    out_patch = (
         patch_t.new(data=out)
-        .transpose(*patch.dims)
-        .update(attrs={"data_type": "Kurtosis", "data_units": ""})
+        .transpose(*orig_dims)
+        .update(attrs={"data_type": "Kurtosis", "data_units": None})
     )
-
-
-# %%
-# ================================================================
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    import dascore as dc
-
-    p = dc.examples.get_example_patch("example_event_2")
-
-    rng = np.random.default_rng()
-    data = rng.normal(loc=0, scale=1, size=p.data.shape)
-    data0 = data.copy()
-    data[:, 300:450] = data[:, 300:450] * 3
-
-    p = p.update(data=data0)
-    new = p.update(data=data)
-    k = new.kurtosis(winlen=0.002, dim="time")
-
-    fix, axs = plt.subplots(2, 2, figsize=(10, 8), layout="constrained")
-    _ = p.viz.waterfall(cmap="RdBu", ax=axs[0, 0]).set_title("Original")
-    _ = new.viz.waterfall(cmap="RdBu", ax=axs[0, 1]).set_title("Modified")
-    ax = k.viz.waterfall(cmap="inferno_r", scale=[0, 0.4], ax=axs[1, 1]).set_title(
-        "Kurtosis"
-    )
-
-    axs[1, 0].hist(data.ravel(), 100, alpha=0.5, label="modified", density=True)
-    axs[1, 0].hist(data0.ravel(), 100, alpha=0.5, label="original", density=True)
-    axs[1, 0].legend(loc="upper right")
-    axs[1, 0].grid("on")
-    axs[1, 0].set_title("Amplitude Distributions")
-    axs[1, 0].set_xlabel("Amplitude")
-    axs[1, 0].set_ylabel("Probability of occurrence")
-    plt.show()
+    return out_patch
