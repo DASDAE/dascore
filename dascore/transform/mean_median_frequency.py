@@ -14,6 +14,7 @@ from scipy.signal import get_window
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.utils.patch import patch_function
 
 
 def _welch(xx, win, fs=1.0, nperseg=256):
@@ -204,7 +205,7 @@ def _get_psd_in_window(data, method="WELCH", dt=1, fmin=None, fmax=None, nperseg
 
 
 # %%
-@dc.patch_function(required_dims=("time",), history="full")
+@patch_function(required_dims=("time",), history="full")
 def mean_frequency(
     patch: PatchType,
     winlen: float | None = None,
@@ -244,11 +245,16 @@ def mean_frequency(
     method
         Method for calculating spectrum.
         Can be any of "welch" (default), "fft", or "dft"
-    Returns
 
+    Returns
+    -------
+        The Patch instance with the mean-frequency as data.
 
     Example
-    ----------
+    -------
+    >>> import dascore as dc
+    >>> import matplotlib.pyplot as plt
+    >>>
     >>> patch = dc.get_example_patch('example_event_2')
     >>>
     >>> fig, axs = plt.subplots(2,1, layout='constrained', figsize=(8,10))
@@ -256,7 +262,7 @@ def mean_frequency(
     >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
     >>> mea = patch.mean_frequency(winlen=.010, step=.001, fmin=50, fmax=300)
-    >>> ax = mea.viz.waterfall(ax=axs[1], para)
+    >>> ax = mea.viz.waterfall(**para, ax=axs[1])
 
     """
     do_collapse = False
@@ -318,7 +324,7 @@ def mean_frequency(
 
 
 # %%
-@dc.patch_function(required_dims=("time",), history="full")
+@patch_function(required_dims=("time",), history="full")
 def median_frequency(
     patch: PatchType,
     winlen: float | None = None,
@@ -343,7 +349,6 @@ def median_frequency(
     timestamps.
 
 
-
     Parameters
     ----------
     patch
@@ -360,18 +365,24 @@ def median_frequency(
         Method for calculating spectrum.
         Can be any of "welch" (default), "fft", or "dft"
 
+    Returns
+    -------
+        The Patch instance with the median-frequency as data.
+
 
     Example
-    ----------
+    -------
+    >>> import dascore as dc
+    >>> import matplotlib.pyplot as plt
+    >>>
     >>> patch = dc.get_example_patch('example_event_2')
     >>>
     >>> fig, axs = plt.subplots(2,1, layout='constrained', figsize=(8,10))
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
-    >>>
     >>> para = {'cmap':'turbo', 'scale':(50,300), 'scale_type':'absolute' }
     >>> med = patch.mean_frequency(winlen=.010, step=.001, fmin=50, fmax=300)
-    >>> ax = med.viz.waterfall(ax=axs[1], para)
+    >>> ax = med.viz.waterfall(**para, ax=axs[1] )
     """
     do_collapse = False
     if winlen is None:
