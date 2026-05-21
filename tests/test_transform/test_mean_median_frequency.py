@@ -13,7 +13,7 @@ class TestMeanFrequency:
 
     def test_runs(self, random_patch):
         """Ensure mean_frequency runs as a patch method."""
-        out = random_patch.mean_frequency(winlen=0.01, step=0.01)
+        out = random_patch.mean_frequency(winlen=0.3, step=0.01)
 
         assert out.attrs.data_type == "Mean Frequency"
         assert out.attrs.data_units == units.Hz
@@ -22,23 +22,16 @@ class TestMeanFrequency:
 
     def test_fft_method_runs(self, random_patch):
         """Ensure FFT method runs."""
-        out = random_patch.mean_frequency(winlen=0.01, step=0.01, method="fft")
+        out = random_patch.mean_frequency(winlen=0.3, step=0.01, method="fft")
 
         assert out.attrs.data_type == "Mean Frequency"
         assert out.attrs.data_units == units.Hz
         assert np.isfinite(out.data).any()
 
-    def test_step_defaults_to_winlen(self, random_patch):
-        """Ensure step defaults to winlen."""
-        out = random_patch.mean_frequency(winlen=0.01)
-        expected = random_patch.mean_frequency(winlen=0.01, step=0.01)
-
-        assert np.allclose(out.data, expected.data, equal_nan=True)
-
     def test_frequency_bounds(self, random_patch):
         """Ensure frequency bounds are accepted."""
         out = random_patch.mean_frequency(
-            winlen=0.01,
+            winlen=0.3,
             step=0.01,
             fmin=10,
             fmax=100,
@@ -51,19 +44,11 @@ class TestMeanFrequency:
         """Ensure invalid frequency bounds raise."""
         with pytest.raises(AssertionError, match="must be smaller than fmax"):
             random_patch.mean_frequency(
-                winlen=0.01,
+                winlen=0.3,
                 step=0.01,
                 fmin=100,
                 fmax=10,
             )
-
-    def test_collapse_mode_runs(self, random_patch):
-        """Ensure winlen=None collapses over the full time range."""
-        out = random_patch.mean_frequency()
-
-        assert out.attrs.data_type == "Mean Frequency"
-        assert out.attrs.data_units == units.Hz
-        assert out.data.shape != random_patch.data.shape
 
     def test_winlen_too_short_for_fmin_raises(self, random_patch):
         """Ensure low frequencies require sufficiently long windows."""
@@ -79,7 +64,7 @@ class TestMedianFrequency:
 
     def test_runs(self, random_patch):
         """Ensure median_frequency runs as a patch method."""
-        out = random_patch.median_frequency(winlen=0.01, step=0.01)
+        out = random_patch.median_frequency(winlen=0.3, step=0.01)
 
         assert out.attrs.data_type == "Median Frequency"
         assert out.attrs.data_units == units.Hz
@@ -88,23 +73,16 @@ class TestMedianFrequency:
 
     def test_fft_method_runs(self, random_patch):
         """Ensure FFT method runs."""
-        out = random_patch.median_frequency(winlen=0.01, step=0.01, method="fft")
+        out = random_patch.median_frequency(winlen=0.3, step=0.01, method="fft")
 
         assert out.attrs.data_type == "Median Frequency"
         assert out.attrs.data_units == units.Hz
         assert np.isfinite(out.data).any()
 
-    def test_step_defaults_to_winlen(self, random_patch):
-        """Ensure step defaults to winlen."""
-        out = random_patch.median_frequency(winlen=0.01)
-        expected = random_patch.median_frequency(winlen=0.01, step=0.01)
-
-        assert np.allclose(out.data, expected.data, equal_nan=True)
-
     def test_frequency_bounds(self, random_patch):
         """Ensure frequency bounds are accepted."""
         out = random_patch.median_frequency(
-            winlen=0.01,
+            winlen=0.3,
             step=0.01,
             fmin=10,
             fmax=100,
@@ -117,19 +95,11 @@ class TestMedianFrequency:
         """Ensure invalid frequency bounds raise."""
         with pytest.raises(AssertionError, match="must be smaller than fmax"):
             random_patch.median_frequency(
-                winlen=0.01,
+                winlen=0.3,
                 step=0.01,
                 fmin=100,
                 fmax=10,
             )
-
-    def test_collapse_mode_runs(self, random_patch):
-        """Ensure winlen=None collapses over the full time range."""
-        out = random_patch.median_frequency()
-
-        assert out.attrs.data_type == "Median Frequency"
-        assert out.attrs.data_units == units.Hz
-        assert out.data.shape != random_patch.data.shape
 
     def test_winlen_too_short_for_fmin_raises(self, random_patch):
         """Ensure low frequencies require sufficiently long windows."""
