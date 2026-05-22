@@ -80,6 +80,16 @@ class TestRolling:
         expected = vals[start :: self.step, None]
         assert np.allclose(out.data, expected)
 
+    def test_apply_with_overlap(self, range_patch):
+        """Ensure rolling supports overlap end-to-end."""
+        step = range_patch.get_coord("distance").step
+        window = self.window * step
+        overlap = (self.window - self.step) * step
+        overlap_out = range_patch.rolling(distance=window, overlap=overlap).mean()
+        step_out = range_patch.rolling(distance=window, step=self.step * step).mean()
+        assert overlap_out.shape == step_out.shape
+        assert all_close(overlap_out, step_out)
+
     def test_window_size_one(self, random_patch):
         """Ensure we can get a window size of one."""
         time_step = random_patch.get_coord("time").step

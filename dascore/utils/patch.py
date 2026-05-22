@@ -32,7 +32,7 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchCoordinateError,
 )
-from dascore.units import get_quantity
+from dascore.units import get_quantity, is_percent
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
@@ -763,6 +763,91 @@ def get_patch_window_size(
         size[axis] = samps
 
     return tuple(size)
+
+
+def get_window_axis_step(
+    patch,
+    overlap=None,
+    step=None,
+    samples=False,
+    **kwargs,
+) -> tuple[int, int, int | None]:
+    """
+    Get window size, axis, and step for a single patch dimension.
+
+    Parameters
+    ----------
+    patch
+        The patch with the dimension and coordinate.
+    overlap
+        Optional overlap between adjacent windows. Percent quantities are
+        interpreted relative to the window size.
+    step
+        Optional step between adjacent windows. Mutually exclusive with overlap.
+        Percent quantities are interpreted relative to the window size.
+    samples
+        If True, numeric window, overlap, and step values are interpreted as
+        sample counts. Quantities with explicit units keep their unit meaning.
+    **kwargs
+        Exactly one dimension name and window size.
+
+    Returns
+    -------
+    tuple
+        The window size in samples, the axis for the dimension, and the step in
+        samples. The step is None if neither step nor overlap was provided.
+    """
+
+    def _percent_to_window_samps(window, val):
+        """Convert any percentages to samples of the window."""
+        if is_per := is_percent(val):
+            mag = val.magnitude
+            if mag < 0 or mag > 100:
+                msg = f"Percentage must be between 0 and 100, not {val}"
+                raise ParameterError(msg)
+            val = int(np.round(val.magnitude / 100 * window))
+        return val, is_per
+
+    def _check_not_negative(val, name):
+        """Ensure a step or overlap value isn't negative."""
+        magnitude = val.magnitude if isinstance(val, dc.units.Quantity) else val
+        if magnitude is not None and magnitude < 0:
+            msg = f"{name} must be non-negative"
+            raise ParameterError(msg)
+
+    def quantity_to_samps(val, coord, samples=False):
+        """Convert quantity value to number of samples."""
+        # None just passes through
+        if val is None:
+            return None
+        # Specifying a quantity should overwrite samples parameter.
+        if isinstance(val, dc.units.Quantity):
+            samples = False
+        return coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
+
+    if overlap is not None and step is not None:
+        msg = "step and overlap are mutually exclusive."
+        raise ParameterError(msg)
+
+    dim, axis, win = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=False)[0]
+    coord = patch.get_coord(dim, require_evenly_sampled=True)
+    win_samp = coord.get_sample_count(win, samples=samples, enforce_lt_coord=True)
+    # Convert any percentages to win_samples
+    step, step_percent = _percent_to_window_samps(win_samp, step)
+    overlap, overlap_percent = _percent_to_window_samps(win_samp, overlap)
+    _check_not_negative(step, "step")
+    _check_not_negative(overlap, "overlap")
+    # Then convert to coordinate samples. This handles differing units and such.
+    step = quantity_to_samps(step, coord, samples=samples or step_percent)
+    overlap = quantity_to_samps(overlap, coord, samples=samples or overlap_percent)
+    # Convert overlap to step
+    if step is None and overlap is not None:
+        step = win_samp - overlap
+    if step is not None and step <= 0:
+        msg = "Window step must be greater than zero."
+        raise ParameterError(msg)
+    # Get window length/step in samples
+    return win_samp, axis, step
 
 
 def _get_data_units_from_dims(patch, dims, operator):

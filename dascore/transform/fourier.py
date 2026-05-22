@@ -30,6 +30,7 @@ from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     get_dim_axis_value,
+    get_window_axis_step,
     patch_function,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
@@ -319,7 +320,7 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     >>> # get inverse dft, transformed axis are ascertained automatically
     >>> idft = dft_time.idft()
     """
-    dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
+    dims, _steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
     func = nft.irfftn if real else nft.ifftn
     # Get new coords, fft sizes, and padding to remove.
@@ -374,7 +375,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
 @patch_function()
 def stft(
     patch: PatchType,
-    taper_window: str | ndarray | tuple[str, Any, ...] = "hann",
+    taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
     detrend: bool = False,
@@ -440,26 +441,20 @@ def stft(
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
     # Get coordinate information.
-    (dim, axis, val) = get_dim_axis_value(patch, kwargs=kwargs)[0]
+    (dim, axis, _) = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_evenly_sampled=True)
-    window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
-    step = dc.to_float(coord.step)
-    sampling_rate = 1 / abs(step)
-    # Create window and calculate hop.
+    # Get window count/step in samples
+    window_samples, _, hop = get_window_axis_step(
+        patch, step=None, overlap=overlap, samples=samples, **kwargs
+    )
+    # Default step here is the same size as window (no overlap).
+    hop = hop if hop is not None else window_samples
+    sampling_rate = 1 / abs(dc.to_float(coord.step))
+    # Create window.
     if isinstance(taper_window, ndarray):
         window = taper_window
     else:
         window = get_window(taper_window, window_samples, fftbins=False)
-    # By using a coord and enforce_lt_coord, we guarantee the overlap is lt window.
-    if overlap is not None:
-        overlap = coord[:window_samples].get_sample_count(
-            overlap,
-            samples=samples,
-            enforce_lt_coord=True,
-        )
-    else:
-        overlap = 0
-    hop = window_samples - overlap
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(
@@ -471,7 +466,8 @@ def stft(
     )
     func = stft.stft if not detrend else partial(stft.stft_detrend, detr="linear")
     # For compatibility with dft, we scale by step. See the DFT note for why.
-    new_data = func(patch.data, axis=axis) * step
+    coord_step = dc.to_float(coord.step)
+    new_data = func(patch.data, axis=axis) * coord_step
     # Get new coordinate manager
     cm = _get_stft_coords(patch, dim, axis, coord, stft, window)
     # Update attrs with metadata needed to invert stft
