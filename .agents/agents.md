@@ -12,8 +12,9 @@ This file gives AI/code agents a practical checklist for contributing safely to 
 ## Development workflow
 
 1. Work on a feature/fix branch, not `master`.
-2. Keep commits focused (one logical change per commit where possible).
-3. Use pull requests to merge to `master`.
+2. Create task worktrees under the repository root at `worktrees/{slug}`. Do not create task worktrees under `.agents/worktrees`, even if the current shell starts there.
+3. Keep commits focused (one logical change per commit where possible).
+4. Use pull requests to merge to `master`.
 
 ## Environment setup
 
