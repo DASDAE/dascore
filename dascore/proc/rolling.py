@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
 
 import dascore as dc
 from dascore.constants import samples_arg_description
@@ -15,6 +14,27 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, get_window_axis_step
 from dascore.utils.pd import rolling_df
+
+rolling_apply_description = """
+Apply a function over the specified moving window.
+
+Parameters
+----------
+function
+    The function which is applied.
+*args
+    Positional arguments passed to function.
+**kwargs
+    Keyword arguments passed to function.
+
+Examples
+--------
+>>> import numpy as np
+>>> import dascore as dc
+>>>
+>>> patch = dc.get_example_patch()
+>>> out = patch.rolling(time=100, samples=True).apply(np.percentile, 80)
+"""
 
 
 class _PatchRollerInfo(DascoreBaseModel):
@@ -31,7 +51,6 @@ class _PatchRollerInfo(DascoreBaseModel):
     axis: int
     center: bool
     roll_hist: str = ""
-    func_kwargs: dict = Field(default_factory=dict)
 
     def get_coords(self):
         """
@@ -84,14 +103,14 @@ class _NumpyPatchRoller(_PatchRollerInfo):
             padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
-    def apply(self, function):
+    @compose_docstring(apply_description=rolling_apply_description)
+    def apply(self, function, *args, **kwargs):
         """
-        Apply a function over the specified moving window.
+        {apply_description}
 
-        Parameters
-        ----------
-        function
-            The function which is applied. Must accept an axis argument.
+        Notes
+        -----
+        The provided function must accept an ``axis`` argument.
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
@@ -107,9 +126,8 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         start = self.get_start_index()
         step_slice[self.axis] = slice(start, None, self.step)
         # apply function, then pad with NaNs and roll
-        kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
+        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs).astype(np.float64)
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
@@ -179,9 +197,13 @@ class _PandasPatchRoller(_PatchRollerInfo):
         attrs = self._get_attrs_with_apply_history(name)
         return self._repack_patch(df, attrs=attrs)
 
-    def apply(self, func):
-        df = self._get_rolling().apply(func, **self.func_kwargs)
-        attrs = self._get_attrs_with_apply_history(func)
+    @compose_docstring(apply_description=rolling_apply_description)
+    def apply(self, function, *args, **kwargs):
+        """
+        {apply_description}
+        """
+        df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
+        attrs = self._get_attrs_with_apply_history(function)
         return self._repack_patch(df, attrs=attrs)
 
     def mean(self):
@@ -319,6 +341,16 @@ def rolling(
 
     patch = dc.get_example_patch()
     zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
+
+    # Additional arguments can be passed directly to apply.
+    def percentile(frame, q, axis=-1):
+        '''Compute a rolling percentile.'''
+        return np.percentile(frame, q, axis=axis)
+
+
+    percentile_patch = patch.rolling(time=100, step=2, samples=True).apply(
+        percentile, 80
+    )
     ```
 
     Examples

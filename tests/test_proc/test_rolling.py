@@ -210,6 +210,38 @@ class TestRolling:
         patch_2 = roll2.apply(np.sum)
         assert patch_2.shape == patch_1.shape
 
+    def test_numpy_apply_with_args_kwargs(self, random_patch):
+        """Ensure numpy rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        dt = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="numpy").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = random_patch.rolling(
+            time=10 * dt, step=10 * dt, engine="numpy"
+        ).apply(lambda frame, axis=None: np.percentile(frame, 80, axis=axis) + 1)
+        assert all_close(out, expected)
+
+    def test_pandas_apply_with_args_kwargs(self, random_patch):
+        """Ensure pandas rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        dt = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = random_patch.rolling(
+            time=10 * dt, step=10 * dt, engine="pandas"
+        ).apply(lambda frame: np.percentile(frame, 80) + 1)
+        assert all_close(out, expected)
+
 
 class TestNumpyVsPandasRolling:
     """Ensure numpy rolling return the same results as pandas rolling."""
