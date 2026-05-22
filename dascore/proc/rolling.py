@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
 
 import dascore as dc
 from dascore.constants import samples_arg_description
@@ -31,7 +30,6 @@ class _PatchRollerInfo(DascoreBaseModel):
     axis: int
     center: bool
     roll_hist: str = ""
-    func_kwargs: dict = Field(default_factory=dict)
 
     def get_coords(self):
         """
@@ -84,7 +82,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
             padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
-    def apply(self, function):
+    def apply(self, function, *args, **kwargs):
         """
         Apply a function over the specified moving window.
 
@@ -92,6 +90,10 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         ----------
         function
             The function which is applied. Must accept an axis argument.
+        *args
+            Positional arguments passed to function.
+        **kwargs
+            Keyword arguments passed to function.
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
@@ -107,9 +109,8 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         start = self.get_start_index()
         step_slice[self.axis] = slice(start, None, self.step)
         # apply function, then pad with NaNs and roll
-        kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
+        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs).astype(np.float64)
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
@@ -179,8 +180,8 @@ class _PandasPatchRoller(_PatchRollerInfo):
         attrs = self._get_attrs_with_apply_history(name)
         return self._repack_patch(df, attrs=attrs)
 
-    def apply(self, func):
-        df = self._get_rolling().apply(func, **self.func_kwargs)
+    def apply(self, func, *args, **kwargs):
+        df = self._get_rolling().apply(func, args=args, kwargs=kwargs)
         attrs = self._get_attrs_with_apply_history(func)
         return self._repack_patch(df, attrs=attrs)
 
@@ -312,6 +313,16 @@ def rolling(
 
     patch = dc.get_example_patch()
     zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
+
+    # Additional arguments can be passed directly to apply.
+    def percentile(frame, q, axis=-1):
+        '''Compute a rolling percentile.'''
+        return np.percentile(frame, q, axis=axis)
+
+
+    percentile_patch = patch.rolling(time=100, step=2, samples=True).apply(
+        percentile, 80
+    )
     ```
 
     Examples
