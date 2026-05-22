@@ -1,8 +1,4 @@
-"""
-Spyder Editor
-
-This is a temporary script file.
-"""
+"""Rolling mean and median frequency transforms for DASCore patches"""
 
 from __future__ import annotations
 
@@ -148,8 +144,6 @@ def _fft_psd(xx, fs=1.0):
     pxx : ndarray
         One-sided power spectral density
     """
-    import numpy as np
-
     n = xx.shape[-1]
 
     # remove mean along time axis (like detrend='constant')
@@ -176,16 +170,17 @@ def _fft_psd(xx, fs=1.0):
 # %% define a wrapper function to call
 def _get_psd_in_window(data, method="WELCH", dt=1, fmin=None, fmax=None, nperseg=None):
     allowed_methods = ["WELCH", "FFT"]
-    assert (
-        method.upper() in allowed_methods
-    ), f"Invalid method: '{method}'. Must be one of {allowed_methods}"
+    if method.upper() not in allowed_methods:
+        raise ValueError(
+            f"Invalid method: '{method}'. Must be one of {allowed_methods}"
+        )
 
     if fmin is not None and fmax is not None:
-        assert fmin < fmax, f"fmin ({fmin}) must be smaller than fmax ({fmax})"
+        if fmin >= fmax:
+            raise ValueError(f"fmin ({fmin}) must be smaller than fmax ({fmax})")
 
-    # if data.shape[-1] < nperseg:
-    #    nperseg = data.shape[1]
-    nperseg = data.shape[-1]
+    if nperseg is None:
+        nperseg = data.shape[-1]
     win = get_window("hann", nperseg)
 
     if method.upper() == "WELCH":
@@ -215,7 +210,7 @@ def mean_frequency(
     fmin: float | None = None,
     fmax: float | None = None,
     method: str = "welch",
-    nperseg: float = 256,
+    nperseg: int = 256,
 ) -> PatchType:
     """
     Compute rolling mean-frequency along a time axis. This represents "center of
@@ -324,7 +319,7 @@ def median_frequency(
     step: float | None = None,
     fmin: float | None = None,
     fmax: float | None = None,
-    nperseg: float = 256,
+    nperseg: int = 256,
     method: str = "welch",
 ) -> PatchType:
     """
@@ -382,7 +377,7 @@ def median_frequency(
         dt = dt / np.timedelta64(1, "s")
 
     if step is None:
-        step = winlen
+        step = dt
 
     def _get_median_freq_in_window(
         data, axis=None, dt=dt, method=method, fmin=fmin, fmax=fmax, nperseg=nperseg
