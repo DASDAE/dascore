@@ -7,7 +7,7 @@ import pytest
 from scipy.signal import get_window, welch
 
 from dascore import units
-from dascore.transform.mean_median_frequency import _fft_psd, _welch
+from dascore.transform.mean_median_frequency import _fft_psd, _get_psd_in_window, _welch
 
 
 class TestWelch:
@@ -161,6 +161,17 @@ class TestMeanFrequency:
         assert out.get_axis("distance") == patch.get_axis("distance")
         assert out.dims == patch.dims
 
+    def test_mean_frequency_step_defaults_to_time_step(self, random_patch):
+        """Cover step=None branch in mean_frequency."""
+        dt = random_patch.get_coord("time").step
+        if isinstance(dt, np.timedelta64):
+            dt = dt / np.timedelta64(1, "s")
+
+        out = random_patch.mean_frequency(winlen=0.01, step=None, method="fft")
+        expected = random_patch.mean_frequency(winlen=0.01, step=dt, method="fft")
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+
 
 class TestMedianFrequency:
     """Tests for median_frequency patch function."""
@@ -216,6 +227,17 @@ class TestMedianFrequency:
         assert out.get_axis("distance") == patch.get_axis("distance")
         assert out.dims == patch.dims
 
+    def test_median_frequency_step_defaults_to_time_step(self, random_patch):
+        """Cover step=None branch in median_frequency."""
+        dt = random_patch.get_coord("time").step
+        if isinstance(dt, np.timedelta64):
+            dt = dt / np.timedelta64(1, "s")
+
+        out = random_patch.median_frequency(winlen=0.01, step=None, method="fft")
+        expected = random_patch.median_frequency(winlen=0.01, step=dt, method="fft")
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+
 
 class TestFFTPSD:
     """Tests for simple FFT PSD helper."""
@@ -241,3 +263,25 @@ class TestFFTPSD:
 
         # interior bins doubled
         assert np.allclose(pxx[..., 1:-1], raw[..., 1:-1] * 2)
+
+    def test_fft_psd_odd_length_doubles_all_non_dc_bins(self):
+        """Cover the odd-length branch in _fft_psd."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(2, 3, 127))
+        fs = 100.0
+
+        _, pxx = _fft_psd(data, fs=fs)
+
+        n = data.shape[-1]
+        demeaned = data - np.mean(data, axis=-1, keepdims=True)
+        raw = np.abs(np.fft.rfft(demeaned, axis=-1)) ** 2 / (fs * n)
+
+        assert np.allclose(pxx[..., 0], raw[..., 0])
+        assert np.allclose(pxx[..., 1:], raw[..., 1:] * 2.0)
+
+    def test_invalid_frequency_bounds_raise(self):
+        """Cover fmin >= fmax validation in _get_psd_in_window."""
+        data = np.ones((2, 3, 128))
+
+        with pytest.raises(ValueError, match=r"must be smaller than fmax"):
+            _get_psd_in_window(data, method="fft", dt=0.01, fmin=20, fmax=10)
