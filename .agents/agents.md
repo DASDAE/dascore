@@ -2,7 +2,6 @@
 
 This file gives AI/code agents a practical checklist for contributing safely to DASCore.
 
-Keep Markdown prose unwrapped. Do not hard-wrap paragraphs in `.md` files unless a specific format requires it.
 
 ## Scope and priorities
 
@@ -18,9 +17,7 @@ Keep Markdown prose unwrapped. Do not hard-wrap paragraphs in `.md` files unless
 
 ## Environment setup
 
-Follow `docs/contributing/dev_install.qmd`.
-
-The default Python environment for this repo uses the repository name as the environment name. For this repo, activate it with `mamba activate dascore`. If that environment is unavailable, stop and report it clearly instead of guessing another environment.
+Use an environment named after the current worktree slug. If it is unavailable, create it with mamba or uv before running checks. This keeps editable installs isolated between worktrees.
 
 Typical setup:
 
@@ -33,7 +30,6 @@ pre-commit install -f
 ## Linting and formatting
 
 - Run pre-commit hooks before finalizing changes.
-- Project lint/format is driven by pre-commit and Ruff config in `pyproject.toml`.
 
 ```bash
 pre-commit run --all
@@ -42,8 +38,6 @@ pre-commit run --all
 Tip: running twice can apply auto-fixes on first pass.
 
 ## Testing requirements
-
-Follow `docs/contributing/testing.qmd`.
 
 Run targeted tests for changed behavior, then broader tests as needed:
 
@@ -63,7 +57,6 @@ For doctests:
 ```bash
 pytest dascore --doctest-modules
 ```
-
 ## Test authoring conventions
 
 - Put tests under `tests/` mirroring package structure.
@@ -75,15 +68,11 @@ pytest dascore --doctest-modules
 
 ## Code conventions
 
-
-- Prefer `pathlib.Path` over raw path strings (except performance-sensitive bulk file workflows).
-- Use snake_case dataframe column names when possible.
-- Use `df["col"]` (getitem), not `df.col` (getattr).
+- For dataframes, use snake_case column names and access via getitem, not getattr.
 - Prefer non-inplace dataframe operations unless inplace is explicitly required.
 - Add type hints for public functions/methods.
-- Use NumPy-style docstrings for public APIs.
-- Add a short explanatory comment for private helpers when intent is not obvious.
-- Keep comments meaningful; do not restate obvious code.
+- Use NumPy-style docstrings for public APIs. Strive for short, informative example sections.
+- Add a short explanatory docstring for private objects.
 
 ## Documentation changes
 
@@ -91,7 +80,8 @@ If behavior or API changes, update docs in the same PR.
 
 - Documentation source lives in `docs/` (`.qmd` files).
 - API docs are generated from docstrings.
-- Build docs workflow (see `docs/contributing/documentation.qmd`):
+- Build docs workflow:
+- Don't add newlines to markdown prose; let editors wrap.
 
 ```bash
 python scripts/build_api_docs.py
