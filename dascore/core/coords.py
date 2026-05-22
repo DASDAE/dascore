@@ -795,7 +795,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
-                f"value of {value} with samples={samples }results in a window "
+                f"value of {value} with samples={samples } results in a window "
                 f"larger than coordinate length of {len(self)}."
             )
             raise ParameterError(msg)

@@ -13,7 +13,7 @@ from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
-from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.patch import get_dim_axis_value, get_window_axis_step
 from dascore.utils.pd import rolling_df
 
 
@@ -213,6 +213,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
 def rolling(
     patch: dc.Patch,
     step=None,
+    overlap=None,
     center=False,
     engine: Literal["numpy", "pandas", None] = None,
     samples=False,
@@ -230,7 +231,13 @@ def rolling(
     step
         The window is evaluated at every step result, equivalent to slicing
         at every step. If the step argument is not None, the result will
-        have a different shape than the input. Default None.
+        have a different shape than the input. Mutually exclusive with
+        overlap. Default None.
+    overlap
+        The overlap between windows. Can be a number (assumed to be in units of
+        the rolling dimension if `samples`==False), a percent, or None. If
+        provided, step is calculated as `window - overlap`. Percent overlap is
+        always interpreted relative to the window length.
     center
         If False, set the window labels as the right edge of the window index.
         If True, set the window labels as the center of the window index. Default False.
@@ -337,20 +344,18 @@ def rolling(
             return _PandasPatchRoller
         return _NumpyPatchRoller
 
-    # get window sizes in samples
     dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
-    coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)
-    step = (
-        1
-        if step is None
-        else coord.get_sample_count(step, samples=samples, enforce_lt_coord=True)
-    )
+    window, _, step = get_window_axis_step(patch, overlap, step, samples, **kwargs)
+    # Handle default when no overlap/step specified and ensure window size
+    step = 1 if step is None else step
     if window == 0 or step == 0:
         msg = "Window or step size can't be zero. Use any positive values."
         raise ParameterError(msg)
     cls = _get_engine(step, engine, patch)
+    roll_hist = (
+        f"rolling({dim}={value}, step={step}, overlap={overlap}, "
+        f"center={center}, engine={engine})"
+    )
     out = cls(
         patch=patch,
         window=window,
