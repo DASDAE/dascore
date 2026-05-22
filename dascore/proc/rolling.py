@@ -213,10 +213,10 @@ class _PandasPatchRoller(_PatchRollerInfo):
 def rolling(
     patch: dc.Patch,
     step=None,
-    overlap=None,
     center=False,
     engine: Literal["numpy", "pandas", None] = None,
     samples=False,
+    overlap=None,
     **kwargs,
 ) -> _NumpyPatchRoller | _PandasPatchRoller:
     """
@@ -233,11 +233,6 @@ def rolling(
         at every step. If the step argument is not None, the result will
         have a different shape than the input. Mutually exclusive with
         overlap. Default None.
-    overlap
-        The overlap between windows. Can be a number (assumed to be in units of
-        the rolling dimension if `samples`==False), a percent, or None. If
-        provided, step is calculated as `window - overlap`. Percent overlap is
-        always interpreted relative to the window length.
     center
         If False, set the window labels as the right edge of the window index.
         If True, set the window labels as the center of the window index. Default False.
@@ -251,6 +246,11 @@ def rolling(
         is probably better.
     samples
         {sample_explination}
+    overlap
+        The overlap between windows. Can be a number (assumed to be in units of
+        the rolling dimension if `samples`==False), a percent, or None. If
+        provided, step is calculated as `window - overlap`. Percent overlap is
+        always interpreted relative to the window length.
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of
