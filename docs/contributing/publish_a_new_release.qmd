@@ -2,16 +2,37 @@
 title: "Publish a new release"
 ---
 
-On this page, we provide step-by-step guidance on how to publish a new release for DASCore.
+This page describes the maintainer workflow for publishing a DASCore release. DASCore's package version is derived from git tags, so the release tag is the source of truth and no version file needs to be edited by hand.
 
-## Step 1: Draft a new release and publish
+## Before releasing
 
-On DASCore GitHub page, you should go to [Releases](https://github.com/DASDAE/dascore/releases), draft a new release. On the draft, choose a new tag and a release title (e.g. 0.0.14). Finally, generate release notes and publish the release.
+Make sure the docs build. Because the doc-build can take a bit of time, the doc-build is not automatically tested on each PR. You can test this using the `documentation` tag on a new PR, or run it locally following the [doc-build instructions](documentation.qmd#generating-documentation).
 
-## Step 2: Check the release status
+Next, from the github interface navigate to DASCore's [release page](https://github.com/DASDAE/dascore/releases) and click on [draft new release](https://github.com/DASDAE/dascore/releases/new). For the tag, note the latest release, then choose the next version tag using DASCore's versioning policy in the [general guidelines](general_guidelines.qmd) (eg if the latest version is `v0.1.20` then type `v0.1.21` for a patch/bug fix release and `v0.2.0` for a larger feature release).
 
-On [Actions](https://github.com/DASDAE/dascore/actions), check the release status for both "PublishPackage" and "BuildDeployStableDocs". Also, make sure [PyPI](https://pypi.org/project/dascore/) is updated.
+## Draft the release notes
 
-## Step 3: Commit required changes for Conda
+Compare the merged changes since the previous release and group user-facing changes into a short changelog. The changelog should usually include these sections:
 
-For [conda](https://github.com/conda-forge/dascore-feedstock), you need to wait a few hours to get a pull request, and then verify/edit the dependencies, extras, etc. on [meta.yaml](https://github.com/conda-forge/dascore-feedstock/blob/main/recipe/meta.yaml) at /dascore-feedstock/recipe directory based on [pyproject.toml](https://github.com/DASDAE/dascore/blob/master/pyproject.toml) at /dascore directory. Therefore, if they do not match, you need to clone the dascore-feedstock branch (the branch that the bot wants to merge into the master), add the bot's fork as a remote (`git remote add conda_bot git@github.com:regro-cf-autotick-bot/dascore-feedstock`), fetch the new branch (`git fetch conda_bot`), and then check the bot's created branch out. Then, you modify the branch and push it back. After merging the pull request, you can verify the latest DASCore version at [conda-forge](https://anaconda.org/conda-forge/dascore).
+- New Features
+- Bug Fixes
+- Breaking Changes
+
+The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes and agent skill called "draft release" so a coding agent of your choice can help you do this. In the changelog, prefer concise descriptions of behavior and API changes over internal implementation details. Include pull request links when they help readers find more context.
+
+Then click 'Publish Release'. This will kick off the doc-build and publishing task automatically, as well as publish the tagged source code to PyPI.
+
+## Verify package and docs publishing
+
+After publishing, open [GitHub Actions](https://github.com/DASDAE/dascore/actions) and confirm the release workflows complete successfully.
+
+- `PublishPackage` builds the distributions and uploads DASCore to [PyPI](https://pypi.org/project/dascore/).
+- `BuildDeployStableDocs` builds the stable documentation, deploys it to GitHub Pages, and uploads `docs.zip` to the GitHub release. This may take 30 minutes or more.
+
+Once the workflows finish, check that PyPI shows the new version and that the stable documentation site reflects the release. If a workflow fails, fix the underlying issue on `master`, publish a new patch release if the tag has already been distributed, and avoid moving or replacing a public release tag.
+
+## Conda-forge
+
+Unfortunately, simply creating the tag will not publish to conda-forge automatically. To do this, first wait until the new package appears on [DASCore's PyPI page](https://pypi.org/project/dascore/). Next, navigate to [DASCore's feedstock](https://github.com/conda-forge/dascore-feedstock) and open a new issue. Click "bot commands" and create an issue with the title "@conda-forge-admin, please update version". The conda-forge bot will then see there is a new release on PyPI and open a PR. Alternatively, the bot will automatically see the new version and open a new PR within a day or so.
+
+When this PR opens, examine the requirements and dependencies listed, and make sure they have not gotten out of sync with DASCore's current pyproject.toml. In general, conda-forge should lean more towards including dependencies that are optional, although some have been abandoned if they are very slow at making conda releases. Once this is correct, merge the pull request. After the feedstock PR is merged, the new version should be published to conda-forge in an hour or so. Verify the new package appears on [conda-forge](https://anaconda.org/conda-forge/dascore).
