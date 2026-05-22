@@ -18,7 +18,7 @@ Compare the merged changes since the previous release and group user-facing chan
 - Bug Fixes
 - Breaking Changes
 
-The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes and agent skill called "draft release" so a coding agent of your choice can help you do this. In the changelog, prefer concise descriptions of behavior and API changes over internal implementation details. Include pull request links when they help readers find more context.
+The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes an agent skill called "draft release" so a coding agent of your choice can help you do this. In the changelog, prefer concise descriptions of behavior and API changes over internal implementation details. Include pull request links when they help readers find more context.
 
 Then click 'Publish Release'. This will kick off the doc-build and publishing task automatically, as well as publish the tagged source code to PyPI.
 
