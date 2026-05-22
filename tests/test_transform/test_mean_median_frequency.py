@@ -141,7 +141,7 @@ class TestMeanFrequency:
 
     def test_invalid_frequency_bounds_raise(self, random_patch):
         """Ensure invalid frequency bounds raise."""
-        with pytest.raises(AssertionError, match="must be smaller than fmax"):
+        with pytest.raises(ValueError, match="must be smaller than fmax"):
             random_patch.mean_frequency(
                 winlen=0.3,
                 step=0.01,
@@ -196,7 +196,7 @@ class TestMedianFrequency:
 
     def test_invalid_frequency_bounds_raise(self, random_patch):
         """Ensure invalid frequency bounds raise."""
-        with pytest.raises(AssertionError, match="must be smaller than fmax"):
+        with pytest.raises(ValueError, match="must be smaller than fmax"):
             random_patch.median_frequency(
                 winlen=0.3,
                 step=0.01,
