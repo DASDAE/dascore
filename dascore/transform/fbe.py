@@ -20,13 +20,13 @@ def fbe(
     **kwargs,
 ) -> PatchType:
     """
-    Compute the rolling Root-Mean-Squared (RMS) of the Energy in a
-    Frequency Band (i.e  the Frequency-Band Energy, or FBE).
-    This is commonly called 'the waterfall plot' in DAS-processing.
+    Compute the rolling Frequency Band Energy in a window.
+    This is the Root-Mean-Squared (RMS) of the Energy in a Frequency Band (the FBE),
+    and commonly called 'the waterfall plot' in DAS-processing.
     This implementation is a wrapper to DAScore functionality:
         1) Apply a 'pass_filter' to the patch
-        2) Apply rolling-funtction of window length "time"
-        3) Calculate RMS value for each channel
+        2) Apply rolling-funtction of a window along a coordinate
+        3) Calculate RMS value
 
 
     Parameters

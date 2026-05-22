@@ -3,41 +3,68 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 
 class TestStaLta:
     """Tests for short-term average / long-term average ratio."""
 
-    def test_runs(self, random_patch):
-        """Ensure stalta runs and returns a patch with the same shape."""
-        out = random_patch.stalta(sta=0.01, lta=0.05)
+    def test_runs_time_dimension(self, random_patch):
+        """Ensure stalta runs along the time dimension."""
+        out = random_patch.stalta(time=(0.01, 0.05))
 
-        assert out.data.shape == random_patch.data.shape
         assert out.dims == random_patch.dims
+        assert out.data.shape == random_patch.data.shape
         assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_units is None
 
-    def test_non_time_dim(self, random_patch):
-        """Ensure dim controls the rolling dimension."""
-        out = random_patch.stalta(sta=1, lta=5, dim="distance")
-        expected = (
-            random_patch.abs().rolling(distance=1).mean()
-            / random_patch.abs().rolling(distance=5).mean()
-        )
+    def test_runs_distance_dimension(self, random_patch):
+        """Ensure stalta runs along the distance dimension."""
+        out = random_patch.stalta(distance=(5, 25))
+
+        assert out.dims == random_patch.dims
+        assert out.data.shape == random_patch.data.shape
+        assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_units is None
+
+    def test_matches_expected_time_ratio(self, random_patch):
+        """Ensure stalta returns rolling STA divided by rolling LTA."""
+        out = random_patch.stalta(time=(0.01, 0.05))
+
+        sta = random_patch.rolling(time=0.01).mean()
+        lta = random_patch.rolling(time=0.05).mean()
+        expected = sta / lta
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+
+    def test_matches_expected_distance_ratio(self, random_patch):
+        """Ensure stalta uses the requested dimension for rolling windows."""
+        out = random_patch.stalta(distance=(5, 25))
+
+        sta = random_patch.rolling(distance=5).mean()
+        lta = random_patch.rolling(distance=25).mean()
+        expected = sta / lta
 
         assert np.allclose(out.data, expected.data, equal_nan=True)
 
-    def test_default_sta_and_lta(self, random_patch):
-        """Ensure STA and LTA defaults are derived from coordinate step."""
-        step = random_patch.get_coord("time").step
+    def test_attrs_are_set(self, random_patch):
+        """Ensure output metadata are set."""
+        out = random_patch.stalta(time=(0.01, 0.05))
 
-        out = random_patch.stalta(sta=None, lta=None)
+        assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_units is None
 
-        sta = 20 * step
-        lta = 5 * sta
+    def test_missing_dimension_kwargs_raise(self, random_patch):
+        """Ensure a dimension/window kwarg is required."""
+        with pytest.raises(ValueError):
+            random_patch.stalta()
 
-        expected = (
-            random_patch.abs().rolling(time=sta).mean()
-            / random_patch.abs().rolling(time=lta).mean()
-        )
+    def test_multiple_dimension_kwargs_raise(self, random_patch):
+        """Ensure only one dimension/window kwarg is accepted."""
+        with pytest.raises(ValueError):
+            random_patch.stalta(time=(0.01, 0.05), distance=(5, 25))
 
-        assert np.allclose(out.data, expected.data, equal_nan=True)
+    def test_bad_window_tuple_raises(self, random_patch):
+        """Ensure invalid window kwargs are rejected."""
+        with pytest.raises(ValueError):
+            random_patch.stalta(time=(0.01, 0.05, 0.1))
