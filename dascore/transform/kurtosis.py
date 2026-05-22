@@ -7,8 +7,107 @@ from __future__ import annotations
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.utils.jit import maybe_numba_jit
 from dascore.utils.patch import patch_function
-from dascore.utils.time import to_float
+
+
+def _validate_window(winlen: float, step: float) -> int:
+    """Convert window length in seconds to samples and validate."""
+    if winlen <= 0:
+        raise ValueError("winlen must be positive.")
+    nwin = int(round(winlen / step))
+    if nwin < 2:
+        raise ValueError("winlen is too small for the sampling interval.")
+    return nwin
+
+
+@maybe_numba_jit
+def _moving_sum(x: np.ndarray, nwin: int):
+    """Moving sum along axis 0 using clipped centered windows."""
+    npts = x.shape[0]
+    left = nwin // 2
+    right = nwin - left
+
+    out = np.empty_like(x, dtype=np.float64)
+    counts = np.empty(npts, dtype=np.float64)
+
+    for i in range(npts):
+        start = max(i - left, 0)
+        stop = min(i + right, npts)
+        counts[i] = stop - start
+
+        for j in range(x.shape[1]):
+            out[i, j] = np.sum(x[start:stop, j])
+
+    return out, counts
+
+
+@maybe_numba_jit
+def _windowed_kurtosis(data: np.ndarray, nwin: int) -> np.ndarray:
+    """Compute Pearson kurtosis in moving windows along axis 0."""
+    s1, counts = _moving_sum(data, nwin)
+    s2, _ = _moving_sum(data**2, nwin)
+    s3, _ = _moving_sum(data**3, nwin)
+    s4, _ = _moving_sum(data**4, nwin)
+
+    out = np.empty_like(data, dtype=np.float64)
+
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            count = counts[i]
+
+            m1 = s1[i, j] / count
+            m2 = s2[i, j] / count
+            m3 = s3[i, j] / count
+            m4 = s4[i, j] / count
+
+            mu2 = m2 - m1**2
+            mu4 = m4 - 4 * m1 * m3 + 6 * m1**2 * m2 - 3 * m1**4
+
+            if mu2 > 0:
+                out[i, j] = mu4 / mu2**2
+            else:
+                out[i, j] = np.nan
+
+    return out
+
+
+@maybe_numba_jit
+def _recursive_kurtosis(
+    data: np.ndarray, step: float, winlen: float, varx: np.ndarray
+) -> np.ndarray:
+    """Recursive pseudo-kurtosis after Langet et al.-style formulation."""
+    c = 1.0 - step / winlen
+    npts = data.shape[0]
+    nchans = data.shape[1]
+
+    out = np.empty_like(data, dtype=np.float64)
+    mean_value = np.zeros(nchans, dtype=np.float64)
+    var_value = np.zeros(nchans, dtype=np.float64)
+    kurt_value = np.zeros(nchans, dtype=np.float64)
+
+    for i in range(npts):
+        for j in range(nchans):
+            xi = data[i, j]
+
+            mean_value[j] = c * mean_value[j] + (1.0 - c) * xi
+            var_value[j] = c * var_value[j] + (1.0 - c) * (xi - mean_value[j]) ** 2
+
+            if var_value[j] > varx[j]:
+                norm_factor = var_value[j] ** 2
+            else:
+                norm_factor = varx[j] ** 2
+
+            if norm_factor > 0:
+                kurt_value[j] = (
+                    c * kurt_value[j]
+                    + (1.0 - c) * (xi - mean_value[j]) ** 4 / norm_factor
+                )
+            else:
+                kurt_value[j] = np.nan
+            out[i, j] = kurt_value[j]
+
+    return out
 
 
 @patch_function()
@@ -19,10 +118,7 @@ def kurtosis(
     recursive: bool = True,
 ) -> PatchType:
     """
-    Compute kurtosis along a patch dimension. Note that for best results
-    normalize data, or convert to nano-strain(rate)
-
-
+    Compute kurtosis along a patch dimension.
     Background seismic noise is approximately Gaussian. A seismic arrival
     (especially a P-wave onset) produces a transient, impulsive signal with
     a sharply peaked amplitude distribution. Kurtosis — the normalized 4th
@@ -40,15 +136,15 @@ def kurtosis(
     patch
         Input DASCore patch.
     winlen
-        Window length in seconds.
+        Window length used to calculate the kurtosis in.
     dim
         Dimension along which to compute kurtosis. Defaults to ``"time"``.
     recursive
         If True, use recursive pseudo-kurtosis: Instead of computing kurtosis
         in a sliding window (computationally expensive for continuous data),
-        the @langet2014 propose a recursive formulation. This acts like an
-        exponentially weighted moving estimator, so the algorithm updates
-        continuously without storing long windows of data.
+        @langet2014 propose a recursive formulation. This acts like an
+        exponentially weighted moving estimator, so the algorithm updates continuously
+        without storing long windows of data.
         If False, the common kurtosis calculation is used
 
     Returns
@@ -65,7 +161,6 @@ def kurtosis(
     >>>
     >>> k = p.kurtosis(winlen = 0.002,dim = 'time')
     >>> ax = k.viz.waterfall(cmap = 'inferno')
-
 
     2) To better understand how kutosis works, we replace the data with
     normal-distributed random data. We then amplify a block of those
@@ -109,126 +204,31 @@ def kurtosis(
     >>> _ = axs[1,0].set_xlabel('Amplitude')
     >>> _ = axs[1,0].set_ylabel('Probability of occurrence')
     """
-
-    def _validate_window(winlen: float, dt: float) -> int:
-        """Convert window length in seconds to samples and validate."""
-        if winlen <= 0:
-            raise ValueError("winlen must be positive.")
-
-        nwin = int(round(winlen / dt))
-        if nwin < 2:
-            raise ValueError("winlen is too small for the sampling interval.")
-
-        return nwin
-
-    def _moving_sum(x: np.ndarray, nwin: int) -> np.ndarray:
-        """
-        Moving sum along axis 0 using cumulative sums.
-
-        Returns sums over centered windows with clipped boundaries, matching the
-        original script's edge behavior approximately.
-        """
-        npts = x.shape[0]
-        left = nwin // 2
-        right = nwin - left
-
-        starts = np.arange(npts) - left
-        stops = np.arange(npts) + right
-
-        starts = np.clip(starts, 0, npts)
-        stops = np.clip(stops, 0, npts)
-
-        csum = np.cumsum(x, axis=0)
-        csum = np.concatenate(
-            [np.zeros((1, *x.shape[1:]), dtype=x.dtype), csum], axis=0
-        )
-
-        return csum[stops, ...] - csum[starts, ...], (stops - starts)
-
-    def _windowed_kurtosis(data: np.ndarray, nwin: int) -> np.ndarray:
-        """
-        Compute Pearson kurtosis in moving windows along axis 0.
-
-        Uses raw moments from cumulative sums for speed.
-        """
-        x1 = data
-        x2 = data**2
-        x3 = data**3
-        x4 = data**4
-
-        s1, counts = _moving_sum(x1, nwin)
-        s2, _ = _moving_sum(x2, nwin)
-        s3, _ = _moving_sum(x3, nwin)
-        s4, _ = _moving_sum(x4, nwin)
-
-        counts = counts.reshape((-1,) + (1,) * (data.ndim - 1))
-
-        m1 = s1 / counts
-        m2 = s2 / counts
-        m3 = s3 / counts
-        m4 = s4 / counts
-
-        # Central moments
-        mu2 = m2 - m1**2
-        mu4 = m4 - 4 * m1 * m3 + 6 * (m1**2) * m2 - 3 * m1**4
-
-        out = np.divide(
-            mu4,
-            mu2**2,
-            out=np.full_like(mu4, np.nan, dtype=float),
-            where=mu2 > 0,
-        )
-        return out
-
-    def _recursive_kurtosis(data: np.ndarray, dt: float, winlen: float) -> np.ndarray:
-        """
-        Recursive pseudo-kurtosis after Langet et al.-style formulation.
-
-        """
-        c = 1.0 - dt / winlen
-
-        # https://amaggi.github.io/waveloc/_modules/filters.html#rec_kurtosis_old
-        npts = data.shape[0]
-        out = np.empty_like(data, dtype=float)
-
-        # Per-channel initialization
-        varx = np.std(data, axis=0) ** 2  # the version on Maggi uses the std not var
-        mean_value = np.zeros(data.shape[1:], dtype=float)
-        var_value = np.zeros(data.shape[1:], dtype=float)
-        kurt_value = np.zeros(data.shape[1:], dtype=float)
-
-        varx2 = varx**2
-        for i in range(npts):
-            xi = data[i, ...]
-
-            mean_value = c * mean_value + (1.0 - c) * xi
-            var_value = c * var_value + (1.0 - c) * (xi - mean_value) ** 2
-
-            norm_factor = np.where(var_value > varx, var_value**2, varx2)
-
-            kurt_value = (
-                c * kurt_value + (1.0 - c) * (xi - mean_value) ** 4 / norm_factor
-            )
-            out[i, ...] = kurt_value
-
-        return out
-
     orig_dims = patch.dims
     patch_t = patch.transpose(dim, ...)
+
     data = np.asarray(patch_t.data, dtype=float)
+    orig_shape = data.shape
 
-    coord = patch_t.get_coord(dim)
-    dt = to_float(coord.step)
+    data_2d = data.reshape(orig_shape[0], -1)
 
-    nwin = _validate_window(winlen, dt)
+    step = patch_t.get_coord(dim).step
+
+    if isinstance(step, np.timedelta64):
+        step = step / np.timedelta64(1, "s")
+
+    nwin = _validate_window(winlen, step)
+
     if recursive:
-        out = _recursive_kurtosis(data, dt=dt, winlen=winlen)
+        varx = np.var(data_2d, axis=0)
+        out = _recursive_kurtosis(data_2d, step=step, winlen=winlen, varx=varx)
     else:
-        out = _windowed_kurtosis(data, nwin=nwin)
+        out = _windowed_kurtosis(data_2d, nwin=nwin)
 
-    out_patch = (
+    out = out.reshape(orig_shape)
+
+    return (
         patch_t.new(data=out)
         .transpose(*orig_dims)
-        .update(attrs={"data_type": "Kurtosis", "data_units": None})
+        .update(attrs={"data_type": "Kurtosis", "data_units": ""})
     )
-    return out_patch
