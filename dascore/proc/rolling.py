@@ -15,6 +15,27 @@ from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.pd import rolling_df
 
+rolling_apply_description = """
+Apply a function over the specified moving window.
+
+Parameters
+----------
+function
+    The function which is applied.
+*args
+    Positional arguments passed to function.
+**kwargs
+    Keyword arguments passed to function.
+
+Examples
+--------
+>>> import numpy as np
+>>> import dascore as dc
+>>>
+>>> patch = dc.get_example_patch()
+>>> out = patch.rolling(time=100, samples=True).apply(np.percentile, 80)
+"""
+
 
 class _PatchRollerInfo(DascoreBaseModel):
     """
@@ -82,18 +103,14 @@ class _NumpyPatchRoller(_PatchRollerInfo):
             padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
+    @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
         """
-        Apply a function over the specified moving window.
+        {apply_description}
 
-        Parameters
-        ----------
-        function
-            The function which is applied. Must accept an axis argument.
-        *args
-            Positional arguments passed to function.
-        **kwargs
-            Keyword arguments passed to function.
+        Notes
+        -----
+        The provided function must accept an ``axis`` argument.
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
@@ -180,9 +197,13 @@ class _PandasPatchRoller(_PatchRollerInfo):
         attrs = self._get_attrs_with_apply_history(name)
         return self._repack_patch(df, attrs=attrs)
 
-    def apply(self, func, *args, **kwargs):
-        df = self._get_rolling().apply(func, args=args, kwargs=kwargs)
-        attrs = self._get_attrs_with_apply_history(func)
+    @compose_docstring(apply_description=rolling_apply_description)
+    def apply(self, function, *args, **kwargs):
+        """
+        {apply_description}
+        """
+        df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
+        attrs = self._get_attrs_with_apply_history(function)
         return self._repack_patch(df, attrs=attrs)
 
     def mean(self):
