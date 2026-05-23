@@ -34,7 +34,7 @@ class TestKurtosisHelpers:
         """Ensure moving sum uses clipped centered windows."""
         data = np.arange(5, dtype=float).reshape(5, 1)
 
-        out, counts = _moving_sum(data, nwin=3)
+        out, counts = _moving_sum.func(data, nwin=3)
 
         assert np.allclose(out[:, 0], [1, 3, 6, 9, 7])
         assert np.allclose(counts, [2, 3, 3, 3, 2])
@@ -43,9 +43,19 @@ class TestKurtosisHelpers:
         """Ensure zero-variance data returns NaNs."""
         data = np.ones((10, 3), dtype=float)
 
-        out = _windowed_kurtosis(data, nwin=3)
+        out = _windowed_kurtosis.func(data, nwin=3)
 
         assert np.isnan(out).all()
+
+    def test_windowed_kurtosis_non_constant_data(self):
+        """Ensure positive-variance windows return finite values."""
+        rng = np.random.default_rng(42)
+        data = rng.normal(size=(10, 3))
+
+        out = _windowed_kurtosis.func(data, nwin=3)
+
+        assert out.shape == data.shape
+        assert np.isfinite(out).any()
 
     def test_recursive_kurtosis_preserves_shape(self):
         """Ensure recursive helper preserves input shape."""
@@ -53,9 +63,22 @@ class TestKurtosisHelpers:
         data = rng.normal(size=(20, 3))
         varx = np.var(data, axis=0)
 
-        out = _recursive_kurtosis(data, step=0.01, winlen=0.05, varx=varx)
+        out = _recursive_kurtosis.func(data, step=0.01, winlen=0.05, varx=varx)
 
         assert out.shape == data.shape
+
+    def test_recursive_kurtosis_constant_data_returns_nan(self):
+        """Ensure recursive helper handles zero-variance data."""
+        data = np.zeros((20, 3), dtype=float)
+
+        out = _recursive_kurtosis.func(
+            data,
+            step=0.01,
+            winlen=0.05,
+            varx=np.zeros(data.shape[1]),
+        )
+
+        assert np.isnan(out).all()
 
 
 class TestKurtosis:
