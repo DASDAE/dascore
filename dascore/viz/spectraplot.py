@@ -17,7 +17,7 @@ from dascore.utils.plotting import _get_dim_label
 def spectraplot(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap="turbo",
+    cmap=None,
     scale: float | Sequence[float] | None = (0.5, 1),
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "bilinear",
@@ -65,6 +65,7 @@ def spectraplot(
         getattr(ax, f"set_{x}label")(label)
 
         if log:
+            # prevent changes in axis limits
             lim = list(getattr(ax, f"get_{x}lim")())
             lim[0] = patch.get_coord(dim).step
             getattr(ax, f"set_{x}scale")("log")
@@ -72,8 +73,6 @@ def spectraplot(
 
             # Make ticks human-readable
             formatter = ticker.FuncFormatter(lambda tick, _: f"{tick:g}")
-            # formatter = ticker.ScalarFormatter()
             getattr(ax, f"{x}axis").set_major_formatter(formatter)
-            # ax.autoscale(enable=True, axis=x, tight=True)
 
     return ax

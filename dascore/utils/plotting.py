@@ -16,8 +16,6 @@ from dascore.utils.misc import suppress_warnings
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
-    # attrs = patch.attrs
-    # maybe_units = attrs.get(f"{dim}_units")
     maybe_units = patch.get_coord(dim).units
     if maybe_units == 1 / seconds:
         maybe_units = Hz
