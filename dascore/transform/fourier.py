@@ -92,7 +92,7 @@ def _get_dft_attrs(patch, dims, new_coords, pad=False):
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
     new["_pre_dft_data_type"] = new["data_type"]
-    new['data_type'] = "fourier transformed"
+    new["data_type"] = "fourier transformed"
     new["_dft_padded"] = pad
     return PatchAttrs(**new)
 

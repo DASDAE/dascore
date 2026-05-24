@@ -5,17 +5,15 @@ from __future__ import annotations
 import numpy as np
 
 from dascore import units
-
 from dascore.constants import PatchType
 from dascore.utils.patch import _get_dx_or_spacing_and_axes, patch_function
-
 
 
 @patch_function(required_dims=("time",), history="full")
 def spectra(
     patch: PatchType,
     dim: str = "time",
-    kind: str = 'PSD',
+    kind: str = "PSD",
     db: bool = False,
 ) -> PatchType:
     """
@@ -87,43 +85,46 @@ def spectra(
     >>>     ax = spec.viz.spectraplot(log=True, ax=axs[a+1], show=False, scale=[0.7, 1])
     >>>     ax.set_title('Fourier-Transform along ' + dim.capitalize())
     """
-    spec = patch.dft(dim=dim, real=True,  pad=True).abs()
+    spec = patch.dft(dim=dim, real=True, pad=True).abs()
     if db:
         # add a small number to prevent division-by zero when taking the log10
         spec += np.finfo(spec.data.dtype).eps
 
-
     _, axis = _get_dx_or_spacing_and_axes(patch, dim)
     n = patch.data.shape[axis[0]]
 
-    if kind.upper() == 'AS':
+    if kind.upper() == "AS":
         out = spec
         if db:
             out = 20 * out.log10()
 
-        out = out.update(attrs={'data_type':"Amplitude Spectrum"})
+        out = out.update(attrs={"data_type": "Amplitude Spectrum"})
 
-    elif kind.upper() == 'PS':
-        out = spec*spec
+    elif kind.upper() == "PS":
+        out = spec * spec
         if db:
             out = 10 * out.log10()
 
-        out = out.update(attrs={'data_type':"Power Spectrum",} )
+        out = out.update(
+            attrs={
+                "data_type": "Power Spectrum",
+            }
+        )
 
-    elif kind.upper() == 'PSD':
-        fsamp = 1 / (spec.get_coord('ft_'+dim).step * spec.get_coord('ft_'+dim).units)
-        out = spec*spec  / (n * fsamp)
+    elif kind.upper() == "PSD":
+        fsamp = 1 / (
+            spec.get_coord("ft_" + dim).step * spec.get_coord("ft_" + dim).units
+        )
+        out = spec * spec / (n * fsamp)
         if db:
             out = 10 * out.log10()
 
-        out = out.update(attrs={'data_type':"Power Spectral Density"})
+        out = out.update(attrs={"data_type": "Power Spectral Density"})
 
     else:
-       raise ValueError('ERROR: Unknown option: kind=', kind)
-
+        raise ValueError("ERROR: Unknown option: kind=", kind)
 
     if db:
         out = out.set_units(units.dB)
 
     return out
-

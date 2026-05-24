@@ -128,16 +128,17 @@ def _add_colorbar(ax, im, patch, log, scale):
     below = (mi < scale[0]) and not np.isclose(scale[0], mi)
 
     if above and below:
-        extend = 'both'
+        extend = "both"
     elif above:
-         extend = 'max'
+        extend = "max"
     elif below:
-         extend = 'min'
+        extend = "min"
     else:
-        extend = 'neither'
+        extend = "neither"
 
-    cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025,
-                                  extend=extend, extendfrac=.025)
+    cb = ax.get_figure().colorbar(
+        im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
+    )
 
     data_type = str(patch.attrs.get("data_type", ""))
     data_units = get_quantity_str(patch.attrs.data_units) or ""
@@ -152,7 +153,7 @@ def _default_colormap_per_datatype(patch):
     """
     Select a default colormap based on datatype
     """
-    default_maps={
+    default_maps = {
         "frequency-fand energy": "Spectral_r",
         "stalta": "RdGy_r",
         "kurtosis": "gnuplot2",
@@ -167,17 +168,16 @@ def _default_colormap_per_datatype(patch):
         "phase_difference": "bone",
         "phase_rate": "seismic",
         "temperature": "coolwarm",
-        "temperature_gradient":"RdYlBu_r"
-        }
+        "temperature_gradient": "RdYlBu_r",
+    }
 
     this_type = patch.attrs.data_type.lower()
     if this_type in default_maps.keys():
         cmap = default_maps[this_type]
     else:
-        cmap = "bwr" # default
+        cmap = "bwr"  # default
 
     return _get_cmap(cmap)
-
 
 
 @patch_function()
@@ -295,7 +295,7 @@ def waterfall(
     extents = _get_extents(dims_r, coords)
 
     if cmap is None:
-      cmap = _default_colormap_per_datatype(patch)
+        cmap = _default_colormap_per_datatype(patch)
 
     scale = _get_scale(scale, scale_type, data)
 
