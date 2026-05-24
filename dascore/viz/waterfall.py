@@ -157,7 +157,7 @@ def _default_colormap_per_datatype(patch):
     Select a default colormap based on datatype
     """
     default_maps = {
-        "frequency-fand energy": "Spectral_r",
+        "frequency-band energy": "Spectral_r",
         "stalta": "RdGy_r",
         "kurtosis": "gnuplot2",
         "fourier transform": "magma",
