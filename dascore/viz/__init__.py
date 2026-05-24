@@ -5,6 +5,7 @@ from __future__ import annotations
 from dascore.utils.namespace import PatchNameSpace
 
 from .spectrogram import spectrogram
+from .spectraplot import spectraplot
 from .waterfall import waterfall
 from .wiggle import wiggle
 from .map_fiber import map_fiber
@@ -16,6 +17,7 @@ class VizPatchNameSpace(PatchNameSpace):
     name = "viz"
 
     waterfall = waterfall
+    spectraplot = spectraplot
     spectrogram = spectrogram
     wiggle = wiggle
     map_fiber = map_fiber

@@ -117,11 +117,28 @@ def _format_axis_labels(ax, patch, dims_r):
             ax.invert_yaxis()
 
 
-def _add_colorbar(ax, im, patch, log):
+def _add_colorbar(ax, im, patch, log, scale):
     """
     Add a colorbar with appropriate labels to the plot.
     """
-    cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
+    mi = patch.data.min()
+    mx = patch.data.max()
+
+    above = (mx > scale[1]) and not np.isclose(scale[1], mx)
+    below = (mi < scale[0]) and not np.isclose(scale[0], mi)
+
+    if above and below:
+        extend = 'both'
+    elif above:
+         extend = 'max'
+    elif below:
+         extend = 'min'
+    else:
+        extend = 'neither'
+
+    cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025,
+                                  extend=extend, extendfrac=.025)
+
     data_type = str(patch.attrs.get("data_type", ""))
     data_units = get_quantity_str(patch.attrs.data_units) or ""
     dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
@@ -131,15 +148,48 @@ def _add_colorbar(ax, im, patch, log):
     cb.set_label(label)
 
 
+def _default_colormap_per_datatype(patch):
+    """
+    Select a default colormap based on datatype
+    """
+    default_maps={
+        "frequency-fand energy": "Spectral_r",
+        "stalta": "RdGy_r",
+        "kurtosis": "gnuplot2",
+        "fourier transformed": "magma",
+        "power spectral density": "turbo",
+        "power spectrum": "turbo",
+        "amplitude spectrum": "turbo",
+        "strain_rate": "RdBu_r",
+        "strain": "seismic",
+        "velocity": "viridis",
+        "phase": "twilight_shifted",
+        "phase_difference": "bone",
+        "phase_rate": "seismic",
+        "temperature": "coolwarm",
+        "temperature_gradient":"RdYlBu_r"
+        }
+
+    this_type = patch.attrs.data_type.lower()
+    if this_type in default_maps.keys():
+        cmap = default_maps[this_type]
+    else:
+        cmap = "bwr" # default
+
+    return _get_cmap(cmap)
+
+
+
 @patch_function()
 def waterfall(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap: str = "bwr",
+    cmap: str | None = None,
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
     log: bool = False,
+    cbar: bool = True,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -173,6 +223,8 @@ def waterfall(
         options are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
+    cbar
+        If True, adds a colorbar.
     show
         If True, show the plot, else just return axis.
 
@@ -235,14 +287,18 @@ def waterfall(
     patch = _validate_patch_dims(patch)
     # Setup axes and data
     ax = _get_ax(ax)
-    cmap = _get_cmap(cmap)
     data = np.log10(np.absolute(patch.data)) if log else patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
+
+    if cmap is None:
+      cmap = _default_colormap_per_datatype(patch)
+
     scale = _get_scale(scale, scale_type, data)
+
     with mpl.rc_context({"image.resample": True}):
         im = ax.imshow(
             data,
@@ -257,13 +313,15 @@ def waterfall(
             interpolation=interpolation,
             interpolation_stage="data",
         )
+
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
+
     # Add colorbar if requested
-    if cmap is not None:
-        _add_colorbar(ax, im, patch, log)
+    if cbar:
+        _add_colorbar(ax, im, patch, log, scale)
     if show:
         plt.show()
     return ax
