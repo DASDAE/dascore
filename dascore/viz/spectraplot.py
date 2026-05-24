@@ -57,11 +57,9 @@ def spectraplot(
             continue
 
         # replace labels with publication-ready descriptors
-        label = getattr(ax, f"get_{x}label")()
         label = _get_dim_label(patch, dim)
-        label = label.replace("Ft_time", "Frequency").replace(
-            "Ft_distance", "Wavennumber"
-        )
+        label = label.replace("Ft_time", "Frequency")
+        label = label.replace("Ft_distance", "Wavenumber")
         getattr(ax, f"set_{x}label")(label)
 
         if log:
