@@ -287,7 +287,8 @@ def waterfall(
     patch = _validate_patch_dims(patch)
     # Setup axes and data
     ax = _get_ax(ax)
-    data = np.log10(np.absolute(patch.data)) if log else patch.data
+    eps = np.finfo(patch.dtype).eps
+    data = np.log10(np.absolute(patch.data) + eps) if log else patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}

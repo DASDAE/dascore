@@ -51,39 +51,49 @@ def spectra(
 
     Example
     -------
+    Example 1: dispersion event
 
-    Example 2: dispersion event
     >>> import dascore as dc
     >>> import matplotlib.pyplot as plt
     >>>
-    >>> patch = dc.examples.dispersion_event().T.set_units(distance='m')
+    >>> patch = dc.examples.dispersion_event().T.set_units(distance="m")
     >>>
-    >>> fig, axs = plt.subplots(1,3,figsize=(16,4), layout='constrained')
-    >>> patch.viz.waterfall(cmap='RdBu_r', ax=axs[0], show=False);
+    >>> fig, axs = plt.subplots(1, 3, figsize=(16, 4), layout="constrained")
+    >>> ax = patch.viz.waterfall(cmap="RdBu_r", ax=axs[0], show=False)
     >>>
-    >>> for a, dim in enumerate(['time', 'distance']):
-    >>>     spec  = patch.spectra(dim=dim, kind='PSD',  db=True)
-    >>>     ax = spec.viz.spectraplot(log=True, ax=axs[a+1], show=False, scale=[0.7, 1])
-    >>>     ax.set_title('Fourier-Transform along ' + dim.capitalize())
-    >>>     if dim=='time':
-    >>>         ax.set_ylim((5,200))
+    >>> for a, dim in enumerate(["time", "distance"]):
+    ...     spec = patch.spectra(dim=dim, kind="PSD", db=True)
+    ...     ax = spec.viz.spectraplot(
+    ...         log=True,
+    ...         ax=axs[a + 1],
+    ...         show=False,
+    ...         scale=[0.7, 1],
+    ...     )
+    ...     _ = ax.set_title("Fourier-Transform along " + dim.capitalize())
+    ...     if dim == "time":
+    ...         _ = ax.set_ylim((5, 200))
 
+    Example 2: seismic event
 
-    Example 2: seimic event
     >>> import dascore as dc
     >>> import matplotlib.pyplot as plt
     >>>
     >>> patch = dc.examples.example_event_2().T.decimate(time=10)
-    >>> new = dc.to_datetime64(patch.coords.get_array('time') + 1704400020)
+    >>> new = dc.to_datetime64(patch.coords.get_array("time") + 1704400020)
     >>> patch = patch.update_coords(time=new)
     >>>
-    >>> fig, axs = plt.subplots(1,3,figsize=(18,5), layout='constrained')
-    >>> patch.viz.waterfall(cmap='RdBu_r', ax=axs[0]);
+    >>> fig, axs = plt.subplots(1, 3, figsize=(18, 5), layout="constrained")
+    >>> ax = patch.viz.waterfall(cmap="RdBu_r", ax=axs[0])
     >>>
-    >>> for a, dim in enumerate(['time', 'distance']):
-    >>>     spec  = patch.spectra(dim=dim, kind='PSD',  db=True)
-    >>>     ax = spec.viz.spectraplot(log=True, ax=axs[a+1], show=False, scale=[0.7, 1])
-    >>>     ax.set_title('Fourier-Transform along ' + dim.capitalize())
+    >>> for a, dim in enumerate(["time", "distance"]):
+    ...     spec = patch.spectra(dim=dim, kind="PSD", db=True)
+    ...     ax = spec.viz.spectraplot(
+    ...         log=True,
+    ...         ax=axs[a + 1],
+    ...         show=False,
+    ...         scale=[0.7, 1],
+    ...     )
+    ...     _ = ax.set_title("Fourier-Transform along " + dim.capitalize())
     """
     spec = patch.dft(dim=dim, real=True, pad=True).abs()
     if db:
