@@ -21,8 +21,8 @@ def spectraplot(
     scale: float | Sequence[float] | None = (0.5, 1),
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "bilinear",
-    log=False,
-    show=False,
+    log: bool = False,
+    show: bool = False,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -73,4 +73,6 @@ def spectraplot(
             formatter = ticker.FuncFormatter(lambda tick, _: f"{tick:g}")
             getattr(ax, f"{x}axis").set_major_formatter(formatter)
 
+    if show:
+        plt.show()
     return ax

@@ -185,7 +185,7 @@ class TestDiscreteFourierTransform:
     def test_datatype_changed(self, fft_sin_patch_time, sin_patch):
         """Ensure the data_type attr is changed after transform."""
         assert sin_patch.attrs.data_type == "strain_rate"
-        assert fft_sin_patch_time.attrs.data_type == "fourier transformed"
+        assert fft_sin_patch_time.attrs.data_type == "fourier transform"
 
     def test_pad(self, sin_patch_trimmed):
         """Ensure patch is padded when requested and not otherwise."""

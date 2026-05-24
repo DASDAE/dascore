@@ -9,7 +9,7 @@ from dascore.constants import PatchType
 from dascore.utils.patch import _get_dx_or_spacing_and_axes, patch_function
 
 
-@patch_function(required_dims=("time",), history="full")
+@patch_function()
 def spectra(
     patch: PatchType,
     dim: str = "time",
@@ -132,8 +132,7 @@ def spectra(
         out = out.update(attrs={"data_type": "Power Spectral Density"})
 
     else:
-        raise ValueError("ERROR: Unknown option: kind=", kind)
-
+        raise ValueError(f"Unknown kind={kind!r}. Expected one of: 'AS', 'PS', 'PSD'.")
     if db:
         out = out.set_units(units.dB)
 

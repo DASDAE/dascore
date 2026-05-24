@@ -124,8 +124,11 @@ def _add_colorbar(ax, im, patch, log, scale):
     mi = patch.data.min()
     mx = patch.data.max()
 
-    above = (mx > scale[1]) and not np.isclose(scale[1], mx)
-    below = (mi < scale[0]) and not np.isclose(scale[0], mi)
+    if scale is None or len(scale) != 2 or not np.all(np.isfinite(scale)):
+        above = below = False
+    else:
+        above = (mx > scale[1]) and not np.isclose(scale[1], mx)
+        below = (mi < scale[0]) and not np.isclose(scale[0], mi)
 
     if above and below:
         extend = "both"
@@ -157,7 +160,7 @@ def _default_colormap_per_datatype(patch):
         "frequency-fand energy": "Spectral_r",
         "stalta": "RdGy_r",
         "kurtosis": "gnuplot2",
-        "fourier transformed": "magma",
+        "fourier transform": "magma",
         "power spectral density": "turbo",
         "power spectrum": "turbo",
         "amplitude spectrum": "turbo",
@@ -171,7 +174,7 @@ def _default_colormap_per_datatype(patch):
         "temperature_gradient": "RdYlBu_r",
     }
 
-    this_type = patch.attrs.data_type.lower()
+    this_type = str(patch.attrs.get("data_type", "")).lower()
     if this_type in default_maps.keys():
         cmap = default_maps[this_type]
     else:
@@ -287,8 +290,13 @@ def waterfall(
     patch = _validate_patch_dims(patch)
     # Setup axes and data
     ax = _get_ax(ax)
-    eps = np.finfo(patch.dtype).eps
-    data = np.log10(np.absolute(patch.data) + eps) if log else patch.data
+    float_dtype = np.result_type(patch.data.dtype, np.float64)
+    eps = np.finfo(float_dtype).eps
+    data = (
+        np.log10(np.abs(patch.data).astype(float_dtype, copy=False) + eps)
+        if log
+        else patch.data
+    )
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
