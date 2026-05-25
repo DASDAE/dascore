@@ -258,3 +258,9 @@ class TestWaterfall:
 
     def test_percent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""
+
+    def test_invalid_scale_disables_colorbar_extend(self, random_patch):
+        """Ensure invalid scales fall back to extend='neither'."""
+        ax = random_patch.viz.waterfall(scale=(np.nan, 1), show=False)
+        cbar = ax.images[-1].colorbar
+        assert cbar.extend == "neither"

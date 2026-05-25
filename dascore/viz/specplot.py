@@ -14,7 +14,7 @@ from dascore.utils.plotting import _get_dim_label
 
 
 @patch_function()
-def spectraplot(
+def specplot(
     patch: PatchType,
     ax: plt.Axes | None = None,
     cmap=None,

@@ -124,6 +124,12 @@ def _add_colorbar(ax, im, patch, log, scale):
     mi = patch.data.min()
     mx = patch.data.max()
 
+    if log:
+        float_dtype = np.result_type(patch.data.dtype, np.float64)
+        eps = np.finfo(float_dtype).eps
+        mi = np.log10(np.abs(mi).astype(float_dtype, copy=False) + eps)
+        mx = np.log10(np.abs(mx).astype(float_dtype, copy=False) + eps)
+
     if scale is None or len(scale) != 2 or not np.all(np.isfinite(scale)):
         above = below = False
     else:

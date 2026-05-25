@@ -63,7 +63,7 @@ def spectra(
     >>>
     >>> for a, dim in enumerate(["time", "distance"]):
     ...     spec = patch.spectra(dim=dim, kind="PSD", db=True)
-    ...     ax = spec.viz.spectraplot(
+    ...     ax = spec.viz.specplot(
     ...         log=True,
     ...         ax=axs[a + 1],
     ...         show=False,
@@ -87,7 +87,7 @@ def spectra(
     >>>
     >>> for a, dim in enumerate(["time", "distance"]):
     ...     spec = patch.spectra(dim=dim, kind="PSD", db=True)
-    ...     ax = spec.viz.spectraplot(
+    ...     ax = spec.viz.specplot(
     ...         log=True,
     ...         ax=axs[a + 1],
     ...         show=False,

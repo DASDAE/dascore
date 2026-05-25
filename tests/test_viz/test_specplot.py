@@ -7,31 +7,31 @@ import pytest
 from matplotlib.axes import Axes
 
 
-class TestSpectraPlot:
+class TestSpecPlot:
     """Tests for spectra plot visualization."""
 
     def test_runs_with_time_spectrum(self, random_patch):
-        """Ensure spectraplot runs on a time-frequency patch."""
+        """Ensure specplot runs on a time-frequency patch."""
         patch = random_patch.spectra(dim="time")
 
-        ax = patch.viz.spectraplot(show=False)
+        ax = patch.viz.specplot(show=False)
 
         assert isinstance(ax, Axes)
 
     def test_runs_with_distance_spectrum(self, random_patch):
-        """Ensure spectraplot runs on a distance-frequency patch."""
+        """Ensure specplot runs on a distance-frequency patch."""
         patch = random_patch.spectra(dim="distance")
 
-        ax = patch.viz.spectraplot(show=False)
+        ax = patch.viz.specplot(show=False)
 
         assert isinstance(ax, Axes)
 
     def test_uses_provided_axis(self, random_patch):
-        """Ensure spectraplot uses the supplied axis."""
+        """Ensure specplot uses the supplied axis."""
         patch = random_patch.spectra(dim="time")
         _, ax = plt.subplots()
 
-        out = patch.viz.spectraplot(ax=ax, show=False)
+        out = patch.viz.specplot(ax=ax, show=False)
 
         assert out is ax
 
@@ -39,7 +39,7 @@ class TestSpectraPlot:
         """Ensure ft_time label is replaced by Frequency."""
         patch = random_patch.spectra(dim="time")
 
-        ax = patch.viz.spectraplot(show=False)
+        ax = patch.viz.specplot(show=False)
 
         labels = {ax.get_xlabel(), ax.get_ylabel()}
 
@@ -49,7 +49,7 @@ class TestSpectraPlot:
         """Ensure ft_distance label is replaced by Wavenumber."""
         patch = random_patch.spectra(dim="distance")
 
-        ax = patch.viz.spectraplot(show=False)
+        ax = patch.viz.specplot(show=False)
 
         labels = {ax.get_xlabel(), ax.get_ylabel()}
 
@@ -59,7 +59,7 @@ class TestSpectraPlot:
         """Ensure log=True sets the Fourier axis to log scale."""
         patch = random_patch.spectra(dim="time")
 
-        ax = patch.viz.spectraplot(log=True, show=False)
+        ax = patch.viz.specplot(log=True, show=False)
 
         fft_dim = next(dim for dim in patch.dims if dim.startswith("ft_"))
         scale = ax.get_yscale() if patch.dims.index(fft_dim) == 0 else ax.get_xscale()
@@ -70,7 +70,7 @@ class TestSpectraPlot:
         """Ensure log=True sets lower FFT-axis limit to coordinate step."""
         patch = random_patch.spectra(dim="time")
 
-        ax = patch.viz.spectraplot(log=True, show=False)
+        ax = patch.viz.specplot(log=True, show=False)
 
         fft_dim = next(dim for dim in patch.dims if dim.startswith("ft_"))
         fft_axis = patch.dims.index(fft_dim)
@@ -82,13 +82,13 @@ class TestSpectraPlot:
     def test_raises_without_fourier_dimension(self, random_patch):
         """Ensure a patch without Fourier coordinates raises."""
         with pytest.raises(Exception, match="Fourier-transformed coordinate"):
-            random_patch.viz.spectraplot(show=False)
+            random_patch.viz.specplot(show=False)
 
     def test_passes_waterfall_kwargs(self, random_patch):
         """Ensure plotting kwargs are accepted and forwarded."""
         patch = random_patch.spectra(dim="time")
 
-        ax = patch.viz.spectraplot(
+        ax = patch.viz.specplot(
             cmap="viridis",
             scale=(0.1, 0.9),
             scale_type="relative",
@@ -97,3 +97,10 @@ class TestSpectraPlot:
         )
 
         assert isinstance(ax, Axes)
+
+    def test_show(self, random_patch, monkeypatch):
+        """Ensure show path is callable."""
+        monkeypatch.setattr(plt, "show", lambda: None)
+        patch = random_patch.spectra(dim="time")
+
+        patch.viz.specplot(show=True)
