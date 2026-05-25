@@ -35,12 +35,12 @@ The units of $\hat{f}$ are also straight-forward to ascertain from @eq-1. Becaus
 One property of @eq-1 relevant to DASCore's implementation is [Parseval's identity](https://en.wikipedia.org/wiki/Parseval%27s_identity) which, in 1D, can be stated as:
 
 $$
-\int_{-\infty}^{\infty} |\hat{f}(\xi)|^2dx = \int_{-\infty}^{\infty} |f(x)|^2 dx
+\int_{-\infty}^{\infty} |\hat{f}(\xi)|^2 d \xi = \int_{-\infty}^{\infty} |f(x)|^2 dx
 $${#eq-3}
 
 Loosely speaking, we might say that the *energy* of the function is preserved by the transform.
 
-A related property of the @eq-3 is that the zero frequency represents the DC offset, or integral, of the original function. Setting $\xi=0$ we see:
+A related property of the @eq-3 is that the zero frequency represents the DC offset, or integral, of the original function. Setting $\xi=0$ in @eq-1 we see:
 
 $$
 \hat{f}(0) = \int_{-\infty}^{\infty} f(x) dx
