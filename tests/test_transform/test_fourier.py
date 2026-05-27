@@ -182,10 +182,10 @@ class TestDiscreteFourierTransform:
         assert not out.equals(fft_sin_patch_time)
         assert np.allclose(out.data, fft_sin_patch_all.data)
 
-    def test_datatype_removed(self, fft_sin_patch_time, sin_patch):
-        """Ensure the data_type attr is removed after transform."""
+    def test_datatype_changed(self, fft_sin_patch_time, sin_patch):
+        """Ensure the data_type attr is changed after transform."""
         assert sin_patch.attrs.data_type == "strain_rate"
-        assert fft_sin_patch_time.attrs.data_type == ""
+        assert fft_sin_patch_time.attrs.data_type == "fourier transform"
 
     def test_pad(self, sin_patch_trimmed):
         """Ensure patch is padded when requested and not otherwise."""

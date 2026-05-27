@@ -486,6 +486,7 @@ class Patch(NamespaceOwner):
     istft = transform.istft
     integrate = transform.integrate
     spectrogram = transform.spectrogram
+    spectra = transform.spectra
     stalta = transform.stalta
     kurtosis = transform.kurtosis
     velocity_to_strain_rate = transform.velocity_to_strain_rate
