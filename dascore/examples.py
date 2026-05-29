@@ -566,7 +566,9 @@ def dispersion_event():
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
-def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **kwargs):
+def random_spool(
+    time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), var=0, **kwargs
+):
     """
     Several random patches in the spool.
 
@@ -580,12 +582,24 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
     time_min
         The start time of the first patch. Subsequent patches have start times
         after the end time of the previous patch, plus the time_gap.
+    var
+        Variability (in percent) of the file-lengths. A normal distribution of
+        file lengths is generated if var > 0
     **kwargs
         Passed to the [_random_patch](`dascore.examples.random_patch`) function.
     """
     out = []
-    for _ in range(length):
-        patch = random_patch(time_min=time_min, **kwargs)
+    if var > 0:
+        sigma = 2_000 * var / 100
+        rng = np.default_rng()
+        nsmpl = rng.normal(2_000, sigma, size=length).astype(int)
+    else:
+        nsmpl = (np.zeros((length,)) + 2_000).astype(int)
+
+    for i in range(length):
+        nchn = 300
+        shape = (nchn, nsmpl[i])
+        patch = random_patch(time_min=time_min, shape=shape, **kwargs)
         out.append(patch)
         diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
         time_min = patch.attrs["time_max"] + diff
