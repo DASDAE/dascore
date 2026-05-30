@@ -48,7 +48,7 @@ def _find_outliers(gap, duration, method, tolerance_percent):
 
 
 # %%
-def viz_spool(spool, method="mode", tolerance_percent=20):
+def viz_spool(spool, method="mode", tolerance_percent=20, annotate_gaps=True):
     """
     Visualize spool timing statistics.
 
@@ -148,18 +148,27 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
 
     mosaic = [["top", "top"], ["middle", "middle"], ["bottom_left", "bottom_right"]]
 
-    fig, axs = plt.subplot_mosaic(mosaic, layout="constrained", figsize=(10, 12))
+    _, axs = plt.subplot_mosaic(mosaic, layout="constrained", figsize=(10, 12))
 
     ############################
     # Plot file-time differences
     ax = axs["top"]
     ax.semilogy(filestart[:-1], gap, ".")
 
-    if len(outlier_index) < 50:
+    if (len(outlier_index) < 50) & annotate_gaps:
         for i in outlier_index:
             txt = str(np.timedelta64(int(gap[i]), "s").item())
             txt = "  " + str(filestart[i])[:19]
-            ax.text(filestart[i], gap[i], txt, rotation=90, ha="center", fontsize=8)
+            ax.text(
+                filestart[i],
+                gap[i],
+                txt,
+                rotation=45,
+                ha="left",
+                va="center",
+                fontsize=8,
+                rotation_mode="anchor",
+            )
     else:
         ax.semilogy(filestart[outlier_index], gap[outlier_index], "r.")
         pass
@@ -234,17 +243,17 @@ if __name__ == "__main__":
     tmpfile = Path(
         r"O:\Staff\andreasw\Dev\FibreEyes\Aurland\_dascore_index_Aurland.hdf5"
     )
-    tmpfile = Path(
-        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Aurland.hdf5"
-    )
 
     tmpfile = Path(
         r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Hoyanger.hdf5"
     )
 
-    df = HDFPatchIndexManager(tmpfile).get_index(time_min="2025-01-16T14:00:00")
+    tmpfile = Path(
+        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Aurland.hdf5"
+    )
 
-    dummy = viz_spool(df, method="mode", tolerance_percent=20)
+    df = HDFPatchIndexManager(tmpfile).get_index(time_min="2025-01-16T14:00:00")
+    dummy = viz_spool(df, method="mode", tolerance_percent=20, annotate_gaps=True)
 
 
 """
