@@ -9,18 +9,18 @@ import pandas as pd
 from scipy import stats
 
 
-def _find_outliers(gap, method, tolerance_percent):
+def _find_outliers(gap, duration, method, tolerance_percent):
     """
-    Identify outliers in file interval data.
+    Identify outliers in file gap data.
 
     Parameters
     ----------
     gap : array-like
-        Array of time intervals between consecutive files, in seconds.
+        Array of time gaps between consecutive files, in seconds.
     method : {"mode", "mean", "median"}
         Method used to identify outliers.
 
-        - ``"mode"``: values which differ from the most common interval.
+        - ``"mode"``: values which differ from the most common gap.
         - ``"mean"``: values outside ``tolerance_percent`` of the mean.
         - ``"median"``: values outside ``tolerance_percent`` of the median.
     tolerance_percent : float
@@ -32,30 +32,17 @@ def _find_outliers(gap, method, tolerance_percent):
     numpy.ndarray
         Array containing the indices of detected outliers.
     """
-
-    def _is_not_within_tolerance(value, reference, tolerance_percent):
-        """Calculate the absolute difference as a fraction of the reference"""
-        diff_percent = abs((value - reference) / reference)
-
-        # Returns True if the difference is tolerance_percent  or less
-        return diff_percent > tolerance_percent / 100
-
     if method == "mode":
-        # most common value; outliers are exact not matches!
-        value = stats.mode(gap).mode
-        outlier_index = np.where(gap != value)[0]
+        reference_value = stats.mode(duration).mode
 
     elif method == "mean":
-        reference_value = np.mean(gap)
-        outlier_index = np.where(
-            _is_not_within_tolerance(gap, reference_value, tolerance_percent)
-        )[0]
+        reference_value = np.mean(duration)
 
     elif method == "median":
-        reference_value = np.median(gap)
-        outlier_index = np.where(
-            _is_not_within_tolerance(gap, reference_value, tolerance_percent)
-        )[0]
+        reference_value = np.median(duration)
+
+    threshold = reference_value * (1 + tolerance_percent / 100)
+    outlier_index = np.where(gap > threshold)[0]
 
     return outlier_index
 
@@ -67,11 +54,11 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
 
     Creates two plots:
 
-    1. The interval between consecutive files.
+    1. The gap between consecutive files.
     2. The sample rate evolution through time.
 
-    Detected outliers in file intervals are highlighted and annotated on
-    the interval plot.
+    Detected outliers in file gaps are highlighted and annotated on
+    the gap plot.
 
     Parameters
     ----------
@@ -79,23 +66,23 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
         A DASCore spool or a pandas DataFrame containing spool contents.
         The contents must include ``time_min`` and ``time_step`` columns.
     method : {"mode", "mean", "median"}, optional
-        Method used to identify outlier file intervals.
+        Method used to identify outlier file gaps.
 
-        - ``"mode"``: values which differ from the most common interval.
+        - ``"mode"``: values which differ from the most common gap.
         - ``"mean"``: values outside ``tolerance_percent`` of the mean.
         - ``"median"``: values outside ``tolerance_percent`` of the median.
     tolerance_percent : float, optional
-        Percentage deviation from the reference interval used to classify
+        Percentage deviation from the reference gap used to classify
         outliers for the ``"mean"`` and ``"median"`` methods.
 
     Returns
     -------
     ax : matplotlib.axes.Axes
         The axis showing sample rate evolution.
-    interval : numpy.ndarray
-        The interval between consecutive file start times, in seconds.
+    gap : numpy.ndarray
+        The gap between consecutive file start times, in seconds.
     outlier_index : numpy.ndarray
-        Indices of detected interval outliers.
+        Indices of detected gap outliers.
 
     Raises
     ------
@@ -106,13 +93,8 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
 
     Notes
     -----
-    File intervals are computed from consecutive values in
-    ``time_min``:
-
-    ``gap = np.diff(time_min)``
-
-    Therefore the reported intervals represent differences between file
-    start times
+    File gaps are computed from the difference of between the end-time of one file
+    and the start of the next file (minus 1 sample interval)
     """
     if hasattr(spool, "get_contents"):
         df = spool.get_contents()
@@ -129,17 +111,28 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
             f"Unknown outlier detection method {method!r}. "
             f"Allowed values are {valid_options}."
         )
+
+        # %%
+    method = "mean"
+    tolerance_percent = 20
     method = method.lower()
 
     filestart = df["time_min"].to_numpy()
-    dt = df["time_step"].to_numpy()
-    fsamp = np.timedelta64(1, "s") / dt
-    interval = np.diff(filestart) / np.timedelta64(1, "s")
+    fileend = df["time_max"].to_numpy()
 
-    outlier_index = _find_outliers(interval, method, tolerance_percent)
+    duration = (fileend - filestart) / np.timedelta64(1, "s")
+    gap = (filestart[1:] - fileend[:-1]) / np.timedelta64(1, "s")
+    outlier_index = _find_outliers(gap, duration, method, tolerance_percent)
 
-    # plotting
+    # %% Plot
+
     tick_map = [
+        [0.000001, "1 μs"],
+        [0.00001, "10 μs"],
+        [0.0001, "100 μs"],
+        [0.001, "1 ms"],
+        [0.01, "10 ms"],
+        [0.1, "100 ms"],
         [1, "1 sec"],
         [10, "10 sec"],
         [60, "1 min"],
@@ -150,65 +143,88 @@ def viz_spool(spool, method="mode", tolerance_percent=20):
         [7 * 86400, "1 week"],
         [30 * 86400, "1 month"],
     ]
-    ticks = [x[0] for x in tick_map]
-    ticklabels = [x[1] for x in tick_map]
-    # % Plot
-    _, axs = plt.subplots(2, 1, figsize=(12, 10), layout="constrained")
+    ticks = np.asarray([x[0] for x in tick_map])
+    ticklabels = np.asarray([x[1] for x in tick_map])
 
+    mosaic = [["top", "top"], ["middle", "middle"], ["bottom_left", "bottom_right"]]
+
+    fig, axs = plt.subplot_mosaic(mosaic, layout="constrained", figsize=(10, 12))
+
+    ############################
     # Plot file-time differences
-    ax = axs[0]
-    ax.semilogy(filestart[:-1], interval, ".")
-    ax.set_yticks(
-        ticks,
-        ticklabels,
-    )
+    ax = axs["top"]
+    ax.semilogy(filestart[:-1], gap, ".")
+
+    if len(outlier_index) < 50:
+        for i in outlier_index:
+            txt = str(np.timedelta64(int(gap[i]), "s").item())
+            txt = "  " + str(filestart[i])[:19]
+            ax.text(filestart[i], gap[i], txt, rotation=90, ha="center", fontsize=8)
+    else:
+        ax.semilogy(filestart[outlier_index], gap[outlier_index], "r.")
+        pass
+
+    ax.set_yticks(ticks, labels=ticklabels)
     ax.tick_params(axis="x", labelrotation=90)
     ax.grid("on")
     ax.yaxis.set_minor_locator(ticker.NullLocator())
-    ax.set_ylabel("Filetime Difference")
+    ax.set_ylabel("Gap Between Files")
+    ax.set_title("File Gaps")
 
-    for i in outlier_index:
-        txt = str(np.timedelta64(int(interval[i]), "s").item())
-        txt = "  " + str(filestart[i])[:19]
-        ax.text(filestart[i], interval[i], txt, rotation=90, ha="center", fontsize=8)
+    ####################################
+    # %% Plot file duration
+    ax = axs["middle"]
+    ax.semilogy(filestart, duration, ".")
 
-    # add start label
-    txt = str(filestart[0])[:19].replace("T", "\n")
-    ax.text(
-        filestart[0],
-        interval[0],
-        txt,
-        rotation=90,
-        va="center",
-        ha="right",
-        fontsize=8,
-        color="darkgreen",
-    )
-    # add end label
-    txt = str(filestart[-1])[:19].replace("T", "\n")
-    ax.text(
-        filestart[-1],
-        interval[-1],
-        txt,
-        rotation=90,
-        va="center",
-        ha="left",
-        fontsize=8,
-        color="red",
-    )
-    ax.set_title("Filetime Difference")
+    minlim = 10 ** np.floor(np.log10(duration.min()))
+    maxlim = 10 ** (np.ceil(np.log10(duration.max())) + 1)
+    use = (minlim <= ticks) & (ticks <= maxlim)
+    ax.set_yticks(ticks[use], labels=ticklabels[use])
 
-    # plor sampling rate evolution
-    ax = axs[1]
-    ax.plot(filestart, fsamp, "-", lw=3)
-    # ax.set_yticks(ticks, ticklabels, )
     ax.tick_params(axis="x", labelrotation=90)
     ax.grid("on")
-    # ax.yaxis.set_minor_locator(ticker.NullLocator())
-    ax.set_ylabel("Sample Rate [Hz]")
-    ax.set_title("Sample Rate Evolution")
+    ax.set_ylabel("Filetime Difference")
+    ax.tick_params(axis="x", labelrotation=90)
+    # ax.grid("on")
+    ax.set_ylabel("File Duration")
+    ax.set_title("File Durations")
 
-    return ax, interval, outlier_index
+    ####################################
+    # %% Plot gap histogram
+    # refine resolution
+    gap = gap[gap > 0]
+    minlim = 10 ** (np.floor(np.log10(gap.min())) - 1)
+    maxlim = 10 ** (np.ceil(np.log10(gap.max())) + 1)
+    use = (minlim <= ticks) & (ticks <= maxlim)
+    fine_ticks = np.geomspace(minlim, maxlim, num=31)
+
+    ax = axs["bottom_left"]
+    ax.hist(gap, bins=fine_ticks, edgecolor="k")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xticks(ticks[use], labels=ticklabels[use])
+    ax.set_xlim((minlim, maxlim))
+    ax.tick_params(axis="x", labelrotation=90)
+    ax.set_title("File Gaps")
+
+    ####################################
+    # % Plot file duration histogram
+    minlim = 10 ** (np.floor(np.log10(duration.min())))
+    maxlim = 10 ** (np.ceil(np.log10(duration.max())) + 1)
+    use = (minlim <= ticks) & (ticks <= maxlim)
+    fine_ticks = np.geomspace(minlim, maxlim, num=31)
+
+    ax = axs["bottom_right"]
+    ax.hist(duration, bins=fine_ticks, edgecolor="k")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xticks(ticks[use], labels=ticklabels[use])
+    ax.set_xlim((minlim, maxlim))
+    ax.tick_params(axis="x", labelrotation=90)
+    ax.set_title("File Duration")
+
+    # %%
+    return axs, duration, gap, outlier_index
 
 
 # %%
@@ -222,7 +238,11 @@ if __name__ == "__main__":
         r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Aurland.hdf5"
     )
 
-    df = HDFPatchIndexManager(tmpfile).get_index(time_min="2026-01-16T14:00:00")
+    tmpfile = Path(
+        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Hoyanger.hdf5"
+    )
+
+    df = HDFPatchIndexManager(tmpfile).get_index(time_min="2025-01-16T14:00:00")
 
     dummy = viz_spool(df, method="mode", tolerance_percent=20)
 
