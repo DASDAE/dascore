@@ -50,7 +50,7 @@ def specplot(
         Colormap passed to [waterfall](`dascore.viz.waterfall`).
     scale
         Scaling limits passed to [waterfall](`dascore.viz.waterfall`).
-        Default is [0, 1], showing the full data ran
+        Default is [0, 1], showing the full data range
     scale_type
         Scaling mode passed to [waterfall](`dascore.viz.waterfall`).
     interpolation
@@ -88,6 +88,13 @@ def specplot(
     >>> fk_patch = patch.dft(("time", "distance")).abs()
     >>> ax = fk_patch.viz.specplot(log=True, cmap='inferno')
     """
+    # check if patch actually has a fourier-transformed dimension
+    dims = patch.coords.dims
+    is_fft_dim = [d.startswith("ft_") for d in dims]
+    if not any(is_fft_dim):
+        raise CoordError("Patch does not contain a Fourier-transformed coordinate")
+
+    # Make the plot
     ax = patch.viz.waterfall(
         cmap=cmap,
         ax=ax,
@@ -99,12 +106,6 @@ def specplot(
         show=False,
     )
 
-    # check if patch actually has a fourier-transformed dimension
-    dims = patch.coords.dims
-    is_fft_dim = [d.startswith("ft_") for d in dims]
-    if not any(is_fft_dim):
-        raise CoordError("Patch does not contain a Fourier-transformed coordinate")
-
     # Format axis labels.
     fft_dims = {d for d in dims if d.startswith("ft_")}
     for dim, axis_name in zip(dims, ["y", "x"], strict=True):
@@ -115,7 +116,6 @@ def specplot(
         label = _get_dim_label(patch, dim)
         for key, value in label_replacements.items():
             label = label.replace(key, value)
-
         getattr(ax, f"set_{axis_name}label")(label)
 
         if log:
