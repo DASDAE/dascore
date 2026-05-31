@@ -25,6 +25,7 @@ def specplot(
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "bilinear",
     log: bool = False,
+    cbar: bool = True,
     show: bool = False,
     **kwargs,
 ) -> plt.Axes:
@@ -60,6 +61,8 @@ def specplot(
         scale.
         For a distance coordinate, positive and negative wavenumbers are shown, while
         for a time coordinate only positive frequencies are shown.
+    cbar
+        If True, colorbar is added.
     show
         If True, show the plot, else just return axis.
 
@@ -92,6 +95,7 @@ def specplot(
         scale_type=scale_type,
         interpolation=interpolation,
         log=False,
+        cbar=cbar,
         show=False,
     )
 
