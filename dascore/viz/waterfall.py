@@ -178,8 +178,8 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. If None, a colorbar will be
-        chosen automatically, depending on the data_type of the patch.
+        A matplotlib colormap string or instance. If None, a colormap will be
+        chosen automatically, depending on the data_type of the patch. Defaults to 'bwr'
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
