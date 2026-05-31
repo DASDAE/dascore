@@ -121,10 +121,6 @@ def specplot(
         if log:
             # prevent changes in axis limits
             step = patch.get_coord(dim).step
-            if step <= 0:
-                raise ValueError(
-                    f"Cannot use log scale for coordinate '{dim}' with step={step}"
-                )
             lim = list(getattr(ax, f"get_{axis_name}lim")())
 
             if dim == "ft_distance":
