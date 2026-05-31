@@ -110,7 +110,7 @@ def _get_untransformed_dims(patch, dims):
     return out
 
 
-def _convert_dft_spectral_amplitudes(patch, output, dim, db):
+def _convert_dft_spectral_amplitudes(patch, output, dims, db):
     """Convert the FFT output to spectral ampitude representations"""
     data_types = {
         "AS": "Amplitude Spectrum",
@@ -124,14 +124,12 @@ def _convert_dft_spectral_amplitudes(patch, output, dim, db):
     elif output == "PS":
         out = patch * patch
     elif output == "PSD":
-        n = len(patch.get_coord(dim))
-        ft_coord = patch.get_coord("ft_" + dim)
-        fsamp = 1 / (ft_coord.step * ft_coord.units)
-        out = patch * patch / (n * fsamp)
-    else:
-        msg = f"Unknown kind={output!r}. Expected one of: {tuple(data_types)}."
-        raise ValueError(msg)
-
+        out = patch * patch
+        for dim in iterate(dims):
+            n = len(patch.get_coord(dim))
+            ft_coord = patch.get_coord(f"ft_{dim}")
+            fsamp = 1 / (ft_coord.step * ft_coord.units)
+            out = out / (n * fsamp)
     if db:
         out = out + np.finfo(out.data.dtype).eps if db else out
         db_scale = 20 if output == "AS" else 10
@@ -254,7 +252,7 @@ def dft(
     patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
 
     if output != "FFT":
-        patch_out = _convert_dft_spectral_amplitudes(patch_out, output, dim, db)
+        patch_out = _convert_dft_spectral_amplitudes(patch_out, output, dims, db)
 
     return patch_out
 
