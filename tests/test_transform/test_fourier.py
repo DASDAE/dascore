@@ -182,10 +182,10 @@ class TestDiscreteFourierTransform:
         assert not out.equals(fft_sin_patch_time)
         assert np.allclose(out.data, fft_sin_patch_all.data)
 
-    def test_datatype_removed(self, fft_sin_patch_time, sin_patch):
-        """Ensure the data_type attr is removed after transform."""
+    def test_datatype_changed(self, fft_sin_patch_time, sin_patch):
+        """Ensure the data_type attr is changed after transform."""
         assert sin_patch.attrs.data_type == "strain_rate"
-        assert fft_sin_patch_time.attrs.data_type == ""
+        assert fft_sin_patch_time.attrs.data_type == "fourier transform"
 
     def test_pad(self, sin_patch_trimmed):
         """Ensure patch is padded when requested and not otherwise."""
@@ -202,6 +202,61 @@ class TestDiscreteFourierTransform:
         out = str(fft_sin_patch_time)
         assert isinstance(out, str)
         assert out
+
+    @pytest.mark.parametrize(
+        ("output", "data_type"),
+        [
+            ("FFT", "fourier transform"),
+            # ("AS", "Amplitude Spectrum"),
+            # ("PS", "Power Spectrum"),
+            # ("PSD", "Power Spectral Density"),
+        ],
+    )
+    def test_output_spectral_representations(self, sin_patch, output, data_type):
+        """Ensure supported spectral outputs are converted from FFT output."""
+        fft = sin_patch.dft("time", output="FFT")
+        amp = fft.abs() + np.finfo(sin_patch.data.dtype).eps
+        out = sin_patch.dft("time", output=output)
+
+        if output == "FFT":
+            expected = fft.data
+        elif output == "AS":
+            expected = amp.data
+        elif output == "PS":
+            expected = amp.data * amp.data
+        else:
+            ps = sin_patch.dft("time", output="PS")
+            n = len(out.get_coord("time"))
+            ft_coord = out.get_coord("ft_time")
+            fsamp = 1 / (ft_coord.step * ft_coord.units)
+            expected = (ps / (n * fsamp)).data
+
+        assert out.attrs.data_type == data_type
+        assert out.data.shape == fft.data.shape
+        assert np.allclose(out.data, expected)
+
+    def test_output_is_case_insensitive(self, sin_patch):
+        """Ensure output names are normalized before conversion."""
+        lower = sin_patch.dft("time", output="as")
+        upper = sin_patch.dft("time", output="AS")
+        assert lower.equals(upper)
+
+    def test_invalid_output_raises(self, sin_patch):
+        """Ensure invalid output types raise."""
+        with pytest.raises(ValueError, match="Unknown kind"):
+            sin_patch.dft("time", output="bad")
+
+    @pytest.mark.parametrize(("output", "scale"), [("AS", 20), ("PS", 10), ("PSD", 10)])
+    def test_db_output(self, sin_patch, output, scale):
+        """Ensure spectral outputs can be converted to decibels."""
+        linear = sin_patch.dft("time", output=output)
+        out = sin_patch.dft("time", output=output, db=True)
+        eps = np.finfo(linear.data.dtype).eps
+        expected = scale * np.log10(linear.data + eps)
+
+        assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+        assert out.attrs.data_type == linear.attrs.data_type
+        assert np.allclose(out.data, expected)
 
 
 class TestInverseDiscreteFourierTransform:
