@@ -9,14 +9,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from dascore.units import get_quantity_str
+from dascore.units import Hz, get_quantity_str
+from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings
 
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
-    attrs = patch.attrs
-    maybe_units = attrs.get(f"{dim}_units")
+    maybe_units = patch.get_coord(dim).units
+    if maybe_units == 1 / seconds:
+        maybe_units = Hz
     dim_str = string.capwords(str(dim))
     unit_str = f" [{get_quantity_str(maybe_units)}]" if maybe_units else ""
     return dim_str + unit_str
