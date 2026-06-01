@@ -692,6 +692,21 @@ class TestSelect:
         out = monotonic_float_coord.select((i1, i2), samples=True)[0]
         assert np.all(values[i1:i2] == out.values)
 
+    def test_single_sample_retains_step(self, evenly_sampled_coord):
+        """A length-1 selection of an evenly sampled coord keeps its step. See #567."""
+        out, _ = evenly_sampled_coord.select(1, samples=True)
+        assert len(out) == 1
+        assert out.step is not None
+        assert out.step == evenly_sampled_coord.step
+        assert out.values[0] == evenly_sampled_coord.values[1]
+
+    def test_single_sample_retains_step_datetime(self, evenly_sampled_date_coord):
+        """Same as above but for a datetime coord (step is a timedelta64)."""
+        out, _ = evenly_sampled_date_coord.select(3, samples=True)
+        assert len(out) == 1
+        assert out.step == evenly_sampled_date_coord.step
+        assert out.values[0] == evenly_sampled_date_coord.values[3]
+
     def test_values_not_in_coord(self, long_coord):
         """Ensure using values not in coord results in an empty coordinate."""
         values1 = long_coord.values[: len(long_coord) // 2]
