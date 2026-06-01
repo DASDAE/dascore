@@ -180,8 +180,7 @@ def waterfall(
         A matplotlib object, if None create one.
     cmap
         A matplotlib colormap string or instance. If `None`, a colormap will be
-        chosen automatically, depending on the data_type of the patch. Set to
-        None to not plot the colorbar.
+        chosen automatically, depending on the data_type of the patch.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -204,7 +203,8 @@ def waterfall(
         To avoid log(0), the abs(array) is cast to float64 and a small value
         added.
     cbar
-        If True, plot the colorbar, else do not.
+        If True, plot the colorbar, else do not. This controls only colorbar
+        display; use `cmap` to control colormap selection.
     show
         If True, show the plot, else just return axis.
 
