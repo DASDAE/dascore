@@ -115,7 +115,6 @@ class TestWaterfall:
     def test_no_colorbar(self, random_patch):
         """Ensure the colorbar can be disabled."""
         ax = random_patch.viz.waterfall(cmap=None)
-        # ensure no colorbar was created.
         assert ax.images[-1].colorbar is None
 
     def test_units(self, random_patch):
@@ -171,7 +170,7 @@ class TestWaterfall:
         # Retrieve the expected data type and data units
         data_type = str(random_patch.attrs["data_type"])
         data_units = get_quantity_str(random_patch.attrs.data_units) or ""
-        expected_dunits = f" ({data_units})" if data_units else ""
+        expected_dunits = f" [{data_units}]" if data_units else ""
 
         # Construct the expected label
         expected_label = f"{data_type}{expected_dunits} - log_10"
@@ -258,3 +257,25 @@ class TestWaterfall:
 
     def test_percent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""
+        from dascore.units import percent
+
+        ax = random_patch.viz.waterfall(scale=10 * percent, scale_type="absolute")
+        assert ax is not None
+
+    def test_invalid_scale_disables_colorbar_extend(self, random_patch):
+        """Ensure invalid scales fall back to extend='neither'."""
+        ax = random_patch.viz.waterfall(scale=(np.nan, 1), show=False)
+        cbar = ax.images[-1].colorbar
+        assert cbar.extend == "neither"
+
+    def test_log_with_zero_data_has_finite_clim(self, random_patch):
+        """Ensure that color limits work with in log-scale with zeros"""
+        patch = random_patch.update(data=np.zeros(random_patch.shape))
+        ax = patch.viz.waterfall(log=True)
+        assert np.all(np.isfinite(ax.images[0].get_clim()))
+
+    def test_default_colormap_uses_data_type(self, random_patch):
+        """Ensure colormap is chosen automatically."""
+        patch = random_patch.update_attrs(data_type="velocity")
+        ax = patch.viz.waterfall()
+        assert ax.images[0].cmap is not None

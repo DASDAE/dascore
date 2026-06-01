@@ -25,7 +25,9 @@ def _get_dim_label(patch, dim):
 def _get_cmap(cmap):
     """Return a color map from a colormap or string."""
     if isinstance(cmap, str):  # get color map if a string was passed
-        cmap = plt.get_cmap(cmap)
+        cmap = plt.get_cmap(cmap).copy()
+        cmap.set_over(cmap(1.0))
+        cmap.set_under(cmap(0.0))
     return cmap
 
 

@@ -9,7 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dascore.constants import PatchType
+from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
 from dascore.utils.misc import tukey_fence
@@ -117,11 +117,27 @@ def _format_axis_labels(ax, patch, dims_r):
             ax.invert_yaxis()
 
 
-def _add_colorbar(ax, im, patch, log):
+def _add_colorbar(ax, im, data, patch, log, scale):
     """
     Add a colorbar with appropriate labels to the plot.
+    When auto-scaling, extend-triangles are added if data above or below limits exist
     """
-    cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
+    mi = np.nanmin(data)
+    mx = np.nanmax(data)
+
+    above, below = False, False
+    if scale is not None and len(scale) == 2:
+        above = (mx > scale[1]) and not np.isclose(scale[1], mx)
+        below = (mi < scale[0]) and not np.isclose(scale[0], mi)
+    extend_map = {
+        (True, True): "both",
+        (True, False): "max",
+        (False, True): "min",
+    }
+    extend = extend_map.get((above, below), "neither")
+    cb = ax.get_figure().colorbar(
+        im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
+    )
     data_type = str(patch.attrs.get("data_type", ""))
     data_units = get_quantity_str(patch.attrs.data_units) or ""
     dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
@@ -131,11 +147,20 @@ def _add_colorbar(ax, im, patch, log):
     cb.set_label(label)
 
 
+def _default_colormap_per_datatype(patch):
+    """
+    Select a default colormap based on datatype
+    """
+    this_type = str(patch.attrs.get("data_type", "")).lower()
+    cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
+    return _get_cmap(cmap)
+
+
 @patch_function()
 def waterfall(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap: str = "bwr",
+    cmap: str | None = "default",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
@@ -152,8 +177,9 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. Set to None to not plot the
-        colorbar.
+        A matplotlib colormap string or instance. If "default", a colormap will be
+        chosen automatically, depending on the data_type of the patch. Set to
+        None to not plot the colorbar.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -173,6 +199,8 @@ def waterfall(
         options are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
+        To avoid log(0), the abs(array) is cast to float64 and a small value
+        added.
     show
         If True, show the plot, else just return axis.
 
@@ -235,13 +263,22 @@ def waterfall(
     patch = _validate_patch_dims(patch)
     # Setup axes and data
     ax = _get_ax(ax)
-    cmap = _get_cmap(cmap)
-    data = np.log10(np.absolute(patch.data)) if log else patch.data
+    if log:
+        data = np.log10(np.abs(patch.data) + np.finfo(np.float64).eps)
+    else:
+        data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
+
+    add_colorbar = cmap is not None
+    if cmap == "default":
+        cmap = _default_colormap_per_datatype(patch)
+    else:
+        cmap = _get_cmap(cmap)
+
     scale = _get_scale(scale, scale_type, data)
     with mpl.rc_context({"image.resample": True}):
         im = ax.imshow(
@@ -262,8 +299,8 @@ def waterfall(
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested
-    if cmap is not None:
-        _add_colorbar(ax, im, patch, log)
+    if add_colorbar:
+        _add_colorbar(ax, im, data, patch, log, scale)
     if show:
         plt.show()
     return ax
