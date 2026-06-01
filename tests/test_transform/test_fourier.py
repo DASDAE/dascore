@@ -8,9 +8,10 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import PatchError
+from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity, second
+from dascore.utils.misc import iterate
 
 F_0 = 2
 seconds = get_quantity("seconds")
@@ -79,6 +80,21 @@ def chirp_stft_detrend_patch(chirp_patch):
 
 class TestDiscreteFourierTransform:
     """Forward DFT suite."""
+
+    def _assert_spectral_power_matches_patch(self, patch, out, dims, output):
+        """Ensure spectral outputs recover the time-domain mean square."""
+        dims = patch.dims if dims is None else tuple(iterate(dims))
+        old_axes = tuple(patch.get_axis(dim) for dim in dims)
+        ft_axes = tuple(out.get_axis(f"ft_{dim}") for dim in dims)
+        expected = np.mean(patch.data**2, axis=old_axes)
+        spectral_power = np.sum(out.data, axis=ft_axes)
+        if output == "PSD":
+            bin_volume = np.prod(
+                [abs(out.get_coord(f"ft_{dim}").step) for dim in dims]
+            )
+            spectral_power = spectral_power * bin_volume
+
+        assert np.allclose(spectral_power, expected)
 
     def test_max_frequency(self, fft_sin_patch_time):
         """Ensure when sin wave is input max freq is correct."""
@@ -164,6 +180,13 @@ class TestDiscreteFourierTransform:
         out = fft_sin_patch_time.dft("time")
         assert out.equals(fft_sin_patch_time)
 
+    def test_idempotent_does_not_convert_output(self, fft_sin_patch_time):
+        """Ensure output is ignored when no new dimensions are transformed."""
+        out = fft_sin_patch_time.dft("time", output="AS")
+
+        assert out.equals(fft_sin_patch_time)
+        assert out.attrs["_dft_output"] == "FFT"
+
     def test_idempotent_all_dims(self, fft_sin_patch_all):
         """
         Ensure dft is idempotent for transforms applied to all dims.
@@ -187,6 +210,10 @@ class TestDiscreteFourierTransform:
         assert sin_patch.attrs.data_type == "strain_rate"
         assert fft_sin_patch_time.attrs.data_type == "fourier transform"
 
+    def test_dft_output_attr_set(self, fft_sin_patch_time):
+        """Ensure the DFT output type is tracked."""
+        assert fft_sin_patch_time.attrs["_dft_output"] == "FFT"
+
     def test_pad(self, sin_patch_trimmed):
         """Ensure patch is padded when requested and not otherwise."""
         trimmed = sin_patch_trimmed
@@ -207,33 +234,103 @@ class TestDiscreteFourierTransform:
         ("output", "data_type"),
         [
             ("FFT", "fourier transform"),
-            # ("AS", "Amplitude Spectrum"),
-            # ("PS", "Power Spectrum"),
-            # ("PSD", "Power Spectral Density"),
+            ("AS", "Amplitude Spectrum"),
+            ("PS", "Power Spectrum"),
+            ("PSD", "Spectral Density"),
         ],
     )
     def test_output_spectral_representations(self, sin_patch, output, data_type):
-        """Ensure supported spectral outputs are converted from FFT output."""
+        """Ensure supported spectral outputs are returned."""
         fft = sin_patch.dft("time", output="FFT")
-        amp = fft.abs() + np.finfo(sin_patch.data.dtype).eps
         out = sin_patch.dft("time", output=output)
 
-        if output == "FFT":
-            expected = fft.data
-        elif output == "AS":
-            expected = amp.data
-        elif output == "PS":
-            expected = amp.data * amp.data
-        else:
-            ps = sin_patch.dft("time", output="PS")
-            n = len(out.get_coord("time"))
-            ft_coord = out.get_coord("ft_time")
-            fsamp = 1 / (ft_coord.step * ft_coord.units)
-            expected = (ps / (n * fsamp)).data
-
         assert out.attrs.data_type == data_type
+        assert out.attrs["_dft_output"] == output
         assert out.data.shape == fft.data.shape
-        assert np.allclose(out.data, expected)
+
+    @pytest.mark.parametrize("real", [False, True])
+    def test_amplitude_spectrum_scaling(self, sin_patch, real):
+        """Ensure AS recovers harmonic amplitudes."""
+        out = sin_patch.dft("time", real=real, pad=False, output="AS")
+        time_axis = sin_patch.get_axis("time")
+        ft_axis = out.get_axis("ft_time")
+        sine_amp = np.ptp(sin_patch.data, axis=time_axis) / 2
+        expected = sine_amp if real else sine_amp / 2
+
+        assert np.allclose(np.max(out.data, axis=ft_axis), expected, rtol=0.005)
+
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    @pytest.mark.parametrize("real", [False, True])
+    def test_spectral_power_scaling(self, sin_patch, real, output):
+        """Ensure PS and PSD integrate/sum to time-domain mean square."""
+        dims = ("time",)
+        out = sin_patch.dft("time", real=real, pad=False, output=output)
+
+        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+
+    @pytest.mark.parametrize(
+        ("dims", "real"),
+        [
+            (None, None),
+            (("time", "distance"), None),
+            (("time", "distance"), "time"),
+            (("distance", "time"), "distance"),
+        ],
+    )
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling_multiple_dims(
+        self, sin_patch, dims, real, output
+    ):
+        """Ensure multi-axis spectral outputs recover mean square."""
+        out = sin_patch.dft(dim=dims, real=real, pad=False, output=output)
+
+        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling_padded(self, sin_patch_trimmed, output):
+        """Ensure default padded spectral outputs use the padded extent."""
+        padded = sin_patch_trimmed.pad(time="fft")
+        out = sin_patch_trimmed.dft("time", output=output)
+
+        self._assert_spectral_power_matches_patch(padded, out, ("time",), output)
+
+    def test_real_spectral_output_does_not_double_edges(self, sin_patch):
+        """Ensure one-sided spectral outputs don't double DC or Nyquist."""
+        time_axis = sin_patch.get_axis("time")
+        time_shape = [1] * sin_patch.ndim
+        time_shape[time_axis] = sin_patch.shape[time_axis]
+        nyquist = (-1) ** np.arange(sin_patch.shape[time_axis])
+        data = np.broadcast_to(nyquist.reshape(time_shape), sin_patch.shape)
+        patch = sin_patch.new(data=data)
+
+        out = patch.dft("time", real=True, pad=False, output="AS")
+        ft_axis = out.get_axis("ft_time")
+        nyquist_amp = np.take(out.data, -1, axis=ft_axis)
+
+        assert np.allclose(nyquist_amp, 1)
+
+    def test_spectral_output_units(self, sin_patch):
+        """Ensure spectral output units are scaled according to output type."""
+        data_units = get_quantity(sin_patch.attrs.data_units)
+        time_units = get_quantity(sin_patch.get_coord("time").units)
+
+        as_ = sin_patch.dft("time", pad=False, output="AS")
+        ps = sin_patch.dft("time", pad=False, output="PS")
+        psd = sin_patch.dft("time", pad=False, output="PSD")
+
+        assert get_quantity(as_.attrs.data_units) == data_units
+        assert get_quantity(ps.attrs.data_units) == data_units * data_units
+        expected_psd_units = data_units * data_units * time_units
+        assert get_quantity(psd.attrs.data_units) == expected_psd_units
+
+    @pytest.mark.parametrize("output", ["AS", "PS", "PSD"])
+    def test_spectral_output_without_data_units(self, sin_patch, output):
+        """Ensure spectral outputs don't invent units without data units."""
+        patch = sin_patch.update_attrs(data_units=None)
+
+        out = patch.dft("time", pad=False, output=output)
+
+        assert out.attrs.data_units is None
 
     def test_output_is_case_insensitive(self, sin_patch):
         """Ensure output names are normalized before conversion."""
@@ -246,9 +343,14 @@ class TestDiscreteFourierTransform:
         with pytest.raises(ValueError, match="Unknown kind"):
             sin_patch.dft("time", output="bad")
 
+    def test_db_true_with_fft_raises(self, sin_patch):
+        """Ensure dB conversion is only accepted for spectral outputs."""
+        with pytest.raises(ParameterError, match="db=True is only supported"):
+            sin_patch.dft("time", output="FFT", db=True)
+
     @pytest.mark.parametrize(("output", "scale"), [("AS", 20), ("PS", 10), ("PSD", 10)])
     def test_db_output(self, sin_patch, output, scale):
-        """Ensure spectral outputs can be converted to decibels."""
+        """Ensure spectral outputs use DASCore's no-reference dB scaling."""
         linear = sin_patch.dft("time", output=output)
         out = sin_patch.dft("time", output=output, db=True)
         eps = np.finfo(linear.data.dtype).eps
@@ -307,6 +409,20 @@ class TestInverseDiscreteFourierTransform:
         """Ensure data_type attr is restored."""
         out = fft_sin_patch_time.idft("time")
         assert out.attrs.data_type == sin_patch.attrs.data_type
+
+    def test_dft_output_attr_removed_after_idft(self, fft_sin_patch_time):
+        """Ensure inverse DFT removes private DFT output metadata."""
+        out = fft_sin_patch_time.idft("time")
+
+        assert "_dft_output" not in out.attrs
+
+    @pytest.mark.parametrize("output", ["AS", "PS", "PSD"])
+    def test_non_fft_output_cannot_be_inverted(self, sin_patch, output):
+        """Ensure non-FFT spectral representations cannot be inverted."""
+        out = sin_patch.dft("time", output=output)
+
+        with pytest.raises(ValueError, match="Only dft\\(output='FFT'\\)"):
+            out.idft("time")
 
     def test_undo_padding(self, sin_patch_trimmed):
         """Ensure the padding is undone in idft."""
