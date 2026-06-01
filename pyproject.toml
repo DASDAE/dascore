@@ -213,6 +213,7 @@ max-complexity = 10
 convention = "numpy"
 
 [tool.pytest.ini_options]
+norecursedirs = ["worktrees"]
 filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'

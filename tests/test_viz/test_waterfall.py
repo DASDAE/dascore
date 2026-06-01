@@ -114,7 +114,7 @@ class TestWaterfall:
 
     def test_no_colorbar(self, random_patch):
         """Ensure the colorbar can be disabled."""
-        ax = random_patch.viz.waterfall(cmap=None)
+        ax = random_patch.viz.waterfall(cmap=None, cbar=False)
         assert ax.images[-1].colorbar is None
 
     def test_units(self, random_patch):
