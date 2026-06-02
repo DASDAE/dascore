@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
+from math import prod
 from operator import mul, truediv
 from typing import Any, Literal
 
@@ -37,48 +38,49 @@ from dascore.utils.patch import (
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 
-DFT_OUTPUT_DATA_TYPES = {
+DFT_OUTPUT_DATA_TYPE_MAP = {
     "AS": "Amplitude Spectrum",
     "PS": "Power Spectrum",
     "PSD": "Spectral Density",
 }
-DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPES)
+DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
 
 
 def _get_dft_coord_units(units):
     """Get units for DFT coordinates."""
     new_units = invert_quantity(units)
-    if new_units == dc.get_quantity("Hz"):
+    # This purposefully converts 1/s to Hz to be more conventional. See #693.
+    if new_units == dc.get_quantity("1/s"):
         new_units = dc.get_quantity("Hz")
     return new_units
 
 
-def _get_dft_spectral_data_units(patch, dims, output, db):
-    """Get conventional data units for DFT spectral outputs."""
-    if db:
-        return units.dB
+def _get_dft_coord_unit_product(patch, dims, transformed=False):
+    """Get the product of original or transformed coordinate units."""
+    names = [f"ft_{dim}" if transformed else dim for dim in iterate(dims)]
+    return prod(
+        unit
+        for name in names
+        if (unit := dc.get_quantity(patch.get_coord(name).units)) is not None
+    )
+
+
+def _get_dft_data_units(patch, dims, output="FFT"):
+    """Get data units for DFT outputs."""
     data_units = dc.get_quantity(patch.attrs.data_units)
     if data_units is None:
         return None
-    domain_units = None
-    spectral_units = None
-    for dim in iterate(dims):
-        dim_units = dc.get_quantity(patch.get_coord(dim).units)
-        ft_units = dc.get_quantity(patch.get_coord(f"ft_{dim}").units)
-        domain_units = dim_units if domain_units is None else domain_units * dim_units
-        spectral_units = (
-            ft_units if spectral_units is None else spectral_units * ft_units
-        )
-    original_units = (
-        data_units / domain_units if domain_units is not None else data_units
-    )
-    if output == "AS":
-        return original_units
-    if output == "PS":
-        return original_units * original_units
-    if output == "PSD" and spectral_units is not None:
-        return original_units * original_units / spectral_units
-    return original_units * original_units
+    domain_units = _get_dft_coord_unit_product(patch, dims)
+    if output == "FFT":
+        return data_units * domain_units
+    original_units = data_units / domain_units
+    spectral_units = _get_dft_coord_unit_product(patch, dims, transformed=True)
+    output_units = {
+        "AS": original_units,
+        "PS": original_units**2,
+        "PSD": original_units**2 / spectral_units,
+    }
+    return output_units[output]
 
 
 def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
@@ -90,19 +92,11 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     # Note: We need original_cm and patch because patch may have undergone
     # padding.
 
-    def _get_fft_coord(x_len, dx, units):
-        """Get coord for normal fft coord."""
+    def _get_fft_coord(x_len, dx, units, is_real=False):
+        """Get coord for fft frequency bins."""
         new_dx = 1.0 / (x_len * dx)
-        stop = ((x_len - 1) // 2 + 1) * new_dx
-        start = -(x_len // 2) * new_dx
-        units = _get_dft_coord_units(units)
-        return get_coord(start=start, stop=stop, step=new_dx, units=units)
-
-    def _get_rfft_coord(x_len, dx, units):
-        """Get coord from real fft coord."""
-        new_dx = 1.0 / (x_len * dx)
-        start = 0
-        stop = (x_len // 2 + 1) * new_dx
+        start = 0 if is_real else -(x_len // 2) * new_dx
+        stop = (x_len // 2 + 1) * new_dx if is_real else ((x_len - 1) // 2 + 1) * new_dx
         units = _get_dft_coord_units(units)
         return get_coord(start=start, stop=stop, step=new_dx, units=units)
 
@@ -117,10 +111,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
         size = old_coord.shape[0]
         dx = dxs[i]
         new_name = ft.rename_dims(dim)[0]
-        if dim == real:
-            coord = _get_rfft_coord(size, dx, units)
-        else:
-            coord = _get_fft_coord(size, dx, units)
+        coord = _get_fft_coord(size, dx, units, is_real=dim == real)
         new_coords[new_name] = (new_name, coord)
         # Add padded coordinates
         if original_cm is not None:
@@ -134,7 +125,7 @@ def _get_dft_attrs(patch, dims, new_coords, pad=False, output="FFT"):
     """Get new attributes for transformed patch."""
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
-    new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
+    new["data_units"] = _get_dft_data_units(patch, dims)
     new["_pre_dft_data_type"] = new.get("data_type")
     new["data_type"] = "fourier transform"
     new["_dft_output"] = output
@@ -195,7 +186,7 @@ def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
     amp = patch.abs()
     extent = _get_transformed_domain_extent(amp, dims)
     one_sided_factor = _get_one_sided_spectral_factor(patch, real)
-    data_units = _get_dft_spectral_data_units(patch, dims, output, db)
+    data_units = _get_dft_data_units(patch, dims, output)
     if output == "AS":
         # Convert DASCore's dx-scaled Fourier coefficients to harmonic
         # amplitude. One-sided spectra collect the dropped negative-frequency
@@ -214,9 +205,10 @@ def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
         db_scale = 20 if output == "AS" else 10
         out = db_scale * out.log10()
         out = out.set_units(units.dB)
+        data_units = out.attrs.data_units
 
     return out.update_attrs(
-        data_type=DFT_OUTPUT_DATA_TYPES[output],
+        data_type=DFT_OUTPUT_DATA_TYPE_MAP[output],
         data_units=data_units,
     )
 
