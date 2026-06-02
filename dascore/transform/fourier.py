@@ -45,6 +45,42 @@ DFT_OUTPUT_DATA_TYPES = {
 DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPES)
 
 
+def _get_dft_coord_units(units):
+    """Get units for DFT coordinates."""
+    new_units = invert_quantity(units)
+    if new_units == dc.get_quantity("Hz"):
+        new_units = dc.get_quantity("Hz")
+    return new_units
+
+
+def _get_dft_spectral_data_units(patch, dims, output, db):
+    """Get conventional data units for DFT spectral outputs."""
+    if db:
+        return units.dB
+    data_units = dc.get_quantity(patch.attrs.data_units)
+    if data_units is None:
+        return None
+    domain_units = None
+    spectral_units = None
+    for dim in iterate(dims):
+        dim_units = dc.get_quantity(patch.get_coord(dim).units)
+        ft_units = dc.get_quantity(patch.get_coord(f"ft_{dim}").units)
+        domain_units = dim_units if domain_units is None else domain_units * dim_units
+        spectral_units = (
+            ft_units if spectral_units is None else spectral_units * ft_units
+        )
+    original_units = (
+        data_units / domain_units if domain_units is not None else data_units
+    )
+    if output == "AS":
+        return original_units
+    if output == "PS":
+        return original_units * original_units
+    if output == "PSD" and spectral_units is not None:
+        return original_units * original_units / spectral_units
+    return original_units * original_units
+
+
 def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     """
     Create coordinates based on dxs and patch shape.
@@ -59,7 +95,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
         new_dx = 1.0 / (x_len * dx)
         stop = ((x_len - 1) // 2 + 1) * new_dx
         start = -(x_len // 2) * new_dx
-        units = invert_quantity(units)
+        units = _get_dft_coord_units(units)
         return get_coord(start=start, stop=stop, step=new_dx, units=units)
 
     def _get_rfft_coord(x_len, dx, units):
@@ -67,7 +103,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
         new_dx = 1.0 / (x_len * dx)
         start = 0
         stop = (x_len // 2 + 1) * new_dx
-        units = invert_quantity(units)
+        units = _get_dft_coord_units(units)
         return get_coord(start=start, stop=stop, step=new_dx, units=units)
 
     # first disassociate old coordinates. We do this rather than drop them
@@ -159,6 +195,7 @@ def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
     amp = patch.abs()
     extent = _get_transformed_domain_extent(amp, dims)
     one_sided_factor = _get_one_sided_spectral_factor(patch, real)
+    data_units = _get_dft_spectral_data_units(patch, dims, output, db)
     if output == "AS":
         # Convert DASCore's dx-scaled Fourier coefficients to harmonic
         # amplitude. One-sided spectra collect the dropped negative-frequency
@@ -178,7 +215,10 @@ def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
         out = db_scale * out.log10()
         out = out.set_units(units.dB)
 
-    return out.update_attrs(data_type=DFT_OUTPUT_DATA_TYPES[output])
+    return out.update_attrs(
+        data_type=DFT_OUTPUT_DATA_TYPES[output],
+        data_units=data_units,
+    )
 
 
 @patch_function()
@@ -263,6 +303,8 @@ def dft(
     >>> dft_time_real = patch.dft(dim="time", real=True)
     >>> # dft on specified dimensions, specify real dimension
     >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
+    >>> # calculate a power spectral density along time
+    >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
     output = output.upper()
     if output not in DFT_OUTPUT_TYPES:
@@ -304,9 +346,7 @@ def dft(
     patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
 
     if output != "FFT":
-        patch_out = _convert_dft_spectral_amplitudes(
-            patch_out, output, dims, real, db
-        )
+        patch_out = _convert_dft_spectral_amplitudes(patch_out, output, dims, real, db)
 
     return patch_out
 

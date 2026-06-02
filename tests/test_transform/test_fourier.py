@@ -10,7 +10,7 @@ import dascore as dc
 import dascore.proc.coords
 from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import dft, idft
-from dascore.units import get_quantity, second
+from dascore.units import get_quantity, get_quantity_str, second
 from dascore.utils.misc import iterate
 
 F_0 = 2
@@ -89,9 +89,7 @@ class TestDiscreteFourierTransform:
         expected = np.mean(patch.data**2, axis=old_axes)
         spectral_power = np.sum(out.data, axis=ft_axes)
         if output == "PSD":
-            bin_volume = np.prod(
-                [abs(out.get_coord(f"ft_{dim}").step) for dim in dims]
-            )
+            bin_volume = np.prod([abs(out.get_coord(f"ft_{dim}").step) for dim in dims])
             spectral_power = spectral_power * bin_volume
 
         assert np.allclose(spectral_power, expected)
@@ -278,9 +276,7 @@ class TestDiscreteFourierTransform:
         ],
     )
     @pytest.mark.parametrize("output", ["PS", "PSD"])
-    def test_spectral_power_scaling_multiple_dims(
-        self, sin_patch, dims, real, output
-    ):
+    def test_spectral_power_scaling_multiple_dims(self, sin_patch, dims, real, output):
         """Ensure multi-axis spectral outputs recover mean square."""
         out = sin_patch.dft(dim=dims, real=real, pad=False, output=output)
 
@@ -322,6 +318,22 @@ class TestDiscreteFourierTransform:
         assert get_quantity(ps.attrs.data_units) == data_units * data_units
         expected_psd_units = data_units * data_units * time_units
         assert get_quantity(psd.attrs.data_units) == expected_psd_units
+
+    def test_time_dft_coord_uses_hz(self, sin_patch):
+        """Ensure transformed time coords use Hz rather than reduced 1/s."""
+        out = sin_patch.dft("time", pad=False)
+
+        assert get_quantity(out.get_coord("ft_time").units) == get_quantity("Hz")
+        assert get_quantity_str(out.get_coord("ft_time").units) == "Hz"
+
+    def test_strain_rate_psd_units_use_hz(self, sin_patch):
+        """Ensure strain-rate PSD units use conventional per-Hz units."""
+        patch = sin_patch.set_units("strain/s")
+
+        out = patch.dft("time", real=True, pad=False, output="PSD")
+
+        assert get_quantity(out.attrs.data_units) == get_quantity("(strain/s)**2/Hz")
+        assert "Hz" in get_quantity_str(out.attrs.data_units)
 
     @pytest.mark.parametrize("output", ["AS", "PS", "PSD"])
     def test_spectral_output_without_data_units(self, sin_patch, output):
