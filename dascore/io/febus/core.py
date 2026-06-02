@@ -21,7 +21,7 @@ from .a1utils import (
     _yield_attrs_coords,
 )
 from .g1utils import _get_g1_coords_and_attrs, _get_g1_patch, _is_g1_file
-
+from .t1utils import _is_t1_file, _get_t1_patch, _get_t1_coords_and_attrs
 
 class FebusPatchAttrs(dc.PatchAttrs):
     """
@@ -149,4 +149,45 @@ class FebusG1CSV1(FiberIO):
     def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:
         """Read a G1 file, return a Patch object."""
         pa = _get_g1_patch(resource, attr_cls=FebusBOTDRStrainAttrs)
+        return dc.spool([pa])
+
+
+class FebusT1V1(FiberIO):
+    """
+    IO support for FEBUS T1 DTS HDF5 files.
+
+    Each file typically covers one acquisition session; each row in
+    Temperature / Time represents one measurement sweep.
+
+    Only Temperature is exposed as the primary Patch data_type.
+    Stokes / AntiStokes live in the same file but on a different distance
+    grid (DistanceSignal, 4501 pts vs 1103 pts for Temperature), so they
+    would need separate Patch objects — out of scope for this reader.
+    """
+
+    name    = "FEBUS_T1"
+    version = "1"
+
+    # DASCore checks preferred_extensions when sniffing format
+    preferred_extensions = ("hdf5", "h5")
+
+    def get_format(self, fi: H5Reader, **kwargs) -> tuple[str, str] | bool:
+        """Return (name, version) if this is a FEBUS T1 file, else False."""
+        return (self.name, self.version) if _is_t1_file(fi) else False
+
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+        """Return a list with one PatchAttrs for the file's temperature data."""
+        coords, attrs = _get_t1_coords_and_attrs(resource, self.name, self.version)
+        return [attrs]
+
+    def read(self, resource: H5Reader, **kwargs) -> dc.BaseSpool:
+        """
+        Read temperature data into a list containing one Patch.
+
+        Parameters
+        ----------
+        resource
+            Open h5py.File — provided automatically by DASCore.
+        """
+        pa = _get_t1_patch(resource, self.name, self.version)
         return dc.spool([pa])
