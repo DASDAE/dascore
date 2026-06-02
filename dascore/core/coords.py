@@ -627,10 +627,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return None
         # special case for datetime/timedelta and relative
         if relative:
-            # A relative offset into a time-like coordinate is a duration, so
-            # coerce it to timedelta64 for both datetime64 and timedelta64
-            # coords (previously only datetime64 was handled, so a numeric
-            # offset into a timedelta64 coord raised a ufunc type error).
+            # A relative offset into any time-like coord is a duration.
             if dtype_time_like(self.dtype):
                 value = dc.to_timedelta64(value)
             value = self._get_relative_values(value)
