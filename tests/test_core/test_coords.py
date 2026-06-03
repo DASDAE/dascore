@@ -633,6 +633,24 @@ class TestSelect:
         else:
             assert ind_1 == ind_2
 
+    def test_select_relative_numeric_offset_timedelta(self):
+        """
+        A numeric relative offset into a timedelta64 coordinate should be
+        coerced to a duration, just like for datetime64 coords (see #604).
+        """
+        coord = dc.get_coord(data=dc.to_timedelta64(np.arange(0, 10)))
+        # A numeric offset previously raised a ufunc type error for
+        # timedelta64 coords; it should behave like the explicit duration.
+        out_num, ind_num = coord.select((2, -2), relative=True)
+        out_td, ind_td = coord.select(
+            (dc.to_timedelta64(2), dc.to_timedelta64(-2)), relative=True
+        )
+        assert np.all(out_num == out_td)
+        if isinstance(ind_num, np.ndarray):
+            assert np.all(ind_num == ind_td)
+        else:
+            assert ind_num == ind_td
+
     def test_select_changes_len(self, long_coord):
         """Ensure select changes the length of the coordinate."""
         data = long_coord.data
