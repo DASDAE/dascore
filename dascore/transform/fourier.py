@@ -160,46 +160,22 @@ def _get_transformed_domain_extent(patch, dims):
     return extent
 
 
-def _get_one_sided_spectral_factor(patch, real):
-    """Get the factor for converting rfft spectra to one-sided spectra."""
-    if real is None:
-        return 1
-
-    # rfft drops negative frequencies only along the real axis. The returned
-    # factor is shaped for broadcasting over the full transformed array.
-    ft_dim = f"ft_{real}"
-    axis = patch.get_axis(ft_dim)
-    factor = np.ones(patch.coord_shapes[ft_dim])
-    n_samples = len(patch.get_coord(real))
-
-    # Even-length real inputs include a Nyquist bin; odd-length inputs don't.
-    stop = -1 if n_samples % 2 == 0 else None
-    factor[slice(1, stop)] = 2
-
-    shape = [1] * patch.ndim
-    shape[axis] = len(factor)
-    return factor.reshape(shape)
-
-
 def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
     """Convert the FFT output to spectral amplitude representations."""
     amp = patch.abs()
     extent = _get_transformed_domain_extent(amp, dims)
-    one_sided_factor = _get_one_sided_spectral_factor(patch, real)
     data_units = _get_dft_data_units(patch, dims, output)
     if output == "AS":
         # Convert DASCore's dx-scaled Fourier coefficients to harmonic
-        # amplitude. One-sided spectra collect the dropped negative-frequency
-        # amplitude into the corresponding positive-frequency bins.
-        out = (amp / extent) * one_sided_factor
+        # amplitude.
+        out = amp / extent
     elif output == "PS":
-        # PS bins sum to mean square. For one-sided spectra, power from the
-        # dropped negative-frequency bins is added to positive-frequency bins.
-        out = (amp * amp / (extent * extent)) * one_sided_factor
+        # PS bins sum to mean square.
+        out = amp * amp / (extent * extent)
     elif output == "PSD":
         # PSD bins integrate to mean square when multiplied by frequency-bin
         # volume, which is the reciprocal of the transformed-domain extent.
-        out = (amp * amp / extent) * one_sided_factor
+        out = amp * amp / extent
     if db:
         out = out + np.finfo(out.data.dtype).eps
         db_scale = 20 if output == "AS" else 10
@@ -270,7 +246,8 @@ def dft(
       types are normalized as described in the ``output`` parameter.
 
     - For ``output='AS'``, ``'PS'``, or ``'PSD'`` with ``real=True``, the
-      non-DC and non-Nyquist bins are converted to one-sided spectra.
+      non-DC and non-Nyquist bins have not been converted to one-sided spectra.
+      Depending on your use case, you may need to multiply non-zero bins by 2.
 
     - If all requested dimensions are already transformed, ``dft`` returns
       the input patch unchanged, regardless of the requested ``output``.

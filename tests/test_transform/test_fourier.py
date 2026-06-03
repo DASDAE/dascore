@@ -94,6 +94,23 @@ class TestDiscreteFourierTransform:
 
         assert np.allclose(spectral_power, expected)
 
+    def _assert_real_output_matches_full_dft(self, patch, out, dims, output, real):
+        """Ensure real spectral outputs are not converted to one-sided spectra."""
+        dims = patch.dims if dims is None else tuple(iterate(dims))
+        real = dims[-1] if real is True else real
+        full = patch.dft(dim=dims, real=False, pad=False, output=output)
+        real_axis = full.get_axis(f"ft_{real}")
+        nonnegative = full.get_coord(f"ft_{real}").data >= 0
+        full_ft_axes = tuple(full.get_axis(f"ft_{dim}") for dim in dims)
+        out_ft_axes = tuple(out.get_axis(f"ft_{dim}") for dim in dims)
+        expected = np.sum(
+            np.compress(nonnegative, full.data, axis=real_axis),
+            axis=full_ft_axes,
+        )
+        spectral_power = np.sum(out.data, axis=out_ft_axes)
+
+        assert np.allclose(spectral_power, expected)
+
     def test_max_frequency(self, fft_sin_patch_time):
         """Ensure when sin wave is input max freq is correct."""
         assert "ft_time" in fft_sin_patch_time.dims
@@ -253,34 +270,48 @@ class TestDiscreteFourierTransform:
         time_axis = sin_patch.get_axis("time")
         ft_axis = out.get_axis("ft_time")
         sine_amp = np.ptp(sin_patch.data, axis=time_axis) / 2
-        expected = sine_amp if real else sine_amp / 2
+        expected = sine_amp / 2
 
         assert np.allclose(np.max(out.data, axis=ft_axis), expected, rtol=0.005)
 
     @pytest.mark.parametrize("output", ["PS", "PSD"])
-    @pytest.mark.parametrize("real", [False, True])
-    def test_spectral_power_scaling(self, sin_patch, real, output):
+    def test_spectral_power_scaling(self, sin_patch, output):
         """Ensure PS and PSD integrate/sum to time-domain mean square."""
         dims = ("time",)
-        out = sin_patch.dft("time", real=real, pad=False, output=output)
+        out = sin_patch.dft("time", pad=False, output=output)
+
+        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+
+    @pytest.mark.parametrize(
+        "dims",
+        [
+            None,
+            ("time", "distance"),
+        ],
+    )
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling_multiple_dims(self, sin_patch, dims, output):
+        """Ensure multi-axis spectral outputs recover mean square."""
+        out = sin_patch.dft(dim=dims, pad=False, output=output)
 
         self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
 
     @pytest.mark.parametrize(
         ("dims", "real"),
         [
-            (None, None),
-            (("time", "distance"), None),
+            (("time",), True),
             (("time", "distance"), "time"),
             (("distance", "time"), "distance"),
         ],
     )
     @pytest.mark.parametrize("output", ["PS", "PSD"])
-    def test_spectral_power_scaling_multiple_dims(self, sin_patch, dims, real, output):
-        """Ensure multi-axis spectral outputs recover mean square."""
+    def test_real_spectral_outputs_match_full_dft_bins(
+        self, sin_patch, dims, real, output
+    ):
+        """Ensure real spectral outputs keep raw nonnegative-frequency bins."""
         out = sin_patch.dft(dim=dims, real=real, pad=False, output=output)
 
-        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+        self._assert_real_output_matches_full_dft(sin_patch, out, dims, output, real)
 
     @pytest.mark.parametrize("output", ["PS", "PSD"])
     def test_spectral_power_scaling_padded(self, sin_patch_trimmed, output):
@@ -289,21 +320,6 @@ class TestDiscreteFourierTransform:
         out = sin_patch_trimmed.dft("time", output=output)
 
         self._assert_spectral_power_matches_patch(padded, out, ("time",), output)
-
-    def test_real_spectral_output_does_not_double_edges(self, sin_patch):
-        """Ensure one-sided spectral outputs don't double DC or Nyquist."""
-        time_axis = sin_patch.get_axis("time")
-        time_shape = [1] * sin_patch.ndim
-        time_shape[time_axis] = sin_patch.shape[time_axis]
-        nyquist = (-1) ** np.arange(sin_patch.shape[time_axis])
-        data = np.broadcast_to(nyquist.reshape(time_shape), sin_patch.shape)
-        patch = sin_patch.new(data=data)
-
-        out = patch.dft("time", real=True, pad=False, output="AS")
-        ft_axis = out.get_axis("ft_time")
-        nyquist_amp = np.take(out.data, -1, axis=ft_axis)
-
-        assert np.allclose(nyquist_amp, 1)
 
     def test_spectral_output_units(self, sin_patch):
         """Ensure spectral output units are scaled according to output type."""
