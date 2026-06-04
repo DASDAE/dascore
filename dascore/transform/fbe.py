@@ -11,7 +11,7 @@ from dascore.utils.patch import get_dim_sampling_rate, patch_function
 from dascore.utils.time import to_float
 
 
-@patch_function()
+@patch_function(data_type="frequency_band_energy")
 def fbe(
     patch: PatchType,
     window: float,
@@ -87,13 +87,9 @@ def fbe(
 
     patch = patch.pass_filter(**kwargs)
 
-    fbe = ((patch**2).rolling(**{dim: window, "step": step}).mean() ** 0.5).update(
-        attrs={"data_type": "Frequency-Band Energy"}
-    )
+    fbe = (patch**2).rolling(**{dim: window, "step": step}).mean() ** 0.5
 
     if db:
-        fbe = (10 * fbe.log10()).update(
-            attrs={"data_type": "Frequency-Band Energy", "data_units": "dB"}
-        )
+        fbe = (10 * fbe.log10()).update(attrs={"data_units": "dB"})
 
     return fbe
