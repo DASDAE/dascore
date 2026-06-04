@@ -40,3 +40,5 @@ febus_2.h5 c118960a94e37fbff0eb5c33856d34cdfe81609902c4feaedab9949498d31c23 http
 febg1_C1_2023-05-10T12.25.03+0000.bsl e1a8ff72f3ec1805129267df916f41419bf7fa3a4993602e2b85e721cad922ae https://github.com/dasdae/test_data/raw/master/dss/febg1_C1_2023-05-10T12.25.03+0000.bsl
 febg1_C1_2023-05-10T12.27.33+0000.bsl 233df0c184796944442ae19beddcf962aba1c9fab337fd1c74971f0c4d513a36 https://github.com/dasdae/test_data/raw/master/dss/febg1_C1_2023-05-10T12.27.33+0000.bsl
 febus-g1-spectra_C2_2026-06-03T17.28.13+0200.mtx.h5 554bfd4c80aa8b7ff1bc02df854023f7e3e40952f94403a13845a43439fe238f https://github.com/dasdae/test_data/raw/master/dss/febus-g1-spectra_C2_2026-06-03T17.28.13+0200.mtx.h5
+febus_dts.h5 995bcfa9448c17e94ab48800e0de08eace20500f648ec3aa258830b8d7a58ff6 https://github.com/dasdae/test_data/raw/master/dts/febus_dts.h5
+febus_dts_single_reading.h5 e81c7225e6061e6c0ac7fc42d9d623b0c79d20d7ef367a7513a2e51d84677d78 https://github.com/dasdae/test_data/raw/master/dts/febus_dts_single_reading.h5

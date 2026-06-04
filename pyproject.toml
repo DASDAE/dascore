@@ -119,6 +119,7 @@ FEBUS_G1_CSV__V1_0 = "dascore.io.febus.core:FebusG1CSV1"
 FEBUS_MTX_H5__V1 = "dascore.io.febus.core:FebusMTXH5V1"
 FEBUS__V1 = "dascore.io.febus.core:Febus1"
 FEBUS__V2 = "dascore.io.febus.core:Febus2"
+FEBUS_T1__V1 = "dascore.io.febus.core:FebusT1V1"
 NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
 NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
@@ -214,6 +215,18 @@ max-complexity = 10
 convention = "numpy"
 
 [tool.pytest.ini_options]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "worktrees",
+]
 filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'

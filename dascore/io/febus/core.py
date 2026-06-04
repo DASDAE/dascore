@@ -10,7 +10,7 @@ from types import EllipsisType
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
+from dascore.constants import opt_timeable_types, timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
@@ -30,6 +30,7 @@ from .g1utils import (
     _is_g1_file,
     _mtx_version,
 )
+from .t1utils import _get_t1_patch, _is_t1_file, _scan_t1
 
 _float_select_type = tuple[float | None | EllipsisType, float | None | EllipsisType]
 _time_select_type = tuple[
@@ -223,3 +224,55 @@ class FebusMTXH5V1(FiberIO):
             select_kwargs=select_kwargs,
         )
         return dc.spool([] if patch is None else [patch])
+
+
+class FebusT1V1(FiberIO):
+    """
+    IO support for FEBUS T1 DTS HDF5 files.
+
+    Each file typically covers one acquisition session; each row in
+    Temperature / Time represents one measurement sweep.
+
+    Only Temperature is exposed as the primary Patch data_type.
+    Stokes / AntiStokes live in the same file but on a different distance
+    grid (DistanceSignal, 4501 pts vs 1103 pts for Temperature), so they
+    would need separate Patch objects — out of scope for this reader.
+
+    Additionally, it's possible to have multiple fibers on a single
+    interrogator and this doesn't account for that in any way.
+    """
+
+    name = "FEBUS_T1"
+    version = "1"
+
+    preferred_extensions = ("hdf5", "h5")
+
+    def get_format(self, fi: H5Reader, **kwargs) -> tuple[str, str] | bool:
+        """Return (name, version) if this is a FEBUS T1 file, else False."""
+        return (self.name, self.version) if _is_t1_file(fi) else False
+
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+        """Return a list with one PatchAttrs for the file's temperature data."""
+        return [_scan_t1(resource, format=self.name, version=self.version)]
+
+    def read(
+        self,
+        resource: H5Reader,
+        time: tuple[timeable_types, timeable_types] | None = None,
+        distance: tuple[float, float] | None = None,
+        **kwargs,
+    ) -> dc.BaseSpool:
+        """
+        Read temperature data into a list containing one Patch.
+
+        Parameters
+        ----------
+        resource
+            Open h5py.File — provided automatically by DASCore.
+        """
+        pa = _get_t1_patch(
+            resource, self.name, self.version, time=time, distance=distance
+        )
+        if not pa.data.size:
+            return dc.spool([])
+        return dc.spool([pa])

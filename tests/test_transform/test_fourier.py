@@ -283,6 +283,21 @@ class TestInverseDiscreteFourierTransform:
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
 
+    def test_numeric_window_with_timedelta_coord(self):
+        """
+        stft with a numeric window length should work when the time
+        coordinate is timedelta64 (not just datetime64); see #604.
+        """
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        # Convert the time coordinate to timedelta64 (relative to the end).
+        new = patch.update_coords(time=time.values - time.values[-1])
+        # A numeric window length previously raised a ufunc type error here.
+        out_numeric = new.stft(time=0.1)
+        out_timedelta = new.stft(time=dc.to_timedelta64(0.1))
+        # The numeric form must match the explicit-duration form exactly.
+        assert out_numeric.equals(out_timedelta)
+
     def test_type(self, chirp_stft_patch, chirp_patch):
         """Simply ensure the correct type was returned."""
         patch = chirp_stft_patch

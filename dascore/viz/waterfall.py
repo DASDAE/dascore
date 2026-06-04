@@ -147,12 +147,13 @@ def _add_colorbar(ax, im, data, patch, log, scale):
     cb.set_label(label)
 
 
-def _default_colormap_per_datatype(patch):
+def _get_waterfall_colormap(patch, cmap=None):
     """
     Select a default colormap based on datatype
     """
-    this_type = str(patch.attrs.get("data_type", "")).lower()
-    cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
+    if cmap is None:
+        this_type = str(patch.attrs.get("data_type", "")).lower()
+        cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
     return _get_cmap(cmap)
 
 
@@ -160,11 +161,12 @@ def _default_colormap_per_datatype(patch):
 def waterfall(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap: str | None = "default",
+    cmap: str | None = None,
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
     log: bool = False,
+    cbar: bool = True,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -177,9 +179,8 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. If "default", a colormap will be
-        chosen automatically, depending on the data_type of the patch. Set to
-        None to not plot the colorbar.
+        A matplotlib colormap string or instance. If `None`, a colormap will be
+        chosen automatically, depending on the data_type of the patch.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -201,6 +202,9 @@ def waterfall(
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
         added.
+    cbar
+        If True, plot the colorbar, else do not. This controls only colorbar
+        display; use `cmap` to control colormap selection.
     show
         If True, show the plot, else just return axis.
 
@@ -272,13 +276,7 @@ def waterfall(
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
-
-    add_colorbar = cmap is not None
-    if cmap == "default":
-        cmap = _default_colormap_per_datatype(patch)
-    else:
-        cmap = _get_cmap(cmap)
-
+    cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
     with mpl.rc_context({"image.resample": True}):
         im = ax.imshow(
@@ -299,7 +297,7 @@ def waterfall(
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested
-    if add_colorbar:
+    if cbar:
         _add_colorbar(ax, im, data, patch, log, scale)
     if show:
         plt.show()
