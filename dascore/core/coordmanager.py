@@ -80,6 +80,10 @@ from dascore.utils.models import (
 )
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
+CoordManagerInput = Mapping[
+    str,
+    BaseCoord | np.ndarray | tuple[str | tuple[str, ...], BaseCoord | np.ndarray],
+]
 
 
 def _ensure_1d_coord(coord, coord_name: str):
@@ -1134,7 +1138,7 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
+    coords: CoordManagerInput | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
     attrs: dc.PatchAttrs | dict[str, Any] | None = None,
     shape=None,

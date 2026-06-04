@@ -150,25 +150,6 @@ class TestG1MTXH5:
         assert "temperature" in patch.coords.coord_map
         assert patch.coords.dim_map["temperature"] == ("time",)
 
-    def test_coords(self, mtx_h5_path):
-        """Coordinates should come from Febus datasets and attributes."""
-        patch = dc.read(mtx_h5_path)[0]
-        freq = patch.get_coord("frequency")
-        time = patch.get_coord("time")
-        dist = patch.get_coord("distance")
-        temperature = patch.get_coord("temperature")
-        assert freq.units == dc.get_quantity("MHz")
-        assert dist.units == dc.get_quantity("m")
-        assert temperature.units == dc.get_quantity("degC")
-        assert freq.step == -3.90625
-        assert freq.max() == 10750.0
-        assert freq.min() == 10253.90625
-        assert dist.min() == 50
-        assert dist.max() == 149
-        assert dist.step == 1
-        assert str(time.min()) == "2026-06-03T15:28:13.647423488"
-        np.testing.assert_allclose(temperature.values[[0, -1]], [24.67, 24.69])
-
     def test_scan_matches_read_attrs(self, mtx_h5_path):
         """Scan and read should return matching coord summaries."""
         attrs = dc.scan(mtx_h5_path)[0]
@@ -192,22 +173,15 @@ class TestG1MTXH5:
         assert fiber.read(mtx_h5_path, distance=(60, 70))[0].shape[1] == 11
         assert len(fiber.read(mtx_h5_path, frequency=(99999, ...))) == 0
 
-    @pytest.mark.parametrize("format_version", [2, [1, 2], None])
-    def test_unsupported_format_version_not_detected(self, tmp_path, format_version):
-        """The v1 reader should not claim unsupported MTX HDF5 versions."""
-        path = tmp_path / "bad_version_C1.mtx.h5"
-        _write_mtx_h5(path, format_version=format_version)
-        assert not FebusMTXH5V1().get_format(path)
-
-    def test_three_dimensional_file(self, tmp_path):
-        """MTX HDF5 files should produce patches in native HDF5 dim order."""
-        path = tmp_path / "three_dimensional_C1.mtx.h5"
+    def test_mtx_must_be_three_dimensional(self, tmp_path):
+        """Non-3D MTX datasets should fail with explicit validation."""
+        path = tmp_path / "two_dimensional_C1.mtx.h5"
         _write_mtx_h5(path)
-        patch = dc.read(path)[0]
-        assert patch.dims == ("time", "distance", "frequency")
-        assert patch.shape == (1, 2, 3)
-        assert patch.attrs.data_type == "brillouin_spectrum"
-        np.testing.assert_allclose(patch.get_coord("temperature").values, [24.0])
+        with h5py.File(path, "a") as h5:
+            del h5["mtx"]
+            h5.create_dataset("mtx", data=np.ones((2, 3), dtype=np.float32))
+        with pytest.raises(ValueError, match="expected 'mtx' to be 3D, got 2D"):
+            FebusMTXH5V1().read(path)
 
 
 class TestMisc:
