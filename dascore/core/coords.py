@@ -1170,8 +1170,16 @@ class CoordRange(BaseCoord):
         if isinstance(item, slice):
             start = None if item.start is ... else item.start
             end = None if item.stop is ... else item.stop
-            # Todo we can probably add more intelligent logic for slices.
             item = slice(start, end, item.step)
+            # A (possibly strided) slice of an evenly sampled range is still
+            # evenly sampled, so preserve the step rather than collapsing to a
+            # CoordMonotonicArray (which loses step for len==1). See #567.
+            indices = range(len(self))[item]
+            if len(indices):
+                new_step = self.step * indices.step
+                new_start = self.start + indices.start * self.step
+                new_stop = new_start + new_step * len(indices)
+                return self.new(start=new_start, stop=new_stop, step=new_step)
         out = self.values[item]
         return get_coord(data=out, units=self.units)
 
