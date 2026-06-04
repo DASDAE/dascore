@@ -36,11 +36,19 @@ def _get_time_coord(fi):
     return dc.get_coord(values=times, units="s")
 
 
-def _get_attrs(cm, path, format, version):
+def _get_coords(fi) -> dc.CoordManager:
+    time_coord = _get_time_coord(fi)
+    distance_coord = _get_distance_coord(fi)
+    dims = ("time", "distance")
+    return get_coord_manager(
+        {"time": time_coord, "distance": distance_coord},
+        dims=dims,
+    )
+
+
+def _get_attrs(path, format, version):
     """Build PatchAttrs from an already-constructed CoordManager."""
-    time_coord = cm.coord_map["time"]
-    dist_coord = cm.coord_map["distance"]
-    return dc.PatchAttrs(
+    return dict(
         path=path,
         file_format=format,
         file_version=str(version),
@@ -49,27 +57,14 @@ def _get_attrs(cm, path, format, version):
         data_category="DTS",
         instrument_make="FEBUS",
         instrument_model="T1",
-        time_min=time_coord.min(),
-        time_max=time_coord.max(),
-        d_time=time_coord.step,
-        distance_min=dist_coord.min(),
-        distance_max=dist_coord.max(),
-        d_distance=dist_coord.step,
-        distance_units="m",
     )
 
 
 def _scan_t1(fi: H5Reader, format, version) -> dc.PatchAttrs:
     """Get the coordinates and attributes for a T1 data patch"""
-    time_coord = _get_time_coord(fi)
-    distance_coord = _get_distance_coord(fi)
-    dims = ("time", "distance")
-    coords = get_coord_manager(
-        {"time": time_coord, "distance": distance_coord},
-        dims=dims,
-    )
-    attrs = _get_attrs(coords, path=fi.filename, format=format, version=version)
-    return attrs
+    coords = _get_coords(fi)
+    attrs = _get_attrs(path=fi.filename, format=format, version=version)
+    return dc.PatchAttrs(coords=coords, **attrs)
 
 
 def _get_t1_patch(
@@ -80,21 +75,16 @@ def _get_t1_patch(
     distance: tuple[float, float] | None = None,
 ) -> dc.Patch:
     """Core builder shared by read() and scan()."""
-    # Build time coordinate
-    time_coord = _get_time_coord(fi)
-    time_coord, time_slice = time_coord.select(time)
-    # Build distance coordinate
-    distance_coord = _get_distance_coord(fi)
-    distance_coord, distance_slice = distance_coord.select(distance)
+    coords = _get_coords(fi)
+    # Slice the coordinates
+    time_coord, time_slice = coords.get_coord("time").select(time)
+    distance_coord, distance_slice = coords.get_coord("distance").select(distance)
+    coords = coords.new(coord_map={"time": time_coord, "distance": distance_coord})
     # Get the temperature data
     temp = _get_h5_attr(fi, "Temperature")[
         time_slice, distance_slice
     ]  # (n_time, n_dist)
     # Construct the patch
-    dims = ("time", "distance")
-    coords = get_coord_manager(
-        {"time": time_coord, "distance": distance_coord},
-        dims=dims,
-    )
-    attrs = _get_attrs(coords, path=fi.filename, format=format, version=version)
-    return dc.Patch(data=temp, coords=coords, dims=dims, attrs=attrs)
+    attrs = _get_attrs(path=fi.filename, format=format, version=version)
+    attrs = dc.PatchAttrs(coords=coords, **attrs)
+    return dc.Patch(data=temp, coords=coords, dims=coords.dims, attrs=attrs)
