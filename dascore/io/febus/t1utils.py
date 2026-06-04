@@ -16,12 +16,6 @@ def _get_h5_attr(fi: H5Reader, key: str) -> np.ndarray:
     return fi[f"{_DATA}/{key}"][()]
 
 
-def _timestamps(fi: H5Reader) -> np.ndarray:
-    """Return 1-D datetime64[ns] array from the (n_time, 1) Unix-sec dataset."""
-    ts = _get_h5_attr(fi, "Time").squeeze()  # (n_time,)
-    return (ts * 1e9).astype("datetime64[ns]")
-
-
 def _is_t1_file(fi: H5Reader) -> bool:
     """Minimal fingerprint check — T1 files always have these datasets."""
     required = {"Temperature", "Distance", "DistanceSignal", "Time"}
@@ -32,20 +26,14 @@ def _is_t1_file(fi: H5Reader) -> bool:
 def _get_distance_coord(fi):
     """Get the distances from the T1 file"""
     dist = fi["Data/Distance"][()]
-    start, stop, step = dist[0], dist[-1], np.diff(dist).mean()
-    return dc.get_coord(start=start, stop=stop + step, step=step, units="m")
+    return dc.get_coord(values=dist, units="m")
 
 
 def _get_time_coord(fi):
     """Get the times from the T1 file"""
     ts = fi["Data/Time"][()].squeeze()
     times = (ts * 1e9).astype("datetime64[ns]")
-    if times.ndim == 0 or len(times) == 1:
-        # the file just has a single reading
-        t = times.flat[0]
-        return dc.get_coord(values=t, units="s")
-    start, stop, step = times[0], times[-1], np.diff(times).mean()
-    return dc.get_coord(start=start, stop=stop + step, step=step, units="s")
+    return dc.get_coord(values=times, units="s")
 
 
 def _get_attrs(cm, path, format, version):
