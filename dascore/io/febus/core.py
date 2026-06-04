@@ -60,15 +60,15 @@ class FebusBOTDRStrainAttrs(dc.PatchAttrs):
     """Attributes for BOTDR (DTSS) systems written in strain."""
 
 
-class FebusG1MTXAttrs(dc.PatchAttrs):
-    """Attributes for Febus G1 Brillouin spectra files."""
+class FebusMTXAttrs(dc.PatchAttrs):
+    """Attributes for Febus Brillouin spectra files."""
 
 
-_G1_MTX_H5_DATASETS = frozenset(
+_MTX_H5_DATASETS = frozenset(
     {"distances", "end_times", "mtx", "start_times", "temperatures"}
 )
-_G1_MTX_DIMS = ("time", "distance", "frequency")
-_G1_MTX_ATTR_EXCLUDES = frozenset({"temperature"})
+_MTX_DIMS = ("time", "distance", "frequency")
+_MTX_ATTR_EXCLUDES = frozenset({"temperature"})
 
 
 def _maybe_scalar(value):
@@ -89,28 +89,29 @@ def _to_snake_case(value):
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", value).lower()
 
 
-def _get_g1_mtx_attrs(resource):
-    """Return normalized Febus G1 MTX HDF5 attributes."""
+def _get_mtx_attrs(resource):
+    """Return normalized Febus MTX HDF5 attributes."""
     attrs = {
         _to_snake_case(key): _maybe_scalar(value)
         for key, value in resource.attrs.items()
     }
     attrs = {
-        key: value for key, value in attrs.items() if key not in _G1_MTX_ATTR_EXCLUDES
+        key: value for key, value in attrs.items() if key not in _MTX_ATTR_EXCLUDES
     }
+    data_type = attrs.pop("febus_data_kind", "brillouin_spectrum")
     attrs.update(
         {
             "data_category": "DSS",
-            "febus_data_kind": "brillouin_spectrum",
+            "data_type": data_type,
         }
     )
     return attrs
 
 
-def _is_g1_mtx_h5(resource):
-    """Return True if the resource looks like a Febus G1 MTX HDF5 file."""
+def _is_mtx_h5(resource):
+    """Return True if the resource looks like a Febus MTX HDF5 file."""
     dataset_names = set(resource)
-    has_datasets = _G1_MTX_H5_DATASETS.issubset(dataset_names)
+    has_datasets = _MTX_H5_DATASETS.issubset(dataset_names)
     if not has_datasets or "formatVersion" not in resource.attrs:
         return False
     try:
@@ -120,7 +121,7 @@ def _is_g1_mtx_h5(resource):
     return format_version == 1
 
 
-def _get_g1_mtx_frequency(resource):
+def _get_mtx_frequency(resource):
     """Return the Brillouin frequency coordinate."""
     mtx = resource["mtx"]
     freq_len = mtx.shape[-1]
@@ -134,12 +135,12 @@ def _get_g1_mtx_frequency(resource):
     )
 
 
-def _get_g1_mtx_coords(resource, dims=_G1_MTX_DIMS):
-    """Return the coordinate manager for a Febus G1 MTX HDF5 file."""
+def _get_mtx_coords(resource, dims=_MTX_DIMS):
+    """Return the coordinate manager for a Febus MTX HDF5 file."""
     mtx = resource["mtx"]
     time = dc.get_coord(data=dc.to_datetime64(resource["start_times"][...]))
     distance = dc.get_coord(data=resource["distances"][...], units="m")
-    frequency = _get_g1_mtx_frequency(resource)
+    frequency = _get_mtx_frequency(resource)
     temperature = dc.get_coord(data=resource["temperatures"][...], units="degC")
     assert mtx.ndim == 3
     coords = {
@@ -151,16 +152,16 @@ def _get_g1_mtx_coords(resource, dims=_G1_MTX_DIMS):
     return dc.get_coord_manager(cast(Any, coords), dims=dims)
 
 
-def _get_g1_mtx_patch(resource, attr_cls, select_kwargs=None):
-    """Read a Febus G1 MTX HDF5 file into a patch."""
+def _get_mtx_patch(resource, attr_cls, select_kwargs=None):
+    """Read a Febus MTX HDF5 file into a patch."""
     select_kwargs = {} if select_kwargs is None else select_kwargs
     data_node = resource["mtx"]
     assert data_node.ndim == 3
-    coords = _get_g1_mtx_coords(resource)
+    coords = _get_mtx_coords(resource)
     coords, data = coords.select(array=data_node, **select_kwargs)
     if 0 in coords.shape:
         return None
-    attrs = _get_g1_mtx_attrs(resource)
+    attrs = _get_mtx_attrs(resource)
     data = np.asarray(data)
     return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
 
@@ -267,21 +268,21 @@ class FebusG1CSV1(FiberIO):
         return dc.spool([pa])
 
 
-class FebusG1MTXH5V1(FiberIO):
-    """HDF5 format used by Febus G1 for storing Brillouin spectra."""
+class FebusMTXH5V1(FiberIO):
+    """HDF5 format used by Febus for storing Brillouin spectra."""
 
-    name = "febus_g1_mtx_h5"
+    name = "febus_mtx_h5"
     preferred_extensions = ("h5",)
     version = "1"
 
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
-        """Get the name/version of a G1 MTX HDF5 file else return False."""
-        return (self.name, self.version) if _is_g1_mtx_h5(resource) else False
+        """Get the name/version of an MTX HDF5 file else return False."""
+        return (self.name, self.version) if _is_mtx_h5(resource) else False
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
-        """Scan a Febus G1 MTX HDF5 file."""
-        attrs = _get_g1_mtx_attrs(resource)
-        coords = _get_g1_mtx_coords(resource)
+        """Scan a Febus MTX HDF5 file."""
+        attrs = _get_mtx_attrs(resource)
+        coords = _get_mtx_coords(resource)
         attrs.update(
             {
                 "coords": coords.to_summary_dict(),
@@ -291,7 +292,7 @@ class FebusG1MTXH5V1(FiberIO):
                 "file_version": str(self.version),
             }
         )
-        return [FebusG1MTXAttrs(**attrs)]
+        return [FebusMTXAttrs(**attrs)]
 
     def read(
         self,
@@ -301,7 +302,7 @@ class FebusG1MTXH5V1(FiberIO):
         distance: _float_select_type | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """Read a Febus G1 MTX HDF5 file into a spool."""
+        """Read a Febus MTX HDF5 file into a spool."""
         select_kwargs = {
             key: value
             for key, value in {
@@ -311,9 +312,9 @@ class FebusG1MTXH5V1(FiberIO):
             }.items()
             if value is not None
         }
-        patch = _get_g1_mtx_patch(
+        patch = _get_mtx_patch(
             resource,
-            attr_cls=FebusG1MTXAttrs,
+            attr_cls=FebusMTXAttrs,
             select_kwargs=select_kwargs,
         )
         return dc.spool([] if patch is None else [patch])
