@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
+from math import prod
 from operator import mul, truediv
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import numpy.fft as nft
@@ -18,12 +19,13 @@ from scipy.signal import ShortTimeFFT
 from scipy.signal.windows import get_window
 
 import dascore as dc
+from dascore import units
 from dascore.compat import ndarray
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import PatchError
+from dascore.exceptions import ParameterError, PatchError
 from dascore.units import Quantity, invert_quantity, percent
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
@@ -36,6 +38,50 @@ from dascore.utils.patch import (
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 
+DFT_OUTPUT_DATA_TYPE_MAP = {
+    "AS": "Amplitude Spectrum",
+    "PS": "Power Spectrum",
+    "PSD": "Spectral Density",
+}
+DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
+
+
+def _get_dft_coord_units(units):
+    """Get units for DFT coordinates."""
+    new_units = invert_quantity(units)
+    # This purposefully converts 1/s to Hz to be more conventional. See #693.
+    if new_units == dc.get_quantity("1/s"):
+        new_units = dc.get_quantity("Hz")
+    return new_units
+
+
+def _get_dft_coord_unit_product(patch, dims, transformed=False):
+    """Get the product of original or transformed coordinate units."""
+    names = [f"ft_{dim}" if transformed else dim for dim in iterate(dims)]
+    return prod(
+        unit
+        for name in names
+        if (unit := dc.get_quantity(patch.get_coord(name).units)) is not None
+    )
+
+
+def _get_dft_data_units(patch, dims, output="FFT"):
+    """Get data units for DFT outputs."""
+    data_units = dc.get_quantity(patch.attrs.data_units)
+    if data_units is None:
+        return None
+    domain_units = _get_dft_coord_unit_product(patch, dims)
+    if output == "FFT":
+        return data_units * domain_units
+    original_units = data_units / domain_units
+    spectral_units = _get_dft_coord_unit_product(patch, dims, transformed=True)
+    output_units = {
+        "AS": original_units,
+        "PS": original_units**2,
+        "PSD": original_units**2 / spectral_units,
+    }
+    return output_units[output]
+
 
 def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     """
@@ -46,20 +92,12 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     # Note: We need original_cm and patch because patch may have undergone
     # padding.
 
-    def _get_fft_coord(x_len, dx, units):
-        """Get coord for normal fft coord."""
+    def _get_fft_coord(x_len, dx, units, is_real=False):
+        """Get coord for fft frequency bins."""
         new_dx = 1.0 / (x_len * dx)
-        stop = ((x_len - 1) // 2 + 1) * new_dx
-        start = -(x_len // 2) * new_dx
-        units = invert_quantity(units)
-        return get_coord(start=start, stop=stop, step=new_dx, units=units)
-
-    def _get_rfft_coord(x_len, dx, units):
-        """Get coord from real fft coord."""
-        new_dx = 1.0 / (x_len * dx)
-        start = 0
-        stop = (x_len // 2 + 1) * new_dx
-        units = invert_quantity(units)
+        start = 0 if is_real else -(x_len // 2) * new_dx
+        stop = (x_len // 2 + 1) * new_dx if is_real else ((x_len - 1) // 2 + 1) * new_dx
+        units = _get_dft_coord_units(units)
         return get_coord(start=start, stop=stop, step=new_dx, units=units)
 
     # first disassociate old coordinates. We do this rather than drop them
@@ -73,10 +111,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
         size = old_coord.shape[0]
         dx = dxs[i]
         new_name = ft.rename_dims(dim)[0]
-        if dim == real:
-            coord = _get_rfft_coord(size, dx, units)
-        else:
-            coord = _get_fft_coord(size, dx, units)
+        coord = _get_fft_coord(size, dx, units, is_real=dim == real)
         new_coords[new_name] = (new_name, coord)
         # Add padded coordinates
         if original_cm is not None:
@@ -86,14 +121,14 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     return cm
 
 
-def _get_dft_attrs(patch, dims, new_coords, pad=False):
+def _get_dft_attrs(patch, dims, new_coords, pad=False, output="FFT"):
     """Get new attributes for transformed patch."""
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
-    new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
-    # As per #390, we also want to remove data_type (eg the patch is no
-    # longer in strain rate after the dft)
-    new["_pre_dft_data_type"] = new.pop("data_type", None)
+    new["data_units"] = _get_dft_data_units(patch, dims)
+    new["_pre_dft_data_type"] = new.get("data_type")
+    new["data_type"] = "fourier transform"
+    new["_dft_output"] = output
     new["_dft_padded"] = pad
     return PatchAttrs(**new)
 
@@ -110,6 +145,50 @@ def _get_untransformed_dims(patch, dims):
     return out
 
 
+def _get_transformed_domain_extent(patch, dims):
+    """Get the transformed-domain extent from the DFT bin spacing."""
+    extent = 1
+    preserve_units = patch.attrs.data_units is not None
+    for dim in iterate(dims):
+        ft_coord = patch.get_coord(f"ft_{dim}")
+        # df = 1 / (n * dx), so 1 / df is the original-domain extent.
+        # For multi-axis DFTs, the total extent is the product over axes.
+        step = abs(ft_coord.step)
+        if preserve_units and ft_coord.units is not None:
+            step = step * ft_coord.units
+        extent = extent / step
+    return extent
+
+
+def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
+    """Convert the FFT output to spectral amplitude representations."""
+    amp = patch.abs()
+    extent = _get_transformed_domain_extent(amp, dims)
+    data_units = _get_dft_data_units(patch, dims, output)
+    if output == "AS":
+        # Convert DASCore's dx-scaled Fourier coefficients to harmonic
+        # amplitude.
+        out = amp / extent
+    elif output == "PS":
+        # PS bins sum to mean square.
+        out = amp * amp / (extent * extent)
+    elif output == "PSD":
+        # PSD bins integrate to mean square when multiplied by frequency-bin
+        # volume, which is the reciprocal of the transformed-domain extent.
+        out = amp * amp / extent
+    if db:
+        out = out + np.finfo(out.data.dtype).eps
+        db_scale = 20 if output == "AS" else 10
+        out = db_scale * out.log10()
+        out = out.set_units(units.dB)
+        data_units = out.attrs.data_units
+
+    return out.update_attrs(
+        data_type=DFT_OUTPUT_DATA_TYPE_MAP[output],
+        data_units=data_units,
+    )
+
+
 @patch_function()
 def dft(
     patch: PatchType,
@@ -117,6 +196,8 @@ def dft(
     *,
     real: str | bool | None = None,
     pad: bool = True,
+    output: Literal["FFT", "PSD", "PS", "AS"] = "FFT",
+    db: bool = False,
 ) -> PatchType:
     """
     Perform the discrete Fourier transform (dft) on specified dimension(s).
@@ -136,6 +217,18 @@ def dft(
         If True, pad patch before performing dft along desired dimensions to
         the next fast length. This can avoid major slow-downs when dimension
         lengths are prime numbers.
+    output
+        Spectral representation to return for each frequency bin
+        - ``'FFT'``: Complex Fourier coefficients scaled by sample spacing.
+        - ``'AS'``: Amplitude spectrum in the original data units.
+        - ``'PS'``: Power spectrum whose bin sum gives mean square.
+        - ``'PSD'``: Spectral density whose bin-width-weighted sum gives
+                     mean square.
+    db
+        If True, converts the output into decibel units, if output is not FFT.
+        This applies ``20 * log10`` to ``'AS'`` and ``10 * log10`` to ``'PS'``
+        or ``'PSD'`` without a reference value.
+
 
     Notes
     -----
@@ -148,8 +241,16 @@ def dft(
 
     - Each transformed dimension has units of 1/original units.
 
-    - Output data units are the original data units multiplied by the units
-      of each transformed dimension.
+    - For ``output='FFT'``, output data units are the original data units
+      multiplied by the units of each transformed dimension. Other output
+      types are normalized as described in the ``output`` parameter.
+
+    - For ``output='AS'``, ``'PS'``, or ``'PSD'`` with ``real=True``, the
+      non-DC and non-Nyquist bins have not been converted to one-sided spectra.
+      Depending on your use case, you may need to multiply non-zero bins by 2.
+
+    - If all requested dimensions are already transformed, ``dft`` returns
+      the input patch unchanged, regardless of the requested ``output``.
 
     - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
@@ -171,7 +272,17 @@ def dft(
     >>> dft_time_real = patch.dft(dim="time", real=True)
     >>> # dft on specified dimensions, specify real dimension
     >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
+    >>> # calculate a power spectral density along time
+    >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
+    output = output.upper()
+    if output not in DFT_OUTPUT_TYPES:
+        msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
+        raise ValueError(msg)
+    if output == "FFT" and db:
+        msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
+        raise ParameterError(msg)
+
     dims = list(iterate(dim if dim is not None else patch.dims))
     patch.check_coords(coords=dims)
     real = dims[-1] if real is True else real  # if true grab last dim
@@ -200,8 +311,13 @@ def dft(
     shift_slice = slice(None) if real is None else slice(None, -1)
     data = nft.fftshift(fft_data, axes=axes[shift_slice])
     # get attributes
-    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad)
-    return patch.new(data=data, coords=new_coords, attrs=attrs)
+    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad, output=output)
+    patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
+
+    if output != "FFT":
+        patch_out = _convert_dft_spectral_amplitudes(patch_out, output, dims, real, db)
+
+    return patch_out
 
 
 def _get_idft_dims_steps_axis(patch, dim):
@@ -273,8 +389,17 @@ def _get_idft_attrs(patch, dims, new_coords):
     # Restore the pre-dft datatype.
     if "_pre_dft_data_type" in new:
         new["data_type"] = new.pop("_pre_dft_data_type", None)
+    new.pop("_dft_output", None)
     new.pop("_dft_padded", None)
     return PatchAttrs(**new)
+
+
+def _check_dft_output_invertible(patch):
+    """Raise if patch DFT data are not invertible Fourier coefficients."""
+    output = patch.attrs.get("_dft_output", "FFT")
+    if output != "FFT":
+        msg = f"Only dft(output='FFT') can be inverted with idft, not {output!r}."
+        raise ValueError(msg)
 
 
 @patch_function()
@@ -320,6 +445,7 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     >>> # get inverse dft, transformed axis are ascertained automatically
     >>> idft = dft_time.idft()
     """
+    _check_dft_output_invertible(patch)
     dims, _steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
     func = nft.irfftn if real else nft.ifftn
