@@ -277,7 +277,7 @@ def dft(
     """
     output = output.upper()
     if output not in DFT_OUTPUT_TYPES:
-        msg = f"Unknown kind={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
+        msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
         raise ValueError(msg)
     if output == "FFT" and db:
         msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
