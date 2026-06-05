@@ -71,6 +71,9 @@ VALID_DATA_TYPES = (
     "strain",
     "temperature",
     "temperature_gradient",
+    "frequency_band_energy",
+    "kurtosis",
+    "stalta",
 )
 
 # Valid categories (of instruments)
@@ -86,7 +89,7 @@ max_lens = {
     "file_version": 9,
     "experiment_id": 50,
     "instrument_id": 50,
-    "data_type": 20,
+    "data_type": 21,
     "data_category": 4,
 }
 

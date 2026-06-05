@@ -17,14 +17,14 @@ class TestFBE:
         out = random_patch.fbe(time=(10, 100), window=0.01, step=0.01, db=False)
 
         assert out.dims == random_patch.dims
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
 
     def test_runs_distance_filter(self, random_patch):
         """Ensure FBE runs along the distance dimension."""
         out = random_patch.fbe(distance=(0.01, 0.05), window=5, step=1, db=False)
 
         assert out.dims == random_patch.dims
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
 
     def test_db_false_matches_expected_rms(self, random_patch):
         """Ensure db=False returns filtered rolling RMS."""
@@ -53,13 +53,13 @@ class TestFBE:
         """Ensure non-db output metadata are set."""
         out = random_patch.fbe(time=(10, 100), window=0.01, step=0.01, db=False)
 
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
 
     def test_attrs_when_db(self, random_patch):
         """Ensure db output metadata are set."""
         out = random_patch.fbe(time=(10, 100), window=0.01, step=0.01, db=True)
 
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
         assert out.attrs.data_units == ureg.dB
 
     def test_step_defaults_to_inverse_sampling_rate(self, random_patch):
@@ -77,13 +77,13 @@ class TestFBE:
         """Ensure open-ended lowpass filters are accepted."""
         out = random_patch.fbe(time=(None, 100), window=0.01, step=0.01, db=False)
 
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
 
     def test_open_ended_highpass_filter(self, random_patch):
         """Ensure open-ended highpass filters are accepted."""
         out = random_patch.fbe(time=(10, None), window=0.01, step=0.01, db=False)
 
-        assert out.attrs.data_type == "Frequency-Band Energy"
+        assert out.attrs.data_type == "frequency_band_energy"
 
     def test_invalid_frequency_range_raises(self, random_patch):
         """Ensure invalid filter ranges raise."""

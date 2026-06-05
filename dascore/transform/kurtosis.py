@@ -110,7 +110,7 @@ def _recursive_kurtosis(
     return out
 
 
-@patch_function()
+@patch_function(data_type="kurtosis")
 def kurtosis(
     patch: PatchType,
     winlen: float,
@@ -227,8 +227,4 @@ def kurtosis(
 
     out = out.reshape(orig_shape)
 
-    return (
-        patch_t.new(data=out)
-        .transpose(*orig_dims)
-        .update(attrs={"data_type": "Kurtosis", "data_units": ""})
-    )
+    return patch_t.new(data=out).transpose(*orig_dims).update(attrs={"data_units": ""})

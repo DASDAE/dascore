@@ -9,7 +9,7 @@ from dascore.utils.misc import check_filter_kwargs
 from dascore.utils.patch import patch_function
 
 
-@patch_function()
+@patch_function(data_type="stalta")
 def stalta(
     patch: PatchType,
     **kwargs,
@@ -53,4 +53,4 @@ def stalta(
     sta_data = patch.rolling(**{dim: sta}).mean()
     lta_data = patch.rolling(**{dim: lta}).mean()
 
-    return (sta_data / lta_data).update(attrs={"data_type": "STALTA", "data_units": ""})
+    return (sta_data / lta_data).update(attrs={"data_units": ""})

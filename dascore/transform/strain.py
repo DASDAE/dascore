@@ -17,6 +17,7 @@ from dascore.utils.patch import patch_function
 @patch_function(
     required_dims=("distance",),
     required_attrs={"data_type": "velocity"},
+    data_type="strain_rate",
 )
 def velocity_to_strain_rate(
     patch: PatchType,
@@ -115,15 +116,14 @@ def velocity_to_strain_rate(
     patch = differentiate.func(
         patch, dim="distance", order=order, step=step_multiple // 2
     )
-    new_attrs = patch.attrs.update(
-        data_type="strain_rate", gauge_length=step * step_multiple
-    )
+    new_attrs = patch.attrs.update(gauge_length=step * step_multiple)
     return patch.update(attrs=new_attrs)
 
 
 @patch_function(
     required_dims=("distance",),
     required_attrs={"data_type": "velocity"},
+    data_type="strain_rate",
 )
 def velocity_to_strain_rate_edgeless(
     patch: PatchType,
@@ -202,7 +202,6 @@ def velocity_to_strain_rate_edgeless(
         new_data_units = data_units / dist_units
 
     new_attrs = patch.attrs.update(
-        data_type="strain_rate",
         gauge_length=distance_step * step_multiple,
         data_units=new_data_units,
     )
