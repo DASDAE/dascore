@@ -118,5 +118,7 @@ class TestFebusBSL:
         """Out-of-range time and distance selections should return empty spools."""
         time = bsl_patch.get_coord("time")
         dist = bsl_patch.get_coord("distance")
-        assert not len(self.parser.read(bsl_path, time=(time.max() + 1, ...)))
+        assert not len(
+            self.parser.read(bsl_path, time=(time.max() + np.timedelta64(1, "s"), ...))
+        )
         assert not len(self.parser.read(bsl_path, distance=(dist.max() + 1, ...)))

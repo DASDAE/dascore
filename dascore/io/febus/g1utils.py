@@ -206,7 +206,7 @@ def _get_g1_h5_patch(resource, attr_cls, data_name, attrs, coords, select_kwargs
 
 def _get_g1_h5_io_attrs(resource, file_format=None, file_version=None) -> dict:
     """Return optional DASCore IO provenance attrs for a G1 HDF5 file."""
-    if file_format is None and file_version is None:
+    if file_format is None or file_version is None:
         return {}
     return {
         "path": resource.filename,
