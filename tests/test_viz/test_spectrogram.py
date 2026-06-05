@@ -83,3 +83,27 @@ class TestPlotSpectrogram:
         monkeypatch.setattr(plt, "show", lambda: None)
         axis = random_patch.viz.spectrogram(dim="time", show=True)
         assert isinstance(axis, plt.Axes)
+
+    @staticmethod
+    def _image_shape(axis):
+        """Return the shape of the data backing the spectrogram image."""
+        images = axis.get_images()
+        if images:
+            return images[0].get_array().shape
+        return axis.collections[0].get_array().shape
+
+    @pytest.mark.parametrize("aggr_domain", ["frequency", "time"])
+    def test_kwargs_passed_to_spectrogram_2d(self, random_patch, aggr_domain):
+        """Ensure kwargs (e.g. nperseg) reach scipy for 2D patches. See #661."""
+        default = random_patch.viz.spectrogram(dim="time", aggr_domain=aggr_domain)
+        windowed = random_patch.viz.spectrogram(
+            dim="time", aggr_domain=aggr_domain, nperseg=64
+        )
+        assert self._image_shape(default) != self._image_shape(windowed)
+
+    def test_kwargs_passed_to_spectrogram_1d(self, random_patch):
+        """Ensure kwargs reach scipy for 1D patches as well. See #661."""
+        patch = random_patch.select(distance=0, samples=True).squeeze()
+        default = patch.viz.spectrogram(dim="time")
+        windowed = patch.viz.spectrogram(dim="time", nperseg=64)
+        assert self._image_shape(default) != self._image_shape(windowed)

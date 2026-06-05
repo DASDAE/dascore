@@ -75,6 +75,12 @@ def get_intervals(
         # need to ensure we have numpy datetimes, not pandas
         start, stop = to_datetime64(start), to_datetime64(stop)
         length = to_timedelta64(length)
+    elif is_timedelta64(start):
+        # a span of a timedelta64 coordinate is itself a duration, so a
+        # numeric chunk length must be coerced to timedelta64 (otherwise the
+        # duration < length comparison mixes Timedelta and float).
+        start, stop = to_timedelta64(start), to_timedelta64(stop)
+        length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
     step = length * 0 if pd.isnull(step) else step
@@ -236,8 +242,9 @@ class ChunkManager:
     def _get_duration_overlap(self, duration, start, step, overlap=None):
         """Get duration and overlap from kwargs."""
         overlap = overlap if overlap is not None else self._overlap
-        # cast step to time delta if start is datetime
-        if is_datetime64(start):
+        # cast step/overlap to timedelta if start is datetime or timedelta;
+        # a span of either dtype is a duration.
+        if is_datetime64(start) or is_timedelta64(start):
             step = to_timedelta64(step)
             overlap = to_timedelta64(overlap)
         if pd.isnull(overlap):

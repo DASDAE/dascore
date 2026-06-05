@@ -147,12 +147,13 @@ def _add_colorbar(ax, im, data, patch, log, scale):
     cb.set_label(label)
 
 
-def _default_colormap_per_datatype(patch):
+def _get_waterfall_colormap(patch, cmap=None):
     """
     Select a default colormap based on datatype
     """
-    this_type = str(patch.attrs.get("data_type", "")).lower()
-    cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
+    if cmap is None:
+        this_type = str(patch.attrs.get("data_type", "")).lower()
+        cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
     return _get_cmap(cmap)
 
 
@@ -178,8 +179,8 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. If None, a colormap will be
-        chosen automatically, depending on the data_type of the patch. Defaults to 'bwr'
+        A matplotlib colormap string or instance. If `None`, a colormap will be
+        chosen automatically, depending on the data_type of the patch.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -199,8 +200,11 @@ def waterfall(
         options are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
+        To avoid log(0), the abs(array) is cast to float64 and a small value
+        added.
     cbar
-        If True, colorbar is added.
+        If True, plot the colorbar, else do not. This controls only colorbar
+        display; use `cmap` to control colormap selection.
     show
         If True, show the plot, else just return axis.
 
@@ -263,24 +267,16 @@ def waterfall(
     patch = _validate_patch_dims(patch)
     # Setup axes and data
     ax = _get_ax(ax)
-    # cmap = _get_cmap(cmap)
-    # data = np.log10(np.absolute(patch.data)) if log else patch.data
-    float_dtype = np.result_type(np.abs(patch.data).dtype, np.float64)
-    eps = np.finfo(float_dtype).eps
-    data = (
-        np.log10(np.abs(patch.data).astype(float_dtype, copy=False) + eps)
-        if log
-        else patch.data
-    )
+    if log:
+        data = np.log10(np.abs(patch.data) + np.finfo(np.float64).eps)
+    else:
+        data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
-
-    if cmap is None:
-        cmap = _default_colormap_per_datatype(patch)
-
+    cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
     with mpl.rc_context({"image.resample": True}):
         im = ax.imshow(

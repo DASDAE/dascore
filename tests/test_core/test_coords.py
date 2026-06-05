@@ -633,6 +633,24 @@ class TestSelect:
         else:
             assert ind_1 == ind_2
 
+    def test_select_relative_numeric_offset_timedelta(self):
+        """
+        A numeric relative offset into a timedelta64 coordinate should be
+        coerced to a duration, just like for datetime64 coords (see #604).
+        """
+        coord = dc.get_coord(data=dc.to_timedelta64(np.arange(0, 10)))
+        # A numeric offset previously raised a ufunc type error for
+        # timedelta64 coords; it should behave like the explicit duration.
+        out_num, ind_num = coord.select((2, -2), relative=True)
+        out_td, ind_td = coord.select(
+            (dc.to_timedelta64(2), dc.to_timedelta64(-2)), relative=True
+        )
+        assert np.all(out_num == out_td)
+        if isinstance(ind_num, np.ndarray):
+            assert np.all(ind_num == ind_td)
+        else:
+            assert ind_num == ind_td
+
     def test_select_changes_len(self, long_coord):
         """Ensure select changes the length of the coordinate."""
         data = long_coord.data
@@ -691,6 +709,21 @@ class TestSelect:
         values = monotonic_float_coord.values
         out = monotonic_float_coord.select((i1, i2), samples=True)[0]
         assert np.all(values[i1:i2] == out.values)
+
+    def test_single_sample_retains_step(self, evenly_sampled_coord):
+        """A length-1 selection of an evenly sampled coord keeps its step. See #567."""
+        out, _ = evenly_sampled_coord.select(1, samples=True)
+        assert len(out) == 1
+        assert out.step is not None
+        assert out.step == evenly_sampled_coord.step
+        assert out.values[0] == evenly_sampled_coord.values[1]
+
+    def test_single_sample_retains_step_datetime(self, evenly_sampled_date_coord):
+        """Same as above but for a datetime coord (step is a timedelta64)."""
+        out, _ = evenly_sampled_date_coord.select(3, samples=True)
+        assert len(out) == 1
+        assert out.step == evenly_sampled_date_coord.step
+        assert out.values[0] == evenly_sampled_date_coord.values[3]
 
     def test_values_not_in_coord(self, long_coord):
         """Ensure using values not in coord results in an empty coordinate."""
