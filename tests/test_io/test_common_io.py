@@ -27,7 +27,7 @@ from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
-from dascore.io.febus import Febus1, Febus2, FebusMTXH5V1, FebusT1V1
+from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
@@ -62,6 +62,7 @@ COMMON_IO_READ_TESTS = {
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
+    FebusBSLH5V1(): ("febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5",),
     FebusMTXH5V1(): ("febus-g1-spectra_C2_2026-06-03T17.28.13+0200.mtx.h5",),
     FebusT1V1(): ("febus_dts.h5", "febus_dts_single_reading.h5"),
     GDR_V1(): ("gdr_1.h5",),
