@@ -215,7 +215,7 @@ def _get_mtx_coords(resource, dims=_MTX_DIMS):
     time = dc.get_coord(data=dc.to_datetime64(resource["start_times"][...]))
     distance = dc.get_coord(data=resource["distances"][...], units="m")
     frequency = _get_mtx_frequency(resource)
-    temperature = dc.get_coord(data=resource["temperatures"][...], units="C")
+    temperature = dc.get_coord(data=resource["temperatures"][...], units="degC")
     coords = {
         "frequency": frequency,
         "time": time,
