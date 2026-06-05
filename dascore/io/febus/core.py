@@ -22,6 +22,10 @@ from .a1utils import (
     _yield_attrs_coords,
 )
 from .g1utils import (
+    _bsl_version,
+    _get_bsl_attrs,
+    _get_bsl_coords,
+    _get_bsl_patch,
     _get_g1_coords_and_attrs,
     _get_g1_patch,
     _get_mtx_attrs,
@@ -177,7 +181,7 @@ class FebusMTXH5V1(FiberIO):
     """HDF5 format used by Febus for storing Brillouin spectra."""
 
     name = "febus_mtx_h5"
-    preferred_extensions = ("h5",)
+    preferred_extensions = ("h5", "hdf5")
     version = "1"
 
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
@@ -187,15 +191,14 @@ class FebusMTXH5V1(FiberIO):
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a Febus MTX HDF5 file."""
-        attrs = _get_mtx_attrs(resource)
+        attrs = _get_mtx_attrs(
+            resource, file_format=self.name, file_version=self.version
+        )
         coords = _get_mtx_coords(resource)
         attrs.update(
             {
                 "coords": coords.to_summary_dict(),
                 "dims": coords.dims,
-                "path": resource.filename,
-                "file_format": self.name,
-                "file_version": str(self.version),
             }
         )
         return [FebusMTXAttrs(**attrs)]
@@ -218,9 +221,64 @@ class FebusMTXH5V1(FiberIO):
             }.items()
             if value is not None
         }
+        attrs = _get_mtx_attrs(
+            resource, file_format=self.name, file_version=self.version
+        )
         patch = _get_mtx_patch(
             resource,
             attr_cls=FebusMTXAttrs,
+            attrs=attrs,
+            select_kwargs=select_kwargs,
+        )
+        return dc.spool([] if patch is None else [patch])
+
+
+class FebusBSLV1(FiberIO):
+    """HDF5 format used by Febus G1 for storing BSL strain files."""
+
+    name = "febus_bsl_h5"
+    preferred_extensions = ("h5", "hdf5")
+    version = "1"
+
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+        """Get the name/version of a BSL HDF5 file else return False."""
+        version = _bsl_version(resource)
+        return (self.name, self.version) if version == self.version else False
+
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+        """Scan a Febus BSL HDF5 file."""
+        attrs = _get_bsl_attrs(
+            resource, file_format=self.name, file_version=self.version
+        )
+        coords = _get_bsl_coords(resource)
+        attrs.update(
+            {
+                "coords": coords.to_summary_dict(),
+                "dims": coords.dims,
+            }
+        )
+        return [FebusBOTDRStrainAttrs(**attrs)]
+
+    def read(
+        self,
+        resource: H5Reader,
+        time: _time_select_type | None = None,
+        distance: _float_select_type | None = None,
+        **kwargs,
+    ) -> dc.BaseSpool:
+        """Read a Febus BSL HDF5 file into a spool."""
+        select_kwargs = {
+            key: value
+            for key, value in {"time": time, "distance": distance}.items()
+            if value is not None
+        }
+        attrs = _get_bsl_attrs(
+            resource, file_format=self.name, file_version=self.version
+        )
+        patch = _get_bsl_patch(
+            resource,
+            attr_cls=FebusBOTDRStrainAttrs,
+            attrs=attrs,
             select_kwargs=select_kwargs,
         )
         return dc.spool([] if patch is None else [patch])
