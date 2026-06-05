@@ -150,6 +150,13 @@ class TestG1MTXH5:
         assert "temperature" in patch.coords.coord_map
         assert patch.coords.dim_map["temperature"] == ("time",)
 
+    def test_read_attrs_have_io_provenance(self, mtx_h5_path):
+        """Read patch attrs should include path and format provenance."""
+        patch = dc.read(mtx_h5_path)[0]
+        assert patch.attrs.path == str(mtx_h5_path)
+        assert patch.attrs.file_format == FebusMTXH5V1.name
+        assert patch.attrs.file_version == FebusMTXH5V1.version
+
     def test_scan_matches_read_attrs(self, mtx_h5_path):
         """Scan and read should return matching coord summaries."""
         attrs = dc.scan(mtx_h5_path)[0]
