@@ -10,7 +10,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.io.febus import FebusBSLV1
+from dascore.io.febus import FebusBSLH5V1
 from dascore.io.febus.g1utils import _get_bsl_attrs
 from dascore.utils.downloader import fetch
 
@@ -20,7 +20,7 @@ BSL_NAME = "febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5"
 class TestFebusBSL:
     """Tests for the FEBUS G1 BSL HDF5 reader."""
 
-    parser = FebusBSLV1()
+    parser = FebusBSLH5V1()
 
     @pytest.fixture(scope="class")
     def bsl_path(self):

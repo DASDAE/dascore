@@ -233,7 +233,7 @@ class FebusMTXH5V1(FiberIO):
         return dc.spool([] if patch is None else [patch])
 
 
-class FebusBSLV1(FiberIO):
+class FebusBSLH5V1(FiberIO):
     """HDF5 format used by Febus G1 for storing BSL strain files."""
 
     name = "febus_bsl_h5"
