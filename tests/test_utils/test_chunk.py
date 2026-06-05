@@ -88,6 +88,22 @@ class TestGetIntervals:
         assert out[-1, 1] == stop
         assert out[0, 0] == start
 
+    def test_timedelta_start_numeric_length(self):
+        """
+        A numeric length for a timedelta64 start should be coerced to a
+        duration, just like for datetime64 starts (see #553). Previously this
+        raised a type error comparing a timedelta64 with a float.
+        """
+        start = np.timedelta64(0, "s")
+        stop = start + np.timedelta64(20, "s")
+        # A numeric (float) length previously raised here for timedelta starts.
+        out = get_intervals(start, stop, length=2.0)
+        # Output stays timedelta64 and each interval spans the requested length.
+        assert np.issubdtype(out.dtype, np.timedelta64)
+        assert np.all(out[:, 1] - out[:, 0] == np.timedelta64(2, "s"))
+        assert out[0, 0] == start
+        assert out[-1, 1] == stop
+
 
 class TestBasicChunkDF:
     """Test basic DF chunking."""
