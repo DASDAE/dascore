@@ -87,9 +87,9 @@ def spectrogram(
     if other_dim is not None:
         if aggr_domain == "time":
             patch_aggr = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
-            spec = patch_aggr.spectrogram(dim)
+            spec = patch_aggr.spectrogram(dim, **kwargs)
         elif aggr_domain == "frequency":
-            _spec = patch.spectrogram(dim).squeeze()
+            _spec = patch.spectrogram(dim, **kwargs).squeeze()
             spec = _spec.aggregate(other_dim, method="mean").squeeze()
         else:
             raise ValueError(
