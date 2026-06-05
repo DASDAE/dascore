@@ -368,7 +368,7 @@ class TestDiscreteFourierTransform:
 
     def test_invalid_output_raises(self, sin_patch):
         """Ensure invalid output types raise."""
-        with pytest.raises(ValueError, match="Unknown kind"):
+        with pytest.raises(ValueError, match="Unknown output"):
             sin_patch.dft("time", output="bad")
 
     def test_db_true_with_fft_raises(self, sin_patch):
