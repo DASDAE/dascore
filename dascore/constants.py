@@ -71,6 +71,7 @@ VALID_DATA_TYPES = (
     "strain",
     "temperature",
     "temperature_gradient",
+    "brillouin_spectrum",
 )
 
 # Valid categories (of instruments)

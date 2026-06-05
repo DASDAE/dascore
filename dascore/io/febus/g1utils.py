@@ -2,11 +2,45 @@
 Utilities for working with Febus' G1 DSTS system files.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
 
 import dascore as dc
+from dascore.utils.misc import maybe_get_items, unbyte
+
+_MTX_H5_DATASETS = frozenset(
+    {"distances", "end_times", "mtx", "start_times", "temperatures"}
+)
+_MTX_H5_ATTRS = frozenset({"formatVersion", "freq_offset_abs", "freq_step"})
+_MTX_DIMS = ("time", "distance", "frequency")
+_MTX_ATTR_MAP = {
+    "acq_res": "acq_res",
+    "ampliPower": "ampli_power",
+    "average": "average",
+    "channel": "channel",
+    "fiberBreak": "fiber_break",
+    "fiberFrom": "fiber_from",
+    "fiberLength": "fiber_length",
+    "fiberTo": "fiber_to",
+    "formatVersion": "format_version",
+    "freq_fiber": "freq_fiber",
+    "freq_offset": "freq_offset",
+    "freq_offset_abs": "freq_offset_abs",
+    "freq_ref": "freq_ref",
+    "freq_step": "freq_step",
+    "mode": "mode",
+    "sampling_resolution": "sampling_resolution",
+    "signal_size": "signal_size",
+    "spatial_resolution": "spatial_resolution",
+    "start_time": "start_time",
+    "end_time": "end_time",
+    "zoneCount": "zone_count",
+    "zones": "zones",
+    "febusDataKind": "febus_data_kind",
+}
 
 param_parse_dict = {
     "start time": lambda x: dc.to_datetime64(float(x[0])),
@@ -101,7 +135,7 @@ def _get_attrs(params):
 def _get_g1_coords_and_attrs(resource):
     """Placeholder parser for g1 scan/read paths."""
     resource_name = Path(getattr(resource, "name", "")).stem
-    name, channel, _ = resource_name.split("_")
+    name, _channel, _ = resource_name.split("_")
     params = _make_param_dict(resource)
     params["instrument_id"] = name
     params["data_type"] = params.pop("mode", None)
@@ -121,3 +155,84 @@ def _get_g1_patch(resource, attr_cls):
     data = np.asarray(data).reshape(coords.shape)
     attrs = attr_cls(**{i: v for i, v in attrs.items() if not i.startswith("_")})
     return dc.Patch(data=data, coords=coords, attrs=attrs)
+
+
+def _get_mtx_mapped_attrs(resource, mapping):
+    """Return mapped MTX attrs, unpacking scalar arrays and decoding bytes."""
+    attrs = dict(resource.attrs)
+    out = maybe_get_items(attrs, mapping, unpack_names=set(mapping))
+    return {key: unbyte(value) for key, value in out.items()}
+
+
+def _get_mtx_attrs(resource):
+    """Return normalized Febus MTX HDF5 attributes."""
+    attrs = _get_mtx_mapped_attrs(resource, _MTX_ATTR_MAP)
+    data_type = attrs.pop("febus_data_kind", "brillouin_spectrum")
+    attrs.update(
+        {
+            "data_category": "DSS",
+            "data_type": data_type,
+        }
+    )
+    return attrs
+
+
+def _mtx_version(resource) -> str | bool:
+    """Return True if the resource looks like a Febus MTX HDF5 file."""
+    dataset_names = set(resource)
+    has_datasets = _MTX_H5_DATASETS.issubset(dataset_names)
+    if not has_datasets or not _MTX_H5_ATTRS.issubset(resource.attrs):
+        return False
+    attrs = _get_mtx_mapped_attrs(resource, {"formatVersion": "format_version"})
+    format_version = str(attrs["format_version"])
+    return format_version
+
+
+def _get_mtx_frequency(resource):
+    """Return the Brillouin frequency coordinate."""
+    mtx = resource["mtx"]
+    freq_len = mtx.shape[-1]
+    attrs = _get_mtx_mapped_attrs(
+        resource,
+        {"freq_offset_abs": "freq_offset_abs", "freq_step": "freq_step"},
+    )
+    freq_start = float(attrs["freq_offset_abs"])
+    freq_step = float(attrs["freq_step"])
+    return dc.get_coord(
+        start=freq_start,
+        step=freq_step,
+        shape=freq_len,
+        units="MHz",
+    )
+
+
+def _get_mtx_coords(resource, dims=_MTX_DIMS):
+    """Return the coordinate manager for a Febus MTX HDF5 file."""
+    mtx = resource["mtx"]
+    if mtx.ndim != 3:
+        msg = f"_get_mtx_coords expected 'mtx' to be 3D, got {mtx.ndim}D."
+        raise ValueError(msg)
+    time = dc.get_coord(data=dc.to_datetime64(resource["start_times"][...]))
+    distance = dc.get_coord(data=resource["distances"][...], units="m")
+    frequency = _get_mtx_frequency(resource)
+    temperature = dc.get_coord(data=resource["temperatures"][...], units="°C")
+    coords = {
+        "frequency": frequency,
+        "time": time,
+        "distance": distance,
+        "temperature": ("time", temperature),
+    }
+    return dc.get_coord_manager(coords, dims=dims)
+
+
+def _get_mtx_patch(resource, attr_cls, select_kwargs=None):
+    """Read a Febus MTX HDF5 file into a patch."""
+    select_kwargs = {} if select_kwargs is None else select_kwargs
+    data_node = resource["mtx"]
+    coords = _get_mtx_coords(resource)
+    coords, data = coords.select(array=data_node, **select_kwargs)
+    if 0 in coords.shape:  # Empty data; dont return
+        return None
+    attrs = _get_mtx_attrs(resource)
+    data = np.asarray(data)
+    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
