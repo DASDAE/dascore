@@ -202,8 +202,9 @@ def waterfall(
     interpolation_stage
         If 'data', interpolation is carried out on the data provided by the user.
         If 'rgba', the interpolation is carried out after the colormapping has
-        been applied (visual interpolation). See matplotlib's imshow
-        documentation for more details.
+        been applied (visual interpolation).
+        'auto' selects a suitable interpolation stage automatically.
+        See matplotlib's imshow documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
