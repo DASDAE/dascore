@@ -165,6 +165,7 @@ def waterfall(
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
+    interpolation_stage: str = "auto",
     log: bool = False,
     cbar: bool = True,
     show: bool = False,
@@ -198,6 +199,12 @@ def waterfall(
         which is relevant for DAS. Usually, "antialiased" works well, but if the
         data look smeared disabling interpolation with None might help. Other
         options are available, see matplotlib's documentation for more details.
+    interpolation_stage
+        If 'data', interpolation is carried out on the data provided by the user.
+        If 'rgba', the interpolation is carried out after the colormapping has
+        been applied (visual interpolation).
+        'auto' (default) selects a suitable interpolation stage automatically.
+        See matplotlib's imshow documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
@@ -285,12 +292,8 @@ def waterfall(
             aspect="auto",
             cmap=cmap,
             origin="lower",
-            # Note: these parameters are so that matplotlib versions > 3.10 behave
-            # like matplotlib < 3.9, which tends to work better for visualizing big
-            # DAS data. See #512. We might consider making these parameters of the
-            # waterfall function in the future.
             interpolation=interpolation,
-            interpolation_stage="data",
+            interpolation_stage=interpolation_stage,
         )
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
