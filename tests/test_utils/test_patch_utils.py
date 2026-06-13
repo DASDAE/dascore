@@ -197,6 +197,31 @@ class TestPatchFunction:
 
         assert out.attrs.data_type == "velocity"
 
+    def test_data_type_none_preserves_inherited_data_type(self, random_patch):
+        """Ensure the default data_type argument preserves inherited attrs."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1)
+
+        patch = random_patch.update_attrs(data_type="velocity")
+        out = some_func(patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_empty_data_type_clears_returned_patch_attr(self, random_patch):
+        """Ensure the decorator can clear the output data_type."""
+
+        @patch_function(data_type="")
+        def some_func(patch):
+            """A test function for clearing data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == ""
+
     def test_data_type_and_history_use_one_attr_update(self, random_patch, monkeypatch):
         """Ensure decorator-managed attrs are updated together."""
         update_count = 0

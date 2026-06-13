@@ -210,7 +210,9 @@ def patch_function(
         quite a lot of code in validation checks, but does have some overhead.
         See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
     data_type
-        If not None, set the output patch's data_type attr to this value.
+        Controls the output patch's ``data_type`` attr. If None, leave the
+        returned patch's ``data_type`` unchanged. Otherwise, set to specified
+        value. Use an empty string ("") to clear.
 
     Examples
     --------
@@ -243,6 +245,11 @@ def patch_function(
     >>> # 4. A patch method which sets the output data_type.
     >>> @dc.patch_function(data_type="strain_rate")
     ... def do_strain_rate(patch):
+    ...     ...
+    >>>
+    >>> # 5. A patch method which clears the output data_type.
+    >>> @dc.patch_function(data_type="")
+    ... def do_unknown_quantity(patch):
     ...     ...
 
     Notes
