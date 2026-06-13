@@ -20,7 +20,7 @@ A stale or misleading `data_type` is much worse than an empty one.
 | Output is a known derived product with a stable meaning | Set a specific snake_case `data_type`. |
 | Output changes physical meaning but no stable label is appropriate | Clear `data_type` to `""`. |
 
-DASCore-assigned `data_type` values should be snake_case and listed in [`dascore.constants.VALID_DATA_TYPES`](`dascore.constants.VALID_DATA_TYPES`). Correctness-critical code should prefer units, coordinates, and explicit validation.
+DASCore-assigned `data_type` values should be snake_case and listed in `VALID_DATA_TYPES` in [`dascore.constants`](`dascore.constants`). Correctness-critical code should prefer units, coordinates, and explicit validation.
 
 ### Patch functions
 
