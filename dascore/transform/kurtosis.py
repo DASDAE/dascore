@@ -15,7 +15,7 @@ def _validate_window(winlen: float, step: float) -> int:
     """Convert window length in seconds to samples and validate."""
     if winlen <= 0:
         raise ValueError("winlen must be positive.")
-    nwin = int(round(winlen / step))
+    nwin = round(winlen / step)
     if nwin < 2:
         raise ValueError("winlen is too small for the sampling interval.")
     return nwin
@@ -230,5 +230,5 @@ def kurtosis(
     return (
         patch_t.new(data=out)
         .transpose(*orig_dims)
-        .update(attrs={"data_type": "Kurtosis", "data_units": ""})
+        .update(attrs={"data_type": "kurtosis", "data_units": ""})
     )

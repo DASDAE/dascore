@@ -39,9 +39,9 @@ from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 DFT_OUTPUT_DATA_TYPE_MAP = {
-    "AS": "Amplitude Spectrum",
-    "PS": "Power Spectrum",
-    "PSD": "Spectral Density",
+    "AS": "amplitude_spectrum",
+    "PS": "power_spectrum",
+    "PSD": "power_spectral_density",
 }
 DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
 
@@ -127,7 +127,7 @@ def _get_dft_attrs(patch, dims, new_coords, pad=False, output="FFT"):
     new["dims"] = new_coords.dims
     new["data_units"] = _get_dft_data_units(patch, dims)
     new["_pre_dft_data_type"] = new.get("data_type")
-    new["data_type"] = "fourier transform"
+    new["data_type"] = "fourier_transform"
     new["_dft_output"] = output
     new["_dft_padded"] = pad
     return PatchAttrs(**new)
@@ -498,7 +498,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     return out
 
 
-@patch_function()
+@patch_function(data_type="fourier_transform")
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
@@ -606,6 +606,7 @@ def stft(
         "_stft_fft_mode": fft_mode,
         "_stft_mfft": window_samples,
         "_stft_performed": True,
+        "_pre_stft_data_type": patch.attrs.get("data_type"),
         "data_units": _get_data_units_from_dims(patch, dim, mul),
     }
     attrs = patch.attrs.drop("coords").update(**new_attrs)
@@ -701,7 +702,10 @@ def istft(patch) -> PatchType:
     new_data = data_untrimmed[index]
     assert new_data.shape == cm.shape
     # Re-assemble and return new patch.
-    new_attrs = {i: v for i, v in patch.attrs.items() if not i.startswith("_stft")}
+    patch_attrs = dict(patch.attrs)
+    new_attrs = {i: v for i, v in patch_attrs.items() if not i.startswith("_stft")}
+    if "_pre_stft_data_type" in patch_attrs:
+        new_attrs["data_type"] = new_attrs.pop("_pre_stft_data_type")
     dim = patch.dims[time_axis]
     new_attrs["data_units"] = _get_data_units_from_dims(patch, dim, truediv)
     attrs = dc.PatchAttrs(**new_attrs).drop("coords")

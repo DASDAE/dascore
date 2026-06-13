@@ -88,12 +88,12 @@ def fbe(
     patch = patch.pass_filter(**kwargs)
 
     fbe = ((patch**2).rolling(**{dim: window, "step": step}).mean() ** 0.5).update(
-        attrs={"data_type": "Frequency-Band Energy"}
+        attrs={"data_type": "frequency_band_energy"}
     )
 
     if db:
         fbe = (10 * fbe.log10()).update(
-            attrs={"data_type": "Frequency-Band Energy", "data_units": "dB"}
+            attrs={"data_type": "frequency_band_energy", "data_units": "dB"}
         )
 
     return fbe

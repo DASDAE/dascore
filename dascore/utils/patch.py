@@ -186,6 +186,7 @@ def patch_function(
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
     validate_call: bool = False,
+    data_type: str | None = None,
 ):
     """
     Decorator to mark a function as a patch method.
@@ -208,6 +209,10 @@ def patch_function(
         If True, use pydantic to validate the function call. This can save
         quite a lot of code in validation checks, but does have some overhead.
         See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
+    data_type
+        Controls the output patch's ``data_type`` attr. If None, leave the
+        returned patch's ``data_type`` unchanged. Otherwise, set to specified
+        value. Use an empty string ("") to clear.
 
     Examples
     --------
@@ -236,6 +241,16 @@ def patch_function(
     ...     option: Literal["min", "max", None] = None,
     ... ):
     ...     ...
+    >>>
+    >>> # 4. A patch method which sets the output data_type.
+    >>> @dc.patch_function(data_type="strain_rate")
+    ... def do_strain_rate(patch):
+    ...     ...
+    >>>
+    >>> # 5. A patch method which clears the output data_type.
+    >>> @dc.patch_function(data_type="")
+    ... def do_unknown_quantity(patch):
+    ...     ...
 
     Notes
     -----
@@ -263,6 +278,9 @@ def patch_function(
             )
             check_patch_attrs(patch, required_attrs)
             out: PatchType = func(patch, *args, **kwargs)
+            attr_updates = {}
+            if data_type is not None:
+                attr_updates["data_type"] = data_type
             # attach history string. Need to consider something a bit less hacky.
             if out is not patch and hasattr(out, "attrs"):
                 hist_str = _get_history_str(
@@ -271,7 +289,9 @@ def patch_function(
                 if hist_str:
                     hist = list(out.attrs.history)
                     hist.append(hist_str)
-                    out = out.update_attrs(history=hist)
+                    attr_updates["history"] = hist
+            if attr_updates and hasattr(out, "attrs"):
+                out = out.update_attrs(**attr_updates)
             return out
 
         # Attach original function. Although we want to encourage raw_function
