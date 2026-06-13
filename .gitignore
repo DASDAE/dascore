@@ -95,6 +95,7 @@ docs/index.quarto_ipynb
 .codex.bak
 CLAUDE.md
 worktrees/
+.scratch
 
 # profile stuff
 prof/
