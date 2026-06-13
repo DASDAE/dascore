@@ -75,7 +75,7 @@ def _jit_taup_general(data, distance, dt, p_vals):
     return two_sided_p_vals, taup
 
 
-@patch_function(required_dims=("time", "distance"))
+@patch_function(required_dims=("time", "distance"), data_type="tau_p")
 def tau_p(
     patch: PatchType,
     velocities: NDArray[np.floating],

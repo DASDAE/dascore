@@ -18,7 +18,7 @@ from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
-@patch_function()
+@patch_function(data_type="fourier_transform")
 @deprecate(
     info="The Patch transform rfft is deprecated. Use dft instead.",
     removed_in="0.2.0",
