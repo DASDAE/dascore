@@ -71,7 +71,7 @@ COMMON_IO_READ_TESTS = {
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     OptoDASV8(): ("opto_das_1.hdf5",),
-    SR4731V200(): ("ofl100_2.sor",),
+    SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",

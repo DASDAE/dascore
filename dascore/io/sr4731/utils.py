@@ -2,19 +2,22 @@
 Utilities for reading SR-4731 OTDR SOR files.
 
 SR-4731 is the Telcordia OTDR Data Format. This implementation currently
-supports the OFL100/FIBERCLOUD subset seen in ``ofl100_2.sor`` and makes these
-specific assumptions:
+supports the OFL100/FIBERCLOUD subset seen in DASCore's ``ofl100_*.sor`` test
+files and makes these specific assumptions:
 
 - The file starts with a ``Map`` block and contains ``GenParams``,
   ``SupParams``, ``FxdParams``, ``DataPts``, and ``Cksum`` blocks.
 - The map block version is ``200``.
 - ``SupParams`` stores manufacturer, model, and serial number in the first
   three null-separated fields.
-- ``FxdParams`` exposes the timestamp, distance unit, wavelength, and
-  acquisition range at the offsets documented in ``_parse_fixed_params``.
+- ``FxdParams`` exposes the timestamp, distance unit, wavelength, sample
+  spacing, index of refraction, and display range fields documented in
+  ``_parse_fixed_params``.
 - ``DataPts`` is a single unsegmented trace with unsigned little-endian
-  16-bit samples and the scale documented in ``_parse_data_points``.
-- Distance is derived from acquisition range divided by sample count.
+  16-bit samples and the display scale documented in ``_parse_data_points``.
+- Trace samples follow pyotdr's SR-4731 display convention:
+  ``(max_raw - raw) * scale / 1_000_000``.
+- Distance spacing is derived from sample spacing and index of refraction.
 - Key events, proprietary blocks, and checksums are not parsed or validated.
 """
 
@@ -28,14 +31,15 @@ import numpy as np
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
-    {"Map", "GenParams", "SupParams", "FxdParams", "DataPts", "Cksum"}
+    ("Map", "GenParams", "SupParams", "FxdParams", "DataPts", "Cksum")
 )
+SPEED_OF_LIGHT_KM_PER_USEC = 0.299792458
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,8 @@ class SR4731PatchAttrs(PatchAttrs):
 
     wavelength_nm: float = np.nan
     acquisition_range_m: float = np.nan
+    sample_spacing_usec: float = np.nan
+    refractive_index: float = np.nan
     trace_count: int = 0
     sample_scale: int = 0
     manufacturer: str = ""
@@ -144,15 +150,31 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
     """Parse the fixed-parameter SOR block fields needed by DASCore."""
     # OFL100/FIBERCLOUD FxdParams fields used here:
     #   0: uint32 unix timestamp, 4: 2-byte distance unit,
-    #   6: uint16 wavelength in tenths of nm, 40: uint32 acquisition range in m.
+    #   6: uint16 wavelength in tenths of nm,
+    #   20: uint32 sample spacing in 1e-8 microseconds,
+    #   24: uint32 fixed-params point count,
+    #   28: uint32 group index of refraction in 1e-5,
+    #   40: uint32 display range in 2e-5 km.
     timestamp = _unpack_from("<I", payload, 0)[0]
     unit = payload[4:6].decode("ascii", "replace")
     wavelength_nm = _unpack_from("<H", payload, 6)[0] / 10
-    acquisition_range_m = _unpack_from("<I", payload, 40)[0]
+    sample_spacing_usec = _unpack_from("<I", payload, 20)[0] * 1e-8
+    num_data_points = _unpack_from("<I", payload, 24)[0]
+    refractive_index = _unpack_from("<I", payload, 28)[0] * 1e-5
+    display_range_km = _unpack_from("<I", payload, 40)[0] * 2e-5
+    if sample_spacing_usec <= 0 or refractive_index <= 0:
+        msg = "SR-4731 SOR FxdParams block has invalid distance scaling fields."
+        raise InvalidFiberFileError(msg)
+    resolution_km = sample_spacing_usec * SPEED_OF_LIGHT_KM_PER_USEC / refractive_index
+    acquisition_range_m = resolution_km * 1000 * num_data_points
     return {
         "timestamp": timestamp,
         "distance_unit": unit,
         "wavelength_nm": wavelength_nm,
+        "sample_spacing_usec": sample_spacing_usec,
+        "num_data_points": num_data_points,
+        "refractive_index": refractive_index,
+        "display_range_km": display_range_km,
         "acquisition_range_m": acquisition_range_m,
     }
 
@@ -161,8 +183,8 @@ def _parse_data_points(payload: bytes, load_samples: bool = True) -> dict[str, A
     """Parse the DataPts block."""
     # OFL100/FIBERCLOUD DataPts fields used here:
     #   0: uint32 total points, 4: uint16 trace count,
-    #   6: uint32 points in trace, 10: uint16 sample scale,
-    #   12: uint16 sample array.
+    #   6: uint32 points in trace, 10: uint16 sample scale.
+    #   12: uint16 sample array, converted to pyotdr-compatible display dB.
     total_points = _unpack_from("<I", payload, 0)[0]
     trace_count = _unpack_from("<H", payload, 4)[0]
     trace_points = _unpack_from("<I", payload, 6)[0]
@@ -185,14 +207,13 @@ def _parse_data_points(payload: bytes, load_samples: bool = True) -> dict[str, A
         msg = "SOR DataPts block ended before all trace samples were read."
         raise InvalidFiberFileError(msg)
     out: dict[str, Any] = {
-        "total_points": total_points,
         "trace_count": trace_count,
         "trace_points": trace_points,
         "scale": scale,
     }
     if load_samples:
         raw = np.frombuffer(payload[sample_start:sample_end], dtype="<u2")
-        out["samples"] = raw.astype(np.float64) / scale
+        out["samples"] = (raw.max() - raw.astype(np.float64)) * scale / 1_000_000
     return out
 
 
@@ -218,26 +239,27 @@ def _parse_sor(resource, load_samples: bool = True) -> dict[str, Any]:
     }
 
 
-def _get_time_coord(parsed: dict[str, Any]):
+def _get_time_coord(parsed: dict[str, Any]) -> BaseCoord:
     """Create a singleton time coordinate from the fixed-params timestamp."""
     timestamp = parsed["fixed"]["timestamp"]
     time = np.asarray([timestamp], dtype="datetime64[s]").astype("datetime64[ns]")
     return get_coord(data=time)
 
 
-def _get_distance_coord(parsed: dict[str, Any]):
+def _get_distance_coord(parsed: dict[str, Any]) -> BaseCoord:
     """Create the distance coordinate."""
     fixed = parsed["fixed"]
     trace_points = parsed["data_points"]["trace_points"]
     if trace_points <= 0:
         msg = "SR-4731 SOR DataPts block contains no trace samples."
         raise InvalidFiberFileError(msg)
-    step = fixed["acquisition_range_m"] / trace_points
+    step = fixed["sample_spacing_usec"] * SPEED_OF_LIGHT_KM_PER_USEC
+    step = step / fixed["refractive_index"] * 1000
     stop = fixed["acquisition_range_m"]
     return get_coord(start=0, stop=stop, step=step, units="m")
 
 
-def _get_coords(parsed: dict[str, Any]):
+def _get_coords(parsed: dict[str, Any]) -> CoordManager:
     """Create the coordinate manager for an SR-4731 trace."""
     coords = {
         "time": _get_time_coord(parsed),
@@ -249,9 +271,7 @@ def _get_coords(parsed: dict[str, Any]):
 def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
     """Create DASCore patch attrs from parsed SR-4731 metadata."""
     supplier = parsed["supplier"]
-    manufacturer = supplier[0] if len(supplier) > 0 else ""
-    model = supplier[1] if len(supplier) > 1 else ""
-    serial_number = supplier[2] if len(supplier) > 2 else ""
+    manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
     instrument_id = "-".join(x for x in (manufacturer, model, serial_number) if x)
     data_points = parsed["data_points"]
     out = {
@@ -260,6 +280,8 @@ def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
         "instrument_id": instrument_id,
         "wavelength_nm": parsed["fixed"]["wavelength_nm"],
         "acquisition_range_m": parsed["fixed"]["acquisition_range_m"],
+        "sample_spacing_usec": parsed["fixed"]["sample_spacing_usec"],
+        "refractive_index": parsed["fixed"]["refractive_index"],
         "trace_count": data_points["trace_count"],
         "sample_scale": data_points["scale"],
         "manufacturer": manufacturer,
@@ -270,7 +292,7 @@ def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
     return out
 
 
-def get_patch_attrs(
+def _get_patch_attrs(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
     extras: dict | None = None,
@@ -283,7 +305,7 @@ def get_patch_attrs(
     return attr_class(**attrs)
 
 
-def get_patches(
+def _get_patches(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
     extras: dict | None = None,
@@ -303,7 +325,7 @@ def get_patches(
     return [patch]
 
 
-def get_format(resource, name: str, version: str) -> tuple[str, str] | bool:
+def _get_format(resource, name: str, version: str) -> tuple[str, str] | bool:
     """Return SR-4731 format/version if the resource is supported."""
     try:
         parsed = _parse_sor(resource, load_samples=False)
