@@ -152,29 +152,31 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
     #   0: uint32 unix timestamp, 4: 2-byte distance unit,
     #   6: uint16 wavelength in tenths of nm,
     #   20: uint32 sample spacing in 1e-8 microseconds,
-    #   24: uint32 fixed-params point count,
+    #   24: uint32 sample count,
     #   28: uint32 group index of refraction in 1e-5,
     #   40: uint32 display range in 2e-5 km.
     timestamp = _unpack_from("<I", payload, 0)[0]
     unit = payload[4:6].decode("ascii", "replace")
     wavelength_nm = _unpack_from("<H", payload, 6)[0] / 10
     sample_spacing_usec = _unpack_from("<I", payload, 20)[0] * 1e-8
-    num_data_points = _unpack_from("<I", payload, 24)[0]
+    n_samples = _unpack_from("<I", payload, 24)[0]
     refractive_index = _unpack_from("<I", payload, 28)[0] * 1e-5
     display_range_km = _unpack_from("<I", payload, 40)[0] * 2e-5
     if sample_spacing_usec <= 0 or refractive_index <= 0:
         msg = "SR-4731 SOR FxdParams block has invalid distance scaling fields."
         raise InvalidFiberFileError(msg)
     resolution_km = sample_spacing_usec * SPEED_OF_LIGHT_KM_PER_USEC / refractive_index
-    acquisition_range_m = resolution_km * 1000 * num_data_points
+    distance_step_m = resolution_km * 1000
+    acquisition_range_m = distance_step_m * n_samples
     return {
         "timestamp": timestamp,
         "distance_unit": unit,
         "wavelength_nm": wavelength_nm,
         "sample_spacing_usec": sample_spacing_usec,
-        "num_data_points": num_data_points,
+        "n_samples": n_samples,
         "refractive_index": refractive_index,
         "display_range_km": display_range_km,
+        "distance_step_m": distance_step_m,
         "acquisition_range_m": acquisition_range_m,
     }
 
@@ -183,38 +185,50 @@ def _parse_data_points(payload: bytes, load_samples: bool = True) -> dict[str, A
     """Parse the DataPts block."""
     # OFL100/FIBERCLOUD DataPts fields used here:
     #   0: uint32 total points, 4: uint16 trace count,
-    #   6: uint32 points in trace, 10: uint16 sample scale.
+    #   6: uint32 samples per trace, 10: uint16 sample scale.
     #   12: uint16 sample array, converted to pyotdr-compatible display dB.
     total_points = _unpack_from("<I", payload, 0)[0]
     trace_count = _unpack_from("<H", payload, 4)[0]
-    trace_points = _unpack_from("<I", payload, 6)[0]
+    n_samples = _unpack_from("<I", payload, 6)[0]
     scale = _unpack_from("<H", payload, 10)[0]
-    if trace_points <= 0:
+    if n_samples <= 0:
         msg = "SR-4731 SOR DataPts block contains no trace samples."
         raise InvalidFiberFileError(msg)
     if scale <= 0:
         msg = "SR-4731 SOR DataPts block has an invalid sample scale."
         raise InvalidFiberFileError(msg)
-    if trace_count != 1 or total_points != trace_points:
+    if trace_count != 1 or total_points != n_samples:
         msg = (
             "Only single-trace, unsegmented SR-4731 SOR DataPts blocks are "
             "currently supported."
         )
         raise InvalidFiberFileError(msg)
     sample_start = 12
-    sample_end = sample_start + trace_points * 2
+    sample_end = sample_start + n_samples * 2
     if sample_end > len(payload):
         msg = "SOR DataPts block ended before all trace samples were read."
         raise InvalidFiberFileError(msg)
     out: dict[str, Any] = {
         "trace_count": trace_count,
-        "trace_points": trace_points,
+        "n_samples": n_samples,
         "scale": scale,
     }
     if load_samples:
         raw = np.frombuffer(payload[sample_start:sample_end], dtype="<u2")
         out["samples"] = (raw.max() - raw.astype(np.float64)) * scale / 1_000_000
     return out
+
+
+def _validate_sample_counts(fixed: dict[str, Any], data_points: dict[str, Any]) -> None:
+    """Ensure FxdParams and DataPts agree on trace sample count."""
+    fixed_samples = fixed["n_samples"]
+    data_samples = data_points["n_samples"]
+    if fixed_samples != data_samples:
+        msg = (
+            "SR-4731 SOR FxdParams sample count "
+            f"({fixed_samples}) does not match DataPts samples ({data_samples})."
+        )
+        raise InvalidFiberFileError(msg)
 
 
 def _parse_sor(resource, load_samples: bool = True) -> dict[str, Any]:
@@ -228,6 +242,7 @@ def _parse_sor(resource, load_samples: bool = True) -> dict[str, Any]:
     data_points = _parse_data_points(
         _block_payload(data, blocks["DataPts"]), load_samples=load_samples
     )
+    _validate_sample_counts(fixed, data_points)
     supplier = _parse_text_fields(_block_payload(data, blocks["SupParams"]))
     general = _parse_text_fields(_block_payload(data, blocks["GenParams"]))
     return {
@@ -249,13 +264,9 @@ def _get_time_coord(parsed: dict[str, Any]) -> BaseCoord:
 def _get_distance_coord(parsed: dict[str, Any]) -> BaseCoord:
     """Create the distance coordinate."""
     fixed = parsed["fixed"]
-    trace_points = parsed["data_points"]["trace_points"]
-    if trace_points <= 0:
-        msg = "SR-4731 SOR DataPts block contains no trace samples."
-        raise InvalidFiberFileError(msg)
-    step = fixed["sample_spacing_usec"] * SPEED_OF_LIGHT_KM_PER_USEC
-    step = step / fixed["refractive_index"] * 1000
+    step = fixed["distance_step_m"]
     stop = fixed["acquisition_range_m"]
+    # DASCore keeps coordinate units on coords; the SOR unit token is parser metadata.
     return get_coord(start=0, stop=stop, step=step, units="m")
 
 
@@ -329,7 +340,7 @@ def _get_format(resource, name: str, version: str) -> tuple[str, str] | bool:
     """Return SR-4731 format/version if the resource is supported."""
     try:
         parsed = _parse_sor(resource, load_samples=False)
-    except Exception:
+    except (InvalidFiberFileError, OSError, ValueError, TypeError):
         return False
     blocks = parsed["blocks"]
     if blocks["Map"].version == int(version):

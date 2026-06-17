@@ -14,7 +14,6 @@ from numpy.testing import assert_allclose
 import dascore as dc
 from dascore.io.sr4731 import SR4731V200
 from dascore.io.sr4731.utils import (
-    _get_distance_coord,
     _get_format,
     _parse_blocks,
     _parse_data_points,
@@ -46,6 +45,51 @@ def _make_map_data(*entries, map_size=32, version=200, extra_size=256):
     return bytes(data)
 
 
+def _make_block(name, payload):
+    """Create an SOR block with a null-terminated block name."""
+    return name.encode() + b"\0" + payload
+
+
+def _make_sor_data(fixed_n_samples=3, data_n_samples=3):
+    """Create a minimal supported SOR byte stream."""
+    fixed = bytearray(44)
+    fixed[4:6] = b"km"
+    fixed[6:8] = np.uint16(15500).tobytes()
+    fixed[20:24] = np.uint32(125003).tobytes()
+    fixed[24:28] = np.uint32(fixed_n_samples).tobytes()
+    fixed[28:32] = np.uint32(146832).tobytes()
+    fixed[40:44] = np.uint32(204805).tobytes()
+
+    data_points = bytearray(12 + data_n_samples * 2)
+    data_points[0:4] = np.uint32(data_n_samples).tobytes()
+    data_points[4:6] = np.uint16(1).tobytes()
+    data_points[6:10] = np.uint32(data_n_samples).tobytes()
+    data_points[10:12] = np.uint16(1000).tobytes()
+    data_points[12:] = np.arange(data_n_samples, dtype="<u2").tobytes()
+
+    blocks = [
+        _make_block("GenParams", b"gen\0"),
+        _make_block("SupParams", b"FIBERCLOUD\0" + b"OFL100\0" + b"0901001\0"),
+        _make_block("FxdParams", bytes(fixed)),
+        _make_block("DataPts", bytes(data_points)),
+        _make_block("Cksum", b"\0\0"),
+    ]
+    entries = [(block.split(b"\0", 1)[0].decode(), 200, len(block)) for block in blocks]
+    entry_bytes = b"".join(
+        name.encode() + b"\0" + np.uint16(version).tobytes() + np.uint32(size).tobytes()
+        for name, version, size in entries
+    )
+    map_size = len(b"Map\0") + 2 + 4 + 2 + len(entry_bytes)
+    map_block = (
+        b"Map\0"
+        + np.uint16(200).tobytes()
+        + np.uint32(map_size).tobytes()
+        + np.uint16(len(blocks) + 1).tobytes()
+        + entry_bytes
+    )
+    return map_block + b"".join(blocks)
+
+
 def _read_c_string(data: bytes, offset: int = 0) -> tuple[str, int]:
     """Read a null-terminated ASCII string for independent fixture checks."""
     end = data.index(0, offset)
@@ -64,7 +108,7 @@ def _get_block_payload(path, block_name):
 def _expected_fixed_values(payload):
     """Decode fixed params independently of the production helper."""
     sample_spacing_usec = struct.unpack_from("<I", payload, 20)[0] * 1e-8
-    point_count = struct.unpack_from("<I", payload, 24)[0]
+    n_samples = struct.unpack_from("<I", payload, 24)[0]
     refractive_index = struct.unpack_from("<I", payload, 28)[0] * 1e-5
     resolution_m = (
         sample_spacing_usec * SPEED_OF_LIGHT_KM_PER_USEC / refractive_index * 1000
@@ -73,20 +117,20 @@ def _expected_fixed_values(payload):
         "timestamp": struct.unpack_from("<I", payload, 0)[0],
         "wavelength_nm": struct.unpack_from("<H", payload, 6)[0] / 10,
         "sample_spacing_usec": sample_spacing_usec,
-        "point_count": point_count,
+        "n_samples": n_samples,
         "refractive_index": refractive_index,
-        "acquisition_range_m": resolution_m * point_count,
+        "acquisition_range_m": resolution_m * n_samples,
         "distance_step": resolution_m,
     }
 
 
 def _expected_data_values(payload):
     """Decode DataPts samples independently of the production helper."""
-    point_count = struct.unpack_from("<I", payload, 6)[0]
+    n_samples = struct.unpack_from("<I", payload, 6)[0]
     scale = struct.unpack_from("<H", payload, 10)[0]
-    raw = np.frombuffer(payload[12 : 12 + point_count * 2], dtype="<u2")
+    raw = np.frombuffer(payload[12 : 12 + n_samples * 2], dtype="<u2")
     data = (raw.max() - raw.astype(np.float64)) * scale / 1_000_000
-    return {"point_count": point_count, "scale": scale, "data": data}
+    return {"n_samples": n_samples, "scale": scale, "data": data}
 
 
 def _expected_supplier_values(payload):
@@ -125,9 +169,7 @@ class TestSR4731:
         data_points = _expected_data_values(_get_block_payload(sor_path, "DataPts"))
         supplier = _expected_supplier_values(_get_block_payload(sor_path, "SupParams"))
         manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
-        instrument_id = "-".join(
-            x for x in (manufacturer, model, serial_number) if x
-        )
+        instrument_id = "-".join(x for x in (manufacturer, model, serial_number) if x)
         attrs = self.parser.scan(sor_path)
         assert len(attrs) == 1
         attr = attrs[0]
@@ -140,9 +182,7 @@ class TestSR4731:
         assert attr.data_units == dc.get_quantity("dB")
         assert attr.instrument_id == instrument_id
         assert attr.wavelength_nm == fixed["wavelength_nm"]
-        assert attr.acquisition_range_m == pytest.approx(
-            fixed["acquisition_range_m"]
-        )
+        assert attr.acquisition_range_m == pytest.approx(fixed["acquisition_range_m"])
         assert attr.sample_spacing_usec == pytest.approx(fixed["sample_spacing_usec"])
         assert attr.refractive_index == pytest.approx(fixed["refractive_index"])
         assert attr.trace_count == 1
@@ -152,7 +192,7 @@ class TestSR4731:
         """Read returns one singleton-time OTDR patch."""
         data_points = _expected_data_values(_get_block_payload(sor_path, "DataPts"))
         assert isinstance(sor_patch, dc.Patch)
-        assert sor_patch.shape == (1, data_points["point_count"])
+        assert sor_patch.shape == (1, data_points["n_samples"])
         assert sor_patch.dims == ("time", "distance")
         assert sor_patch.attrs.data_type == "otdr"
         assert sor_patch.attrs.data_units == dc.get_quantity("dB")
@@ -173,13 +213,38 @@ class TestSR4731:
         distance = sor_patch.get_coord("distance")
         assert_allclose(distance.min(), 0.0)
         assert_allclose(distance.step, fixed["distance_step"])
-        assert len(distance) == data_points["point_count"]
+        assert distance.units == dc.get_quantity("m")
+        assert len(distance) == data_points["n_samples"]
 
     def test_sample_values_match_pyotdr_display_convention(self, sor_path):
         """Sample values match pyotdr's display dB convention."""
         sor_patch = self.parser.read(sor_path)[0]
         data_points = _expected_data_values(_get_block_payload(sor_path, "DataPts"))
         assert_allclose(sor_patch.data[0], data_points["data"])
+
+    def test_golden_values_ofl100_1(self):
+        """Pin known values for ofl100_1.sor to catch wrong scaling constants.
+
+        Unlike the other tests, these expected values are hard-coded rather than
+        re-derived from the file, so a wrong offset or scale factor in both the
+        parser and the test helpers cannot hide.
+        """
+        patch = self.parser.read(fetch("ofl100_1.sor"))[0]
+        attrs = patch.attrs
+        distance = patch.get_coord("distance")
+        assert patch.shape == (1, 16384)
+        assert attrs.wavelength_nm == 1550.0
+        assert attrs.refractive_index == pytest.approx(1.46832)
+        assert attrs.sample_spacing_usec == pytest.approx(0.00125003)
+        assert attrs.acquisition_range_m == pytest.approx(4181.579556111035)
+        assert attrs.trace_count == 1
+        assert attrs.sample_scale == 1000
+        assert attrs.instrument_id == "FIBERCLOUD-FC4000-0901001"
+        assert distance.step == pytest.approx(0.2552233615790427)
+        assert patch.get_coord("time").min() == np.datetime64("2026-06-12T10:58:14")
+        assert_allclose(patch.data[0, :5], [9.064, 10.146, 11.439, 11.98, 12.539])
+        assert patch.data.min() == 0.0
+        assert patch.data.max() == pytest.approx(20.304)
 
     def test_select(self, sor_path, sor_patch):
         """Partial distance reads reduce coords and data consistently."""
@@ -273,8 +338,14 @@ class TestSR4731Utils:
         """Invalid bytes should not be claimed as SR-4731."""
         assert not _get_format(BytesIO(b"Map"), "SR4731", "200")
 
-    def test_fixed_params_has_no_datetime_utc_field(self):
-        """The fixed params parser should not depend on Python 3.11 datetime.UTC."""
+    def test_fixed_and_data_sample_counts_must_match(self):
+        """FxdParams and DataPts must agree on trace length."""
+        data = _make_sor_data(fixed_n_samples=4, data_n_samples=3)
+        with pytest.raises(dc.exceptions.InvalidFiberFileError, match="does not match"):
+            _parse_sor(BytesIO(data), load_samples=False)
+
+    def test_parse_fixed_params(self):
+        """FxdParams fields decode to the documented physical values."""
         payload = bytearray(44)
         payload[4:6] = b"km"
         payload[6:8] = np.uint16(15500).tobytes()
@@ -288,9 +359,10 @@ class TestSR4731Utils:
             "distance_unit": "km",
             "wavelength_nm": 1550.0,
             "sample_spacing_usec": pytest.approx(0.00125003),
-            "num_data_points": 16384,
+            "n_samples": 16384,
             "refractive_index": pytest.approx(1.46832),
             "display_range_km": pytest.approx(4.0961),
+            "distance_step_m": pytest.approx(0.2552233615795309),
             "acquisition_range_m": pytest.approx(4181.579556111035),
         }
 
@@ -312,13 +384,13 @@ class TestSR4731Utils:
         out = _parse_data_points(bytes(payload))
         assert_allclose(out["samples"], [0.0, 0.05, 0.1])
 
-    @pytest.mark.parametrize("trace_points, scale", [(0, 1000), (10, 0)])
-    def test_invalid_data_points_raise(self, trace_points, scale):
-        """Invalid point counts and scales should fail with DASCore IO errors."""
-        payload = bytearray(12 + trace_points * 2)
-        payload[0:4] = np.uint32(trace_points).tobytes()
+    @pytest.mark.parametrize("n_samples, scale", [(0, 1000), (10, 0)])
+    def test_invalid_data_points_raise(self, n_samples, scale):
+        """Invalid sample counts and scales should fail with DASCore IO errors."""
+        payload = bytearray(12 + n_samples * 2)
+        payload[0:4] = np.uint32(n_samples).tobytes()
         payload[4:6] = np.uint16(1).tobytes()
-        payload[6:10] = np.uint32(trace_points).tobytes()
+        payload[6:10] = np.uint32(n_samples).tobytes()
         payload[10:12] = np.uint16(scale).tobytes()
         with pytest.raises(dc.exceptions.InvalidFiberFileError):
             _parse_data_points(bytes(payload))
@@ -342,16 +414,3 @@ class TestSR4731Utils:
         payload[10:12] = np.uint16(1000).tobytes()
         with pytest.raises(dc.exceptions.InvalidFiberFileError):
             _parse_data_points(bytes(payload))
-
-    def test_distance_coord_rejects_zero_points(self):
-        """Distance coord creation guards against invalid point counts."""
-        parsed = {
-            "fixed": {
-                "acquisition_range_m": 10,
-                "sample_spacing_usec": 1,
-                "refractive_index": 1,
-            },
-            "data_points": {"trace_points": 0},
-        }
-        with pytest.raises(dc.exceptions.InvalidFiberFileError):
-            _get_distance_coord(parsed)
