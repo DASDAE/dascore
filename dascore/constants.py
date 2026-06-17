@@ -72,6 +72,7 @@ VALID_DATA_TYPES = (
     "temperature",
     "temperature_gradient",
     "brillouin_spectrum",
+    "otdr",
 )
 
 # Valid categories (of instruments)
@@ -231,4 +232,5 @@ DEFAULT_COLORMAPS = {
     "phase_rate": "seismic",
     "temperature": "coolwarm",
     "temperature_gradient": "RdYlBu_r",
+    "otdr": "viridis",
 }
