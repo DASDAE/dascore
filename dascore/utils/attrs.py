@@ -229,15 +229,19 @@ def separate_coord_info(
             return obj["coords"].dims
 
         # This object already has dims, just honor it.
-        if dims := obj.get("dims", None):
-            return tuple(dims.split(",")) if isinstance(dims, str) else dims
+        if "dims" in obj:
+            dims_val = obj["dims"]
+            if isinstance(dims_val, str):
+                return tuple(dims_val.split(",")) if dims_val else ()
+            return tuple(dims_val)
 
         potential_keys = defaultdict(set)
         for key in obj:
             if not is_valid_coord_str(key):
                 continue
             potential_keys[key.split("_")[0]].add(key.split("_")[1])
-        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
+        found = tuple(i for i, v in potential_keys.items() if _meets_required(v))
+        return found if found else None
 
     def _get_coords_from_top_level(obj, out, dims):
         """First get coord info from top level."""
@@ -289,7 +293,7 @@ def separate_coord_info(
     obj = dict(obj)
     # Check if dims need to be updated.
     new_dims = _get_dims(obj)
-    if new_dims and new_dims != dims:
+    if new_dims is not None and new_dims != dims:
         obj["dims"] = new_dims
         dims = new_dims
     # this is already a dict of coord info.
