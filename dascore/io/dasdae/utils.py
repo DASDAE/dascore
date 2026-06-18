@@ -89,7 +89,7 @@ def _save_patch(patch, wave_group, h5, name):
     _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group, h5)
     # add data
-    if patch.data.shape:
+    if patch.data.shape or patch.data.ndim == 0:
         _create_or_squash_array(h5, patch_group, "data", patch.data)
 
 
@@ -119,6 +119,14 @@ def _read_array(table_array):
     if table_array._v_attrs["is_timedelta64"]:
         data = data.view("timedelta64[ns]")
     return data
+
+
+def _read_data_array(table_array):
+    """Read patch data, including scalar arrays."""
+    try:
+        return table_array[:]
+    except IndexError:
+        return np.asarray(table_array[()])
 
 
 def _get_coords(patch_group, dims, attrs2):
@@ -164,16 +172,21 @@ def _read_patch(patch_group, **kwargs):
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
-    if kwargs:
-        # We need to remove any coordinates from kwargs that are multi-dim
-        # coords.
-        cmap = coords.dim_map
-        sub_kwargs = {
-            i: v for i, v in kwargs.items() if (i not in cmap) or (len(cmap[i]) == 1)
-        }
-        coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
-    else:
-        data = patch_group["data"][:]
+    try:
+        if kwargs:
+            # We need to remove any coordinates from kwargs that are multi-dim
+            # coords.
+            cmap = coords.dim_map
+            sub_kwargs = {
+                i: v
+                for i, v in kwargs.items()
+                if (i not in cmap) or (len(cmap[i]) == 1)
+            }
+            coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
+        else:
+            data = _read_data_array(patch_group["data"])
+    except IndexError:
+        data = _read_data_array(patch_group["data"])
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 

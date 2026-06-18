@@ -681,6 +681,27 @@ class TestSqueeze:
         if coords:
             assert set(coords) == set(patch.coords.coord_map)
 
+    def test_squeeze_single_dim_on_1x1_patch(self):
+        """Squeeze one dim of a (1,1) patch should work (#623)."""
+        data = np.arange(1, dtype=np.float64).reshape(1, 1)
+        patch = dc.Patch(
+            data=data,
+            coords={
+                "distance": (("distance",), np.array([0.0])),
+                "time": (("time",), np.array([0.0])),
+            },
+            dims=["distance", "time"],
+        )
+        out = patch.squeeze("distance")
+        assert out.dims == ("time",)
+        assert out.attrs.dim_tuple == ("time",)
+        assert out.shape == (1,)
+
+        out_all = patch.squeeze()
+        assert out_all.dims == ()
+        assert out_all.attrs.dim_tuple == ()
+        assert out_all.shape == ()
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""

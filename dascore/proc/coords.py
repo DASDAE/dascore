@@ -718,7 +718,9 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     else:
         axes = tuple(self.get_axis(x) for x in iterate(dim))
     data = np.squeeze(self.data, axis=axes)
-    return self.new(data=data, coords=coords)
+    dims = coords.dims
+    attrs = self.attrs.new(dims=",".join(dims))
+    return self.new(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
 @patch_function()
