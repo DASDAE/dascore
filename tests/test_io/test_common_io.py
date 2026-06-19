@@ -38,6 +38,7 @@ from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.sintela_binary import SintelaBinaryV3
+from dascore.io.sr4731 import SR4731V200
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -70,6 +71,7 @@ COMMON_IO_READ_TESTS = {
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     OptoDASV8(): ("opto_das_1.hdf5",),
+    SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
