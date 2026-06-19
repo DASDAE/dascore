@@ -311,7 +311,7 @@ def imag(patch: PatchType) -> PatchType:
     return patch.new(data=np.imag(patch.data))
 
 
-@patch_function()
+@patch_function(data_type="")
 def angle(patch: PatchType) -> PatchType:
     """
     Return a new patch with the phase angles from the data array.
@@ -325,7 +325,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function()
+@patch_function(data_type="")
 def normalize(
     self: PatchType,
     dim: str,
@@ -387,7 +387,7 @@ def normalize(
     return self.new(data=new_data)
 
 
-@patch_function()
+@patch_function(data_type="")
 def standardize(
     self: PatchType,
     dim: str,
@@ -793,7 +793,7 @@ def flip(patch, *dims, flip_coords=True):
     return patch.new(data=data, coords=coords)
 
 
-@patch_function()
+@patch_function(data_type="")
 def full(patch, fill_value):
     """
     Return an identical patch with the data replaced by fill_value.

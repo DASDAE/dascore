@@ -90,7 +90,7 @@ class TestKurtosis:
 
         assert out.dims == random_patch.dims
         assert out.data.shape == random_patch.data.shape
-        assert out.attrs.data_type == "Kurtosis"
+        assert out.attrs.data_type == "kurtosis"
         assert out.attrs.data_units is None
 
     def test_recursive_runs(self, random_patch):
@@ -99,7 +99,7 @@ class TestKurtosis:
 
         assert out.dims == random_patch.dims
         assert out.data.shape == random_patch.data.shape
-        assert out.attrs.data_type == "Kurtosis"
+        assert out.attrs.data_type == "kurtosis"
         assert out.attrs.data_units is None
 
     def test_restores_original_dimension_order(self, random_patch):

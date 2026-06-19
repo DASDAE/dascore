@@ -72,6 +72,18 @@ VALID_DATA_TYPES = (
     "temperature",
     "temperature_gradient",
     "brillouin_spectrum",
+    "fourier_transform",
+    "amplitude_spectrum",
+    "power_spectrum",
+    "power_spectral_density",
+    "frequency_band_energy",
+    "stalta",
+    "kurtosis",
+    "envelope",
+    "correlation",
+    "tau_p",
+    "dispersion",
+    "phase_weighted_stack",
     "otdr",
 )
 
@@ -88,7 +100,7 @@ max_lens = {
     "file_version": 9,
     "experiment_id": 50,
     "instrument_id": 50,
-    "data_type": 20,
+    "data_type": 32,
     "data_category": 4,
 }
 
@@ -217,13 +229,18 @@ dim_reduce
 
 
 DEFAULT_COLORMAPS = {
-    "frequency-band energy": "Spectral_r",
+    "frequency_band_energy": "Spectral_r",
     "stalta": "RdGy_r",
     "kurtosis": "gnuplot2",
-    "fourier transform": "magma",
-    "power spectral density": "turbo",
-    "power spectrum": "turbo",
-    "amplitude spectrum": "turbo",
+    "envelope": "viridis",
+    "correlation": "RdBu_r",
+    "tau_p": "magma",
+    "dispersion": "turbo",
+    "phase_weighted_stack": "viridis",
+    "fourier_transform": "magma",
+    "power_spectral_density": "turbo",
+    "power_spectrum": "turbo",
+    "amplitude_spectrum": "turbo",
     "strain_rate": "RdBu_r",
     "strain": "seismic",
     "velocity": "viridis",

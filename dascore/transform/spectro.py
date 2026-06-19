@@ -58,7 +58,7 @@ def _get_new_dims(patch, dim, new_coord_name):
     return tuple([*dims, dim])
 
 
-@patch_function()
+@patch_function(data_type="fourier_transform")
 @deprecate(
     info="Use Patch.stft() instead.",
     since="0.1.11",

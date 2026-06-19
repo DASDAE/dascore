@@ -161,6 +161,89 @@ class TestPatchFunction:
         with pytest.raises(pydantic.ValidationError):
             some_func(patch, some_int=10, specific_float=20.0)
 
+    def test_data_type(self, random_patch):
+        """Ensure the decorator can set the output data_type."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting the output data_type."""
+            return patch.new(data=patch.data + 1)
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_overwrites_returned_patch_attr(self, random_patch):
+        """Ensure the decorator data_type takes precedence."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function with a conflicting output data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_none_preserves_existing_behavior(self, random_patch):
+        """Ensure the default data_type argument leaves attrs unchanged."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_data_type_none_preserves_inherited_data_type(self, random_patch):
+        """Ensure the default data_type argument preserves inherited attrs."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1)
+
+        patch = random_patch.update_attrs(data_type="velocity")
+        out = some_func(patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_empty_data_type_clears_returned_patch_attr(self, random_patch):
+        """Ensure the decorator can clear the output data_type."""
+
+        @patch_function(data_type="")
+        def some_func(patch):
+            """A test function for clearing data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == ""
+
+    def test_data_type_and_history_use_one_attr_update(self, random_patch, monkeypatch):
+        """Ensure decorator-managed attrs are updated together."""
+        update_count = 0
+        original_update_attrs = dc.Patch.update_attrs
+
+        def update_attrs(self, **attrs):
+            nonlocal update_count
+            update_count += 1
+            return original_update_attrs(self, **attrs)
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting data_type and history."""
+            return patch.new(data=patch.data + 1)
+
+        monkeypatch.setattr(dc.Patch, "update_attrs", update_attrs)
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+        assert len(out.attrs.history) == len(random_patch.attrs.history) + 1
+        assert update_count == 1
+
 
 class TestHistory:
     """Tests for tracking patch processing history."""
