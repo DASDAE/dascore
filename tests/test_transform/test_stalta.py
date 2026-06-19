@@ -15,7 +15,7 @@ class TestStaLta:
 
         assert out.dims == random_patch.dims
         assert out.data.shape == random_patch.data.shape
-        assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_type == "stalta"
         assert out.attrs.data_units is None
 
     def test_runs_distance_dimension(self, random_patch):
@@ -24,7 +24,7 @@ class TestStaLta:
 
         assert out.dims == random_patch.dims
         assert out.data.shape == random_patch.data.shape
-        assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_type == "stalta"
         assert out.attrs.data_units is None
 
     def test_matches_expected_time_ratio(self, random_patch):
@@ -51,7 +51,7 @@ class TestStaLta:
         """Ensure output metadata are set."""
         out = random_patch.stalta(time=(0.01, 0.05))
 
-        assert out.attrs.data_type == "STALTA"
+        assert out.attrs.data_type == "stalta"
         assert out.attrs.data_units is None
 
     def test_missing_dimension_kwargs_raise(self, random_patch):

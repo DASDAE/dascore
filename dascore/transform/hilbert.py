@@ -15,7 +15,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import patch_function
 
 
-@patch_function()
+@patch_function(data_type="")
 def hilbert(patch: PatchType, dim: str) -> PatchType:
     """
     Perform a Hilbert transform on a patch.
@@ -57,7 +57,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     return patch.new(data=analytic_signal)
 
 
-@patch_function()
+@patch_function(data_type="envelope")
 def envelope(patch: PatchType, dim: str) -> PatchType:
     """
     Calculate the envelope of a signal using the Hilbert transform.
@@ -112,7 +112,7 @@ def __infer_transform_dim(patch, stack_dim):
     return next(iter(dims))
 
 
-@patch_function()
+@patch_function(data_type="phase_weighted_stack")
 @compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
 def phase_weighted_stack(
     patch: PatchType,

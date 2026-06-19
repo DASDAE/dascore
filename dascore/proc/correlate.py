@@ -34,7 +34,7 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     return out
 
 
-@patch_function()
+@patch_function(data_type="correlation")
 def correlate_shift(
     patch: PatchType, dim: str, undo_weighting: bool = True
 ) -> PatchType:
@@ -86,7 +86,7 @@ def correlate_shift(
     return out
 
 
-@patch_function()
+@patch_function(data_type="correlation")
 def correlate(
     patch: PatchType,
     samples: bool = False,

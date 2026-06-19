@@ -1,0 +1,35 @@
+---
+title: PatchAttrs
+---
+
+[`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) stores metadata about a [`Patch`](`dascore.Patch`). Some attributes describe identity or provenance, some summarize coordinates, and some describe the data array itself.
+
+This note explains how DASCore interprets a few important attributes, and its internal policies around these attributes.
+
+## `data_type`
+
+`data_type` is an optional label for the kind of data contained in a patch. It is useful for display defaults, plotting choices, grouping, and quick inspection, but it is not the canonical source of physical meaning, rather the data and coordinate units, as well as the patch history serve this purpose. 
+
+:::{.callout-note}
+A stale or misleading `data_type` is much worse than an empty one.
+:::
+
+| Situation | `data_type` behavior |
+|---|---|
+| Output is still the same measured quantity, just filtered/resampled/selected/reordered | Preserve existing `data_type`. |
+| Output is a known derived product with a stable meaning | Set a specific snake_case `data_type`. |
+| Output changes physical meaning but no stable label is appropriate | Clear `data_type` to `""`. |
+
+DASCore-assigned `data_type` values should be snake_case and listed in `VALID_DATA_TYPES` in [`dascore.constants`](`dascore.constants`). Correctness-critical code should prefer units, coordinates, and explicit validation.
+
+### Patch functions
+
+[`patch_function`](`dascore.utils.patch.patch_function`) can manage output `data_type` for patch methods.
+
+| Decorator value | Behavior |
+|---|---|
+| `data_type=None` | Preserve the returned patch's `data_type`. This is the default for backward compatibility. |
+| `data_type=""` | Clear the returned patch's `data_type`. |
+| `data_type="some_value"` | Set the returned patch's `data_type` to that value. |
+
+Functions may still require a specific input label with `required_attrs`, for example `required_attrs={"data_type": "velocity"}`. This should only be used when the function's assumptions truly depend on that label and are documented.

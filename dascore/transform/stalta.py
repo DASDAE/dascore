@@ -53,4 +53,4 @@ def stalta(
     sta_data = patch.rolling(**{dim: sta}).mean()
     lta_data = patch.rolling(**{dim: lta}).mean()
 
-    return (sta_data / lta_data).update(attrs={"data_type": "STALTA", "data_units": ""})
+    return (sta_data / lta_data).update(attrs={"data_type": "stalta", "data_units": ""})

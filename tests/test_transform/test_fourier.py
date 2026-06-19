@@ -223,7 +223,7 @@ class TestDiscreteFourierTransform:
     def test_datatype_changed(self, fft_sin_patch_time, sin_patch):
         """Ensure the data_type attr is changed after transform."""
         assert sin_patch.attrs.data_type == "strain_rate"
-        assert fft_sin_patch_time.attrs.data_type == "fourier transform"
+        assert fft_sin_patch_time.attrs.data_type == "fourier_transform"
 
     def test_dft_output_attr_set(self, fft_sin_patch_time):
         """Ensure the DFT output type is tracked."""
@@ -248,10 +248,10 @@ class TestDiscreteFourierTransform:
     @pytest.mark.parametrize(
         ("output", "data_type"),
         [
-            ("FFT", "fourier transform"),
-            ("AS", "Amplitude Spectrum"),
-            ("PS", "Power Spectrum"),
-            ("PSD", "Spectral Density"),
+            ("FFT", "fourier_transform"),
+            ("AS", "amplitude_spectrum"),
+            ("PS", "power_spectrum"),
+            ("PSD", "power_spectral_density"),
         ],
     )
     def test_output_spectral_representations(self, sin_patch, output, data_type):
@@ -484,7 +484,7 @@ class TestSTFT:
 
     def test_numeric_window_with_timedelta_coord(self):
         """
-        stft with a numeric window length should work when the time
+        Stft with a numeric window length should work when the time
         coordinate is timedelta64 (not just datetime64); see #604.
         """
         patch = dc.get_example_patch()

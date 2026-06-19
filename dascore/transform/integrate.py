@@ -80,7 +80,7 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     return out, patch.coords  # coords shouldn't change
 
 
-@patch_function()
+@patch_function(data_type="")
 def integrate(
     patch: PatchType,
     dim: Sequence[str] | str | None,

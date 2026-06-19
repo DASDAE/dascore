@@ -12,7 +12,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 
 
-@patch_function(required_dims=("time", "distance"))
+@patch_function(required_dims=("time", "distance"), data_type="dispersion")
 def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
