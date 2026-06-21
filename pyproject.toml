@@ -149,6 +149,7 @@ GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
 [project.entry-points."dascore.patch_namespace"]
 io = "dascore.io:PatchIO"
+spectral = "dascore.transform.spectral_descriptors:SpectralPatchNameSpace"
 viz = "dascore.viz:VizPatchNameSpace"
 
 

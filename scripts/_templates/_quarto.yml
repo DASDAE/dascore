@@ -141,6 +141,7 @@ website:
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
+            - recipes/spectral_descriptors.qmd
             - recipes/real_time_proc.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd

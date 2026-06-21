@@ -18,10 +18,12 @@ from .stalta import stalta
 from .fbe import fbe
 from .kurtosis import kurtosis
 from .spectral_descriptors import (
-    mean_frequency,
-    median_frequency,
+    SpectralPatchNameSpace,
     max_frequency,
+    median_frequency,
+    spectral_centroid,
     spectral_entropy,
+    spectral_flatness,
     spectral_kurtosis,
-    spectral_flatness
-    )
+    spectral_max,
+)

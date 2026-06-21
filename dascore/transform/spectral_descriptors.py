@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.units import Quantity
+from dascore.utils.namespace import PatchNameSpace
 from dascore.utils.patch import patch_function
 
 SpectralFormat = Literal["auto", "fft", "amplitude", "power", "density"]
@@ -256,7 +257,7 @@ def _broadcast_freqs(
 
 
 @patch_function()
-def mean_frequency(
+def spectral_centroid(
     patch: PatchType,
     dim: str | None = None,
     fmin: float | None = None,
@@ -265,10 +266,10 @@ def mean_frequency(
     negative_frequencies: NegativeFrequencies = "auto",
 ) -> PatchType:
     """
-    Compute the mean frequency of a Fourier-domain patch.
+    Compute the spectral centroid of a Fourier-domain patch.
 
     This represents the center of gravity of the signal's power spectrum, and
-    is sometimes called the spectral centroid. The input patch must already be
+    is sometimes called the mean frequency. The input patch must already be
     transformed with [Patch.dft](`dascore.Patch.dft`) or
     [Patch.stft](`dascore.Patch.stft`). STFT inputs produce rolling descriptors;
     DFT inputs produce descriptors over the remaining non-frequency dimensions.
@@ -318,8 +319,8 @@ def mean_frequency(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> spec = patch.stft(time=.02, overlap=.019, taper_window="boxcar")
-    >>> mea = spec.mean_frequency(fmin=50, fmax=300)
-    >>> ax = mea.viz.waterfall(cmap='turbo', ax=axs[1])
+    >>> centroid = spec.spectral.spectral_centroid(fmin=50, fmax=300)
+    >>> ax = centroid.viz.waterfall(cmap='turbo', ax=axs[1])
 
     """
     freqs, power, freq_dim = _get_spectral_power(
@@ -344,7 +345,7 @@ def mean_frequency(
         where=denominator > 0,
     )
     data_units = patch.get_coord(freq_dim).units
-    data_type = "Mean Frequency"
+    data_type = "Spectral Centroid"
     return _prepare_output(patch, out, freq_dim, data_type, data_units)
 
 
@@ -404,7 +405,7 @@ def median_frequency(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> spec = patch.stft(time=.02, overlap=.019, taper_window="boxcar")
-    >>> med = spec.median_frequency(fmin=50, fmax=300)
+    >>> med = spec.spectral.median_frequency(fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(cmap='turbo', ax=axs[1], scale=[0,1])
     """
     freqs, power, freq_dim = _get_spectral_power(
@@ -492,6 +493,59 @@ def max_frequency(
 
     data_units = patch.get_coord(freq_dim).units
     data_type = "Frequency at Maximum"
+    return _prepare_output(patch, out, freq_dim, data_type, data_units)
+
+
+@patch_function()
+def spectral_max(
+    patch: PatchType,
+    dim: str | None = None,
+    fmin: float | None = None,
+    fmax: float | None = None,
+    spectral_format: SpectralFormat = "auto",
+    negative_frequencies: NegativeFrequencies = "auto",
+) -> PatchType:
+    """
+    Compute the maximum spectral amplitude of a Fourier-domain patch.
+
+    The input patch must already be transformed with
+    [Patch.dft](`dascore.Patch.dft`) or [Patch.stft](`dascore.Patch.stft`).
+    The descriptor returns the largest linear spectral amplitude along the
+    requested Fourier dimension.
+
+    Parameters
+    ----------
+    patch
+        Fourier-domain DASCore patch from ``dft`` or ``stft``.
+    dim
+        Frequency dimension over which to compute the descriptor. This can be
+        either the original dimension name or the Fourier dimension name.
+    fmin
+        Optional lower frequency limit.
+    fmax
+        Optional upper frequency limit.
+    spectral_format
+        Representation of the spectral data: ``"auto"``, ``"fft"``,
+        ``"amplitude"``, ``"power"``, or ``"density"``.
+    negative_frequencies
+        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
+        ``"raise"``, or ``"keep"``.
+
+    Returns
+    -------
+    PatchType
+        Patch containing the maximum spectral amplitude.
+    """
+    _freqs, power, freq_dim = _get_spectral_power(
+        patch, dim, fmin, fmax, spectral_format, negative_frequencies
+    )
+
+    freq_axis = patch.dims.index(freq_dim)
+    amplitude = np.sqrt(power)
+    out = np.max(amplitude, axis=freq_axis)
+
+    data_units = patch.attrs.get("data_units")
+    data_type = "Maximum Spectral Amplitude"
     return _prepare_output(patch, out, freq_dim, data_type, data_units)
 
 
@@ -721,3 +775,17 @@ def spectral_flatness(
     data_units = None
     data_type = "Spectral Flatness"
     return _prepare_output(patch, flatness, freq_dim, data_type, data_units)
+
+
+class SpectralPatchNameSpace(PatchNameSpace):
+    """A class for storing spectral descriptor methods."""
+
+    name = "spectral"
+
+    spectral_centroid = spectral_centroid
+    median_frequency = median_frequency
+    max_frequency = max_frequency
+    spectral_max = spectral_max
+    spectral_entropy = spectral_entropy
+    spectral_kurtosis = spectral_kurtosis
+    spectral_flatness = spectral_flatness

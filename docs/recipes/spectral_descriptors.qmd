@@ -1,0 +1,20 @@
+---
+title: "Spectral Descriptors"
+---
+
+Spectral descriptors summarize Fourier-domain patches. First transform a patch with `dft` or `stft`, then call descriptor methods from the `spectral` namespace.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=2)
+spec = patch.dft("time", real=True, pad=False)
+
+centroid = spec.spectral.spectral_centroid(fmin=1, fmax=3)
+peak_frequency = spec.spectral.max_frequency(fmin=1, fmax=3)
+peak_amplitude = spec.spectral.spectral_max(fmin=1, fmax=3)
+```
+
+`spectral_centroid` is the power-weighted center frequency, formerly exposed as mean frequency. `max_frequency` returns the frequency bin with the largest spectral power, while `spectral_max` returns the maximum spectral amplitude along the requested Fourier dimension.
+
+The namespace also includes `median_frequency`, `spectral_entropy`, `spectral_kurtosis`, and `spectral_flatness`. These methods accept DFT and STFT output and support frequency limits with `fmin` and `fmax`.
