@@ -2,6 +2,8 @@
 
 This file gives AI/code agents a practical checklist for contributing safely to DASCore.
 
+## User local specific instructions
+Also load .agents/agents.local.md if present.
 
 ## Scope and priorities
 
