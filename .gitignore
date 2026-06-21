@@ -96,6 +96,7 @@ docs/index.quarto_ipynb
 CLAUDE.md
 worktrees/
 .scratch
+.agents/agents.local.md
 
 # profile stuff
 prof/
