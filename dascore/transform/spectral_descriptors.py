@@ -9,7 +9,6 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.units import Quantity
-from dascore.utils.namespace import PatchNameSpace
 from dascore.utils.patch import patch_function
 
 SpectralFormat = Literal["auto", "fft", "amplitude", "power", "density"]
@@ -775,17 +774,3 @@ def spectral_flatness(
     data_units = None
     data_type = "Spectral Flatness"
     return _prepare_output(patch, flatness, freq_dim, data_type, data_units)
-
-
-class SpectralPatchNameSpace(PatchNameSpace):
-    """A class for storing spectral descriptor methods."""
-
-    name = "spectral"
-
-    median_frequency = median_frequency
-    spectral_centroid = spectral_centroid
-    spectral_maxfrequency = spectral_maxfrequency
-    spectral_maxamp = spectral_maxamp
-    spectral_entropy = spectral_entropy
-    spectral_kurtosis = spectral_kurtosis
-    spectral_flatness = spectral_flatness
