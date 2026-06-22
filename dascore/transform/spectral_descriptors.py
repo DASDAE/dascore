@@ -440,7 +440,7 @@ def median_frequency(
 
 
 @patch_function()
-def max_frequency(
+def spectral_maxfrequency(
     patch: PatchType,
     dim: str | None = None,
     fmin: float | None = None,
@@ -497,7 +497,7 @@ def max_frequency(
 
 
 @patch_function()
-def spectral_max(
+def spectral_maxamp(
     patch: PatchType,
     dim: str | None = None,
     fmin: float | None = None,
@@ -782,10 +782,10 @@ class SpectralPatchNameSpace(PatchNameSpace):
 
     name = "spectral"
 
-    spectral_centroid = spectral_centroid
     median_frequency = median_frequency
-    max_frequency = max_frequency
-    spectral_max = spectral_max
+    spectral_centroid = spectral_centroid
+    spectral_maxfrequency = spectral_maxfrequency
+    spectral_maxamp = spectral_maxamp
     spectral_entropy = spectral_entropy
     spectral_kurtosis = spectral_kurtosis
     spectral_flatness = spectral_flatness
