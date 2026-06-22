@@ -113,11 +113,12 @@ def _reduce_time_like(func, data):
     # Some reducers cannot operate directly on time-like dtypes. If direct
     # reduction fails, or returns only nulls despite valid input, fall back to
     # reducing offsets from a valid reference value.
-    with suppress(TypeError, ValueError, OverflowError):
-        out = np.atleast_1d(func(data))
-        # Return direct reductions that produce at least one non-null value.
-        if not np.all(pd.isnull(out)):
-            return out
+    if func not in {np.mean, np.nanmean}:
+        with suppress(TypeError, ValueError, OverflowError):
+            out = np.atleast_1d(func(data))
+            # Return direct reductions that produce at least one non-null value.
+            if not np.all(pd.isnull(out)):
+                return out
 
     ref = valid[0]
     # Reducers like std over absolute times are not semantically time points,
