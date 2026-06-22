@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -224,7 +225,7 @@ class TestToTimeDelta64:
     def test_float_array(self):
         """Ensure an array of flaots can be converted to ns timedelta."""
         ar = [1.0, 0.000000001, 0.001]
-        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64[ns]")
         out = to_timedelta64(ar)
         assert np.all(out == expected)
 
@@ -307,7 +308,11 @@ class TestToTimeDelta64:
         arr = pd.array(["1s", "2s", None], dtype="string")
         out = to_timedelta64(arr)
         expected = np.array(
-            [np.timedelta64(1, "s"), np.timedelta64(2, "s"), np.timedelta64("NaT")]
+            [
+                np.timedelta64(1, "s"),
+                np.timedelta64(2, "s"),
+                np.timedelta64("NaT", "ns"),
+            ]
         ).astype("timedelta64[ns]")
         assert np.all(out[:2] == expected[:2])
         assert pd.isnull(out[2])
@@ -331,6 +336,14 @@ class TestToTimeDelta64:
         out2 = to_timedelta64("nat")
         assert pd.isnull(out1)
         assert pd.isnull(out2)
+
+    def test_none_nat_no_warnings(self):
+        """None should return a typed NaT without warnings."""
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            out = to_timedelta64(None)
+        assert pd.isnull(out)
+        assert not record
 
     def test_nat_array(self):
         """Ensure an array of NaT works."""

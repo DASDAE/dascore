@@ -80,6 +80,32 @@ def ensure_consistent_dtype(value, name, dtype):
     return value
 
 
+def _reduce_time_like(func, data):
+    """Reduce datetime/timedelta data relative to a reference value."""
+    data = np.asarray(data)
+    valid = data[~pd.isnull(data)]
+    try:
+        out = np.atleast_1d(func(data))
+        if not (valid.size and np.all(pd.isnull(out))):
+            return out
+    except (TypeError, ValueError, OverflowError):
+        pass
+
+    if valid.size:
+        ref = valid[0]
+    else:
+        ref = (
+            np.datetime64("NaT", "ns")
+            if is_datetime64(data)
+            else np.timedelta64("NaT", "ns")
+        )
+    deltas = data - ref
+    # Reducers like std over absolute times are not semantically time points,
+    # but this preserves the previous dim_reduce behavior.
+    out = ref + dc.to_timedelta64(func(dc.to_float(deltas)))
+    return np.atleast_1d(out)
+
+
 def _get_dtype(value, dtype):
     """Get the data type based on the first argument."""
     if dtype is not None and dtype != "":
@@ -928,18 +954,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         {dim_reduce}
         """
-
-        def _maybe_handle_datatypes(func, data):
-            """Maybe handle the complexity of date times here."""
-            try:  # First try function directly
-                out = func(data)
-            # Fall back to floats and re-packing.
-            except (TypeError, ValueError, np.core._exceptions.UFuncTypeError):
-                float_data = dc.to_float(data)
-                dfunc = dc.to_datetime64 if is_datetime64(data) else dc.to_timedelta64
-                out = dfunc(func(float_data))
-            return np.atleast_1d(out)
-
         if dim_reduce == "empty":
             # Preserve concrete single-sample coords; only synthesize a partial
             # coord when reduction actually collapses a longer coordinate.
@@ -952,7 +966,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             func = dim_reduce if callable(dim_reduce) else func
             coord_data = self.data
             if dtype_time_like(coord_data):
-                result = _maybe_handle_datatypes(func, coord_data)
+                result = _reduce_time_like(func, coord_data)
             else:
                 result = func(self.data)
             new_coord = self.update(data=result)
@@ -1136,7 +1150,8 @@ class CoordRange(BaseCoord):
                 # handle conversion to integer if other values are ints.
                 if isinstance(start, int) and isinstance(stop, int):
                     step = int(step) if np.isclose(np.round(step), step) else step
-        if step != 0:
+        zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+        if step != zero:
             span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
             int_val = int(_maybe_unbox_scalar(np.ceil(span)))
             stop = start + step * int_val
@@ -1335,12 +1350,14 @@ class CoordRange(BaseCoord):
     @property
     def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        return self.step >= 0
+        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        return self.step >= zero
 
     @property
     def reverse_sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        return self.step < 0
+        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        return self.step < zero
 
 
 class CoordArray(BaseCoord):
@@ -1430,7 +1447,8 @@ class CoordArray(BaseCoord):
                 step = np.timedelta64(int(np.round(_step)), "ns")
             else:
                 step = dur / (len(self) - 1)
-            assert step > 0
+            zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+            assert step > zero
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step

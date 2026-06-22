@@ -155,9 +155,9 @@ def _all_null(maybe_ar):
 def _get_nullish(dtype=np.floating):
     """Get nullish values for a given dtype."""
     if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT")
+        return np.datetime64("NaT", "ns")
     elif np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT")
+        return np.timedelta64("NaT", "ns")
     return np.nan
 
 
