@@ -39,6 +39,7 @@ jobs:
             echo "::error::No release tag matching v[0-9]* exists."
             exit 1
           fi
+          git checkout --detach "$tag"
           echo "DASCORE_DOC_VERSION=${tag#v}" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/load-shared-vars

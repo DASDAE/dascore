@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("jinja2")
-
-import _qmd_builder
+_qmd_builder = pytest.importorskip("_qmd_builder")
 
 
 class TestGetDascoreTitle:
