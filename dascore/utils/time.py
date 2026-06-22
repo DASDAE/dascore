@@ -218,19 +218,16 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
         return np.array(int_array).astype("timedelta64[ns]")
 
     assert np.isreal(array[0])
-    nans = pd.isnull(array)
+    invalid = pd.isnull(array) | ~np.isfinite(array)
     # Need to make copy to 1) not change original array and 2) handle
     # immutable arrays. See #575.
-    if np.any(nans):
+    if np.any(invalid):
         array = np.array(array)
-        array[nans] = 0
+        array[invalid] = 0
     # inf/NaN complain, salience these types of warnings for this block.
     with np.errstate(divide="ignore", invalid="ignore"):
-        nans = nans | ~np.isfinite(array)
-        array = np.array(array)
-        array[nans] = 0
         out = _float_array_to_ns(array).astype("timedelta64[ns]")
-        out[nans] = _NAT_TIMEDELTA64
+        out[invalid] = _NAT_TIMEDELTA64
     return out
 
 

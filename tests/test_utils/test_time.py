@@ -373,6 +373,14 @@ class TestToTimeDelta64:
         assert pd.isnull(out[0])
         assert out[1] == np.timedelta64(1, "s")
 
+    def test_non_finite_values_are_nat(self):
+        """Infinite and NaN values should not overflow during conversion."""
+        out = to_timedelta64([np.inf, -np.inf, np.nan, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert np.all(pd.isnull(out[:3]))
+        assert out[3] == np.timedelta64(1, "s")
+
     def test_array_of_datetimes(self, random_patch):
         """Ensure datetime64 array can be converted to timedelta array."""
         dt_array = random_patch.get_coord("time").values
