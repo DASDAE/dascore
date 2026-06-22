@@ -74,20 +74,24 @@ def build_amp_toc_tree(api_path=API_PATH):
     return out
 
 
-def create_quarto_qmd():
-    """Create the _quarto.yml file."""
-
-    def _get_nice_version_string():
-        """Just get a simplified version string."""
+def _get_dascore_title():
+    """Get the DASCore title with the docs version."""
+    doc_version = os.environ.get("DASCORE_DOC_VERSION")
+    if doc_version is not None:
+        vstr = doc_version
+    else:
         version_str = str(dc.__version__)
         if "dev" not in version_str:
             vstr = version_str
         else:
             vstr = version_str.split("+")[0]
-        return f"DASCore ({vstr})"
+    return f"DASCore ({vstr})"
 
+
+def create_quarto_qmd():
+    """Create the _quarto.yml file."""
     temp = get_template("_quarto.yml")
-    version_str = _get_nice_version_string()
+    version_str = _get_dascore_title()
     api_toc_tree = build_amp_toc_tree()
     out = temp.render(dascore_version_str=version_str, api_toc_tree=api_toc_tree)
     path = Path(__file__).parent.parent / "docs" / "_quarto.yml"
