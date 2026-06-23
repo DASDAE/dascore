@@ -43,6 +43,13 @@ class TestToDateTime64:
         out = to_datetime64(float_array)
         assert np.all(input_datetime64 == out)
 
+    def test_float_array_preserves_ns_offsets(self):
+        """Float datetimes should preserve representable nanosecond offsets."""
+        expected = np.array(["2026-06-03T15:18:13.422442752"], dtype="datetime64[ns]")
+        float_array = expected.astype(np.float64) / 1_000_000_000
+        out = to_datetime64(float_array)
+        assert np.all(expected == out)
+
     def test_single_float(self):
         """Ensure a single float can be converted to datetime."""
         out = to_datetime64(1.0)

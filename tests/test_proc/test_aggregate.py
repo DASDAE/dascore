@@ -10,7 +10,7 @@ import pytest
 
 import dascore
 import dascore as dc
-from dascore.core.coords import _reduce_time_like
+from dascore.core.coords import _is_translation_equivariant, _reduce_time_like
 from dascore.exceptions import ParameterError
 from dascore.proc.aggregate import _AGG_FUNCS
 from dascore.utils.misc import broadcast_for_index
@@ -18,6 +18,28 @@ from dascore.utils.misc import broadcast_for_index
 
 class TestReduceTimeLike:
     """Tests for time-like coordinate reductions."""
+
+    def test_translation_equivariant_with_no_valid_data(self):
+        """Empty or all-null data cannot disprove translation equivariance."""
+        data = np.array([np.nan, np.nan])
+        assert _is_translation_equivariant(np.nanmean, data)
+
+    def test_translation_equivariant_when_reducer_raises(self):
+        """Reducers which cannot be checked are treated as equivariant."""
+
+        def reducer(_array):
+            raise ValueError
+
+        assert _is_translation_equivariant(reducer, np.array([1.0, 2.0]))
+
+    def test_translation_equivariant_when_comparison_raises(self, monkeypatch):
+        """Comparison failures default to treating reducers as equivariant."""
+
+        def raise_type_error(*_args, **_kwargs):
+            raise TypeError
+
+        monkeypatch.setattr(np, "allclose", raise_type_error)
+        assert _is_translation_equivariant(np.nanmean, np.array([1.0, 2.0]))
 
     def test_all_nat_datetime_reduction_returns_typed_nat(self):
         """All-null datetime reductions use the datetime NaT fallback."""
@@ -42,6 +64,18 @@ class TestReduceTimeLike:
             out = _reduce_time_like(reducer, data)
         assert out.dtype == np.dtype("timedelta64[ns]")
         assert np.isnat(out[0])
+
+    def test_timedelta_sum_fallback_does_not_add_reference(self):
+        """Non-equivariant timedelta reducers should not add the reference value."""
+
+        def reducer(array):
+            if np.issubdtype(np.asarray(array).dtype, np.timedelta64):
+                raise TypeError
+            return np.nansum(array)
+
+        data = np.array([np.timedelta64(10, "ns"), np.timedelta64(11, "ns")])
+        out = _reduce_time_like(reducer, data)
+        assert out == np.array([np.timedelta64(1, "ns")])
 
 
 class TestBasicAggregations:

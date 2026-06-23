@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sized
+from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from typing import Any, TypeVar
@@ -80,29 +81,49 @@ def ensure_consistent_dtype(value, name, dtype):
     return value
 
 
+def _is_translation_equivariant(func, data):
+    """Return True if shifting inputs shifts the reduced output equally."""
+    # This is a bit heavy/magic, but needed for generic support.
+    valid = data[~pd.isnull(data)]
+    if not len(valid):
+        return True
+    shift = 1.0
+    with np.errstate(all="ignore"):
+        try:
+            base = np.asarray(func(valid))
+            shifted = np.asarray(func(valid + shift))
+        except Exception:
+            return True
+    expected = base + shift
+    try:
+        return bool(np.allclose(shifted, expected, equal_nan=True))
+    except TypeError:
+        return True
+
+
 def _reduce_time_like(func, data):
     """Reduce datetime/timedelta data relative to a reference value."""
     data = np.asarray(data)
     valid = data[~pd.isnull(data)]
-    try:
-        out = np.atleast_1d(func(data))
-        if not (valid.size and np.all(pd.isnull(out))):
-            return out
-    except (TypeError, ValueError, OverflowError):
-        pass
+    if not valid.size:
+        nfunc = np.datetime64 if is_datetime64(data) else np.timedelta64
+        return np.atleast_1d(nfunc("NaT", "ns"))
 
-    if valid.size:
-        ref = valid[0]
-    else:
-        ref = (
-            np.datetime64("NaT", "ns")
-            if is_datetime64(data)
-            else np.timedelta64("NaT", "ns")
-        )
-    deltas = data - ref
+    # Some reducers cannot operate directly on time-like dtypes. If direct
+    # reduction fails, or returns only nulls despite valid input, fall back to
+    # reducing offsets from a valid reference value.
+    with suppress(TypeError, ValueError, OverflowError):
+        out = np.atleast_1d(func(data))
+        # Return direct reductions that produce at least one non-null value.
+        if not np.all(pd.isnull(out)):
+            return out
+
+    ref = valid[0]
     # Reducers like std over absolute times are not semantically time points,
-    # but this preserves the previous dim_reduce behavior.
-    out = ref + dc.to_timedelta64(func(dc.to_float(deltas)))
+    # but this preserves the previous dim_reduce behavior for equivariant reducers.
+    delta_float = dc.to_float(data - ref)
+    reduced = dc.to_timedelta64(func(delta_float))
+    out = ref + reduced if _is_translation_equivariant(func, delta_float) else reduced
     return np.atleast_1d(out)
 
 

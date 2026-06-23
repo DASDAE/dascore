@@ -21,6 +21,11 @@ _NAT_DATETIME64 = np.datetime64("NaT", "ns")
 _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
 
 
+def _float_array_to_ns(array):
+    """Convert seconds as floats to signed integer nanoseconds."""
+    return np.rint(array * 1_000_000_000).astype(np.int64)
+
+
 @singledispatch
 def to_datetime64(obj: timeable_types | np.ndarray):
     """
@@ -99,14 +104,9 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     elif np.issubdtype(array.dtype, np.timedelta64) or np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
             array = to_float(np.array(array))  # need to make copy to write
+            nans = nans | ~np.isfinite(array)
             array[nans] = 0  # temporary replace NaNs
-            abs_array = np.abs(array)
-            sign = np.sign(array)
-            # separate seconds and factions, assume ns precision
-            int_sec = abs_array.astype(np.int64)
-            frac_sec = abs_array % 1.0
-            ns = (frac_sec * 1_000_000_000).astype(np.int64)
-            out = (sign * (int_sec * 1_000_000_000 + ns)).astype("datetime64[ns]")
+            out = _float_array_to_ns(array).astype("datetime64[ns]")
         # fill NaN Back in
         out[nans] = _NAT_DATETIME64
     return out
@@ -226,14 +226,10 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
         array[nans] = 0
     # inf/NaN complain, salience these types of warnings for this block.
     with np.errstate(divide="ignore", invalid="ignore"):
-        # separate seconds and factions, convert fractions to ns precision,
-        # sub in array. Track sign and use abs to ensure sign comes out.
-        sign = np.sign(array)
-        abs_array = np.abs(array)
-        seconds = abs_array.astype(np.int64).astype("timedelta64[s]")
-        frac_sec = abs_array % 1.0
-        ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
-        out = sign * (seconds + ns)
+        nans = nans | ~np.isfinite(array)
+        array = np.array(array)
+        array[nans] = 0
+        out = _float_array_to_ns(array).astype("timedelta64[ns]")
         out[nans] = _NAT_TIMEDELTA64
     return out
 
