@@ -21,15 +21,11 @@ def stalta(
     ----------
     patch :
         The input DASCore patch.
-    sta : float
-        Short window length in seconds. If None, it defaults to 20 samples.
-    lta : float
-        Long window length in seconds. If None it defaults to 5*short.
-
     **kwargs
-        Used to pass dimension and short/longterm windows.
-        For example `time=(0.1, 0.5)` uses windows of 0.1 and 0.5 seconds along
-        the time axis.
+        Used to pass one dimension name and the short/long-term window lengths.
+        For example, `time=(0.1, 0.5)` uses windows of 0.1 and 0.5 seconds
+        along the time axis, and `distance=(5, 25)` uses windows of 5 and 25
+        distance units along the distance axis.
         Note that a good first guess is to choose the long-term window 5x the length
         of the short-term window.
 
