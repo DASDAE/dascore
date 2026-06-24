@@ -45,7 +45,8 @@ def stalta(
     >>> p = dc.examples.example_event_2()
     >>>
     >>> s = p.envelope(dim="time").stalta(time=(0.002, 0.01))
-    >>> ax = s.viz.waterfall(cmap="RdGy_r", scale=[0, 2], scale_type="absolute")
+    >>> s.viz.waterfall(cmap="RdGy_r", scale=[0, 2], scale_type="absolute")
+    <Axes: xlabel='Time [s]', ylabel='Distance [m]'>
     >>>
     >>> # Use sample counts for the STA/LTA windows.
     >>> s_samples = p.envelope(dim="time").stalta(time=(2, 10), samples=True)
