@@ -87,6 +87,7 @@ def _is_translation_equivariant(func, data):
     valid = data[~pd.isnull(data)]
     if not len(valid):
         return True
+    valid = valid[:32]
     shift = 1.0
     with np.errstate(all="ignore"):
         try:

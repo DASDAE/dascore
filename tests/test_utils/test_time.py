@@ -351,6 +351,7 @@ class TestToTimeDelta64:
             out = to_timedelta64(None)
         assert pd.isnull(out)
         assert not record
+        assert out.dtype == np.dtype("timedelta64[ns]")
 
     def test_nat_array(self):
         """Ensure an array of NaT works."""

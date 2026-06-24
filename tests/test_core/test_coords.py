@@ -1618,7 +1618,7 @@ class TestPartialCoord:
         out = coord.reduce_coord(func)
 
         assert len(out) == 1
-        assert np.issubdtype(out.dtype, np.datetime64)
+        assert out.dtype == np.dtype("datetime64[ns]")
         assert pd.isnull(out.data[0])
         assert dtypes == []
 
