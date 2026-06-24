@@ -95,8 +95,9 @@ def merge_coord_managers(
             tolerance = snap_tolerance * c_coord.step
             assumed_start = c_coord.max() + c_coord.step
             diff = np.abs(assumed_start - n_coord.min())
+            zero = np.asarray([0], dtype=np.asarray(diff).dtype)[0]
             # snap is close enough, update coord.
-            if diff > 0 and diff <= tolerance:
+            if diff > zero and diff <= tolerance:
                 coord_list[ind] = n_coord.update_limits(min=assumed_start)
             # snap is too far off, bail out.
             elif diff > tolerance:
