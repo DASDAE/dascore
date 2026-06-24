@@ -17,6 +17,14 @@ from dascore.constants import (
 )
 from dascore.exceptions import TimeError
 
+_NAT_DATETIME64 = np.datetime64("NaT", "ns")
+_NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
+
+
+def _float_array_to_ns(array):
+    """Convert seconds as floats to signed integer nanoseconds."""
+    return np.rint(array * 1_000_000_000).astype(np.int64)
+
 
 @singledispatch
 def to_datetime64(obj: timeable_types | np.ndarray):
@@ -50,7 +58,7 @@ def to_datetime64(obj: timeable_types | np.ndarray):
     >>> dt_array = dc.to_datetime64(timestamp_array)
     """
     if pd.isnull(obj):
-        return np.datetime64("NaT")
+        return _NAT_DATETIME64
     msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
 
@@ -93,19 +101,14 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
         else:
             out = array.astype("datetime64[ns]")
     # dealing with numerical data
-    elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
+    elif np.issubdtype(array.dtype, np.timedelta64) or np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
             array = to_float(np.array(array))  # need to make copy to write
+            nans = nans | ~np.isfinite(array)
             array[nans] = 0  # temporary replace NaNs
-            abs_array = np.abs(array)
-            sign = np.sign(array)
-            # separate seconds and factions, assume ns precision
-            int_sec = abs_array.astype(np.int64)
-            frac_sec = abs_array % 1.0
-            ns = (frac_sec * 1_000_000_000).astype(np.int64)
-            out = (sign * (int_sec * 1_000_000_000 + ns)).astype("datetime64[ns]")
+            out = _float_array_to_ns(array).astype("datetime64[ns]")
         # fill NaN Back in
-        out[nans] = np.datetime64("NaT")
+        out[nans] = _NAT_DATETIME64
     return out
 
 
@@ -135,7 +138,7 @@ def _datetime_to_datetime64(dt: datetime):
     # because pandas NaT has datetime in its MRO we need to check
     # if this is nullish and return NaT if so.
     if pd.isnull(dt):
-        return np.datetime64("NaT")
+        return _NAT_DATETIME64
     return to_datetime64(np.datetime64(dt))
 
 
@@ -175,7 +178,7 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
 
     """
     if pd.isnull(obj):
-        return np.timedelta64("NaT")
+        return _NAT_TIMEDELTA64
     msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
 
@@ -223,15 +226,11 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
         array[nans] = 0
     # inf/NaN complain, salience these types of warnings for this block.
     with np.errstate(divide="ignore", invalid="ignore"):
-        # separate seconds and factions, convert fractions to ns precision,
-        # sub in array. Track sign and use abs to ensure sign comes out.
-        sign = np.sign(array)
-        abs_array = np.abs(array)
-        seconds = abs_array.astype(np.int64).astype("timedelta64[s]")
-        frac_sec = abs_array % 1.0
-        ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
-        out = sign * (seconds + ns)
-        out[nans] = np.timedelta64("NaT")
+        nans = nans | ~np.isfinite(array)
+        array = np.array(array)
+        array[nans] = 0
+        out = _float_array_to_ns(array).astype("timedelta64[ns]")
+        out[nans] = _NAT_TIMEDELTA64
     return out
 
 
@@ -272,7 +271,7 @@ def _time_delta_from_str(time_delta_str: str):
             new_unit = NUMPY_TIME_UNIT_MAPPING[units]
             return np.timedelta64(int(val), new_unit)
         case [val] if val.lower() == "nat" or val.lower() == "":
-            return np.timedelta64("NaT")
+            return _NAT_TIMEDELTA64
         case _:
             msg = f"Could not convert {time_delta_str} to timedelta64"
             raise TimeError(msg)

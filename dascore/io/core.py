@@ -71,9 +71,9 @@ class PatchFileSummary(DascoreBaseModel):
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
     dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
-    time_min: DateTime64 = np.datetime64("NaT")
-    time_max: DateTime64 = np.datetime64("NaT")
-    time_step: TimeDelta64 = np.timedelta64("NaT")
+    time_min: DateTime64 = np.datetime64("NaT", "ns")
+    time_max: DateTime64 = np.datetime64("NaT", "ns")
+    time_step: TimeDelta64 = np.timedelta64("NaT", "ns")
     # the attributes to index on
     file_version: str = ""
     file_format: str = ""

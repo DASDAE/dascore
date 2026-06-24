@@ -295,7 +295,7 @@ class PatchAttrs(DascoreBaseModel):
             if step is None:
                 is_time = isinstance(start, np.datetime64 | np.timedelta64)
                 if is_time:
-                    out[step_name] = np.timedelta64("NaT")
+                    out[step_name] = np.timedelta64("NaT", "ns")
                 elif isinstance(start, float | np.floating):
                     out[step_name] = np.nan
         return out

@@ -2,15 +2,80 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 import dascore
 import dascore as dc
+from dascore.core.coords import _is_translation_equivariant, _reduce_time_like
 from dascore.exceptions import ParameterError
 from dascore.proc.aggregate import _AGG_FUNCS
 from dascore.utils.misc import broadcast_for_index
+
+
+class TestReduceTimeLike:
+    """Tests for time-like coordinate reductions."""
+
+    def test_translation_equivariant_with_no_valid_data(self):
+        """Empty or all-null data cannot disprove translation equivariance."""
+        data = np.array([np.nan, np.nan])
+        assert _is_translation_equivariant(np.nanmean, data)
+
+    def test_translation_equivariant_when_reducer_raises(self):
+        """Reducers which cannot be checked are treated as equivariant."""
+
+        def reducer(_array):
+            raise ValueError
+
+        assert _is_translation_equivariant(reducer, np.array([1.0, 2.0]))
+
+    def test_translation_equivariant_when_comparison_raises(self, monkeypatch):
+        """Comparison failures default to treating reducers as equivariant."""
+
+        def raise_type_error(*_args, **_kwargs):
+            raise TypeError
+
+        monkeypatch.setattr(np, "allclose", raise_type_error)
+        assert _is_translation_equivariant(np.nanmean, np.array([1.0, 2.0]))
+
+    def test_all_nat_datetime_reduction_returns_typed_nat(self):
+        """All-null datetime reductions use the datetime NaT fallback."""
+        data = np.array([np.datetime64("NaT", "ns")] * 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            out = _reduce_time_like(np.nanmean, data)
+        assert out.dtype == np.dtype("datetime64[ns]")
+        assert np.isnat(out[0])
+
+    def test_all_nat_timedelta_reduction_returns_typed_nat(self):
+        """All-null timedelta reductions use the timedelta NaT fallback."""
+
+        def reducer(array):
+            if np.issubdtype(np.asarray(array).dtype, np.timedelta64):
+                raise TypeError
+            return np.nanmean(array)
+
+        data = np.array([np.timedelta64("NaT", "ns")] * 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            out = _reduce_time_like(reducer, data)
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert np.isnat(out[0])
+
+    def test_timedelta_sum_fallback_does_not_add_reference(self):
+        """Non-equivariant timedelta reducers should not add the reference value."""
+
+        def reducer(array):
+            if np.issubdtype(np.asarray(array).dtype, np.timedelta64):
+                raise TypeError
+            return np.nansum(array)
+
+        data = np.array([np.timedelta64(10, "ns"), np.timedelta64(11, "ns")])
+        out = _reduce_time_like(reducer, data)
+        assert out == np.array([np.timedelta64(1, "ns")])
 
 
 class TestBasicAggregations:
@@ -70,6 +135,35 @@ class TestBasicAggregations:
         out = patch.aggregate(dim="time", method="mean", dim_reduce="mean")
         new_time = out.get_coord("time")
         assert len(new_time) == 1
+
+    def test_dim_reduce_mean_preserves_nanosecond_offsets(self):
+        """Time-like coord reductions preserve ns offsets far from epoch."""
+        start = np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+        offsets = np.arange(5).astype("timedelta64[ns]")
+        time = start + offsets
+        patch = dc.Patch(data=np.ones(5), coords={"time": time}, dims=("time",))
+
+        out = patch.aggregate(dim="time", method="mean", dim_reduce="mean")
+
+        new_time = out.get_coord("time")
+        assert len(new_time) == 1
+        assert new_time.values[0] == start + np.timedelta64(2, "ns")
+
+    @pytest.mark.parametrize(
+        ("method", "expected"),
+        [("mean", np.timedelta64(2, "ns")), ("sum", np.timedelta64(8, "ns"))],
+    )
+    def test_dim_reduce_timedelta_nat_skips_nulls(self, method, expected):
+        """Timedelta coord reductions skip NaT like numeric nan reducers."""
+        time = np.arange(5).astype("timedelta64[ns]")
+        time[2] = np.timedelta64("NaT", "ns")
+        patch = dc.Patch(data=np.ones(5), coords={"time": time}, dims=("time",))
+
+        out = patch.aggregate(dim="time", method="mean", dim_reduce=method)
+
+        new_time = out.get_coord("time")
+        assert len(new_time) == 1
+        assert new_time.values[0] == expected
 
     def test_invalid_dim_reduce(self, random_patch):
         """Ensure an invalid dim_reduce argument raises."""
