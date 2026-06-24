@@ -959,6 +959,19 @@ class TestApproxEqual:
         assert out.approx_equal(coord)
 
 
+class TestReduceCoord:
+    """Tests for reducing coordinates."""
+
+    def test_mean_large_timedelta_doesnt_overflow(self):
+        """Mean reduction of large timedeltas should not overflow."""
+        value = np.timedelta64(np.iinfo(np.int64).max, "ns")
+        coord = get_coord(data=np.array([value, value]))
+
+        out = coord.reduce_coord("mean")
+
+        assert out.values[0] == value
+
+
 class TestCoordRange:
     """Tests for coords from array."""
 

@@ -359,6 +359,28 @@ class TestToTimeDelta64:
         out = to_timedelta64(ar)
         assert np.all(pd.isnull(out))
 
+    @pytest.mark.filterwarnings(
+        "error:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning"
+    )
+    def test_null_values_use_explicit_timedelta_unit(self):
+        """Null-like values should not create generic-unit timedeltas."""
+        assert pd.isnull(to_timedelta64(None))
+        assert pd.isnull(to_timedelta64("NaT"))
+
+        out = to_timedelta64([None, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert pd.isnull(out[0])
+        assert out[1] == np.timedelta64(1, "s")
+
+    def test_non_finite_values_are_nat(self):
+        """Infinite and NaN values should not overflow during conversion."""
+        out = to_timedelta64([np.inf, -np.inf, np.nan, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert np.all(pd.isnull(out[:3]))
+        assert out[3] == np.timedelta64(1, "s")
+
     def test_array_of_datetimes(self, random_patch):
         """Ensure datetime64 array can be converted to timedelta array."""
         dt_array = random_patch.get_coord("time").values
