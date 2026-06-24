@@ -9,9 +9,11 @@ from dascore.utils.misc import check_filter_kwargs
 from dascore.utils.patch import patch_function
 
 
-@patch_function()
+@patch_function(data_type="stalta")
 def stalta(
     patch: PatchType,
+    *,
+    samples: bool = False,
     **kwargs,
 ) -> PatchType:
     """
@@ -21,32 +23,34 @@ def stalta(
     ----------
     patch :
         The input DASCore patch.
+    samples
+        If True, values specified by kwargs are in samples not coordinate units.
     **kwargs
         Used to pass one dimension name and the short/long-term window lengths.
-        For example, `time=(0.1, 0.5)` uses windows of 0.1 and 0.5 seconds
-        along the time axis, and `distance=(5, 25)` uses windows of 5 and 25
-        distance units along the distance axis.
-        Note that a good first guess is to choose the long-term window 5x the length
-        of the short-term window.
-
 
     Returns
     -------
     PatchType
         A new patch containing the STA/LTA ratio.
 
-    Example
+    Notes
+    -----
+    A good first guess is to choose the long-term window 5x the length of the
+    short-term window.
+
+    Examples
     --------
     >>> import dascore as dc
     >>>
     >>> p = dc.examples.example_event_2()
     >>>
-    >>> s = p.envelope(dim='time').stalta(time=(0.002, 0.01))
-    >>> ax = s.viz.waterfall(cmap = 'RdGy_r', scale = [0, 2], scale_type = 'absolute')
+    >>> s = p.envelope(dim="time").stalta(time=(0.002, 0.01))
+    >>> ax = s.viz.waterfall(cmap="RdGy_r", scale=[0, 2], scale_type="absolute")
+    >>> s_samples = p.envelope(dim="time").stalta(time=(2, 10), samples=True)
     """
     dim, (sta, lta) = check_filter_kwargs(kwargs)
 
-    sta_data = patch.rolling(**{dim: sta}).mean()
-    lta_data = patch.rolling(**{dim: lta}).mean()
+    sta_data = patch.rolling(**{dim: sta}, samples=samples).mean()
+    lta_data = patch.rolling(**{dim: lta}, samples=samples).mean()
 
-    return (sta_data / lta_data).update(attrs={"data_type": "stalta", "data_units": ""})
+    return sta_data / lta_data
