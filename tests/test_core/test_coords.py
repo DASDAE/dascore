@@ -1603,6 +1603,25 @@ class TestPartialCoord:
         )
         assert isinstance(out, CoordRange)
 
+    def test_all_null_datetime_reduce_returns_nat(self):
+        """All-null time reductions return NaT before calling reducer."""
+        coord = get_coord(shape=(2,), dtype="datetime64[ns]")
+        dtypes = []
+
+        def func(data):
+            data = np.asarray(data)
+            dtypes.append(data.dtype)
+            if np.issubdtype(data.dtype, np.datetime64):
+                raise TypeError("datetime reduction unsupported")
+            return 1.0
+
+        out = coord.reduce_coord(func)
+
+        assert len(out) == 1
+        assert out.dtype == np.dtype("datetime64[ns]")
+        assert pd.isnull(out.data[0])
+        assert dtypes == []
+
 
 class TestCoercion:
     """Some data types should support coercion in selecting (eg dates)."""
