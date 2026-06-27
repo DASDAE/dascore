@@ -177,16 +177,13 @@ class Patch(NamespaceOwner):
 
     def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""
+        data = np.asarray(self.data)
         # dascore.utils.misc.to_object_array stores patch references in numpy
         # object arrays. When that function is called it tries to make a copy
         # of the array data with dtype == object, which takes a TON of memory.
         # For now, just don't let this method convert to object dtype arrays.
-        if np.issubdtype(dtype, np.dtype(object)):
-            out = np.empty((), dtype=object)
-            out[()] = self
-            return out
-        data = self.data
-        out = data.astype(dtype) if dtype is not None else data
+        is_object_dtype = dtype is not None and np.issubdtype(dtype, np.dtype(object))
+        out = data if dtype is None or is_object_dtype else data.astype(dtype)
         out = out if not copy else np.copy(out)
         return out
 
@@ -399,6 +396,8 @@ class Patch(NamespaceOwner):
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
+    demean = dascore.proc.demean
+    demedian = dascore.proc.demedian
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
     fillna = dascore.proc.fillna
@@ -464,10 +463,13 @@ class Patch(NamespaceOwner):
     # --- transformation functions
     differentiate = transform.differentiate
     dft = transform.dft
+    fbe = transform.fbe
     idft = transform.idft
     stft = transform.stft
     istft = transform.istft
     integrate = transform.integrate
+    stalta = transform.stalta
+    kurtosis = transform.kurtosis
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift

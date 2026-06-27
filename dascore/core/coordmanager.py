@@ -79,6 +79,10 @@ from dascore.utils.models import (
 )
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
+CoordManagerInput = Mapping[
+    str,
+    BaseCoord | np.ndarray | tuple[str | tuple[str, ...], BaseCoord | np.ndarray],
+]
 
 
 def _ensure_1d_coord(coord, coord_name: str):
@@ -803,9 +807,10 @@ class CoordManager(DascoreBaseModel):
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
         data = np.asarray([]) if data is None else data
-        if self.shape != data.shape:
+        shape = tuple(data.shape)
+        if self.shape != shape:
             msg = (
-                f"Data array has a shape of {data.shape} which doesnt match "
+                f"Data array has a shape of {shape} which doesnt match "
                 f"the coordinate manager shape of {self.shape}."
             )
             raise CoordDataError(msg)
@@ -1117,7 +1122,7 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
+    coords: CoordManagerInput | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
     attrs: dc.PatchAttrs | dict[str, Any] | None = None,
     shape=None,

@@ -26,7 +26,7 @@ from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
-from dascore.io.febus import Febus1, Febus2
+from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
@@ -39,6 +39,7 @@ from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.sintela_binary import SintelaBinaryV3
+from dascore.io.sr4731 import SR4731V200
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -68,11 +69,15 @@ COMMON_IO_READ_TESTS = {
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
+    FebusBSLH5V1(): ("febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5",),
+    FebusMTXH5V1(): ("febus-g1-spectra_C2_2026-06-03T17.28.13+0200.mtx.h5",),
+    FebusT1V1(): ("febus_dts.h5", "febus_dts_single_reading.h5"),
     GDR_V1(): ("gdr_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     OptoDASV8(): ("opto_das_1.hdf5",),
+    SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",

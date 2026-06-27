@@ -294,6 +294,8 @@ print(row["time_min"])
 print(row["distance_max"])
 ```
 
+The `data_type` attribute is an optional label for the kind of data in the patch. It is useful for display defaults and quick inspection, but physical interpretation should come from `data_units`, coordinate units, and `history`. See the [PatchAttrs note](../notes/patch_attrs.qmd) for more detail.
+
 ## String representation
 
 DASCore Patches have a useful string representation:

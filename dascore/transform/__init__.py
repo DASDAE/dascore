@@ -12,3 +12,6 @@ from .hilbert import hilbert, envelope, phase_weighted_stack
 from .strain import velocity_to_strain_rate, velocity_to_strain_rate_edgeless, radians_to_strain
 from .dispersion import dispersion_phase_shift
 from .taup import tau_p
+from .stalta import stalta
+from .fbe import fbe
+from .kurtosis import kurtosis

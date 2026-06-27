@@ -631,6 +631,24 @@ class TestSpoolBehaviorOptionalImports:
 class TestMisc:
     """Tests for misc. spool cases."""
 
+    def test_chunk_timedelta_coord(self):
+        """
+        Chunking a spool whose time coordinate is timedelta64 (rather than
+        datetime64) should work with a numeric chunk size (see #553).
+        """
+        from dascore.examples import ricker_moveout
+
+        patch = ricker_moveout()
+        assert np.issubdtype(patch.get_coord("time").dtype, np.timedelta64)
+        spool = dc.spool(patch)
+        # Previously raised a TypeError comparing Timedelta with float.
+        chunked = spool.chunk(time=0.02)
+        assert len(chunked) > 1
+        # The chunked patches retain the timedelta64 time coordinate.
+        assert np.issubdtype(chunked[0].get_coord("time").dtype, np.timedelta64)
+        # Overlap (also numeric) must work too.
+        assert len(spool.chunk(time=0.02, overlap=0.005)) > 1
+
     def test_changed_memory_spool(self, random_patch):
         """
         Calling spool on a patch that was returned from None results in

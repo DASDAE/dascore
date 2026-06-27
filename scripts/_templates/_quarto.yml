@@ -211,6 +211,9 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
+        - text: PatchAttrs
+          href: notes/patch_attrs.qmd
+
         - text: Fourier Transforms
           href: notes/dft_notes.qmd
 

@@ -21,6 +21,7 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchCoordinateError,
 )
+from dascore.units import percent
 from dascore.utils.patch import (
     _spool_up,
     align_patch_coords,
@@ -28,6 +29,7 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_patch_names,
     get_patch_window_size,
+    get_window_axis_step,
     merge_compatible_coords_attrs,
     patches_to_df,
     stack_patches,
@@ -159,6 +161,89 @@ class TestPatchFunction:
 
         with pytest.raises(pydantic.ValidationError):
             some_func(patch, some_int=10, specific_float=20.0)
+
+    def test_data_type(self, random_patch):
+        """Ensure the decorator can set the output data_type."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting the output data_type."""
+            return patch.new(data=patch.data + 1)
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_overwrites_returned_patch_attr(self, random_patch):
+        """Ensure the decorator data_type takes precedence."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function with a conflicting output data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_none_preserves_existing_behavior(self, random_patch):
+        """Ensure the default data_type argument leaves attrs unchanged."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_data_type_none_preserves_inherited_data_type(self, random_patch):
+        """Ensure the default data_type argument preserves inherited attrs."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1)
+
+        patch = random_patch.update_attrs(data_type="velocity")
+        out = some_func(patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_empty_data_type_clears_returned_patch_attr(self, random_patch):
+        """Ensure the decorator can clear the output data_type."""
+
+        @patch_function(data_type="")
+        def some_func(patch):
+            """A test function for clearing data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == ""
+
+    def test_data_type_and_history_use_one_attr_update(self, random_patch, monkeypatch):
+        """Ensure decorator-managed attrs are updated together."""
+        update_count = 0
+        original_update_attrs = dc.Patch.update_attrs
+
+        def update_attrs(self, **attrs):
+            nonlocal update_count
+            update_count += 1
+            return original_update_attrs(self, **attrs)
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting data_type and history."""
+            return patch.new(data=patch.data + 1)
+
+        monkeypatch.setattr(dc.Patch, "update_attrs", update_attrs)
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+        assert len(out.attrs.history) == len(random_patch.attrs.history) + 1
+        assert update_count == 1
 
 
 class TestHistory:
@@ -437,16 +522,14 @@ class TestMergeCompatibleCoordsAttrs:
     def test_extra_attrs(self, random_patch):
         """Ensure extra attributes are added to patch."""
         patch = random_patch.update_attrs(new_attr=10)
-        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
+        _, attrs = merge_compatible_coords_attrs(patch, random_patch)
         assert attrs.get("new_attr") == 10
 
     def test_different_dims(self, random_patch):
         """Ensure we can merge patches which share some dims but not all."""
         patch1 = random_patch
         patch2 = random_patch.rename_coords(time="money")
-        coord, attrs = merge_compatible_coords_attrs(
-            patch1, patch2, dim_intersection=True
-        )
+        coord, _ = merge_compatible_coords_attrs(patch1, patch2, dim_intersection=True)
         assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
 
 
@@ -902,3 +985,88 @@ class TestGetPatchWindowSize:
 
         with pytest.raises(CoordError):
             get_patch_window_size(irregular_patch, {"time": 0.5})
+
+
+class TestGetWindowAxisStep:
+    """Tests for getting window size, axis, and step."""
+
+    window = 16
+    step = 8
+
+    def test_apply_with_overlap(self, random_patch):
+        """Ensure overlap is converted to the correct step size."""
+        coord = random_patch.get_coord("distance")
+        window = self.window * coord.step
+        overlap = (self.window - self.step) * coord.step
+        out = get_window_axis_step(random_patch, distance=window, overlap=overlap)
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_apply_with_percent_overlap(self, random_patch):
+        """Ensure percent overlap is supported."""
+        coord = random_patch.get_coord("distance")
+        window = self.window * coord.step
+        out = get_window_axis_step(random_patch, distance=window, overlap=50 * percent)
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_apply_with_percent_overlap_and_samples(self, random_patch):
+        """Ensure percent overlap works when samples=True."""
+        out = get_window_axis_step(
+            random_patch, distance=self.window, overlap=50 * percent, samples=True
+        )
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_negative_overlap_raises(self, random_patch):
+        """Ensure negative overlap is rejected."""
+        step = random_patch.get_coord("distance").step
+        msg = "overlap must be non-negative"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window * step, overlap=-step
+            )
+
+    def test_invalid_percent_overlap_raises(self, random_patch):
+        """Ensure percent overlap must be between 0 and 100."""
+        msg = "Percentage must be between 0 and 100"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window, overlap=101 * percent, samples=True
+            )
+
+    def test_complete_overlap_raises(self, random_patch):
+        """Ensure complete overlap is rejected."""
+        msg = "Window step must be greater than zero"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window, overlap=100 * percent, samples=True
+            )
+
+    def test_overlap_larger_than_window_raises(self, random_patch):
+        """Ensure overlap larger than window is rejected."""
+        msg = "Window step must be greater than zero"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch,
+                distance=self.window,
+                overlap=self.window + 1,
+                samples=True,
+            )
+
+    def test_step_and_overlap_raises(self, random_patch):
+        """Ensure step and overlap are mutually exclusive."""
+        step = random_patch.get_coord("distance").step
+        msg = "step and overlap are mutually exclusive"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch,
+                distance=self.window * step,
+                step=self.step * step,
+                overlap=50 * percent,
+            )
+
+    def test_none_overlap_matches_default(self, random_patch):
+        """Ensure overlap=None preserves default window/step behavior."""
+        step = random_patch.get_coord("distance").step
+        out = get_window_axis_step(
+            random_patch, distance=self.window * step, overlap=None
+        )
+        assert out == (self.window, random_patch.get_axis("distance"), None)

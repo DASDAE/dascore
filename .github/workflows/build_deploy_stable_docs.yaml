@@ -2,9 +2,9 @@
 name: BuildDeployStableDocs
 
 on:
-  # Runs when creating a new release
+  # Runs when publishing a new release
   release:
-    types: [ created ]
+    types: [ published ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -31,6 +31,26 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - name: Set manual stable docs version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          # Manually set DASCore version based on last tag.
+          tag="$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          if [ -z "$tag" ]; then
+            echo "::error::No release tag matching v[0-9]* exists."
+            exit 1
+          fi
+          echo "DASCORE_DOC_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+          # Keep workflow actions and docs build scripts from this checkout,
+          # but build/import DASCore package code exactly as the release tag.
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "${GITHUB_REF_NAME:-}" = "$tag" ]; then
+            echo "Already running from latest release tag $tag; leaving dascore/ unchanged."
+          else
+            git restore --source "$tag" -- dascore
+          fi
+
+
       - uses: ./.github/actions/load-shared-vars
 
       - uses: ./.github/actions/mamba-install-dascore
@@ -40,10 +60,8 @@ jobs:
           environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 
-      - uses: ./.github/actions/build-docs
 
-      #      - name: Setup Pages
-      #        uses: actions/configure-pages@v5
+      - uses: ./.github/actions/build-docs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
@@ -70,4 +88,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

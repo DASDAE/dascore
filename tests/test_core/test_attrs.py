@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import VALID_DATA_TYPES, max_lens
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
 from dascore.exceptions import PatchAttributeError
@@ -95,6 +96,19 @@ class TestPatchAttrs:
         out = random_patch.summary.flat_dump()
         assert out["time_min"] == random_patch.coords.min("time")
         assert out["distance_max"] == random_patch.coords.max("distance")
+
+    def test_supports_extra_attrs(self):
+        """The attr dict should allow extra attributes."""
+        out = PatchAttrs(bob="doesnt", bill_min=12, bob_max="2012-01-12")
+        assert out.bob == "doesnt"
+        assert out.bill_min == 12
+
+    def test_valid_data_types_fit_max_length(self):
+        """Ensure supported data_type values fit the declared attr length."""
+        max_len = max_lens["data_type"]
+
+        for data_type in VALID_DATA_TYPES:
+            assert len(data_type) <= max_len
 
     def test_items(self, random_patch):
         """Ensure items works like a dict."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cache
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -295,9 +295,7 @@ def get_filter_units(
         """Ensure to units are valid."""
         if to_unit is None:
             dim_str = "" if dim is None else dim
-            msg = (
-                f"Cannot use units on dimension {dim_str} because it has " f"no units."
-            )
+            msg = f"Cannot use units on dimension {dim_str} because it has no units."
             raise UnitError(msg)
 
     # fast-path for non-unit, non-quantity inputs.
@@ -357,6 +355,18 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
     return array * next(iter(units))
 
 
+def is_percent(value: Any) -> bool:
+    """
+    Return True if value is a percent quantity.
+
+    Parameters
+    ----------
+    value
+        Any value of any type to be to test if it is a percent quantity.
+    """
+    return isinstance(value, Quantity) and value.units == get_unit("percent")
+
+
 def maybe_convert_percent_to_fraction(obj):
     """
     Iterate an object and convert any percentages to fractions.
@@ -399,14 +409,11 @@ def maybe_convert_percent_to_fraction(obj):
     >>> assert result[1] == 0.5
     >>> assert result[2] == get_quantity("2 Hz")
     """
-    percent = get_unit("percent")
     out = []
     obj = [obj] if isinstance(obj, Quantity) and obj.ndim == 0 else obj
     for val in iterate(obj):
-        if hasattr(val, "units"):
-            mag, unit = val.magnitude, val.units
-            if unit == percent:
-                val = mag / 100
+        if is_percent(val):
+            val = val.magnitude / 100
         out.append(val)
     return out
 

@@ -2,11 +2,50 @@
 Utilities for working with Febus' G1 DSTS system files.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
 
 import dascore as dc
+from dascore.utils.misc import maybe_get_items, unbyte
+
+_G1_H5_BASE_DATASETS = frozenset(
+    {"distances", "end_times", "start_times", "temperatures"}
+)
+_MTX_H5_DATASETS = _G1_H5_BASE_DATASETS | {"mtx"}
+_BSL_H5_DATASETS = _G1_H5_BASE_DATASETS | {"bsl_data"}
+_MTX_H5_ATTRS = frozenset({"formatVersion", "freq_offset_abs", "freq_step"})
+_BSL_H5_ATTRS = frozenset({"formatVersion", "channel", "fiberFrom", "fiberTo", "mode"})
+_MTX_DIMS = ("time", "distance", "frequency")
+_BSL_DIMS = ("time", "distance")
+_BSL_H5_MODE_STRAIN = 1
+_G1_H5_ATTR_MAP = {
+    "acq_res": "acq_res",
+    "ampliPower": "ampli_power",
+    "average": "average",
+    "channel": "channel",
+    "fiberBreak": "fiber_break",
+    "fiberFrom": "fiber_from",
+    "fiberLength": "fiber_length",
+    "fiberTo": "fiber_to",
+    "formatVersion": "format_version",
+    "freq_fiber": "freq_fiber",
+    "freq_offset": "freq_offset",
+    "freq_offset_abs": "freq_offset_abs",
+    "freq_ref": "freq_ref",
+    "freq_step": "freq_step",
+    "mode": "mode",
+    "sampling_resolution": "sampling_resolution",
+    "signal_size": "signal_size",
+    "spatial_resolution": "spatial_resolution",
+    "start_time": "start_time",
+    "end_time": "end_time",
+    "zoneCount": "zone_count",
+    "zones": "zones",
+    "febusDataKind": "febus_data_kind",
+}
 
 param_parse_dict = {
     "start time": lambda x: dc.to_datetime64(float(x[0])),
@@ -101,7 +140,7 @@ def _get_attrs(params):
 def _get_g1_coords_and_attrs(resource):
     """Placeholder parser for g1 scan/read paths."""
     resource_name = Path(getattr(resource, "name", "")).stem
-    name, channel, _ = resource_name.split("_")
+    name, _channel, _ = resource_name.split("_")
     params = _make_param_dict(resource)
     params["instrument_id"] = name
     params["data_type"] = params.pop("mode", None)
@@ -121,3 +160,162 @@ def _get_g1_patch(resource, attr_cls):
     data = np.asarray(data).reshape(coords.shape)
     attrs = attr_cls(**{i: v for i, v in attrs.items() if not i.startswith("_")})
     return dc.Patch(data=data, coords=coords, attrs=attrs)
+
+
+def _get_g1_h5_mapped_attrs(resource, mapping):
+    """Return mapped G1 HDF5 attrs, unpacking scalar arrays and decoding bytes."""
+    attrs = dict(resource.attrs)
+    out = maybe_get_items(attrs, mapping, unpack_names=set(mapping))
+    return {key: unbyte(value) for key, value in out.items()}
+
+
+def _get_g1_h5_version(resource, required_datasets, required_attrs) -> str | bool:
+    """Return the G1 HDF5 format version if required contents are present."""
+    dataset_names = set(resource)
+    has_datasets = required_datasets.issubset(dataset_names)
+    if not has_datasets or not required_attrs.issubset(resource.attrs):
+        return False
+    attrs = _get_g1_h5_mapped_attrs(resource, {"formatVersion": "format_version"})
+    return str(attrs["format_version"])
+
+
+def _get_g1_h5_base_coords(resource, dims, extra_coords=None):
+    """Return time/distance coords shared by G1 HDF5 files."""
+    extra_coords = {} if extra_coords is None else extra_coords
+    time = dc.get_coord(data=dc.to_datetime64(resource["start_times"][...]))
+    distance = dc.get_coord(data=resource["distances"][...], units="m")
+    temperature = dc.get_coord(data=resource["temperatures"][...], units="°C")
+    coords = {
+        "time": time,
+        "distance": distance,
+        "temperature": ("time", temperature),
+        **extra_coords,
+    }
+    return dc.get_coord_manager(coords, dims=dims)
+
+
+def _get_g1_h5_patch(resource, attr_cls, data_name, attrs, coords, select_kwargs=None):
+    """Read selected G1 HDF5 data into a patch."""
+    select_kwargs = {} if select_kwargs is None else select_kwargs
+    coords, data = coords.select(array=resource[data_name], **select_kwargs)
+    if 0 in coords.shape:  # Empty data; dont return.
+        return None
+    data = np.asarray(data)
+    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
+
+
+def _get_g1_h5_io_attrs(resource, file_format=None, file_version=None) -> dict:
+    """Return optional DASCore IO provenance attrs for a G1 HDF5 file."""
+    if file_format is None or file_version is None:
+        return {}
+    return {
+        "path": resource.filename,
+        "file_format": file_format,
+        "file_version": str(file_version),
+    }
+
+
+def _get_mtx_attrs(resource, file_format=None, file_version=None):
+    """Return normalized Febus MTX HDF5 attributes."""
+    attrs = _get_g1_h5_mapped_attrs(resource, _G1_H5_ATTR_MAP)
+    data_type = attrs.pop("febus_data_kind", "brillouin_spectrum")
+    attrs.update(
+        {
+            "data_category": "DSS",
+            "data_type": data_type,
+        }
+    )
+    attrs.update(_get_g1_h5_io_attrs(resource, file_format, file_version))
+    return attrs
+
+
+def _mtx_version(resource) -> str | bool:
+    """Return True if the resource looks like a Febus MTX HDF5 file."""
+    return _get_g1_h5_version(resource, _MTX_H5_DATASETS, _MTX_H5_ATTRS)
+
+
+def _get_mtx_frequency(resource):
+    """Return the Brillouin frequency coordinate."""
+    mtx = resource["mtx"]
+    freq_len = mtx.shape[-1]
+    attrs = _get_g1_h5_mapped_attrs(
+        resource,
+        {"freq_offset_abs": "freq_offset_abs", "freq_step": "freq_step"},
+    )
+    freq_start = float(attrs["freq_offset_abs"])
+    freq_step = float(attrs["freq_step"])
+    if freq_step < 0:
+        freq_start = freq_start + (freq_len - 1) * freq_step
+        freq_step = abs(freq_step)
+    return dc.get_coord(
+        start=freq_start,
+        step=freq_step,
+        shape=freq_len,
+        units="MHz",
+    )
+
+
+def _get_mtx_coords(resource, dims=_MTX_DIMS):
+    """Return the coordinate manager for a Febus MTX HDF5 file."""
+    mtx = resource["mtx"]
+    if mtx.ndim != 3:
+        msg = f"_get_mtx_coords expected 'mtx' to be 3D, got {mtx.ndim}D."
+        raise ValueError(msg)
+    frequency = _get_mtx_frequency(resource)
+    return _get_g1_h5_base_coords(
+        resource, dims=dims, extra_coords={"frequency": frequency}
+    )
+
+
+def _get_mtx_patch(resource, attr_cls, attrs=None, select_kwargs=None):
+    """Read a Febus MTX HDF5 file into a patch."""
+    coords = _get_mtx_coords(resource)
+    attrs = _get_mtx_attrs(resource) if attrs is None else attrs
+    select_kwargs = {} if select_kwargs is None else select_kwargs
+    data = np.flip(np.asarray(resource["mtx"]), axis=-1)
+    coords, data = coords.select(array=data, **select_kwargs)
+    if 0 in coords.shape:
+        return None
+    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
+
+
+def _bsl_version(resource) -> str | bool:
+    """Return the version if a file looks like a Febus G1 BSL HDF5 file."""
+    return _get_g1_h5_version(resource, _BSL_H5_DATASETS, _BSL_H5_ATTRS)
+
+
+def _get_bsl_coords(resource, dims=_BSL_DIMS):
+    """Get the coordinate manager from BSL HDF5 datasets."""
+    return _get_g1_h5_base_coords(resource, dims=dims)
+
+
+def _get_bsl_attrs(resource, file_format=None, file_version=None):
+    """Get patch attributes from BSL HDF5 root metadata."""
+    attrs = _get_g1_h5_mapped_attrs(resource, _G1_H5_ATTR_MAP)
+    mode = attrs.get("mode")
+    # Mode 1 is the only observed/supported BSL mode and stores strain data.
+    data_type = "strain" if mode == _BSL_H5_MODE_STRAIN else ""
+    data_units = "microstrain" if data_type == "strain" else None
+    attrs.update(
+        {
+            "data_category": "DSS",
+            "data_type": data_type,
+            "data_units": data_units,
+        }
+    )
+    attrs.update(_get_g1_h5_io_attrs(resource, file_format, file_version))
+    return attrs
+
+
+def _get_bsl_patch(resource, attr_cls, attrs=None, select_kwargs=None):
+    """Read a Febus BSL HDF5 file into a patch."""
+    coords = _get_bsl_coords(resource)
+    attrs = _get_bsl_attrs(resource) if attrs is None else attrs
+    return _get_g1_h5_patch(
+        resource,
+        attr_cls=attr_cls,
+        data_name="bsl_data",
+        attrs=attrs,
+        coords=coords,
+        select_kwargs=select_kwargs,
+    )
