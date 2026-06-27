@@ -666,6 +666,14 @@ def _assert_positive_finite_float(name: str, values: list[float]):
             raise InvalidFiberFileError(msg)
 
 
+def _assert_positive_int(name: str, value: int) -> int:
+    """Ensure an integer header field is positive."""
+    if value <= 0:
+        msg = f"Invalid Sintela protobuf {name}: {value!r}."
+        raise InvalidFiberFileError(msg)
+    return value
+
+
 def _base_attrs(
     common_header, packet_type: str, meta: ParsedMeta, extra: dict | None = None
 ):
@@ -769,6 +777,7 @@ def _validate_common(headers: list[Any]) -> CommonFields:
     num_channels = _assert_equal(
         "num_channels", [int(ch.num_channels) for ch in common_headers]
     )
+    _assert_positive_int("num_channels", num_channels)
     channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
     _assert_positive_finite_float("channel_spacing", channel_spacing_values)
     channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
@@ -941,6 +950,7 @@ def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMet
     gauge_length = common.gauge_length
     start_channel = common.start_channel
     num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
+    _assert_positive_int("num_bins", num_bins)
     bin_res_values = [float(h.bin_res) for h in headers]
     _assert_positive_finite_float("bin_res", bin_res_values)
     bin_res = _assert_float_equal("bin_res", bin_res_values)

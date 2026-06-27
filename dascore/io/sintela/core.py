@@ -91,7 +91,11 @@ class SintelaProtobufV1(FiberIO):
 
     def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """Return the format/version tuple if the file is Sintela protobuf."""
-        tag = get_supported_family_tag(resource)
+        position = resource.tell()
+        try:
+            tag = get_supported_family_tag(resource)
+        finally:
+            resource.seek(position)
         return (self.name, self.version) if tag else False
 
     def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:

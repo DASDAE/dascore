@@ -535,6 +535,20 @@ class TestSintelaProtobuf:
         assert fiber_io.scan(path)
         assert fiber_io.read(path)
 
+    def test_get_format_preserves_reader_position(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """Format detection should not consume a reusable binary reader."""
+        path = write_sintela_file("position.pb", [("META", b""), *ts_records])
+        with path.open("rb") as handle:
+            assert handle.read(4)
+            before = handle.tell()
+            assert fiber_io.get_format.func(fiber_io, handle) == (
+                "Sintela_Protobuf",
+                "1",
+            )
+            assert handle.tell() == before
+
     def test_truncated_payload_raises(self, fiber_io, tmp_path):
         """Truncated payloads should fail in scan."""
         path = tmp_path / "truncated.pb"
@@ -676,6 +690,29 @@ class TestSintelaProtobuf:
         path = write_sintela_file(f"ts_bad_step_{bad_step}.pb", records)
         with pytest.raises(
             InvalidFiberFileError, match="Invalid Sintela protobuf channel_step"
+        ):
+            fiber_io.scan(path)
+
+    @pytest.mark.parametrize("bad_count", [0, -1])
+    def test_scan_rejects_invalid_num_channels(
+        self, fiber_io, write_sintela_file, ts_records, bad_count
+    ):
+        """Common headers with non-positive channel counts should fail early."""
+        records = _mutate_record(
+            ts_records,
+            0,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header.common_header, "num_channels", bad_count),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header.common_header, "num_channels", bad_count),
+        )
+        path = write_sintela_file(f"ts_bad_channels_{bad_count}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf num_channels"
         ):
             fiber_io.scan(path)
 
@@ -822,6 +859,29 @@ class TestSintelaProtobuf:
         path = write_sintela_file(f"fft_bad_bin_res_{bad_bin_res}.pb", records)
         with pytest.raises(
             InvalidFiberFileError, match="Invalid Sintela protobuf bin_res"
+        ):
+            fiber_io.scan(path)
+
+    @pytest.mark.parametrize("bad_num_bins", [0, -1])
+    def test_fft_scan_rejects_invalid_num_bins(
+        self, fiber_io, write_sintela_file, fft_records, bad_num_bins
+    ):
+        """FFT headers with non-positive bin counts should fail early."""
+        records = _mutate_record(
+            fft_records,
+            0,
+            "FFTPacket",
+            lambda msg: setattr(msg.header, "num_bins", bad_num_bins),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "FFTPacket",
+            lambda msg: setattr(msg.header, "num_bins", bad_num_bins),
+        )
+        path = write_sintela_file(f"fft_bad_num_bins_{bad_num_bins}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf num_bins"
         ):
             fiber_io.scan(path)
 
