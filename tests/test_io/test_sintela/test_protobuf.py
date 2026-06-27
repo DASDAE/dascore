@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
-from dascore.io.sintela_protobuf import SintelaProtobufV1
-from dascore.io.sintela_protobuf import utils as sintela_utils
+from dascore.io.sintela import SintelaProtobufV1
+from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
 
@@ -79,18 +79,7 @@ def _payload_to_summary(payload):
 @cache
 def _get_test_proto_messages():
     """Build local protobuf classes for Sintela synthetic test payloads."""
-    from google.protobuf import (
-        descriptor_pb2,
-        descriptor_pool,
-        message_factory,
-        timestamp_pb2,
-    )
-
     return sintela_utils._build_proto_messages(
-        descriptor_pb2=descriptor_pb2,
-        descriptor_pool=descriptor_pool,
-        message_factory=message_factory,
-        timestamp_pb2=timestamp_pb2,
         include_sample_fields=True,
         package_name="test_sintela_common",
         file_name="test_sintela_common.proto",
@@ -351,7 +340,7 @@ class TestSintelaProtobuf:
         assert patch.dims == ("time", "distance", "band")
         assert patch.shape == (2, 2, 2)
         assert "band_start_frequency" in patch.coords.coord_map
-        assert patch.attrs.data_type == ""
+        assert patch.attrs.data_type == "frequency_band_energy"
         assert patch.attrs.data_units in (None, "")
 
     def test_band_read_preserves_attrs_for_single_semantic_type(
@@ -372,7 +361,7 @@ class TestSintelaProtobuf:
         )
         path = write_sintela_file("band_uniform.pb", records)
         patch = fiber_io.read(path)[0]
-        assert patch.attrs.data_type == "phase"
+        assert patch.attrs.data_type == "frequency_band_energy"
         assert patch.attrs.data_units == get_quantity("rad")
 
     def test_fft_read_returns_expected_dims(
@@ -416,7 +405,7 @@ class TestSintelaProtobuf:
         """FFT packets should not inherit time-series phase units by default."""
         path = write_sintela_file("fft_attrs.pb", fft_records)
         patch = fiber_io.read(path)[0]
-        assert patch.attrs.data_type == ""
+        assert patch.attrs.data_type == "power_spectral_density"
         assert patch.attrs.data_units in (None, "")
 
     def test_complex_fft_is_complex_dtype(
@@ -868,11 +857,10 @@ class TestSintelaProtobuf:
         """Detection should stay available without protobuf support."""
         path = sintela_protobuf_path
 
-        def _raise():
+        def _raise(*args, **kwargs):
             raise MissingOptionalDependencyError("protobuf missing")
 
         monkeypatch.setattr(sintela_utils, "_get_proto_messages", _raise)
-        monkeypatch.setattr(sintela_utils, "_get_scan_proto_messages", _raise)
         monkeypatch.setattr(sintela_utils, "_get_meta_message_class", _raise)
 
         fiber_io = SintelaProtobufV1()
@@ -935,7 +923,7 @@ class TestSintelaProtobufUtils:
         ):
             sintela_utils._get_distance_coord(0, np.nan, 1)
         assert sintela_utils._get_band_attr_data_type(((999, 0, 1, "", ""),)) == (
-            "",
+            "frequency_band_energy",
             "",
         )
 
