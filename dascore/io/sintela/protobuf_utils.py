@@ -1,5 +1,27 @@
 """
 Utilities for reading Sintela protobuf MTLV recordings.
+
+File format
+-----------
+A recording is a flat sequence of MTLV (magic-tag-length-value) envelope
+records.  Each record is laid out as:
+
+    magic    4 bytes   little-endian uint32, always ``PBUF_MAGIC``
+    tag      4 bytes   ASCII, null-padded (e.g. ``META``, ``TS05``, ``FFT``)
+    size     4 bytes   little-endian uint32, payload length in bytes
+    payload  size      a serialized protobuf message
+
+The tag identifies the payload's packet family (see ``TS_TAGS`` etc.); the
+payload is decoded with the matching message class built below.
+
+Protobuf schema strategy
+------------------------
+Rather than vendoring Sintela's generated ``*_pb2.py`` modules, we build the
+small subset of their schema that DASCore needs at runtime via
+``descriptor_pb2`` (see ``_build_proto_messages``).  This keeps protobuf an
+optional dependency, avoids committing generated code, and lets us skip the
+sample payloads entirely when scanning.  The field numbers below must match
+Sintela's real wire schema (see ``scratch/onyxpublic/proto/common/``).
 """
 
 from __future__ import annotations
@@ -44,7 +66,7 @@ _BAND_DATA_TYPE_MAP = {
     13: ("phase", "radians"),
 }
 _FFT_ATTR_DEFAULTS = {
-    "data_type": "",
+    "data_type": "power_spectral_density",
     "data_units": "",
 }
 
@@ -200,9 +222,8 @@ def _get_protobuf_decode_error():
     return getattr(message_mod, "DecodeError", Exception)
 
 
-@cache
-def _get_proto_messages():
-    """Build lightweight protobuf messages for supported Sintela packet types."""
+def _import_protobuf():
+    """Import the protobuf submodules or raise the standard optional-dep error."""
     try:
         from google.protobuf import (
             descriptor_pb2,
@@ -212,53 +233,41 @@ def _get_proto_messages():
         )
     except Exception as exc:  # pragma: no cover - import failure path
         raise _optional_dependency_error() from exc
-
-    return _build_proto_messages(
-        descriptor_pb2=descriptor_pb2,
-        descriptor_pool=descriptor_pool,
-        message_factory=message_factory,
-        timestamp_pb2=timestamp_pb2,
-        include_sample_fields=True,
-        package_name="sintela_common",
-        file_name="sintela_common_lite.proto",
-    )
+    return descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2
 
 
 @cache
-def _get_scan_proto_messages():
-    """Build scan-only protobuf messages which omit sample payload fields."""
-    try:
-        from google.protobuf import (
-            descriptor_pb2,
-            descriptor_pool,
-            message_factory,
-            timestamp_pb2,
-        )
-    except Exception as exc:  # pragma: no cover - import failure path
-        raise _optional_dependency_error() from exc
+def _get_proto_messages(include_sample_fields: bool = True):
+    """
+    Build lightweight protobuf messages for supported Sintela packet types.
 
+    When ``include_sample_fields`` is False the (potentially large) sample
+    payload fields are omitted, which is all that is needed for scanning.  The
+    two variants live in separate descriptor pools (distinct package/file
+    names) so they can coexist; ``@cache`` keys on the flag.
+    """
+    suffix = "" if include_sample_fields else "_scan"
     return _build_proto_messages(
-        descriptor_pb2=descriptor_pb2,
-        descriptor_pool=descriptor_pool,
-        message_factory=message_factory,
-        timestamp_pb2=timestamp_pb2,
-        include_sample_fields=False,
-        package_name="sintela_common_scan",
-        file_name="sintela_common_scan.proto",
+        include_sample_fields=include_sample_fields,
+        package_name=f"sintela_common{suffix}",
+        file_name=f"sintela_common{suffix or '_lite'}.proto",
     )
 
 
 def _build_proto_messages(
     *,
-    descriptor_pb2,
-    descriptor_pool,
-    message_factory,
-    timestamp_pb2,
     include_sample_fields: bool,
     package_name: str,
     file_name: str,
 ):
-    """Build lightweight protobuf message classes for data packets."""
+    """
+    Build lightweight protobuf message classes for data packets.
+
+    Descriptors are assembled by hand (rather than from generated ``*_pb2.py``)
+    so protobuf stays optional and only the fields DASCore reads are declared.
+    Field numbers must match Sintela's wire schema; see the module docstring.
+    """
+    descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2 = _import_protobuf()
     file_proto = descriptor_pb2.FileDescriptorProto()
     file_proto.name = file_name
     file_proto.package = package_name
@@ -453,16 +462,7 @@ def _build_proto_messages(
 @cache
 def _get_meta_message_class():
     """Build a lightweight RecordingMetadata parser for selected fields."""
-    try:
-        from google.protobuf import (
-            descriptor_pb2,
-            descriptor_pool,
-            message_factory,
-            timestamp_pb2,
-        )
-    except Exception as exc:  # pragma: no cover - import failure path
-        raise _optional_dependency_error() from exc
-
+    descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2 = _import_protobuf()
     file_proto = descriptor_pb2.FileDescriptorProto()
     file_proto.name = "sintela_meta_lite.proto"
     file_proto.package = "sintela_meta"
@@ -573,7 +573,7 @@ def _parse_records(
     records: list[EnvelopeRecord], *, scan_mode: bool = False
 ) -> tuple[list[Any], ParsedMeta]:
     """Decode protobuf payloads and return messages plus selected META."""
-    messages = _get_scan_proto_messages() if scan_mode else _get_proto_messages()
+    messages = _get_proto_messages(include_sample_fields=not scan_mode)
     decode_error = _get_protobuf_decode_error()
     parsed: list[Any] = []
     meta = ParsedMeta()
@@ -669,7 +669,11 @@ def _assert_positive_finite_float(name: str, values: list[float]):
 def _base_attrs(
     common_header, packet_type: str, meta: ParsedMeta, extra: dict | None = None
 ):
-    """Construct base attrs from the packet header and META metadata."""
+    """Construct base attrs from the packet header and META metadata.
+
+    The data_type/data_units default below is timeseries-oriented; the band and
+    FFT callers override both via ``extra``.
+    """
     data_type, data_units = _TIMESERIES_DATA_TYPE_MAP.get(
         int(getattr(common_header, "timeseries_data_type", 0)),
         ("phase", "radians"),
@@ -705,14 +709,14 @@ def _normalize_demod_data_type(code: int) -> str:
 
 
 def _get_band_attr_data_type(band_def: tuple[tuple[Any, ...], ...]) -> tuple[str, str]:
-    """Return patch-level BAND data type/units when all bands agree."""
+    """Return patch-level BAND data type/units."""
     mapped = [_BAND_DATA_TYPE_MAP.get(int(item[0])) for item in band_def]
     if any(item is None for item in mapped):
-        return "", ""
+        return "frequency_band_energy", ""
     first = mapped[0]
     if all(item == first for item in mapped):
-        return first
-    return "", ""
+        return "frequency_band_energy", first[1]
+    return "frequency_band_energy", ""
 
 
 def _assert_equal(name: str, values: list[Any]):
@@ -745,25 +749,26 @@ def _validate_single_family(parsed: list[tuple[str, Any]]) -> str:
 def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Decode one parsed data family into data, coords, and attrs."""
     family = _validate_single_family(parsed)
-    if family == "timeseries":
-        return _decode_timeseries(parsed, meta)
-    if family == "band":
-        return _decode_band(parsed, meta)
-    return _decode_fft(parsed, meta)
+    return _FAMILY_DECODERS[family](parsed, meta)
 
 
-def _get_timeseries_metadata(
-    parsed: list[tuple[str, Any]], meta: ParsedMeta
-) -> TimeseriesMetadata:
-    """Validate timeseries headers and build shared attrs/coords."""
-    headers = [msg.header for _tag, msg in parsed]
+@dataclass(frozen=True)
+class CommonFields:
+    """Header fields validated identically across every packet family."""
+
+    common_headers: list[Any]
+    num_channels: int
+    channel_spacing: float
+    gauge_length: float
+    start_channel: int
+
+
+def _validate_common(headers: list[Any]) -> CommonFields:
+    """Validate and extract the common-header fields shared by all families."""
     common_headers = [header.common_header for header in headers]
     num_channels = _assert_equal(
         "num_channels", [int(ch.num_channels) for ch in common_headers]
     )
-    sample_rates = [float(ch.sample_rate) for ch in common_headers]
-    _assert_positive_finite_float("sample_rate", sample_rates)
-    sample_rate = _assert_float_equal("sample_rate", sample_rates)
     channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
     _assert_positive_finite_float("channel_spacing", channel_spacing_values)
     channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
@@ -773,6 +778,29 @@ def _get_timeseries_metadata(
     start_channel = _assert_equal(
         "start_channel", [int(ch.start_channel) for ch in common_headers]
     )
+    return CommonFields(
+        common_headers=common_headers,
+        num_channels=num_channels,
+        channel_spacing=channel_spacing,
+        gauge_length=gauge_length,
+        start_channel=start_channel,
+    )
+
+
+def _get_timeseries_metadata(
+    parsed: list[tuple[str, Any]], meta: ParsedMeta
+) -> TimeseriesMetadata:
+    """Validate timeseries headers and build shared attrs/coords."""
+    headers = [msg.header for _tag, msg in parsed]
+    common = _validate_common(headers)
+    common_headers = common.common_headers
+    num_channels = common.num_channels
+    channel_spacing = common.channel_spacing
+    gauge_length = common.gauge_length
+    start_channel = common.start_channel
+    sample_rates = [float(ch.sample_rate) for ch in common_headers]
+    _assert_positive_finite_float("sample_rate", sample_rates)
+    sample_rate = _assert_float_equal("sample_rate", sample_rates)
     channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
     data_type = _assert_equal(
         "timeseries_data_type",
@@ -835,19 +863,12 @@ def _get_timeseries_metadata(
 def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandMetadata:
     """Validate band headers and build shared attrs/coords."""
     headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
-    )
-    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
-    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
-    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
+    common = _validate_common(headers)
+    common_headers = common.common_headers
+    num_channels = common.num_channels
+    channel_spacing = common.channel_spacing
+    gauge_length = common.gauge_length
+    start_channel = common.start_channel
     band_defs = []
     for header in headers:
         band_defs.append(
@@ -913,19 +934,12 @@ def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandM
 def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMetadata:
     """Validate FFT headers and build shared attrs/coords."""
     headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
-    )
-    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
-    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
-    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
+    common = _validate_common(headers)
+    common_headers = common.common_headers
+    num_channels = common.num_channels
+    channel_spacing = common.channel_spacing
+    gauge_length = common.gauge_length
+    start_channel = common.start_channel
     num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
     bin_res_values = [float(h.bin_res) for h in headers]
     _assert_positive_finite_float("bin_res", bin_res_values)
@@ -1069,6 +1083,20 @@ def _scan_fft(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     )
 
 
+# Family name -> decode/scan implementation. Populated here so the dispatch
+# helpers above can stay near the top while referencing functions defined below.
+_FAMILY_DECODERS = {
+    "timeseries": _decode_timeseries,
+    "band": _decode_band,
+    "fft": _decode_fft,
+}
+_FAMILY_SCANNERS = {
+    "timeseries": _scan_timeseries,
+    "band": _scan_band,
+    "fft": _scan_fft,
+}
+
+
 def read_payload(resource):
     """Decode a Sintela protobuf file into data, coords, and attrs."""
     records = _iter_envelope_records(resource, strict=True)
@@ -1081,12 +1109,7 @@ def scan_payload(resource) -> list[dict[str, Any]]:
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=True)
     family = _validate_single_family(parsed)
-    if family == "timeseries":
-        shape, coords, attrs, dtype = _scan_timeseries(parsed, meta)
-    elif family == "band":
-        shape, coords, attrs, dtype = _scan_band(parsed, meta)
-    else:
-        shape, coords, attrs, dtype = _scan_fft(parsed, meta)
+    shape, coords, attrs, dtype = _FAMILY_SCANNERS[family](parsed, meta)
     return [
         _make_scan_payload(
             attrs=attrs,

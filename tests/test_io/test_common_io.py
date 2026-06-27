@@ -37,8 +37,7 @@ from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1
-from dascore.io.sintela_binary import SintelaBinaryV3
-from dascore.io.sintela_protobuf import SintelaProtobufV1
+from dascore.io.sintela import SintelaBinaryV3, SintelaProtobufV1
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
