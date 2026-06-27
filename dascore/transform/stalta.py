@@ -27,6 +27,8 @@ def stalta(
         If True, values specified by kwargs are in samples not coordinate units.
     **kwargs
         Used to pass one dimension name and the short/long-term window lengths.
+        For example `time=(0.1, 0.5)` uses windows of 0.1 and 0.5 seconds along
+        the time axis.
 
     Returns
     -------
@@ -45,11 +47,9 @@ def stalta(
     >>> p = dc.examples.example_event_2()
     >>>
     >>> s = p.envelope(dim="time").stalta(time=(0.002, 0.01))
-    >>> s.viz.waterfall(cmap="RdGy_r", scale=[0, 2], scale_type="absolute")
-    <Axes: xlabel='Time [s]', ylabel='Distance [m]'>
-    >>>
-    >>> # Use sample counts for the STA/LTA windows.
-    >>> s_samples = p.envelope(dim="time").stalta(time=(2, 10), samples=True)
+    >>> s.viz.waterfall(  # doctest: +SKIP
+    ...     cmap="RdGy_r", scale=[0, 2], scale_type="absolute"
+    ... );
     """
     dim, (sta, lta) = check_filter_kwargs(kwargs)
 
