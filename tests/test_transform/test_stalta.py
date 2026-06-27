@@ -47,6 +47,16 @@ class TestStaLta:
 
         assert np.allclose(out.data, expected.data, equal_nan=True)
 
+    def test_samples_argument(self, random_patch):
+        """Ensure samples argument applies window lengths as samples."""
+        out = random_patch.stalta(time=(2, 5), samples=True)
+
+        sta = random_patch.rolling(time=2, samples=True).mean()
+        lta = random_patch.rolling(time=5, samples=True).mean()
+        expected = sta / lta
+
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+
     def test_attrs_are_set(self, random_patch):
         """Ensure output metadata are set."""
         out = random_patch.stalta(time=(0.01, 0.05))
