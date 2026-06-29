@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.sintela_binary import SintelaBinaryV3
+from dascore.io.sintela import SintelaBinaryV3
 from dascore.utils.downloader import fetch
 
 

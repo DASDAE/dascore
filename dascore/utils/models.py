@@ -8,7 +8,7 @@ from typing import Annotated
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
 from typing_extensions import Self
 
 from dascore.compat import array, is_array
@@ -63,6 +63,12 @@ FrozenDictType = Annotated[
 ]
 
 UTF8Str = Annotated[str, PlainValidator(unbyte)]
+
+# A positive (> 0) integer.
+PositiveInt = Annotated[int, Field(gt=0)]
+
+# A positive (> 0), finite (no nan/inf) float.
+PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 def sensible_model_equals(

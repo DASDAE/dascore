@@ -74,6 +74,8 @@ VALID_DATA_TYPES = (
     "strain",
     "temperature",
     "temperature_gradient",
+    "power_spectral_density",
+    "frequency_band_energy",
 )
 
 # Valid categories (of instruments)
