@@ -461,7 +461,9 @@ class CacheDescriptor:
 
 
 def optional_import(
-    package_name: str, on_missing: Literal["raise", "warn", "ignore"] = "raise"
+    package_name: str,
+    on_missing: Literal["raise", "warn", "ignore"] = "raise",
+    required_for: str = "the requested functionality",
 ) -> ModuleType | None:
     """
     Import a module and return the module object if installed.
@@ -476,6 +478,8 @@ def optional_import(
     on_missing
         If "raise" raise an Error if missing, if "warn" or "ignore",
         return None.
+    required_for
+        A string indicating what this import is requried for.
 
     Raises
     ------
@@ -498,10 +502,7 @@ def optional_import(
     try:
         mod = importlib.import_module(package_name)
     except ImportError:
-        msg = (
-            f"{package_name} is not installed but is required for the "
-            f"requested functionality."
-        )
+        msg = f"{package_name} is not installed but is required for {required_for}"
         warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
         mod = None
     return mod

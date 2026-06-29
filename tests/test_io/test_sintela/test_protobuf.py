@@ -30,6 +30,12 @@ def fiber_io():
     return SintelaProtobufV1()
 
 
+def _envelope(record):
+    """Build an EnvelopeRecord from a (tag, payload) tuple."""
+    tag, payload = record
+    return sintela_utils.EnvelopeRecord(tag=tag, payload=payload)
+
+
 def _write_record(handle, tag: str, payload: bytes):
     """Write one MTLV record to a binary handle."""
     handle.write(struct.pack("<I", sintela_utils.PBUF_MAGIC))
@@ -46,7 +52,7 @@ def _set_timestamp(field, seconds: int, nanos: int = 0):
 
 def _build_meta_payload():
     """Create a META payload with selected provenance fields populated."""
-    cls = _get_test_meta_message_class()
+    cls = sintela_utils._get_meta_message_class()
     msg = cls()
     msg.recorder_namespace = "manualRecord/recorder"
     _set_timestamp(msg.metadata_recording_time, 1_700_000_000, 123)
@@ -59,7 +65,7 @@ def _build_meta_payload():
 
 def _build_meta_payload_without_fiber_id():
     """Create a META payload with the optional fiber_id field unset."""
-    cls = _get_test_meta_message_class()
+    cls = sintela_utils._get_meta_message_class()
     msg = cls()
     msg.recorder_namespace = "manualRecord/recorder"
     _set_timestamp(msg.metadata_recording_time, 1_700_000_000, 123)
@@ -84,81 +90,6 @@ def _get_test_proto_messages():
         package_name="test_sintela_common",
         file_name="test_sintela_common.proto",
     )
-
-
-@cache
-def _get_test_meta_message_class():
-    """Build a local RecordingMetadata class for META payload tests."""
-    from google.protobuf import (
-        descriptor_pb2,
-        descriptor_pool,
-        message_factory,
-        timestamp_pb2,
-    )
-
-    file_proto = descriptor_pb2.FileDescriptorProto()
-    file_proto.name = "test_sintela_meta.proto"
-    file_proto.package = "test_sintela_meta"
-    file_proto.dependency.append("google/protobuf/timestamp.proto")
-
-    identification = file_proto.message_type.add()
-    identification.name = "IdentificationResponse"
-    for number, name in (
-        (1, "manufacturer"),
-        (2, "system_type"),
-        (3, "model"),
-        (4, "serial_number"),
-    ):
-        field = identification.field.add()
-        field.name = name
-        field.number = number
-        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
-
-    acquisition = file_proto.message_type.add()
-    acquisition.name = "AcquisitionStatsResponse"
-    field = acquisition.field.add()
-    field.name = "fiber_id"
-    field.number = 8
-    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
-
-    recording = file_proto.message_type.add()
-    recording.name = "RecordingMetadata"
-    for name, number, type_, type_name in (
-        ("recorder_namespace", 1, descriptor_pb2.FieldDescriptorProto.TYPE_STRING, ""),
-        (
-            "metadata_recording_time",
-            2,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".google.protobuf.Timestamp",
-        ),
-        (
-            "identification",
-            3,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".test_sintela_meta.IdentificationResponse",
-        ),
-        (
-            "acquisition_stats",
-            7,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".test_sintela_meta.AcquisitionStatsResponse",
-        ),
-    ):
-        field = recording.field.add()
-        field.name = name
-        field.number = number
-        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-        field.type = type_
-        if type_name:
-            field.type_name = type_name
-
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(timestamp_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(file_proto)
-    descriptor = pool.FindMessageTypeByName("test_sintela_meta.RecordingMetadata")
-    return message_factory.GetMessageClass(descriptor)
 
 
 def _build_ts_payloads():
@@ -263,6 +194,14 @@ def _mutate_record(records, index: int, message_type: str, mutator):
     return out
 
 
+def _mutate_all(records, message_type: str, mutator):
+    """Return a copy of records with every protobuf payload mutated."""
+    out = records
+    for index in range(len(records)):
+        out = _mutate_record(out, index, message_type, mutator)
+    return out
+
+
 @pytest.fixture()
 def ts_records():
     """Return baseline timeseries records."""
@@ -347,15 +286,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, band_records
     ):
         """Uniform BAND semantics should populate patch-level data attrs."""
-        records = _mutate_record(
+        records = _mutate_all(
             band_records,
-            0,
-            "BandPacket",
-            lambda msg: setattr(msg.header.band_data_info[1], "band_data_type", 13),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "BandPacket",
             lambda msg: setattr(msg.header.band_data_info[1], "band_data_type", 13),
         )
@@ -648,17 +580,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, ts_records, bad_spacing
     ):
         """Invalid channel spacing should raise a format-specific error."""
-        records = _mutate_record(
+        records = _mutate_all(
             ts_records,
-            0,
-            "TimeseriesPacket",
-            lambda msg: setattr(
-                msg.header.common_header, "channel_spacing", bad_spacing
-            ),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "TimeseriesPacket",
             lambda msg: setattr(
                 msg.header.common_header, "channel_spacing", bad_spacing
@@ -675,15 +598,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, ts_records, bad_step
     ):
         """Invalid channel steps should raise a format-specific error."""
-        records = _mutate_record(
+        records = _mutate_all(
             ts_records,
-            0,
-            "TimeseriesPacket",
-            lambda msg: setattr(msg.header, "channel_step", bad_step),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "TimeseriesPacket",
             lambda msg: setattr(msg.header, "channel_step", bad_step),
         )
@@ -698,15 +614,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, ts_records, bad_count
     ):
         """Common headers with non-positive channel counts should fail early."""
-        records = _mutate_record(
+        records = _mutate_all(
             ts_records,
-            0,
-            "TimeseriesPacket",
-            lambda msg: setattr(msg.header.common_header, "num_channels", bad_count),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "TimeseriesPacket",
             lambda msg: setattr(msg.header.common_header, "num_channels", bad_count),
         )
@@ -750,6 +659,27 @@ class TestSintelaProtobuf:
         with pytest.raises(InvalidFiberFileError, match="Inconsistent num_channels"):
             fiber_io.read(bad_channels)
 
+    @pytest.mark.parametrize("bad_num_samples", [0, -1])
+    def test_timeseries_scan_rejects_invalid_num_samples(
+        self, fiber_io, write_sintela_file, ts_records, bad_num_samples
+    ):
+        """Timeseries packet sample counts must be positive before scan/read."""
+        records = _mutate_record(
+            ts_records,
+            1,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "num_samples", bad_num_samples),
+        )
+        path = write_sintela_file(f"ts_bad_num_samples_{bad_num_samples}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf num_samples"
+        ):
+            fiber_io.scan(path)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf num_samples"
+        ):
+            fiber_io.read(path)
+
     def test_timeseries_read_rejects_non_contiguous_and_missing_time(
         self, fiber_io, write_sintela_file, ts_records
     ):
@@ -780,15 +710,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, band_records
     ):
         """Band scan/read should reject missing defs, missing time, and bad sizes."""
-        records = _mutate_record(
+        records = _mutate_all(
             band_records,
-            0,
-            "BandPacket",
-            lambda msg: msg.header.ClearField("band_data_info"),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "BandPacket",
             lambda msg: msg.header.ClearField("band_data_info"),
         )
@@ -844,15 +767,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, fft_records, bad_bin_res
     ):
         """FFT bin resolution should be finite and positive."""
-        records = _mutate_record(
+        records = _mutate_all(
             fft_records,
-            0,
-            "FFTPacket",
-            lambda msg: setattr(msg.header, "bin_res", bad_bin_res),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "FFTPacket",
             lambda msg: setattr(msg.header, "bin_res", bad_bin_res),
         )
@@ -867,15 +783,8 @@ class TestSintelaProtobuf:
         self, fiber_io, write_sintela_file, fft_records, bad_num_bins
     ):
         """FFT headers with non-positive bin counts should fail early."""
-        records = _mutate_record(
+        records = _mutate_all(
             fft_records,
-            0,
-            "FFTPacket",
-            lambda msg: setattr(msg.header, "num_bins", bad_num_bins),
-        )
-        records = _mutate_record(
-            records,
-            1,
             "FFTPacket",
             lambda msg: setattr(msg.header, "num_bins", bad_num_bins),
         )
@@ -905,12 +814,6 @@ class TestSintelaProtobuf:
         ):
             fiber_io.read(path)
 
-    def test_optional_dependency_error_message(self):
-        """The missing-protobuf helper should keep a stable message."""
-        err = sintela_utils._optional_dependency_error()
-        assert isinstance(err, MissingOptionalDependencyError)
-        assert "protobuf is not installed" in str(err)
-
     def test_missing_protobuf_only_affects_scan_and_read(
         self, sintela_protobuf_path, monkeypatch
     ):
@@ -937,8 +840,8 @@ class TestSintelaProtobufUtils:
     def test_helper_functions(self, ts_records):
         """Helper utilities should normalize metadata and coordinates."""
         records = [
-            sintela_utils.EnvelopeRecord("META", _build_meta_payload()),
-            sintela_utils.EnvelopeRecord(*ts_records[0]),
+            _envelope(("META", _build_meta_payload())),
+            _envelope(ts_records[0]),
         ]
         parsed, meta = sintela_utils._parse_records(records, scan_mode=True)
 
@@ -946,8 +849,6 @@ class TestSintelaProtobufUtils:
         assert sintela_utils._validate_single_family(parsed) == "timeseries"
         assert sintela_utils._assert_equal("value", [1, 1]) == 1
         assert sintela_utils._assert_float_equal("value", [1.0, 1.0]) == 1.0
-        assert sintela_utils._normalize_data_type("strain") == "strain"
-        assert sintela_utils._normalize_data_type("not-real") == ""
         with pytest.raises(InvalidFiberFileError, match="Cannot validate value"):
             sintela_utils._assert_equal("value", [])
         with pytest.raises(InvalidFiberFileError, match="Cannot validate value"):
@@ -991,7 +892,7 @@ class TestSintelaProtobufUtils:
             InvalidFiberFileError, match="No supported Sintela protobuf"
         ):
             sintela_utils._parse_records(
-                [sintela_utils.EnvelopeRecord("META", _build_meta_payload())],
+                [_envelope(("META", _build_meta_payload()))],
                 scan_mode=True,
             )
 
@@ -1010,17 +911,20 @@ class TestSintelaProtobufUtils:
     ):
         """Direct helper entry points should decode and summarize each family."""
         ts_records_with_meta = [
-            sintela_utils.EnvelopeRecord("META", _build_meta_payload()),
-            *[sintela_utils.EnvelopeRecord(*record) for record in ts_records],
+            _envelope(("META", _build_meta_payload())),
+            *[_envelope(record) for record in ts_records],
         ]
         ts_parsed, ts_meta = sintela_utils._parse_records(
             ts_records_with_meta,
             scan_mode=False,
         )
-        ts_data, ts_coords, _ = sintela_utils._decode_timeseries(ts_parsed, ts_meta)
-        ts_shape, ts_scan_coords, _, ts_dtype = sintela_utils._scan_timeseries(
+        ts_data, ts_coords, _ = sintela_utils.TimeseriesMetadata.from_parsed(
+            ts_parsed, ts_meta
+        ).decode(ts_parsed)
+        ts_scan = sintela_utils.TimeseriesMetadata.from_parsed(
             *sintela_utils._parse_records(ts_records_with_meta, scan_mode=True)
-        )
+        ).scan()
+        ts_shape, ts_scan_coords, _, ts_dtype = ts_scan
         assert ts_data.shape == ts_shape
         assert ts_coords.dims == ts_scan_coords.dims == ("time", "distance")
         assert ts_dtype == str(np.dtype(np.float32))
@@ -1032,16 +936,17 @@ class TestSintelaProtobufUtils:
             band_summary = _payload_to_summary(sintela_utils.scan_payload(handle)[0])
         decoded_band = sintela_utils._decode_family(
             *sintela_utils._parse_records(
-                [sintela_utils.EnvelopeRecord(*record) for record in band_records],
+                [_envelope(record) for record in band_records],
                 scan_mode=False,
             )
         )
-        band_shape, scan_band_coords, _, band_dtype = sintela_utils._scan_band(
+        band_scan = sintela_utils.BandMetadata.from_parsed(
             *sintela_utils._parse_records(
-                [sintela_utils.EnvelopeRecord(*record) for record in band_records],
+                [_envelope(record) for record in band_records],
                 scan_mode=True,
             )
-        )
+        ).scan()
+        band_shape, scan_band_coords, _, band_dtype = band_scan
         assert band_data.shape == band_shape
         assert decoded_band[0].shape == band_shape
         assert band_coords.dims == scan_band_coords.dims == ("time", "distance", "band")
@@ -1055,19 +960,17 @@ class TestSintelaProtobufUtils:
             fft_summary = _payload_to_summary(sintela_utils.scan_payload(handle)[0])
         decoded_fft = sintela_utils._decode_family(
             *sintela_utils._parse_records(
-                [
-                    sintela_utils.EnvelopeRecord(*record)
-                    for record in complex_fft_records
-                ],
+                [_envelope(record) for record in complex_fft_records],
                 scan_mode=False,
             )
         )
-        fft_shape, scan_fft_coords, _, fft_dtype = sintela_utils._scan_fft(
+        fft_scan = sintela_utils.FFTMetadata.from_parsed(
             *sintela_utils._parse_records(
-                [sintela_utils.EnvelopeRecord(*record) for record in fft_records],
+                [_envelope(record) for record in fft_records],
                 scan_mode=True,
             )
-        )
+        ).scan()
+        fft_shape, scan_fft_coords, _, fft_dtype = fft_scan
         assert np.iscomplexobj(fft_data)
         assert np.iscomplexobj(decoded_fft[0])
         assert fft_coords.dims == ("time", "distance", "frequency")
