@@ -477,6 +477,15 @@ class TestToInt:
 class TestSaturateTime:
     """Tests for saturating datetime and timedelta operations."""
 
+    class _OverflowingAdd:
+        """Object which forces the saturating fallback path."""
+
+        def __add__(self, other):
+            raise OverflowError
+
+        def __sub__(self, other):
+            raise OverflowError
+
     def test_datetime_add_saturates_upper_bound(self):
         """Adding past datetime64 max should clamp to max."""
         limits = np.iinfo(np.int64)
@@ -515,6 +524,11 @@ class TestSaturateTime:
         out = saturate_add(dt, np.timedelta64(5, "ns"))
         expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
         assert np.all(out == expected)
+
+    def test_unsupported_type_raises_after_overflow(self):
+        """Unsupported values should still raise from the fallback path."""
+        with pytest.raises(NotImplementedError):
+            saturate_add(self._OverflowingAdd(), np.timedelta64(5, "ns"))
 
 
 class TestIsDateTime:
