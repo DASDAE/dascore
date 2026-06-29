@@ -244,9 +244,6 @@ def _get_mtx_frequency(resource):
     )
     freq_start = float(attrs["freq_offset_abs"])
     freq_step = float(attrs["freq_step"])
-    if freq_step < 0:
-        freq_start = freq_start + (freq_len - 1) * freq_step
-        freq_step = abs(freq_step)
     return dc.get_coord(
         start=freq_start,
         step=freq_step,
@@ -272,7 +269,7 @@ def _get_mtx_patch(resource, attr_cls, attrs=None, select_kwargs=None):
     coords = _get_mtx_coords(resource)
     attrs = _get_mtx_attrs(resource) if attrs is None else attrs
     select_kwargs = {} if select_kwargs is None else select_kwargs
-    data = np.flip(np.asarray(resource["mtx"]), axis=-1)
+    data = np.asarray(resource["mtx"])
     coords, data = coords.select(array=data, **select_kwargs)
     if 0 in coords.shape:
         return None

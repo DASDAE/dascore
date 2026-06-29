@@ -161,6 +161,20 @@ class TestG1MTXH5:
         assert "temperature" in patch.coords.coord_map
         assert patch.coords.dim_map["temperature"] == ("time",)
 
+    def test_read_preserves_mtx_array_order(self, tmp_path):
+        """The patch data should match the MTX array stored in the file."""
+        path = tmp_path / "order_C1.mtx.h5"
+        _write_mtx_h5(path)
+        stored = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+        with h5py.File(path, "a") as h5:
+            del h5["mtx"]
+            h5.create_dataset("mtx", data=stored)
+        patch = FebusMTXH5V1().read(path)[0]
+        frequency = patch.get_coord("frequency")
+        expected_frequency = 10750.0 + np.arange(3) * -3.90625
+        np.testing.assert_array_equal(patch.data, stored)
+        np.testing.assert_allclose(frequency.values, expected_frequency)
+
     def test_read_attrs_have_io_provenance(self, mtx_h5_path):
         """Read patch attrs should include path and format provenance."""
         patch = dc.read(mtx_h5_path)[0]

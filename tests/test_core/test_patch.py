@@ -194,6 +194,13 @@ class TestInit:
         assert isinstance(patch.data, np.ndarray)
         assert not patch.data.flags.writeable
 
+    def test_object_array_conversion_preserves_patch_object(self, random_patch):
+        """Object-dtype conversion should keep the patch, not its array data."""
+        out = np.asarray([random_patch], dtype=object)
+
+        assert out.shape == (1,)
+        assert out[0] is random_patch
+
     def test_max_time_populated(self, random_patch):
         """Ensure the time_max is populated when not explicitly given."""
         end_time = random_patch.summary.get_coord_summary("time").max
