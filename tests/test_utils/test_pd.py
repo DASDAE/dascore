@@ -283,6 +283,21 @@ class TestAdjustSegments:
         assert (out["distance_min"] >= distance[0]).all()
         assert (out["distance_max"] <= distance[1]).all()
 
+    def test_reversed_bounds_keep_adjusted_limits_ordered(self):
+        """Reversed finite bounds should trim metadata by value interval."""
+        df = pd.DataFrame(
+            {
+                "frequency_min": [100.0],
+                "frequency_max": [200.0],
+                "frequency_step": [-1.0],
+            }
+        )
+        out = adjust_segments(df, frequency=(130.0, 120.0))
+        row = out.iloc[0]
+        assert row["frequency_min"] == 120.0
+        assert row["frequency_max"] == 130.0
+        assert row["_modified"]
+
     def test_missing_interval_col_raises_keyerro(self, adjacent_df):
         """Ensure if an interval column is missing a KeyError is raised."""
         df = adjacent_df.drop(columns=["distance_min"])

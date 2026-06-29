@@ -245,6 +245,26 @@ class TestInit:
         assert time_shape == len(patch.coords.get_array("time"))
         assert time_shape == len(patch.coords.get_array("time"))
 
+    def test_select_descending_frequency_value_bounds(self):
+        """Value selection should not depend on descending coord order."""
+        frequency = np.cumsum(np.abs(random_state.rand(100)))[::-1]
+        coord = dc.get_coord(data=frequency, units="Hz")
+        patch = dc.Patch(
+            data=np.arange(len(frequency)),
+            coords={"frequency": coord},
+            dims=("frequency",),
+        )
+        eps = 0.000000001
+        low, high = frequency[60] + eps, frequency[50] - eps
+        low_first = patch.select(frequency=(low, high))
+        high_first = patch.select(frequency=(high, low))
+        expected = frequency[(frequency >= low) & (frequency <= high)]
+        out_freq = low_first.get_coord("frequency")
+        assert np.allclose(out_freq.values, expected)
+        assert np.allclose(high_first.get_coord("frequency").values, expected)
+        assert out_freq.min() >= low
+        assert out_freq.max() <= high
+
     def test_init_no_coords(self, random_patch):
         """Ensure a new patch can be inited from only attrs."""
         attrs = random_patch.attrs

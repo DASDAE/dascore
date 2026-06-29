@@ -271,6 +271,8 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
     for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
+        if val_min is not None and val_max is not None and val_max < val_min:
+            val_min, val_max = val_max, val_min
         start, stop, step = get_interval_columns(out, name)
         min_val = val_min if val_min is not None else start.min()
         max_val = val_max if val_max is not None else stop.max()
