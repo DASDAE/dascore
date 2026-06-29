@@ -258,10 +258,14 @@ class TestInit:
         low, high = frequency[60] + eps, frequency[50] - eps
         low_first = patch.select(frequency=(low, high))
         high_first = patch.select(frequency=(high, low))
-        expected = frequency[(frequency >= low) & (frequency <= high)]
+        mask = (frequency >= low) & (frequency <= high)
+        expected = frequency[mask]
+        expected_data = patch.data[mask]
         out_freq = low_first.get_coord("frequency")
         assert np.allclose(out_freq.values, expected)
         assert np.allclose(high_first.get_coord("frequency").values, expected)
+        assert np.array_equal(low_first.data, expected_data)
+        assert np.array_equal(high_first.data, expected_data)
         assert out_freq.min() >= low
         assert out_freq.max() <= high
 

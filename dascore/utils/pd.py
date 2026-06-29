@@ -170,6 +170,14 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _order_range_tuple(range_tuple):
+    """Ensure finite range bounds are in increasing order."""
+    val_min, val_max = range_tuple
+    if val_min is not None and val_max is not None and val_max < val_min:
+        return val_max, val_min
+    return val_min, val_max
+
+
 def _convert_times(df, some_dict):
     """Convert query values to datetime/timedelta values."""
     if not some_dict:
@@ -270,10 +278,9 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     # Track which rows have been modified
     not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
-    for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
-        if val_min is not None and val_max is not None and val_max < val_min:
-            val_min, val_max = val_max, val_min
-        start, stop, step = get_interval_columns(out, name)
+    for name, range_tuple in yield_range_tuple_from_kwargs(out, kwargs):
+        val_min, val_max = _order_range_tuple(range_tuple)
+        start, stop, _ = get_interval_columns(out, name)
         min_val = val_min if val_min is not None else start.min()
         max_val = val_max if val_max is not None else stop.max()
         too_small = start < min_val
@@ -312,6 +319,9 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
+    multicolumn_range_query = {
+        key: _order_range_tuple(val) for key, val in multicolumn_range_query.items()
+    }
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
     bool_index = np.ones(len(df), dtype=bool)
