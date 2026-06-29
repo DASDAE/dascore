@@ -592,7 +592,7 @@ def sanitize_range_param(select) -> tuple:
     return select
 
 
-def _order_range_tuple(range_tuple):
+def order_range_tuple(range_tuple):
     """Ensure finite range bounds are in increasing order."""
     val_min, val_max = range_tuple
     if val_min is not None and val_max is not None and val_max < val_min:

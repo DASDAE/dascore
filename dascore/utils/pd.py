@@ -16,7 +16,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.misc import _order_range_tuple, sanitize_range_param
+from dascore.utils.misc import order_range_tuple, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -271,7 +271,7 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
     for name, range_tuple in yield_range_tuple_from_kwargs(out, kwargs):
-        val_min, val_max = _order_range_tuple(range_tuple)
+        val_min, val_max = order_range_tuple(range_tuple)
         start, stop, _ = get_interval_columns(out, name)
         min_val = val_min if val_min is not None else start.min()
         max_val = val_max if val_max is not None else stop.max()
@@ -312,7 +312,7 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
     multicolumn_range_query = {
-        key: _order_range_tuple(val) for key, val in multicolumn_range_query.items()
+        key: order_range_tuple(val) for key, val in multicolumn_range_query.items()
     }
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
