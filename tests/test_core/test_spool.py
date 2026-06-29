@@ -327,7 +327,7 @@ class TestSelect:
         time_min = to_datetime64(contents["time_min"].min() + to_timedelta64(4))
         time_max = to_datetime64(contents["time_max"].max() - to_timedelta64(4))
         distance_min = contents["distance_min"].min() + 50
-        distance_max = contents["distance_min"].max() - 50
+        distance_max = contents["distance_max"].max() - 50
         new_spool = spool.select(
             time=(time_min, time_max), distance=(distance_min, distance_max)
         )
