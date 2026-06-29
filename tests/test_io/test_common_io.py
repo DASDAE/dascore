@@ -47,7 +47,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.utils.downloader import fetch, get_registry_df
-from dascore.utils.misc import all_close, iterate
+from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
     skip_missing,
@@ -228,6 +228,8 @@ def _assert_spool_dim_selection(spool, dim, trim_tuple, start_op, stop_op):
         summary = patch.summary.get_coord_summary(dim)
         start = summary.min if trim_tuple[0] in (None, ...) else trim_tuple[0]
         stop = summary.max if trim_tuple[1] in (None, ...) else trim_tuple[1]
+        if start_op is ge and stop_op is le:
+            start, stop = order_range_tuple((start, stop))
         _assert_op_or_close(coord.min(), start, start_op)
         _assert_op_or_close(coord.max(), stop, stop_op)
 
