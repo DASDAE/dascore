@@ -1449,6 +1449,30 @@ class TestMonotonicCoord:
         assert new[0] <= val1
         assert new[-1] >= val2
 
+    def test_reverse_monotonic_value_bounds_are_order_independent(self):
+        """Finite bounds should be treated as a value interval."""
+        ar = np.cumsum(np.abs(random_state.rand(100)))[::-1]
+        coord = get_coord(data=ar)
+        eps = 0.000000001
+        low, high = ar[60] + eps, ar[50] - eps
+        expected = coord.values[(coord.values >= low) & (coord.values <= high)]
+        low_first, low_first_slice = coord.select((low, high))
+        high_first, high_first_slice = coord.select((high, low))
+        assert np.allclose(low_first.values, expected)
+        assert np.allclose(high_first.values, expected)
+        assert low_first_slice == high_first_slice
+        assert low_first.min() >= low
+        assert low_first.max() <= high
+
+    def test_reverse_range_value_bounds_are_order_independent(self):
+        """Evenly sampled descending coords should honor value bounds."""
+        coord = get_coord(data=np.arange(10, 0, -1), units="Hz")
+        low_first, low_slice = coord.select((3.1, 6.9))
+        high_first, high_slice = coord.select((6.9, 3.1))
+        assert np.all(low_first.values == np.array([6, 5, 4]))
+        assert np.all(high_first.values == low_first.values)
+        assert high_slice == low_slice
+
     def test_index_with_string(self, monotonic_datetime_coord):
         """Ensure indexing works with date string."""
         coord = monotonic_datetime_coord
