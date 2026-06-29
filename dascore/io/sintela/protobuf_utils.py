@@ -21,33 +21,56 @@ small subset of their schema that DASCore needs at runtime via
 ``descriptor_pb2`` (see ``_build_proto_messages``).  This keeps protobuf an
 optional dependency, avoids committing generated code, and lets us skip the
 sample payloads entirely when scanning.  The field numbers below must match
-Sintela's real wire schema (see ``scratch/onyxpublic/proto/common/``).
+Sintela's real wire schema.
+
+Why not just ship a ``.proto`` file?  Neither obvious file-based option works
+well here:
+
+- A checked-in ``.proto`` cannot be loaded at runtime by the ``protobuf``
+  package alone -- the pure-Python runtime has no ``.proto`` text parser.
+  Compiling one requires the ``protoc`` compiler (or ``grpcio-tools``), a
+  heavier, non-pure-Python build/runtime dependency we don't want to add for an
+  optional format.
+- A committed generated ``*_pb2.py`` is tightly coupled to the installed
+  protobuf runtime version (generated code has broken across protobuf major
+  releases).  Since protobuf is optional and unpinned, a user could have any
+  version installed.
+
+Building descriptors at runtime through the lower-level, more stable
+``descriptor_pb2`` reflection API sidesteps both problems.
 """
 
 from __future__ import annotations
 
 import struct
 from collections.abc import Iterator
-from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
 import numpy as np
+from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import VALID_DATA_TYPES
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import _make_scan_payload
 from dascore.utils.misc import optional_import, suppress_warnings
+from dascore.utils.models import DascoreBaseModel, PositiveFiniteFloat, PositiveInt
 
 PBUF_MAGIC = 0x46554250
 META_TAG = "META"
 TS_TAGS = frozenset({"TS05", "RF01"})
 FFT_TAGS = frozenset({"FFT", "FFT-"})
 BAND_TAGS = frozenset({"BAND"})
+# Maps each data tag to the packet message class (built by
+# ``_get_proto_messages``) that decodes it.
+_TAG_TO_PACKET = {
+    **dict.fromkeys(TS_TAGS, "TimeseriesPacket"),
+    **dict.fromkeys(BAND_TAGS, "BandPacket"),
+    **dict.fromkeys(FFT_TAGS, "FFTPacket"),
+}
 DIMS_TS = ("time", "distance")
 DIMS_BAND = ("time", "distance", "band")
 DIMS_FFT = ("time", "distance", "frequency")
@@ -84,23 +107,18 @@ class SintelaProtobufAttrs(PatchAttrs):
     fiber_id: int | None = None
     serial_number: str = ""
     start_channel: int | None = None
-    channel_spacing: float = np.nan
-    channel_spacing_units: str = "m"
     channel_step: int | None = None
-    sample_rate: float = np.nan
     demod_data_type: str = ""
 
 
-@dataclass(frozen=True)
-class EnvelopeRecord:
+class EnvelopeRecord(DascoreBaseModel):
     """The envelope information for one MTLV record."""
 
     tag: str
     payload: bytes
 
 
-@dataclass(frozen=True)
-class ParsedMeta:
+class ParsedMeta(DascoreBaseModel):
     """Selected metadata fields promoted from META packets."""
 
     recorder_namespace: str = ""
@@ -109,52 +127,6 @@ class ParsedMeta:
     instrument_model: str = ""
     serial_number: str = ""
     fiber_id: int | None = None
-
-
-@dataclass(frozen=True)
-class TimeseriesMetadata:
-    """Normalized metadata shared by timeseries read and scan paths."""
-
-    common_header: Any
-    packet_type: str
-    num_channels: int
-    total_samples: int
-    sample_rate: float
-    channel_spacing: float
-    gauge_length: float
-    start_channel: int
-    channel_step: int
-    coords: Any
-    attrs: SintelaProtobufAttrs
-
-
-@dataclass(frozen=True)
-class BandMetadata:
-    """Normalized metadata shared by band read and scan paths."""
-
-    common_header: Any
-    packet_type: str
-    num_channels: int
-    num_bands: int
-    gauge_length: float
-    band_def: tuple[tuple[Any, ...], ...]
-    coords: Any
-    attrs: SintelaProtobufAttrs
-
-
-@dataclass(frozen=True)
-class FFTMetadata:
-    """Normalized metadata shared by FFT read and scan paths."""
-
-    common_header: Any
-    packet_type: str
-    num_channels: int
-    num_bins: int
-    gauge_length: float
-    channel_step: int
-    has_complex: bool
-    coords: Any
-    attrs: SintelaProtobufAttrs
 
 
 def _timestamp_to_dt64(timestamp) -> np.datetime64 | None:
@@ -166,30 +138,37 @@ def _timestamp_to_dt64(timestamp) -> np.datetime64 | None:
 
 def _iter_envelope_records(resource, *, strict: bool) -> Iterator[EnvelopeRecord]:
     """Read all MTLV envelope records from a binary stream."""
+
+    def _stop(message):
+        """Raise in strict mode; otherwise signal a clean stop to the caller."""
+        if strict:
+            raise InvalidFiberFileError(message)
+        return True
+
     resource.seek(0)
     while True:
+        # Each record opens with a 4-byte magic word; an empty read here is a
+        # clean end-of-file, while a short or wrong magic is a malformed record.
         magic = resource.read(4)
         if not magic:
             break
-        if len(magic) < 4:
-            if strict:
-                raise InvalidFiberFileError("Truncated Sintela protobuf magic header.")
+        if len(magic) < 4 and _stop("Truncated Sintela protobuf magic header."):
             return
-        if struct.unpack("<I", magic)[0] != PBUF_MAGIC:
-            if strict:
-                raise InvalidFiberFileError("Invalid Sintela protobuf magic header.")
+        if struct.unpack("<I", magic)[0] != PBUF_MAGIC and _stop(
+            "Invalid Sintela protobuf magic header."
+        ):
             return
+        # The magic is followed by an 8-byte header: a 4-byte null-padded tag
+        # and a 4-byte little-endian payload size.
         header = resource.read(8)
-        if len(header) < 8:
-            if strict:
-                raise InvalidFiberFileError("Truncated Sintela protobuf record header.")
+        if len(header) < 8 and _stop("Truncated Sintela protobuf record header."):
             return
         tag = header[:4].rstrip(b"\x00").decode("utf-8", errors="ignore")
         size = struct.unpack("<I", header[4:8])[0]
+        # The payload is `size` bytes of serialized protobuf, decoded later by
+        # the message class matching the tag.
         payload = resource.read(size)
-        if len(payload) < size:
-            if strict:
-                raise InvalidFiberFileError("Truncated Sintela protobuf payload.")
+        if len(payload) < size and _stop("Truncated Sintela protobuf payload."):
             return
         yield EnvelopeRecord(tag=tag, payload=payload)
 
@@ -199,21 +178,12 @@ def get_supported_family_tag(resource) -> str | None:
     for record in _iter_envelope_records(resource, strict=False):
         if record.tag == META_TAG:
             continue
-        if record.tag in TS_TAGS | BAND_TAGS | FFT_TAGS:
+        if record.tag in _TAG_TO_PACKET:
             return record.tag
         # Detection is intentionally tolerant of unknown non-data records so a
         # valid family tag later in the file can still identify the format.
         continue
     return None
-
-
-def _optional_dependency_error() -> MissingOptionalDependencyError:
-    """Return the standardized missing dependency error."""
-    msg = (
-        "protobuf is not installed but is required for Sintela protobuf scan/read "
-        "operations."
-    )
-    return MissingOptionalDependencyError(msg)
 
 
 def _get_protobuf_decode_error():
@@ -223,17 +193,84 @@ def _get_protobuf_decode_error():
 
 
 def _import_protobuf():
-    """Import the protobuf submodules or raise the standard optional-dep error."""
-    try:
-        from google.protobuf import (
-            descriptor_pb2,
-            descriptor_pool,
-            message_factory,
-            timestamp_pb2,
-        )
-    except Exception as exc:  # pragma: no cover - import failure path
-        raise _optional_dependency_error() from exc
-    return descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2
+    """Import the protobuf submodules, raising if protobuf is not installed."""
+    txt = "Sintela protobuf scan/read operations"
+    return (
+        optional_import("google.protobuf.descriptor_pb2", required_for=txt),
+        optional_import("google.protobuf.descriptor_pool", required_for=txt),
+        optional_import("google.protobuf.message_factory", required_for=txt),
+        optional_import("google.protobuf.timestamp_pb2", required_for=txt),
+    )
+
+
+class _ProtoSchemaBuilder:
+    """
+    Assemble a protobuf ``FileDescriptorProto`` and produce message classes.
+
+    Wraps the verbose ``descriptor_pb2`` API so each message and field can be
+    declared in a single line. Field numbers must match Sintela's wire schema
+    (see the module docstring); names are arbitrary local labels.
+    """
+
+    def __init__(self, package_name: str, file_name: str):
+        descriptor_pb2, pool, factory, timestamp = _import_protobuf()
+        self._descriptor_pool = pool
+        self._message_factory = factory
+        self._timestamp_pb2 = timestamp
+        # Short aliases for the field types/labels Sintela messages use.
+        fd = descriptor_pb2.FieldDescriptorProto
+        self.INT32 = fd.TYPE_INT32
+        self.UINT32 = fd.TYPE_UINT32
+        self.FLOAT = fd.TYPE_FLOAT
+        self.BOOL = fd.TYPE_BOOL
+        self.STRING = fd.TYPE_STRING
+        self.BYTES = fd.TYPE_BYTES
+        self.MESSAGE = fd.TYPE_MESSAGE
+        self.REPEATED = fd.LABEL_REPEATED
+        self._optional = fd.LABEL_OPTIONAL
+        self.package_name = package_name
+        self._file_proto = descriptor_pb2.FileDescriptorProto()
+        self._file_proto.name = file_name
+        self._file_proto.package = package_name
+        self._file_proto.dependency.append("google/protobuf/timestamp.proto")
+
+    def message(self, name: str) -> _ProtoMessageBuilder:
+        """Declare a new message type and return a helper to add its fields."""
+        message_proto = self._file_proto.message_type.add()
+        message_proto.name = name
+        return _ProtoMessageBuilder(self, message_proto)
+
+    def build(self, *names: str) -> dict:
+        """Register the schema and return the requested message classes."""
+        pool = self._descriptor_pool.DescriptorPool()
+        pool.AddSerializedFile(self._timestamp_pb2.DESCRIPTOR.serialized_pb)
+        pool.Add(self._file_proto)
+        out = {}
+        for name in names:
+            descriptor = pool.FindMessageTypeByName(f"{self.package_name}.{name}")
+            out[name] = self._message_factory.GetMessageClass(descriptor)
+        return out
+
+
+class _ProtoMessageBuilder:
+    """Add fields to a single protobuf message declared by a schema builder."""
+
+    def __init__(self, schema: _ProtoSchemaBuilder, message_proto):
+        self._schema = schema
+        self._message_proto = message_proto
+
+    def add(self, name, number, type_, *, label=None, type_name=""):
+        """Add one field; a ``type_name`` without a leading dot is local."""
+        field = self._message_proto.field.add()
+        field.name = name
+        field.number = number
+        field.label = self._schema._optional if label is None else label
+        field.type = type_
+        if type_name:
+            if not type_name.startswith("."):
+                type_name = f".{self._schema.package_name}.{type_name}"
+            field.type_name = type_name
+        return self
 
 
 @cache
@@ -267,266 +304,105 @@ def _build_proto_messages(
     so protobuf stays optional and only the fields DASCore reads are declared.
     Field numbers must match Sintela's wire schema; see the module docstring.
     """
-    descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2 = _import_protobuf()
-    file_proto = descriptor_pb2.FileDescriptorProto()
-    file_proto.name = file_name
-    file_proto.package = package_name
-    file_proto.dependency.append("google/protobuf/timestamp.proto")
+    schema = _ProtoSchemaBuilder(package_name, file_name)
 
-    def add_field(message, name, number, type_, *, label=None, type_name=""):
-        field = message.field.add()
-        field.name = name
-        field.number = number
-        field.label = (
-            label
-            if label is not None
-            else descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-        )
-        field.type = type_
-        if type_name:
-            field.type_name = type_name
-        return field
+    common = schema.message("CommonHeader")
+    common.add("time", 1, schema.MESSAGE, type_name=".google.protobuf.Timestamp")
+    common.add("num_channels", 2, schema.INT32)
+    common.add("sample_rate", 3, schema.FLOAT)
+    common.add("channel_spacing", 4, schema.FLOAT)
+    common.add("gauge_length", 5, schema.FLOAT)
+    common.add("start_channel", 6, schema.INT32)
+    common.add("end_of_replay", 7, schema.BOOL)
+    common.add("fiber_flipped", 8, schema.BOOL)
+    common.add("loop_removed", 9, schema.BOOL)
+    common.add("has_dropped_samples", 10, schema.BOOL)
+    common.add("timeseries_data_type", 11, schema.INT32)
+    common.add("demod_data_type", 12, schema.INT32)
 
-    common = file_proto.message_type.add()
-    common.name = "CommonHeader"
-    add_field(
-        common,
-        "time",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=".google.protobuf.Timestamp",
-    )
-    for number, name, type_ in (
-        (2, "num_channels", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (3, "sample_rate", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (4, "channel_spacing", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (5, "gauge_length", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (6, "start_channel", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (7, "end_of_replay", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (8, "fiber_flipped", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (9, "loop_removed", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (10, "has_dropped_samples", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (11, "timeseries_data_type", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (12, "demod_data_type", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-    ):
-        add_field(common, name, number, type_)
+    ts_header = schema.message("TimeseriesHeader")
+    ts_header.add("common_header", 1, schema.MESSAGE, type_name="CommonHeader")
+    ts_header.add("sample_count", 2, schema.UINT32)
+    ts_header.add("num_samples", 3, schema.INT32)
+    ts_header.add("channel_step", 4, schema.INT32)
 
-    timeseries_header = file_proto.message_type.add()
-    timeseries_header.name = "TimeseriesHeader"
-    add_field(
-        timeseries_header,
-        "common_header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.CommonHeader",
-    )
-    add_field(
-        timeseries_header,
-        "sample_count",
-        2,
-        descriptor_pb2.FieldDescriptorProto.TYPE_UINT32,
-    )
-    add_field(
-        timeseries_header,
-        "num_samples",
-        3,
-        descriptor_pb2.FieldDescriptorProto.TYPE_INT32,
-    )
-    add_field(
-        timeseries_header,
-        "channel_step",
-        4,
-        descriptor_pb2.FieldDescriptorProto.TYPE_INT32,
-    )
-
-    timeseries_packet = file_proto.message_type.add()
-    timeseries_packet.name = "TimeseriesPacket"
-    add_field(
-        timeseries_packet,
-        "header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.TimeseriesHeader",
-    )
+    ts_packet = schema.message("TimeseriesPacket")
+    ts_packet.add("header", 1, schema.MESSAGE, type_name="TimeseriesHeader")
     if include_sample_fields:
-        add_field(
-            timeseries_packet,
-            "samples",
-            3,
-            descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT,
-            label=descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED,
-        )
-        add_field(
-            timeseries_packet,
-            "raw_frames",
-            4,
-            descriptor_pb2.FieldDescriptorProto.TYPE_BYTES,
-        )
+        ts_packet.add("samples", 3, schema.FLOAT, label=schema.REPEATED)
+        ts_packet.add("raw_frames", 4, schema.BYTES)
 
-    band_info = file_proto.message_type.add()
-    band_info.name = "BandDataInfo"
-    for number, name, type_ in (
-        (1, "band_data_type", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (2, "start", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (3, "end", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (4, "averaging_type", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (5, "description", descriptor_pb2.FieldDescriptorProto.TYPE_STRING),
-        (6, "source", descriptor_pb2.FieldDescriptorProto.TYPE_STRING),
-    ):
-        add_field(band_info, name, number, type_)
+    band_info = schema.message("BandDataInfo")
+    band_info.add("band_data_type", 1, schema.INT32)
+    band_info.add("start", 2, schema.FLOAT)
+    band_info.add("end", 3, schema.FLOAT)
+    band_info.add("averaging_type", 4, schema.INT32)
+    band_info.add("description", 5, schema.STRING)
+    band_info.add("source", 6, schema.STRING)
 
-    band_header = file_proto.message_type.add()
-    band_header.name = "BandHeader"
-    add_field(
-        band_header,
-        "common_header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.CommonHeader",
-    )
-    add_field(
-        band_header,
+    band_header = schema.message("BandHeader")
+    band_header.add("common_header", 1, schema.MESSAGE, type_name="CommonHeader")
+    band_header.add(
         "band_data_info",
         2,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        label=descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED,
-        type_name=f".{package_name}.BandDataInfo",
+        schema.MESSAGE,
+        label=schema.REPEATED,
+        type_name="BandDataInfo",
     )
 
-    band_packet = file_proto.message_type.add()
-    band_packet.name = "BandPacket"
-    add_field(
-        band_packet,
-        "header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.BandHeader",
-    )
+    band_packet = schema.message("BandPacket")
+    band_packet.add("header", 1, schema.MESSAGE, type_name="BandHeader")
     if include_sample_fields:
-        add_field(
-            band_packet,
-            "samples",
-            2,
-            descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT,
-            label=descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED,
-        )
+        band_packet.add("samples", 2, schema.FLOAT, label=schema.REPEATED)
 
-    fft_header = file_proto.message_type.add()
-    fft_header.name = "FFTHeader"
-    add_field(
-        fft_header,
-        "common_header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.CommonHeader",
-    )
-    for number, name, type_ in (
-        (2, "num_bins", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (3, "bin_res", descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT),
-        (4, "averaging_type", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (5, "channel_step", descriptor_pb2.FieldDescriptorProto.TYPE_INT32),
-        (6, "normalised", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (7, "has_power_data", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-        (8, "has_complex_data", descriptor_pb2.FieldDescriptorProto.TYPE_BOOL),
-    ):
-        add_field(fft_header, name, number, type_)
+    fft_header = schema.message("FFTHeader")
+    fft_header.add("common_header", 1, schema.MESSAGE, type_name="CommonHeader")
+    fft_header.add("num_bins", 2, schema.INT32)
+    fft_header.add("bin_res", 3, schema.FLOAT)
+    fft_header.add("averaging_type", 4, schema.INT32)
+    fft_header.add("channel_step", 5, schema.INT32)
+    fft_header.add("normalised", 6, schema.BOOL)
+    fft_header.add("has_power_data", 7, schema.BOOL)
+    fft_header.add("has_complex_data", 8, schema.BOOL)
 
-    fft_packet = file_proto.message_type.add()
-    fft_packet.name = "FFTPacket"
-    add_field(
-        fft_packet,
-        "header",
-        1,
-        descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-        type_name=f".{package_name}.FFTHeader",
-    )
+    fft_packet = schema.message("FFTPacket")
+    fft_packet.add("header", 1, schema.MESSAGE, type_name="FFTHeader")
     if include_sample_fields:
-        add_field(
-            fft_packet,
-            "samples",
-            2,
-            descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT,
-            label=descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED,
-        )
+        fft_packet.add("samples", 2, schema.FLOAT, label=schema.REPEATED)
 
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(timestamp_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(file_proto)
-    out = {}
-    for name in ("TimeseriesPacket", "BandPacket", "FFTPacket"):
-        descriptor = pool.FindMessageTypeByName(f"{package_name}.{name}")
-        out[name] = message_factory.GetMessageClass(descriptor)
-    return out
+    return schema.build("TimeseriesPacket", "BandPacket", "FFTPacket")
 
 
 @cache
 def _get_meta_message_class():
     """Build a lightweight RecordingMetadata parser for selected fields."""
-    descriptor_pb2, descriptor_pool, message_factory, timestamp_pb2 = _import_protobuf()
-    file_proto = descriptor_pb2.FileDescriptorProto()
-    file_proto.name = "sintela_meta_lite.proto"
-    file_proto.package = "sintela_meta"
-    file_proto.dependency.append("google/protobuf/timestamp.proto")
+    schema = _ProtoSchemaBuilder("sintela_meta", "sintela_meta_lite.proto")
 
-    identification = file_proto.message_type.add()
-    identification.name = "IdentificationResponse"
-    for number, name in (
-        (1, "manufacturer"),
-        (2, "system_type"),
-        (3, "model"),
-        (4, "serial_number"),
-    ):
-        field = identification.field.add()
-        field.name = name
-        field.number = number
-        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+    identification = schema.message("IdentificationResponse")
+    identification.add("manufacturer", 1, schema.STRING)
+    identification.add("system_type", 2, schema.STRING)
+    identification.add("model", 3, schema.STRING)
+    identification.add("serial_number", 4, schema.STRING)
 
-    acquisition = file_proto.message_type.add()
-    acquisition.name = "AcquisitionStatsResponse"
-    field = acquisition.field.add()
-    field.name = "fiber_id"
-    field.number = 8
-    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    acquisition = schema.message("AcquisitionStatsResponse")
+    acquisition.add("fiber_id", 8, schema.INT32)
 
-    recording = file_proto.message_type.add()
-    recording.name = "RecordingMetadata"
-    fields = (
-        ("recorder_namespace", 1, descriptor_pb2.FieldDescriptorProto.TYPE_STRING, ""),
-        (
-            "metadata_recording_time",
-            2,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".google.protobuf.Timestamp",
-        ),
-        (
-            "identification",
-            3,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".sintela_meta.IdentificationResponse",
-        ),
-        (
-            "acquisition_stats",
-            7,
-            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            ".sintela_meta.AcquisitionStatsResponse",
-        ),
+    recording = schema.message("RecordingMetadata")
+    recording.add("recorder_namespace", 1, schema.STRING)
+    recording.add(
+        "metadata_recording_time",
+        2,
+        schema.MESSAGE,
+        type_name=".google.protobuf.Timestamp",
     )
-    for name, number, type_, type_name in fields:
-        field = recording.field.add()
-        field.name = name
-        field.number = number
-        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
-        field.type = type_
-        if type_name:
-            field.type_name = type_name
+    recording.add(
+        "identification", 3, schema.MESSAGE, type_name="IdentificationResponse"
+    )
+    recording.add(
+        "acquisition_stats", 7, schema.MESSAGE, type_name="AcquisitionStatsResponse"
+    )
 
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(timestamp_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(file_proto)
-    descriptor = pool.FindMessageTypeByName("sintela_meta.RecordingMetadata")
-    return message_factory.GetMessageClass(descriptor)
+    return schema.build("RecordingMetadata")["RecordingMetadata"]
 
 
 def _parse_meta(payload: bytes) -> ParsedMeta:
@@ -583,15 +459,11 @@ def _parse_records(
         if tag == META_TAG:
             meta = _parse_meta(record.payload)
             continue
-        if tag in TS_TAGS:
-            msg = messages["TimeseriesPacket"]()
-        elif tag in BAND_TAGS:
-            msg = messages["BandPacket"]()
-        elif tag in FFT_TAGS:
-            msg = messages["FFTPacket"]()
-        else:
+        packet_name = _TAG_TO_PACKET.get(tag)
+        if packet_name is None:
             first_unsupported_tag = first_unsupported_tag or tag
             continue
+        msg = messages[packet_name]()
         try:
             msg.ParseFromString(record.payload)
         except decode_error as exc:
@@ -638,12 +510,6 @@ def _get_times(times: list[np.datetime64]):
     return get_coord(data=np.asarray(times, dtype="datetime64[ns]"))
 
 
-def _normalize_data_type(candidate: str) -> str:
-    """Map any external string to a DASCore-valid data type."""
-    clean = str(candidate or "").lower().strip()
-    return clean if clean in VALID_DATA_TYPES else ""
-
-
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
     """Ensure float values match within a small tolerance."""
     if not values:
@@ -658,39 +524,16 @@ def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
     return first
 
 
-def _assert_positive_finite_float(name: str, values: list[float]):
-    """Ensure each float value is finite and positive."""
-    for value in values:
-        if not np.isfinite(value) or value <= 0:
-            msg = f"Invalid Sintela protobuf {name}: {value!r}."
-            raise InvalidFiberFileError(msg)
-
-
-def _assert_positive_int(name: str, value: int) -> int:
-    """Ensure an integer header field is positive."""
-    if value <= 0:
-        msg = f"Invalid Sintela protobuf {name}: {value!r}."
-        raise InvalidFiberFileError(msg)
-    return value
-
-
 def _base_attrs(
     common_header, packet_type: str, meta: ParsedMeta, extra: dict | None = None
 ):
     """Construct base attrs from the packet header and META metadata.
 
-    The data_type/data_units default below is timeseries-oriented; the band and
-    FFT callers override both via ``extra``.
+    Each packet family supplies its own ``data_type``/``data_units`` via
+    ``extra``; the fields below are shared across all families.
     """
-    data_type, data_units = _TIMESERIES_DATA_TYPE_MAP.get(
-        int(getattr(common_header, "timeseries_data_type", 0)),
-        ("phase", "radians"),
-    )
     attrs = dict(
-        data_type=_normalize_data_type(data_type),
         data_category="DAS",
-        data_units=data_units,
-        gauge_length=float(getattr(common_header, "gauge_length", np.nan)),
         packet_type=packet_type,
         recorder_namespace=meta.recorder_namespace,
         metadata_recording_time=meta.metadata_recording_time,
@@ -702,18 +545,11 @@ def _base_attrs(
         serial_number=meta.serial_number,
         fiber_id=meta.fiber_id,
         start_channel=int(getattr(common_header, "start_channel", 0)),
-        channel_spacing=float(getattr(common_header, "channel_spacing", np.nan)),
         channel_step=None,
-        sample_rate=float(getattr(common_header, "sample_rate", np.nan)),
     )
     if extra:
         attrs.update(extra)
     return SintelaProtobufAttrs(**attrs)
-
-
-def _normalize_demod_data_type(code: int) -> str:
-    """Preserve the raw demod enum until Sintela publishes stable semantics."""
-    return str(code)
 
 
 def _get_band_attr_data_type(band_def: tuple[tuple[Any, ...], ...]) -> tuple[str, str]:
@@ -756,354 +592,411 @@ def _validate_single_family(parsed: list[tuple[str, Any]]) -> str:
 
 def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Decode one parsed data family into data, coords, and attrs."""
-    family = _validate_single_family(parsed)
-    return _FAMILY_DECODERS[family](parsed, meta)
+    family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
+    return family_cls.from_parsed(parsed, meta).decode(parsed)
 
 
-@dataclass(frozen=True)
-class CommonFields:
-    """Header fields validated identically across every packet family."""
+class _PacketHeaderFields(DascoreBaseModel):
+    """
+    Validated per-packet header fields shared by all families.
 
-    common_headers: list[Any]
-    num_channels: int
-    channel_spacing: float
+    Constructing the model enforces the per-field constraints; cross-packet
+    consistency is enforced separately by the callers via ``_reduce_common``.
+    """
+
+    num_channels: PositiveInt
+    channel_spacing: PositiveFiniteFloat
     gauge_length: float
     start_channel: int
 
 
-def _validate_common(headers: list[Any]) -> CommonFields:
-    """Validate and extract the common-header fields shared by all families."""
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
-    )
-    _assert_positive_int("num_channels", num_channels)
-    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
-    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
-    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    return CommonFields(
-        common_headers=common_headers,
-        num_channels=num_channels,
-        channel_spacing=channel_spacing,
-        gauge_length=gauge_length,
-        start_channel=start_channel,
+class _TimeseriesHeaderFields(_PacketHeaderFields):
+    """Adds the timeseries-only constrained sample rate."""
+
+    sample_rate: PositiveFiniteFloat
+    num_samples: PositiveInt
+
+
+class _FFTHeaderFields(_PacketHeaderFields):
+    """Adds the FFT-only constrained bin fields."""
+
+    num_bins: PositiveInt
+    bin_res: PositiveFiniteFloat
+
+
+def _validate_header(model_cls, **fields):
+    """Build a header model, mapping pydantic errors to InvalidFiberFileError."""
+    try:
+        return model_cls(**fields)
+    except ValidationError as exc:
+        name = exc.errors()[0]["loc"][0]
+        msg = f"Invalid Sintela protobuf {name}: {fields.get(name)!r}."
+        raise InvalidFiberFileError(msg) from exc
+
+
+def _reduce_common(fields: list[_PacketHeaderFields]):
+    """Collapse validated per-packet header fields to single agreed values."""
+    return (
+        _assert_equal("num_channels", [f.num_channels for f in fields]),
+        _assert_float_equal("channel_spacing", [f.channel_spacing for f in fields]),
+        _assert_float_equal("gauge_length", [f.gauge_length for f in fields]),
+        _assert_equal("start_channel", [f.start_channel for f in fields]),
     )
 
 
-def _get_timeseries_metadata(
-    parsed: list[tuple[str, Any]], meta: ParsedMeta
-) -> TimeseriesMetadata:
-    """Validate timeseries headers and build shared attrs/coords."""
-    headers = [msg.header for _tag, msg in parsed]
-    common = _validate_common(headers)
-    common_headers = common.common_headers
-    num_channels = common.num_channels
-    channel_spacing = common.channel_spacing
-    gauge_length = common.gauge_length
-    start_channel = common.start_channel
-    sample_rates = [float(ch.sample_rate) for ch in common_headers]
-    _assert_positive_finite_float("sample_rate", sample_rates)
-    sample_rate = _assert_float_equal("sample_rate", sample_rates)
-    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
-    data_type = _assert_equal(
-        "timeseries_data_type",
-        [int(ch.timeseries_data_type) for ch in common_headers],
-    )
-    demod_data_type = _assert_equal(
-        "demod_data_type", [int(ch.demod_data_type) for ch in common_headers]
-    )
-    for ch in common_headers:
-        if ch.has_dropped_samples:
-            raise InvalidFiberFileError("Dropped samples in Sintela protobuf stream.")
-    sample_counts = [int(h.sample_count) for h in headers]
-    num_samples_per_packet = [int(h.num_samples) for h in headers]
-    for current, nxt, count in zip(
-        sample_counts, sample_counts[1:], num_samples_per_packet[:-1], strict=False
-    ):
-        if current + count != nxt:
-            raise InvalidFiberFileError(
-                "Non-contiguous Sintela protobuf sample counts."
+class _PacketMetadata(DascoreBaseModel):
+    """
+    Base for a validated, decodable Sintela packet family.
+
+    Subclasses validate their headers in ``from_parsed`` and fill a
+    preallocated array in ``decode``; ``shape`` and ``scan`` are shared.
+    """
+
+    common_header: Any
+    packet_type: str
+    num_channels: int
+    gauge_length: float
+    coords: Any
+    attrs: SintelaProtobufAttrs
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Patch shape, identical to the coordinate-manager shape."""
+        return self.coords.shape
+
+    @property
+    def dtype(self):
+        """Sample dtype for this family."""
+        return np.float32
+
+    def scan(self):
+        """Summarize the family for a scan without allocating samples."""
+        return (self.shape, self.coords, self.attrs, str(np.dtype(self.dtype)))
+
+
+class TimeseriesMetadata(_PacketMetadata):
+    """Validated timeseries packets laid out as (time, distance)."""
+
+    total_samples: int
+    sample_rate: float
+    channel_spacing: float
+    start_channel: int
+    channel_step: int
+
+    @classmethod
+    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
+        """Validate timeseries headers and build shared attrs/coords."""
+        headers = [msg.header for _tag, msg in parsed]
+        common_headers = [h.common_header for h in headers]
+        fields = [
+            _validate_header(
+                _TimeseriesHeaderFields,
+                num_channels=int(ch.num_channels),
+                channel_spacing=float(ch.channel_spacing),
+                gauge_length=float(ch.gauge_length),
+                start_channel=int(ch.start_channel),
+                sample_rate=float(ch.sample_rate),
+                num_samples=int(h.num_samples),
             )
-    total_samples = sum(num_samples_per_packet)
-    first_time = _common_header_time(common_headers[0])
-    if first_time is None:
-        raise InvalidFiberFileError("Missing Sintela protobuf start time.")
-    time = _get_time_coord_from_samples(first_time, sample_rate, total_samples)
-    distance = _get_distance_coord(
-        start_channel, channel_spacing, num_channels, channel_step
-    )
-    coords = get_coord_manager({"time": time, "distance": distance}, dims=DIMS_TS)
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            channel_step=channel_step,
-            sample_rate=sample_rate,
-            data_type=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[0],
-            data_units=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[
-                1
-            ],
-            demod_data_type=_normalize_demod_data_type(demod_data_type),
-        ),
-    )
-    return TimeseriesMetadata(
-        common_header=common_headers[0],
-        packet_type=parsed[0][0],
-        num_channels=num_channels,
-        total_samples=total_samples,
-        sample_rate=sample_rate,
-        channel_spacing=channel_spacing,
-        gauge_length=gauge_length,
-        start_channel=start_channel,
-        channel_step=channel_step,
-        coords=coords,
-        attrs=attrs,
-    )
-
-
-def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandMetadata:
-    """Validate band headers and build shared attrs/coords."""
-    headers = [msg.header for _tag, msg in parsed]
-    common = _validate_common(headers)
-    common_headers = common.common_headers
-    num_channels = common.num_channels
-    channel_spacing = common.channel_spacing
-    gauge_length = common.gauge_length
-    start_channel = common.start_channel
-    band_defs = []
-    for header in headers:
-        band_defs.append(
-            tuple(
-                (
-                    int(info.band_data_type),
-                    float(info.start),
-                    float(info.end),
-                    str(info.description),
-                    str(info.source),
-                )
-                for info in header.band_data_info
-            )
+            for h, ch in zip(headers, common_headers, strict=False)
+        ]
+        num_channels, channel_spacing, gauge_length, start_channel = _reduce_common(
+            fields
         )
-    band_def = _assert_equal("band_data_info", band_defs)
-    num_bands = len(band_def)
-    if not num_bands:
-        raise InvalidFiberFileError("Band packets missing band definitions.")
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela BAND packet.")
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels)
-    band = get_coord(start=0, stop=num_bands, step=1)
-    coords = get_coord_manager(
-        {
-            "time": _get_times(times),
-            "distance": distance,
-            "band": band,
-            "band_start_frequency": ("band", np.asarray([x[1] for x in band_def])),
-            "band_end_frequency": ("band", np.asarray([x[2] for x in band_def])),
-            "band_description": (
-                "band",
-                np.asarray([x[3] for x in band_def], dtype=object),
+        sample_rate = _assert_float_equal(
+            "sample_rate", [f.sample_rate for f in fields]
+        )
+        channel_step = _assert_equal(
+            "channel_step", [int(h.channel_step) for h in headers]
+        )
+        data_type = _assert_equal(
+            "timeseries_data_type",
+            [int(ch.timeseries_data_type) for ch in common_headers],
+        )
+        demod_data_type = _assert_equal(
+            "demod_data_type", [int(ch.demod_data_type) for ch in common_headers]
+        )
+        for ch in common_headers:
+            if ch.has_dropped_samples:
+                raise InvalidFiberFileError(
+                    "Dropped samples in Sintela protobuf stream."
+                )
+        sample_counts = [int(h.sample_count) for h in headers]
+        num_samples_per_packet = [f.num_samples for f in fields]
+        for current, nxt, count in zip(
+            sample_counts,
+            sample_counts[1:],
+            num_samples_per_packet[:-1],
+            strict=False,
+        ):
+            if current + count != nxt:
+                raise InvalidFiberFileError(
+                    "Non-contiguous Sintela protobuf sample counts."
+                )
+        total_samples = sum(num_samples_per_packet)
+        first_time = _common_header_time(common_headers[0])
+        if first_time is None:
+            raise InvalidFiberFileError("Missing Sintela protobuf start time.")
+        time = _get_time_coord_from_samples(first_time, sample_rate, total_samples)
+        distance = _get_distance_coord(
+            start_channel, channel_spacing, num_channels, channel_step
+        )
+        coords = get_coord_manager({"time": time, "distance": distance}, dims=DIMS_TS)
+        mapping = _TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))
+        attrs = _base_attrs(
+            common_headers[0],
+            packet_type=parsed[0][0],
+            meta=meta,
+            extra=dict(
+                gauge_length=gauge_length,
+                channel_step=channel_step,
+                data_type=mapping[0],
+                data_units=mapping[1],
+                demod_data_type=str(demod_data_type),
             ),
-            "band_source": ("band", np.asarray([x[4] for x in band_def], dtype=object)),
-        },
-        dims=DIMS_BAND,
-    )
-    data_type, data_units = _get_band_attr_data_type(band_def)
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
+        )
+        return cls(
+            common_header=common_headers[0],
+            packet_type=parsed[0][0],
+            num_channels=num_channels,
+            total_samples=total_samples,
+            sample_rate=sample_rate,
+            channel_spacing=channel_spacing,
             gauge_length=gauge_length,
-            data_type=data_type,
-            data_units=data_units,
-            sample_rate=np.nan,
-        ),
-    )
-    return BandMetadata(
-        common_header=common_headers[0],
-        packet_type=parsed[0][0],
-        num_channels=num_channels,
-        num_bands=num_bands,
-        gauge_length=gauge_length,
-        band_def=band_def,
-        coords=coords,
-        attrs=attrs,
-    )
+            start_channel=start_channel,
+            channel_step=channel_step,
+            coords=coords,
+            attrs=attrs,
+        )
+
+    def decode(self, parsed: list[tuple[str, Any]]):
+        """Decode timeseries packets into data, coords, and attrs."""
+        data = np.empty(self.shape, dtype=self.dtype)
+        index = 0
+        for _tag, msg in parsed:
+            packet = np.asarray(msg.samples, dtype=np.float32)
+            rows = int(msg.header.num_samples)
+            expected = rows * self.num_channels
+            if packet.size != expected:
+                raise InvalidFiberFileError(
+                    "Unexpected Sintela protobuf TS sample payload size."
+                )
+            data[index : index + rows] = packet.reshape(rows, self.num_channels)
+            index += rows
+        return data, self.coords, self.attrs
 
 
-def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMetadata:
-    """Validate FFT headers and build shared attrs/coords."""
-    headers = [msg.header for _tag, msg in parsed]
-    common = _validate_common(headers)
-    common_headers = common.common_headers
-    num_channels = common.num_channels
-    channel_spacing = common.channel_spacing
-    gauge_length = common.gauge_length
-    start_channel = common.start_channel
-    num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
-    _assert_positive_int("num_bins", num_bins)
-    bin_res_values = [float(h.bin_res) for h in headers]
-    _assert_positive_finite_float("bin_res", bin_res_values)
-    bin_res = _assert_float_equal("bin_res", bin_res_values)
-    has_complex = _assert_equal(
-        "has_complex_data", [bool(h.has_complex_data) for h in headers]
-    )
-    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela FFT packet.")
-    distance = _get_distance_coord(
-        start_channel, channel_spacing, num_channels, channel_step
-    )
-    frequency = get_coord(start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz")
-    coords = get_coord_manager(
-        {"time": _get_times(times), "distance": distance, "frequency": frequency},
-        dims=DIMS_FFT,
-    )
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
+class BandMetadata(_PacketMetadata):
+    """Validated band packets laid out as (time, distance, band)."""
+
+    num_bands: int
+    band_def: tuple[tuple[Any, ...], ...]
+
+    @classmethod
+    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
+        """Validate band headers and build shared attrs/coords."""
+        headers = [msg.header for _tag, msg in parsed]
+        common_headers = [h.common_header for h in headers]
+        fields = [
+            _validate_header(
+                _PacketHeaderFields,
+                num_channels=int(ch.num_channels),
+                channel_spacing=float(ch.channel_spacing),
+                gauge_length=float(ch.gauge_length),
+                start_channel=int(ch.start_channel),
+            )
+            for ch in common_headers
+        ]
+        num_channels, channel_spacing, gauge_length, start_channel = _reduce_common(
+            fields
+        )
+        band_defs = []
+        for header in headers:
+            band_defs.append(
+                tuple(
+                    (
+                        int(info.band_data_type),
+                        float(info.start),
+                        float(info.end),
+                        str(info.description),
+                        str(info.source),
+                    )
+                    for info in header.band_data_info
+                )
+            )
+        band_def = _assert_equal("band_data_info", band_defs)
+        num_bands = len(band_def)
+        if not num_bands:
+            raise InvalidFiberFileError("Band packets missing band definitions.")
+        times = [_common_header_time(ch) for ch in common_headers]
+        if any(x is None for x in times):
+            raise InvalidFiberFileError("Missing time in Sintela BAND packet.")
+        distance = _get_distance_coord(start_channel, channel_spacing, num_channels)
+        band = get_coord(start=0, stop=num_bands, step=1)
+        coords = get_coord_manager(
+            {
+                "time": _get_times(times),
+                "distance": distance,
+                "band": band,
+                "band_start_frequency": (
+                    "band",
+                    np.asarray([x[1] for x in band_def]),
+                ),
+                "band_end_frequency": (
+                    "band",
+                    np.asarray([x[2] for x in band_def]),
+                ),
+                "band_description": (
+                    "band",
+                    np.asarray([x[3] for x in band_def], dtype=object),
+                ),
+                "band_source": (
+                    "band",
+                    np.asarray([x[4] for x in band_def], dtype=object),
+                ),
+            },
+            dims=DIMS_BAND,
+        )
+        data_type, data_units = _get_band_attr_data_type(band_def)
+        attrs = _base_attrs(
+            common_headers[0],
+            packet_type=parsed[0][0],
+            meta=meta,
+            extra=dict(
+                gauge_length=gauge_length,
+                data_type=data_type,
+                data_units=data_units,
+            ),
+        )
+        return cls(
+            common_header=common_headers[0],
+            packet_type=parsed[0][0],
+            num_channels=num_channels,
+            num_bands=num_bands,
+            gauge_length=gauge_length,
+            band_def=band_def,
+            coords=coords,
+            attrs=attrs,
+        )
+
+    def decode(self, parsed: list[tuple[str, Any]]):
+        """Decode band packets into data, coords, and attrs."""
+        data = np.empty(self.shape, dtype=self.dtype)
+        for ind, (_tag, msg) in enumerate(parsed):
+            packet = np.asarray(msg.samples, dtype=np.float32)
+            expected = self.num_channels * self.num_bands
+            if packet.size != expected:
+                raise InvalidFiberFileError(
+                    "Unexpected Sintela protobuf BAND payload size."
+                )
+            data[ind] = packet.reshape(self.num_channels, self.num_bands)
+        return data, self.coords, self.attrs
+
+
+class FFTMetadata(_PacketMetadata):
+    """Validated FFT packets laid out as (time, distance, frequency)."""
+
+    num_bins: int
+    channel_step: int
+    has_complex: bool
+
+    @property
+    def dtype(self):
+        """Complex when the packets carry complex spectra, else float32."""
+        return np.complex64 if self.has_complex else np.float32
+
+    @classmethod
+    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
+        """Validate FFT headers and build shared attrs/coords."""
+        headers = [msg.header for _tag, msg in parsed]
+        common_headers = [h.common_header for h in headers]
+        fields = [
+            _validate_header(
+                _FFTHeaderFields,
+                num_channels=int(ch.num_channels),
+                channel_spacing=float(ch.channel_spacing),
+                gauge_length=float(ch.gauge_length),
+                start_channel=int(ch.start_channel),
+                num_bins=int(h.num_bins),
+                bin_res=float(h.bin_res),
+            )
+            for h, ch in zip(headers, common_headers, strict=False)
+        ]
+        num_channels, channel_spacing, gauge_length, start_channel = _reduce_common(
+            fields
+        )
+        num_bins = _assert_equal("num_bins", [f.num_bins for f in fields])
+        bin_res = _assert_float_equal("bin_res", [f.bin_res for f in fields])
+        has_complex = _assert_equal(
+            "has_complex_data", [bool(h.has_complex_data) for h in headers]
+        )
+        channel_step = _assert_equal(
+            "channel_step", [int(h.channel_step) for h in headers]
+        )
+        times = [_common_header_time(ch) for ch in common_headers]
+        if any(x is None for x in times):
+            raise InvalidFiberFileError("Missing time in Sintela FFT packet.")
+        distance = _get_distance_coord(
+            start_channel, channel_spacing, num_channels, channel_step
+        )
+        frequency = get_coord(
+            start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz"
+        )
+        coords = get_coord_manager(
+            {"time": _get_times(times), "distance": distance, "frequency": frequency},
+            dims=DIMS_FFT,
+        )
+        attrs = _base_attrs(
+            common_headers[0],
+            packet_type=parsed[0][0],
+            meta=meta,
+            extra=dict(
+                gauge_length=gauge_length,
+                channel_step=channel_step,
+                **_FFT_ATTR_DEFAULTS,
+            ),
+        )
+        return cls(
+            common_header=common_headers[0],
+            packet_type=parsed[0][0],
+            num_channels=num_channels,
+            num_bins=num_bins,
             gauge_length=gauge_length,
             channel_step=channel_step,
-            **_FFT_ATTR_DEFAULTS,
-        ),
-    )
-    return FFTMetadata(
-        common_header=common_headers[0],
-        packet_type=parsed[0][0],
-        num_channels=num_channels,
-        num_bins=num_bins,
-        gauge_length=gauge_length,
-        channel_step=channel_step,
-        has_complex=has_complex,
-        coords=coords,
-        attrs=attrs,
-    )
-
-
-def _decode_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Decode timeseries packets into data, coords, and attrs."""
-    metadata = _get_timeseries_metadata(parsed, meta)
-    data = np.empty((metadata.total_samples, metadata.num_channels), dtype=np.float32)
-    index = 0
-    for _tag, msg in parsed:
-        packet = np.asarray(msg.samples, dtype=np.float32)
-        rows = int(msg.header.num_samples)
-        expected = rows * metadata.num_channels
-        if packet.size != expected:
-            raise InvalidFiberFileError(
-                "Unexpected Sintela protobuf TS sample payload size."
-            )
-        data[index : index + rows] = packet.reshape(rows, metadata.num_channels)
-        index += rows
-    return data, metadata.coords, metadata.attrs
-
-
-def _decode_band(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Decode band packets into data, coords, and attrs."""
-    metadata = _get_band_metadata(parsed, meta)
-    data = np.empty(
-        (len(parsed), metadata.num_channels, metadata.num_bands), dtype=np.float32
-    )
-    for ind, (_tag, msg) in enumerate(parsed):
-        packet = np.asarray(msg.samples, dtype=np.float32)
-        expected = metadata.num_channels * metadata.num_bands
-        if packet.size != expected:
-            raise InvalidFiberFileError(
-                "Unexpected Sintela protobuf BAND payload size."
-            )
-        data[ind] = packet.reshape(
-            metadata.num_channels,
-            metadata.num_bands,
+            has_complex=has_complex,
+            coords=coords,
+            attrs=attrs,
         )
-    return data, metadata.coords, metadata.attrs
+
+    def decode(self, parsed: list[tuple[str, Any]]):
+        """Decode FFT packets into data, coords, and attrs."""
+        data = np.empty(self.shape, dtype=self.dtype)
+        for ind, (_tag, msg) in enumerate(parsed):
+            packet = np.asarray(msg.samples, dtype=np.float32)
+            if self.has_complex:
+                expected = self.num_channels * self.num_bins * 2
+                if packet.size != expected:
+                    raise InvalidFiberFileError(
+                        "Unexpected Sintela protobuf FFT payload size."
+                    )
+                packet = packet.reshape(self.num_channels, self.num_bins, 2)
+                packet = packet[..., 0] + 1j * packet[..., 1]
+            else:
+                expected = self.num_channels * self.num_bins
+                if packet.size != expected:
+                    raise InvalidFiberFileError(
+                        "Unexpected Sintela protobuf FFT payload size."
+                    )
+                packet = packet.reshape(self.num_channels, self.num_bins)
+            data[ind] = packet
+        return data, self.coords, self.attrs
 
 
-def _decode_fft(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Decode FFT packets into data, coords, and attrs."""
-    metadata = _get_fft_metadata(parsed, meta)
-    dtype = np.complex64 if metadata.has_complex else np.float32
-    data = np.empty(
-        (len(parsed), metadata.num_channels, metadata.num_bins),
-        dtype=dtype,
-    )
-    for ind, (_tag, msg) in enumerate(parsed):
-        packet = np.asarray(msg.samples, dtype=np.float32)
-        if metadata.has_complex:
-            expected = metadata.num_channels * metadata.num_bins * 2
-            if packet.size != expected:
-                raise InvalidFiberFileError(
-                    "Unexpected Sintela protobuf FFT payload size."
-                )
-            packet = packet.reshape(metadata.num_channels, metadata.num_bins, 2)
-            packet = packet[..., 0] + 1j * packet[..., 1]
-        else:
-            expected = metadata.num_channels * metadata.num_bins
-            if packet.size != expected:
-                raise InvalidFiberFileError(
-                    "Unexpected Sintela protobuf FFT payload size."
-                )
-            packet = packet.reshape(metadata.num_channels, metadata.num_bins)
-        data[ind] = packet
-    return data, metadata.coords, metadata.attrs
-
-
-def _scan_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Summarize timeseries packets without allocating sample arrays."""
-    metadata = _get_timeseries_metadata(parsed, meta)
-    return (
-        (metadata.total_samples, metadata.num_channels),
-        metadata.coords,
-        metadata.attrs,
-        str(np.dtype(np.float32)),
-    )
-
-
-def _scan_band(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Summarize band packets without allocating sample arrays."""
-    metadata = _get_band_metadata(parsed, meta)
-    return (
-        (len(parsed), metadata.num_channels, metadata.num_bands),
-        metadata.coords,
-        metadata.attrs,
-        str(np.dtype(np.float32)),
-    )
-
-
-def _scan_fft(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Summarize FFT packets without allocating sample arrays."""
-    metadata = _get_fft_metadata(parsed, meta)
-    dtype = np.complex64 if metadata.has_complex else np.float32
-    return (
-        (len(parsed), metadata.num_channels, metadata.num_bins),
-        metadata.coords,
-        metadata.attrs,
-        str(np.dtype(dtype)),
-    )
-
-
-# Family name -> decode/scan implementation. Populated here so the dispatch
-# helpers above can stay near the top while referencing functions defined below.
-_FAMILY_DECODERS = {
-    "timeseries": _decode_timeseries,
-    "band": _decode_band,
-    "fft": _decode_fft,
-}
-_FAMILY_SCANNERS = {
-    "timeseries": _scan_timeseries,
-    "band": _scan_band,
-    "fft": _scan_fft,
+# Family name (from `_validate_single_family`) -> packet class.
+_FAMILY_CLASSES = {
+    "timeseries": TimeseriesMetadata,
+    "band": BandMetadata,
+    "fft": FFTMetadata,
 }
 
 
@@ -1118,8 +1011,8 @@ def scan_payload(resource) -> list[dict[str, Any]]:
     """Decode a Sintela protobuf file and return FiberIO scan payloads."""
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=True)
-    family = _validate_single_family(parsed)
-    shape, coords, attrs, dtype = _FAMILY_SCANNERS[family](parsed, meta)
+    family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
+    shape, coords, attrs, dtype = family_cls.from_parsed(parsed, meta).scan()
     return [
         _make_scan_payload(
             attrs=attrs,
