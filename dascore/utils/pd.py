@@ -16,7 +16,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.misc import sanitize_range_param
+from dascore.utils.misc import _order_range_tuple, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -168,14 +168,6 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
         bool_index = np.logical_and(bool_index, not_null)
 
     return bool_index
-
-
-def _order_range_tuple(range_tuple):
-    """Ensure finite range bounds are in increasing order."""
-    val_min, val_max = range_tuple
-    if val_min is not None and val_max is not None and val_max < val_min:
-        return val_max, val_min
-    return val_min, val_max
 
 
 def _convert_times(df, some_dict):
