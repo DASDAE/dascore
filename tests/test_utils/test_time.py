@@ -16,6 +16,8 @@ from dascore.utils.time import (
     get_max_min_times,
     is_datetime64,
     is_timedelta64,
+    saturate_add,
+    saturate_subtract,
     to_datetime64,
     to_float,
     to_int,
@@ -470,6 +472,49 @@ class TestToInt:
         array = np.empty(0, dtype="datetime64[ns]")
         out = to_int(array)
         assert np.issubdtype(out.dtype, np.integer)
+
+
+class TestSaturateTime:
+    """Tests for saturating datetime and timedelta operations."""
+
+    def test_datetime_add_saturates_upper_bound(self):
+        """Adding past datetime64 max should clamp to max."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.max) - 1).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_subtract_saturates_lower_bound(self):
+        """Subtracting past datetime64 min should clamp to min."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        out = saturate_subtract(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_ops_preserve_normal_values(self):
+        """Normal datetime arithmetic should match numpy time arithmetic."""
+        dt = np.datetime64("2020-01-01", "ns")
+        delta = np.timedelta64(5, "s")
+        assert saturate_add(dt, delta) == dt + delta
+        assert saturate_subtract(dt, delta) == dt - delta
+
+    def test_timedelta_ops_saturate(self):
+        """Timedelta64 values should also saturate at int64 bounds."""
+        limits = np.iinfo(np.int64)
+        td = np.array(int(limits.max) - 1).astype("timedelta64[ns]")
+        out = saturate_add(td, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("timedelta64[ns]")
+        assert out == expected
+
+    def test_datetime_array_saturates(self):
+        """Arrays should saturate overflowing entries and preserve normal ones."""
+        limits = np.iinfo(np.int64)
+        dt = np.array([int(limits.max) - 1, 0]).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
+        assert np.all(out == expected)
 
 
 class TestIsDateTime:

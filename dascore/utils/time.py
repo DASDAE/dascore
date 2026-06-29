@@ -26,6 +26,38 @@ def _float_array_to_ns(array):
     return np.rint(array * 1_000_000_000).astype(np.int64)
 
 
+def _saturate_time(value, amount, sign: int = 1):
+    """Add/subtract a timedelta to a time-like value, saturating at int64 bounds.
+
+    Numpy silently wraps datetime64/timedelta64 overflow rather than raising,
+    so the arithmetic is performed with Python ints (via object arrays) and
+    clipped back into the valid int64 range.
+    """
+    is_dt = is_datetime64(value)
+    is_td = is_timedelta64(value)
+    if not (is_dt or is_td):
+        msg = f"type {type(value)} is not supported"
+        raise NotImplementedError(msg)
+    value = to_datetime64(value) if is_dt else to_timedelta64(value)
+    dtype = "datetime64[ns]" if is_dt else "timedelta64[ns]"
+    limits = np.iinfo(np.int64)
+    lower, upper = int(limits.min) + 1, int(limits.max)
+    value_ns = np.asarray(to_int(value)).astype(object)
+    amount_ns = np.asarray(sign * to_int(to_timedelta64(amount))).astype(object)
+    out = np.clip(value_ns + amount_ns, lower, upper)
+    return np.asarray(out).astype(np.int64).astype(dtype)[()]
+
+
+def saturate_add(value, amount):
+    """Add a timedelta to a time-like value, saturating at int64 bounds."""
+    return _saturate_time(value, amount)
+
+
+def saturate_subtract(value, amount):
+    """Subtract a timedelta from a time-like value, saturating at int64 bounds."""
+    return _saturate_time(value, amount, sign=-1)
+
+
 @singledispatch
 def to_datetime64(obj: timeable_types | np.ndarray):
     """
