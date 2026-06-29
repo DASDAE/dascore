@@ -101,8 +101,8 @@ class TestBasicCoordManager:
         coord = get_coord_manager()
         assert isinstance(coord, CoordManager)
         assert dict(coord) == {}
-        # shape should be the same as an empty array.
-        assert coord.shape == np.array([]).shape
+        # an empty coord manager has no dims, so shape is () like a 0-D array.
+        assert coord.shape == ()
 
     def test_str(self, coord_manager):
         """Tests the str output for coord manager."""

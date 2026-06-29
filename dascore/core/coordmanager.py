@@ -805,9 +805,8 @@ class CoordManager(DascoreBaseModel):
     def shape(self):
         """Return the shape of the dimensions."""
         out = tuple(len(self.coord_map[x]) for x in self.dims)
-        # empty arrays return (0,) as their shape, so we must do the same.
         if not out:
-            return (0,)
+            return () if not self.dims else (0,)
         return out
 
     @property
@@ -822,7 +821,8 @@ class CoordManager(DascoreBaseModel):
 
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
-        data = np.asarray([]) if data is None else data
+        if data is None:
+            data = np.empty(self.shape)
         shape = tuple(data.shape)
         if self.shape != shape:
             msg = (
