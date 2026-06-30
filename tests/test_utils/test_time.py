@@ -525,6 +525,32 @@ class TestSaturateTime:
         expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
         assert np.all(out == expected)
 
+    def test_datetime_nat_stays_nat(self):
+        """NaT datetime operands should stay missing."""
+        nat = np.datetime64("NaT")
+
+        assert pd.isnull(saturate_add(nat, np.timedelta64(1, "s")))
+        assert pd.isnull(saturate_subtract(nat, np.timedelta64(1, "s")))
+
+    def test_amount_nat_stays_nat(self):
+        """NaT timedelta operands should make the result missing."""
+        out = saturate_add(np.datetime64("2020-01-01"), np.timedelta64("NaT"))
+
+        assert pd.isnull(out)
+
+    def test_array_nat_entries_stay_nat(self):
+        """Array entries with NaT operands should stay missing elementwise."""
+        dt = np.array(["2020-01-01", "NaT", "2020-01-03"], dtype="datetime64[ns]")
+        delta = np.array([1, 1, "NaT"], dtype="timedelta64[ns]")
+
+        added = saturate_add(dt, delta)
+        subtracted = saturate_subtract(dt, delta)
+
+        assert added[0] == dt[0] + delta[0]
+        assert subtracted[0] == dt[0] - delta[0]
+        assert pd.isnull(added[1]) and pd.isnull(subtracted[1])
+        assert pd.isnull(added[2]) and pd.isnull(subtracted[2])
+
     def test_unsupported_type_raises_after_overflow(self):
         """Unsupported values should still raise from the fallback path."""
         with pytest.raises(NotImplementedError):
