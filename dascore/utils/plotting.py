@@ -2,26 +2,34 @@
 
 from __future__ import annotations
 
+import string
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from dascore.units import get_quantity_str
+from dascore.units import Hz, get_quantity_str
+from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings
 
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
     maybe_units = patch.get_coord(dim).units if dim in patch.coords else None
-    unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
-    return str(dim) + unit_str
+    if maybe_units == 1 / seconds:
+        maybe_units = Hz
+    dim_str = string.capwords(str(dim))
+    unit_str = f" [{get_quantity_str(maybe_units)}]" if maybe_units else ""
+    return dim_str + unit_str
 
 
 def _get_cmap(cmap):
     """Return a color map from a colormap or string."""
     if isinstance(cmap, str):  # get color map if a string was passed
-        cmap = plt.get_cmap(cmap)
+        cmap = plt.get_cmap(cmap).copy()
+        cmap.set_over(cmap(1.0))
+        cmap.set_under(cmap(0.0))
     return cmap
 
 
@@ -88,7 +96,8 @@ def _format_time_axis(ax, dim, axis_name):
     start time.
     """
     # Set label to not include units
-    getattr(ax, f"set_{axis_name}label")(dim)
+    dim_str = string.capwords(str(dim))
+    getattr(ax, f"set_{axis_name}label")(dim_str)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter

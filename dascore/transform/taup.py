@@ -75,7 +75,7 @@ def _jit_taup_general(data, distance, dt, p_vals):
     return two_sided_p_vals, taup
 
 
-@patch_function(required_dims=("time", "distance"))
+@patch_function(required_dims=("time", "distance"), data_type="tau_p")
 def tau_p(
     patch: PatchType,
     velocities: NDArray[np.floating],
@@ -114,7 +114,7 @@ def tau_p(
     ...     .tau_p(np.arange(1000,6000,10))
     ...     .transpose('time','slowness')
     ... )
-    >>> ax = taup_patch.viz.waterfall(show=False, cmap=None)
+    >>> ax = taup_patch.viz.waterfall(show=False, cbar=False)
     >>> _ = taup_patch.viz.waterfall(ax=ax)
     """
     patch_cop = patch.convert_units(distance="m", time="s").transpose(

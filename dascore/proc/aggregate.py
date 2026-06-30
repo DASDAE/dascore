@@ -260,7 +260,7 @@ def sum(
     return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def any(
     patch: PatchType,
@@ -279,7 +279,7 @@ def any(
     return aggregate.func(patch, dim=dim, method=np.any, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def all(
     patch: PatchType,

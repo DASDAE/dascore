@@ -46,7 +46,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 
 dependencies = [
      "h5py",
-     "matplotlib>=3.8",
+     "matplotlib>=3.10",
      "numpy>=1.24",
      "packaging",
      "pandas>=2.0",
@@ -124,13 +124,18 @@ DASVADER__V1 = "dascore.io.dasvader.core:DASVaderV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 FEBUS_G1_CSV__V1_0 = "dascore.io.febus.core:FebusG1CSV1"
+FEBUS_BSL_H5__V1 = "dascore.io.febus.core:FebusBSLH5V1"
+FEBUS_MTX_H5__V1 = "dascore.io.febus.core:FebusMTXH5V1"
 FEBUS__V1 = "dascore.io.febus.core:Febus1"
 FEBUS__V2 = "dascore.io.febus.core:Febus2"
+FEBUS_T1__V1 = "dascore.io.febus.core:FebusT1V1"
 NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
 NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 OPTODAS__V9 = "dascore.io.optodas.core:OptoDASV9"
 OPTODAS__V10 = "dascore.io.optodas.core:OptoDASV10"
+OPTODAS__V11 = "dascore.io.optodas.core:OptoDASV11"
+SR4731__V200 = "dascore.io.sr4731.core:SR4731V200"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
 PRODML__V2_1 = "dascore.io.prodml.core:ProdMLV2_1"
@@ -223,6 +228,18 @@ max-complexity = 10
 convention = "numpy"
 
 [tool.pytest.ini_options]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "worktrees",
+]
 filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'

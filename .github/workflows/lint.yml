@@ -1,6 +1,12 @@
 # Lint the code using the defined pre-commits
 name: LintCode
-on: [push]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
 
 jobs:
   lint_code:

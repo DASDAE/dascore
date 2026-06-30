@@ -553,6 +553,14 @@ class TestSelect:
         sub2 = random_patch.select(time=np.int64(10), samples=True)
         assert sub1 == sub2
 
+    def test_single_sample_retains_step(self, random_patch):
+        """Single-sample select of an evenly sampled coord keeps step. See #567."""
+        orig = random_patch.get_coord("time")
+        sub_patch = random_patch.select(time=1, samples=1)
+        time = sub_patch.get_coord("time")
+        assert time.step is not None
+        assert time.step == orig.step
+
 
 class TestOrder:
     """Tests for ordering Patches."""

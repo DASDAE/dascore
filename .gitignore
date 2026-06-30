@@ -61,9 +61,6 @@ target/
 # pyenv python configuration file
 .python-version
 
-# pycharm
-.idea
-
 # Ipython stuff
 .ipynb_checkpoints
 
@@ -97,8 +94,19 @@ docs/index.quarto_ipynb
 # Agent stuff
 .codex
 .claude
+.codex.bak
 CLAUDE.md
-.agents/worktrees/
+worktrees/
+.scratch
+.agents/agents.local.md
 
 # profile stuff
 prof/
+
+## Common IDE project files
+#Spyder
+*.spyproject
+#VScode
+.vscode/
+#JetBrains
+.idea/

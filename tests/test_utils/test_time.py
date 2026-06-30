@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -15,6 +16,8 @@ from dascore.utils.time import (
     get_max_min_times,
     is_datetime64,
     is_timedelta64,
+    saturate_add,
+    saturate_subtract,
     to_datetime64,
     to_float,
     to_int,
@@ -41,6 +44,13 @@ class TestToDateTime64:
         float_array = input_datetime64.astype(np.float64) / 1_000_000_000
         out = to_datetime64(float_array)
         assert np.all(input_datetime64 == out)
+
+    def test_float_array_preserves_ns_offsets(self):
+        """Float datetimes should preserve representable nanosecond offsets."""
+        expected = np.array(["2026-06-03T15:18:13.422442752"], dtype="datetime64[ns]")
+        float_array = expected.astype(np.float64) / 1_000_000_000
+        out = to_datetime64(float_array)
+        assert np.all(expected == out)
 
     def test_single_float(self):
         """Ensure a single float can be converted to datetime."""
@@ -224,7 +234,7 @@ class TestToTimeDelta64:
     def test_float_array(self):
         """Ensure an array of flaots can be converted to ns timedelta."""
         ar = [1.0, 0.000000001, 0.001]
-        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64[ns]")
         out = to_timedelta64(ar)
         assert np.all(out == expected)
 
@@ -307,7 +317,11 @@ class TestToTimeDelta64:
         arr = pd.array(["1s", "2s", None], dtype="string")
         out = to_timedelta64(arr)
         expected = np.array(
-            [np.timedelta64(1, "s"), np.timedelta64(2, "s"), np.timedelta64("NaT")]
+            [
+                np.timedelta64(1, "s"),
+                np.timedelta64(2, "s"),
+                np.timedelta64("NaT", "ns"),
+            ]
         ).astype("timedelta64[ns]")
         assert np.all(out[:2] == expected[:2])
         assert pd.isnull(out[2])
@@ -332,11 +346,42 @@ class TestToTimeDelta64:
         assert pd.isnull(out1)
         assert pd.isnull(out2)
 
+    def test_none_nat_no_warnings(self):
+        """None should return a typed NaT without warnings."""
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            out = to_timedelta64(None)
+        assert pd.isnull(out)
+        assert not record
+        assert out.dtype == np.dtype("timedelta64[ns]")
+
     def test_nat_array(self):
         """Ensure an array of NaT works."""
         ar = np.array([to_timedelta64("NaT")] * 4)
         out = to_timedelta64(ar)
         assert np.all(pd.isnull(out))
+
+    @pytest.mark.filterwarnings(
+        "error:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning"
+    )
+    def test_null_values_use_explicit_timedelta_unit(self):
+        """Null-like values should not create generic-unit timedeltas."""
+        assert pd.isnull(to_timedelta64(None))
+        assert pd.isnull(to_timedelta64("NaT"))
+
+        out = to_timedelta64([None, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert pd.isnull(out[0])
+        assert out[1] == np.timedelta64(1, "s")
+
+    def test_non_finite_values_are_nat(self):
+        """Infinite and NaN values should not overflow during conversion."""
+        out = to_timedelta64([np.inf, -np.inf, np.nan, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert np.all(pd.isnull(out[:3]))
+        assert out[3] == np.timedelta64(1, "s")
 
     def test_array_of_datetimes(self, random_patch):
         """Ensure datetime64 array can be converted to timedelta array."""
@@ -427,6 +472,63 @@ class TestToInt:
         array = np.empty(0, dtype="datetime64[ns]")
         out = to_int(array)
         assert np.issubdtype(out.dtype, np.integer)
+
+
+class TestSaturateTime:
+    """Tests for saturating datetime and timedelta operations."""
+
+    class _OverflowingAdd:
+        """Object which forces the saturating fallback path."""
+
+        def __add__(self, other):
+            raise OverflowError
+
+        def __sub__(self, other):
+            raise OverflowError
+
+    def test_datetime_add_saturates_upper_bound(self):
+        """Adding past datetime64 max should clamp to max."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.max) - 1).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_subtract_saturates_lower_bound(self):
+        """Subtracting past datetime64 min should clamp to min."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        out = saturate_subtract(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_ops_preserve_normal_values(self):
+        """Normal datetime arithmetic should match numpy time arithmetic."""
+        dt = np.datetime64("2020-01-01", "ns")
+        delta = np.timedelta64(5, "s")
+        assert saturate_add(dt, delta) == dt + delta
+        assert saturate_subtract(dt, delta) == dt - delta
+
+    def test_timedelta_ops_saturate(self):
+        """Timedelta64 values should also saturate at int64 bounds."""
+        limits = np.iinfo(np.int64)
+        td = np.array(int(limits.max) - 1).astype("timedelta64[ns]")
+        out = saturate_add(td, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("timedelta64[ns]")
+        assert out == expected
+
+    def test_datetime_array_saturates(self):
+        """Arrays should saturate overflowing entries and preserve normal ones."""
+        limits = np.iinfo(np.int64)
+        dt = np.array([int(limits.max) - 1, 0]).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
+        assert np.all(out == expected)
+
+    def test_unsupported_type_raises_after_overflow(self):
+        """Unsupported values should still raise from the fallback path."""
+        with pytest.raises(NotImplementedError):
+            saturate_add(self._OverflowingAdd(), np.timedelta64(5, "ns"))
 
 
 class TestIsDateTime:

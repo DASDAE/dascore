@@ -74,6 +74,20 @@ VALID_DATA_TYPES = (
     "strain",
     "temperature",
     "temperature_gradient",
+    "brillouin_spectrum",
+    "fourier_transform",
+    "amplitude_spectrum",
+    "power_spectrum",
+    "power_spectral_density",
+    "frequency_band_energy",
+    "stalta",
+    "kurtosis",
+    "envelope",
+    "correlation",
+    "tau_p",
+    "dispersion",
+    "phase_weighted_stack",
+    "otdr",
 )
 
 # Valid categories (of instruments)
@@ -89,7 +103,7 @@ max_lens = {
     "file_version": 9,
     "experiment_id": 50,
     "instrument_id": 50,
-    "data_type": 20,
+    "data_type": 32,
     "data_category": 4,
 }
 
@@ -150,12 +164,12 @@ for each attribute.
 
 select_values_description = """
 Any dimension name can be passed as key, and the values can be:
-    - a Slice or a tuple of (min, max) for that dimension. 
+    - a Slice or a tuple of (min, max) for that dimension.
       `None` and ... both indicate open intervals.
-    - an array of values to select, which must be a subset of the 
+    - an array of values to select, which must be a subset of the
       coordinate array.
     - an array of booleans of the same length as the coordinate where
-      `True` indicates values to keep. 
+      `True` indicates values to keep.
 """
 
 check_behavior_description = """
@@ -205,11 +219,36 @@ _AGG_FUNCS: Mapping[str, Callable] = MappingProxyType(
 
 DIM_REDUCE_DOCS = """
 dim_reduce
-    How to reduce the dimensional coordinate associated with the 
+    How to reduce the dimensional coordinate associated with the
     aggregated axis. Can be the name of any valid aggregator, a callable,
-    "empty" (the default) which returns a length 1 partial coord, or 
-    "squeeze" which drops the coordinate. For dimensions with datetime 
-    or timedelta datatypes, if the operation fails it will automatically 
-    be applied to the coordinates converted to floats then the output 
-    converted back to the appropriate time type. 
+    "empty" (the default) which returns a length 1 partial coord, or
+    "squeeze" which drops the coordinate. For dimensions with datetime
+    or timedelta datatypes, if the operation fails it will automatically
+    be applied to the coordinates converted to floats then the output
+    converted back to the appropriate time type.
 """
+
+
+DEFAULT_COLORMAPS = {
+    "frequency_band_energy": "Spectral_r",
+    "stalta": "RdGy_r",
+    "kurtosis": "gnuplot2",
+    "envelope": "viridis",
+    "correlation": "RdBu_r",
+    "tau_p": "magma",
+    "dispersion": "turbo",
+    "phase_weighted_stack": "viridis",
+    "fourier_transform": "magma",
+    "power_spectral_density": "turbo",
+    "power_spectrum": "turbo",
+    "amplitude_spectrum": "turbo",
+    "strain_rate": "RdBu_r",
+    "strain": "seismic",
+    "velocity": "viridis",
+    "phase": "twilight_shifted",
+    "phase_difference": "bone",
+    "phase_rate": "seismic",
+    "temperature": "coolwarm",
+    "temperature_gradient": "RdYlBu_r",
+    "otdr": "viridis",
+}

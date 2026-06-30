@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -85,6 +87,22 @@ class TestGetIntervals:
         assert np.all(out[:, 1] - out[:, 0] == step)
         assert out[-1, 1] == stop
         assert out[0, 0] == start
+
+    def test_timedelta_start_numeric_length(self):
+        """
+        A numeric length for a timedelta64 start should be coerced to a
+        duration, just like for datetime64 starts (see #553). Previously this
+        raised a type error comparing a timedelta64 with a float.
+        """
+        start = np.timedelta64(0, "s")
+        stop = start + np.timedelta64(20, "s")
+        # A numeric (float) length previously raised here for timedelta starts.
+        out = get_intervals(start, stop, length=2.0)
+        # Output stays timedelta64 and each interval spans the requested length.
+        assert np.issubdtype(out.dtype, np.timedelta64)
+        assert np.all(out[:, 1] - out[:, 0] == np.timedelta64(2, "s"))
+        assert out[0, 0] == start
+        assert out[-1, 1] == stop
 
 
 class TestBasicChunkDF:
@@ -258,9 +276,6 @@ class TestChunkToMerge:
         expected_durations = gapy_df["time_max"] - gapy_df["time_min"]
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
-        # Assert a UserWarning about gaps is raised
-        with pytest.warns(UserWarning, match=r"There is a gap in the patch"):
-            _, out = cm.chunk(gapy_df)
 
     def test_doesnt_merge_unordered_gappy_df(self, gapy_df_unordered):
         """Ensure the gappy dataframe doesn't get merged."""
@@ -271,6 +286,22 @@ class TestChunkToMerge:
         expected_durations = df["time_max"] - df["time_min"]
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
+
+    def test_no_warning_when_final_groups_stay_separate(self, contiguous_df):
+        """No warning if other group components prevent final forced merge."""
+        df = contiguous_df.iloc[:2].copy()
+        step = df["time_step"]
+        df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step.iloc[0]
+        df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step.iloc[0]
+        df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step.iloc[1]
+        df["station"] = ["sta1", "sta2"]
+        cm = ChunkManager(time=None, tolerance=10, group_columns=("station",))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            _, out = cm.chunk(df)
+
+        assert len(out) == 2
 
     def test_modified_flag_after_merge(self, contiguous_df):
         """Test that the modified flag shows False for simple merge."""

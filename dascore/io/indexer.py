@@ -23,7 +23,12 @@ from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import iterate
 from dascore.utils.paths import requires_local_directory
 from dascore.utils.pd import filter_df
-from dascore.utils.time import get_max_min_times, to_timedelta64
+from dascore.utils.time import (
+    get_max_min_times,
+    saturate_add,
+    saturate_subtract,
+    to_timedelta64,
+)
 
 # supported read_hdf5 kwargs
 READ_HDF5_KWARGS = frozenset(
@@ -202,8 +207,8 @@ class DirectoryIndexer(AbstractIndexer):
         else:
             index = cached_index.iloc[0]["cindex"]
         # trim down index
-        con1 = index["time_min"] >= (time_max + buffer)
-        con2 = index["time_max"] <= (time_min - buffer)
+        con1 = index["time_min"] >= saturate_add(time_max, buffer)
+        con2 = index["time_max"] <= saturate_subtract(time_min, buffer)
         pre_filter_df = index[~(con1 | con2)]
         out = pre_filter_df[
             filter_df(

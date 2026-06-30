@@ -33,6 +33,23 @@ from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
 
+class ArrayProtocolWrapper:
+    """Minimal non-numpy array-like object for patch initialization tests."""
+
+    def __init__(self, data):
+        self._data = data
+        self.shape = data.shape
+        self.dtype = data.dtype
+
+    def __array__(self, dtype=None, copy=None):
+        out = self._data
+        if dtype is not None:
+            out = out.astype(dtype)
+        if copy:
+            out = out.copy()
+        return out
+
+
 def get_simple_patch() -> Patch:
     """
     Return a small simple array for memory testing.
@@ -139,6 +156,51 @@ class TestInit:
         assert patch.dims == ("x", "y")
         np.testing.assert_array_equal(patch.data, np.array([[1, 2], [3, 4]]))
 
+    def test_init_from_array_protocol_object(self, random_patch):
+        """Ensure array-like objects can initialize a Patch without casting."""
+        wrapped = ArrayProtocolWrapper(random_patch.data.copy())
+        patch = dc.Patch(
+            data=wrapped,
+            coords=random_patch.coords,
+            dims=random_patch.dims,
+            attrs=random_patch.attrs,
+        )
+
+        assert isinstance(patch, Patch)
+        assert type(patch.data) is type(wrapped)
+        assert np.array_equal(patch.data, random_patch.data)
+
+    def test_update_from_array_protocol_object(self, random_patch):
+        """Ensure update preserves non-numpy array-like payload types."""
+        wrapped = ArrayProtocolWrapper(random_patch.data.copy())
+        patch = random_patch.update(data=wrapped)
+
+        assert isinstance(patch, Patch)
+        assert type(patch.data) is type(wrapped)
+        assert np.array_equal(patch.data, random_patch.data)
+
+    def test_numpy_input_remains_immutable(self, random_patch):
+        """Ensure numpy arrays are still marked read-only on patch creation."""
+        data = random_patch.data.copy()
+        assert data.flags.writeable
+
+        patch = dc.Patch(
+            data=data,
+            coords=random_patch.coords,
+            dims=random_patch.dims,
+            attrs=random_patch.attrs,
+        )
+
+        assert isinstance(patch.data, np.ndarray)
+        assert not patch.data.flags.writeable
+
+    def test_object_array_conversion_preserves_patch_object(self, random_patch):
+        """Object-dtype conversion should keep the patch, not its array data."""
+        out = np.asarray([random_patch], dtype=object)
+
+        assert out.shape == (1,)
+        assert out[0] is random_patch
+
     def test_max_time_populated(self, random_patch):
         """Ensure the time_max is populated when not explicitly given."""
         end_time = random_patch.summary.get_coord_summary("time").max
@@ -220,6 +282,30 @@ class TestInit:
         time_shape = patch.shape[patch.get_axis("time")]
         assert time_shape == len(patch.coords.get_array("time"))
         assert time_shape == len(patch.coords.get_array("time"))
+
+    def test_select_descending_frequency_value_bounds(self):
+        """Value selection should not depend on descending coord order."""
+        frequency = np.cumsum(np.abs(random_state.rand(100)))[::-1]
+        coord = dc.get_coord(data=frequency, units="Hz")
+        patch = dc.Patch(
+            data=np.arange(len(frequency)),
+            coords={"frequency": coord},
+            dims=("frequency",),
+        )
+        eps = 0.000000001
+        low, high = frequency[60] + eps, frequency[50] - eps
+        low_first = patch.select(frequency=(low, high))
+        high_first = patch.select(frequency=(high, low))
+        mask = (frequency >= low) & (frequency <= high)
+        expected = frequency[mask]
+        expected_data = patch.data[mask]
+        out_freq = low_first.get_coord("frequency")
+        assert np.allclose(out_freq.values, expected)
+        assert np.allclose(high_first.get_coord("frequency").values, expected)
+        assert np.array_equal(low_first.data, expected_data)
+        assert np.array_equal(high_first.data, expected_data)
+        assert out_freq.min() >= low
+        assert out_freq.max() <= high
 
     def test_init_no_coords(self, random_patch):
         """Attrs alone no longer provide enough information to build coords."""

@@ -47,8 +47,8 @@ class TestWiggle:
         """Ensure another dimension works."""
         sub_patch = random_patch.select(time=(10, 20), samples=True)
         ax = sub_patch.viz.wiggle(dim="distance")
-        assert "distance" in str(ax.get_xlabel())
-        assert "time" in str(ax.get_ylabel())
+        assert "Distance [m]" in str(ax.get_xlabel())
+        assert "Time" in str(ax.get_ylabel())
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""

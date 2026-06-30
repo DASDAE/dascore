@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 from collections.abc import Sized
+from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from typing import Any, Literal, TypeVar
@@ -92,6 +93,54 @@ def ensure_consistent_dtype(value, name, dtype):
     elif np.issubdtype(dtype, np.integer):
         value = int(value)
     return value
+
+
+def _is_translation_equivariant(func, data):
+    """Return True if shifting inputs shifts the reduced output equally."""
+    # This is a bit heavy/magic, but needed for generic support.
+    valid = data[~pd.isnull(data)]
+    if not len(valid):
+        return True
+    valid = valid[:32]
+    shift = 1.0
+    with np.errstate(all="ignore"):
+        try:
+            base = np.asarray(func(valid))
+            shifted = np.asarray(func(valid + shift))
+        except Exception:
+            return True
+    expected = base + shift
+    try:
+        return bool(np.allclose(shifted, expected, equal_nan=True))
+    except TypeError:
+        return True
+
+
+def _reduce_time_like(func, data):
+    """Reduce datetime/timedelta data relative to a reference value."""
+    data = np.asarray(data)
+    valid = data[~pd.isnull(data)]
+    if not valid.size:
+        nfunc = np.datetime64 if is_datetime64(data) else np.timedelta64
+        return np.atleast_1d(nfunc("NaT", "ns"))
+
+    # Some reducers cannot operate directly on time-like dtypes. If direct
+    # reduction fails, or returns only nulls despite valid input, fall back to
+    # reducing offsets from a valid reference value.
+    if func not in {np.mean, np.nanmean}:
+        with suppress(TypeError, ValueError, OverflowError):
+            out = np.atleast_1d(func(data))
+            # Return direct reductions that produce at least one non-null value.
+            if not np.all(pd.isnull(out)):
+                return out
+
+    ref = valid[0]
+    # Reducers like std over absolute times are not semantically time points,
+    # but this preserves the previous dim_reduce behavior for equivariant reducers.
+    delta_float = dc.to_float(data - ref)
+    reduced = dc.to_timedelta64(func(delta_float))
+    out = ref + reduced if _is_translation_equivariant(func, delta_float) else reduced
+    return np.atleast_1d(out)
 
 
 def _get_dtype(value, dtype):
@@ -688,9 +737,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # if null or ... just return None
         if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
             return None
-        # special case for datetime and relative
+        # special case for datetime/timedelta and relative
         if relative:
-            if np.issubdtype(self.dtype, np.datetime64):
+            # A relative offset into any time-like coord is a duration.
+            if dtype_time_like(self.dtype):
                 value = dc.to_timedelta64(value)
             value = self._get_relative_values(value)
         # apply validators. These can, eg, coerce to correct dtype.
@@ -861,7 +911,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
-                f"value of {value} with samples={samples }results in a window "
+                f"value of {value} with samples={samples } results in a window "
                 f"larger than coordinate length of {len(self)}."
             )
             raise ParameterError(msg)
@@ -996,18 +1046,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         {dim_reduce}
         """
-
-        def _maybe_handle_datatypes(func, data):
-            """Maybe handle the complexity of date times here."""
-            try:  # First try function directly
-                out = func(data)
-            # Fall back to floats and re-packing.
-            except (TypeError, ValueError, np.core._exceptions.UFuncTypeError):
-                float_data = dc.to_float(data)
-                dfunc = dc.to_datetime64 if is_datetime64(data) else dc.to_timedelta64
-                out = dfunc(func(float_data))
-            return np.atleast_1d(out)
-
         if dim_reduce == "empty":
             # Preserve concrete single-sample coords; only synthesize a partial
             # coord when reduction actually collapses a longer coordinate.
@@ -1020,7 +1058,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             func = dim_reduce if callable(dim_reduce) else func
             coord_data = self.data
             if dtype_time_like(coord_data):
-                result = _maybe_handle_datatypes(func, coord_data)
+                result = _reduce_time_like(func, coord_data)
             else:
                 result = func(self.data)
             new_coord = self.update(data=result)
@@ -1230,7 +1268,8 @@ class CoordRange(BaseCoord):
                 # handle conversion to integer if other values are ints.
                 if isinstance(start, int) and isinstance(stop, int):
                     step = int(step) if np.isclose(np.round(step), step) else step
-        if step != 0:
+        zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+        if step != zero:
             span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
             int_val = int(_maybe_unbox_scalar(np.ceil(span)))
             stop = start + step * int_val
@@ -1273,8 +1312,16 @@ class CoordRange(BaseCoord):
         if isinstance(item, slice):
             start = None if item.start is ... else item.start
             end = None if item.stop is ... else item.stop
-            # Todo we can probably add more intelligent logic for slices.
             item = slice(start, end, item.step)
+            # A (possibly strided) slice of an evenly sampled range is still
+            # evenly sampled, so preserve the step rather than collapsing to a
+            # CoordMonotonicArray (which loses step for len==1). See #567.
+            indices = range(len(self))[item]
+            if len(indices):
+                new_step = self.step * indices.step
+                new_start = self.start + indices.start * self.step
+                new_stop = new_start + new_step * len(indices)
+                return self.new(start=new_start, stop=new_stop, step=new_step)
         out = self.values[item]
         return get_coord(data=out, units=self.units)
 
@@ -1430,12 +1477,14 @@ class CoordRange(BaseCoord):
     @property
     def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        return self.step >= 0
+        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        return self.step >= zero
 
     @property
     def reverse_sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        return self.step < 0
+        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        return self.step < zero
 
 
 class CoordArray(BaseCoord):
@@ -1525,7 +1574,8 @@ class CoordArray(BaseCoord):
                 step = np.timedelta64(int(np.round(_step)), "ns")
             else:
                 step = dur / (len(self) - 1)
-            assert step > 0
+            zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+            assert step > zero
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step

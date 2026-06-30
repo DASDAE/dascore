@@ -79,3 +79,9 @@ class OptoDASV10(OptoDASV8):
     """Support for OptoDAS V 10."""
 
     version = "10"
+
+
+class OptoDASV11(OptoDASV8):
+    """Support for OptoDAS V 11."""
+
+    version = "11"

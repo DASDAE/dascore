@@ -81,6 +81,16 @@ class TestRolling:
         expected = vals[start :: self.step, None]
         assert np.allclose(out.data, expected)
 
+    def test_apply_with_overlap(self, range_patch):
+        """Ensure rolling supports overlap end-to-end."""
+        step = range_patch.get_coord("distance").step
+        window = self.window * step
+        overlap = (self.window - self.step) * step
+        overlap_out = range_patch.rolling(distance=window, overlap=overlap).mean()
+        step_out = range_patch.rolling(distance=window, step=self.step * step).mean()
+        assert overlap_out.shape == step_out.shape
+        assert all_close(overlap_out, step_out)
+
     def test_window_size_one(self, random_patch):
         """Ensure we can get a window size of one."""
         time_step = random_patch.get_coord("time").step
@@ -208,6 +218,38 @@ class TestRolling:
         with set_config(patch_history="disabled"):
             out = random_patch.rolling(time=4 * time_step).mean()
         assert out.attrs.history == expected
+
+    def test_numpy_apply_with_args_kwargs(self, random_patch):
+        """Ensure numpy rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        dt = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="numpy").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = random_patch.rolling(
+            time=10 * dt, step=10 * dt, engine="numpy"
+        ).apply(lambda frame, axis=None: np.percentile(frame, 80, axis=axis) + 1)
+        assert all_close(out, expected)
+
+    def test_pandas_apply_with_args_kwargs(self, random_patch):
+        """Ensure pandas rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        dt = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = random_patch.rolling(
+            time=10 * dt, step=10 * dt, engine="pandas"
+        ).apply(lambda frame: np.percentile(frame, 80) + 1)
+        assert all_close(out, expected)
 
 
 class TestNumpyVsPandasRolling:

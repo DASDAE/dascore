@@ -298,7 +298,7 @@ def imag(patch: PatchType) -> PatchType:
     return patch.new(data=np.imag(patch.data))
 
 
-@patch_function()
+@patch_function(data_type="")
 def angle(patch: PatchType) -> PatchType:
     """
     Return a new patch with the phase angles from the data array.
@@ -312,7 +312,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function()
+@patch_function(data_type="")
 def normalize(
     self: PatchType,
     dim: str,
@@ -374,7 +374,7 @@ def normalize(
     return self.new(data=new_data)
 
 
-@patch_function()
+@patch_function(data_type="")
 def standardize(
     self: PatchType,
     dim: str,
@@ -730,6 +730,8 @@ def where(
         if isinstance(cond, cls):
             patch, cond = align_patch_coords(patch, cond)
 
+    cond = cond.data if isinstance(cond, cls) else cond
+    other = other.data if isinstance(other, cls) else other
     cond_array, other_array = array(cond), array(other)
 
     # Ensure condition is boolean
@@ -778,7 +780,7 @@ def flip(patch, *dims, flip_coords=True):
     return patch.new(data=data, coords=coords)
 
 
-@patch_function()
+@patch_function(data_type="")
 def full(patch, fill_value):
     """
     Return an identical patch with the data replaced by fill_value.
@@ -804,3 +806,119 @@ def full(patch, fill_value):
     """
     array = np.full(patch.data.shape, fill_value)
     return patch.update(data=array)
+
+
+@patch_function()
+def demedian(patch, dim: str = "time"):
+    """
+    Remove the median along a given dimension of a DASCore patch.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the median from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>>
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
+    >>>
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> _ = ax0.set_title('Original with common-mode noise');
+    >>>
+    >>> # Show demedian applied patch
+    >>> patch1 = patch0.demedian(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> _ = ax1.set_title('Removed common-mode noise');
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> _ = ax2.set_title('Difference');
+    >>>
+    >>> plt.show()
+    """
+    axis = patch.get_axis(dim)
+    data = patch.data
+
+    # Compute median along axis, keep dims for broadcasting
+    med = np.median(data, axis=axis, keepdims=True)
+
+    new_data = data - med
+
+    # Return a new patch with updated data
+    return patch.new(data=new_data)
+
+
+@patch_function()
+def demean(patch, dim: str = "time"):
+    """
+    Remove the mean along a given dimension of a DASCore patch.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the mean from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example (note that the example patch is not ideal, but still shows improvements)
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>>
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
+    >>>
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> _ = ax0.set_title('Original with common-mode noise');
+    >>>
+    >>> # Show demean applied patch
+    >>> patch1 = patch0.demean(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> _ = ax1.set_title('Removed common-mode noise');
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> _ = ax2.set_title('Difference');
+    >>>
+    >>> plt.show()
+    """
+    axis = patch.get_axis(dim)
+    data = patch.data
+
+    # Compute mean along axis, keep dims for broadcasting
+    mea = np.mean(data, axis=axis, keepdims=True)
+
+    new_data = data - mea
+
+    # Return a new patch with updated data
+    return patch.new(data=new_data)

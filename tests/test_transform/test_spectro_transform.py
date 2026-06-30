@@ -12,8 +12,8 @@ class TestSpectroTransform:
         """Visualization should still be able to compute a spectrogram."""
         ax = random_patch.viz.spectrogram(dim="time")
         assert isinstance(ax, plt.Axes)
-        assert ax.get_xlabel() == "time"
-        assert "ft_time" in ax.get_ylabel()
+        assert ax.get_xlabel().casefold() == "time"
+        assert "ft_time" in ax.get_ylabel().casefold()
         assert not ax.get_title()
         assert ax.images or ax.collections
 
@@ -22,6 +22,6 @@ class TestSpectroTransform:
         patch = random_patch.select(distance=0, samples=True).squeeze()
         ax = patch.viz.spectrogram(dim="time")
         assert isinstance(ax, plt.Axes)
-        assert ax.get_xlabel() == "time"
-        assert "ft_time" in ax.get_ylabel()
+        assert ax.get_xlabel().casefold() == "time"
+        assert "ft_time" in ax.get_ylabel().casefold()
         assert ax.images or ax.collections

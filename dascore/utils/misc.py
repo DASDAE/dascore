@@ -171,9 +171,9 @@ def _all_null(maybe_ar):
 def _get_nullish(dtype=np.floating):
     """Get nullish values for a given dtype."""
     if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT")
+        return np.datetime64("NaT", "ns")
     elif np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT")
+        return np.timedelta64("NaT", "ns")
     return np.nan
 
 
@@ -794,6 +794,14 @@ def sanitize_range_param(select) -> tuple:
     return select
 
 
+def order_range_tuple(range_tuple):
+    """Ensure finite range bounds are in increasing order."""
+    val_min, val_max = range_tuple
+    if val_min is not None and val_max is not None and val_max < val_min:
+        return val_max, val_min
+    return val_min, val_max
+
+
 def check_filter_sequence(filt_range):
     """Ensure the filter sequence is the right shape."""
     # strip out units if used.
@@ -928,7 +936,8 @@ def to_object_array(object_sequence):
     This is useful, eg, for storing an object array in a dataframe.
     """
     out = np.empty(len(object_sequence), dtype=object)
-    out[:] = object_sequence
+    for num, value in enumerate(object_sequence):
+        out[num] = value
     return out
 
 

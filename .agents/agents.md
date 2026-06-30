@@ -2,7 +2,8 @@
 
 This file gives AI/code agents a practical checklist for contributing safely to DASCore.
 
-Keep Markdown prose unwrapped. Do not hard-wrap paragraphs in `.md` files unless a specific format requires it.
+## User local specific instructions
+Also load .agents/agents.local.md if present.
 
 ## Scope and priorities
 
@@ -13,14 +14,13 @@ Keep Markdown prose unwrapped. Do not hard-wrap paragraphs in `.md` files unless
 ## Development workflow
 
 1. Work on a feature/fix branch, not `master`.
-2. Keep commits focused (one logical change per commit where possible).
-3. Use pull requests to merge to `master`.
+2. Create task worktrees under the repository root at `worktrees/{slug}`. Do not create task worktrees under `.agents/worktrees`, even if the current shell starts there.
+3. Keep commits focused (one logical change per commit where possible).
+4. Use pull requests to merge to `master`.
 
 ## Environment setup
 
-Follow `docs/contributing/dev_install.qmd`.
-
-The default Python environment for this repo uses the repository name as the environment name. For this repo, activate it with `mamba activate dascore`. If that environment is unavailable, stop and report it clearly instead of guessing another environment.
+Use an environment named after the current worktree slug. If it is unavailable, create it with mamba or uv before running checks. This keeps editable installs isolated between worktrees.
 
 Typical setup:
 
@@ -33,7 +33,6 @@ pre-commit install -f
 ## Linting and formatting
 
 - Run pre-commit hooks before finalizing changes.
-- Project lint/format is driven by pre-commit and Ruff config in `pyproject.toml`.
 
 ```bash
 pre-commit run --all
@@ -42,8 +41,6 @@ pre-commit run --all
 Tip: running twice can apply auto-fixes on first pass.
 
 ## Testing requirements
-
-Follow `docs/contributing/testing.qmd`.
 
 Run targeted tests for changed behavior, then broader tests as needed:
 
@@ -64,7 +61,7 @@ For doctests:
 pytest dascore --doctest-modules
 ```
 
-Unless otherwise specified, A job is not finished until the the tests pass. 
+Unless otherwise specified, a job is not finished until the tests pass.
 
 ## Test authoring conventions
 
@@ -77,16 +74,14 @@ Unless otherwise specified, A job is not finished until the the tests pass.
 
 ## Code conventions
 
-
-- Prefer `pathlib.Path` over raw path strings (except performance-sensitive bulk file workflows).
-- Use snake_case dataframe column names when possible.
-- Use `df["col"]` (getitem), not `df.col` (getattr).
+- For dataframes, use snake_case column names and access via getitem, not getattr.
 - Prefer non-inplace dataframe operations unless inplace is explicitly required.
 - Add type hints for public functions/methods.
-- Use NumPy-style docstrings for public APIs.
+- Use NumPy-style docstrings for public APIs. Strive for short, informative example sections.
+- Add a short explanatory docstring for private objects.
 - Add a short explanatory comment for private helpers when intent is not obvious.
 - Keep comments meaningful; do not restate obvious code.
-- Always use dascore.utils.misc:suppress_warnings to suppress warnings. 
+- Always use `dascore.utils.misc.suppress_warnings` to suppress warnings.
 
 ## Documentation changes
 
@@ -94,7 +89,8 @@ If behavior or API changes, update docs in the same PR.
 
 - Documentation source lives in `docs/` (`.qmd` files).
 - API docs are generated from docstrings.
-- Build docs workflow (see `docs/contributing/documentation.qmd`):
+- Build docs workflow:
+- Don't add newlines to markdown prose; let editors wrap.
 
 ```bash
 python scripts/build_api_docs.py
