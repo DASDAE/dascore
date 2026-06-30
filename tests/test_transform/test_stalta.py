@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dascore.exceptions import ParameterError
+
 
 class TestStaLta:
     """Tests for short-term average / long-term average ratio."""
@@ -78,3 +80,8 @@ class TestStaLta:
         """Ensure invalid window kwargs are rejected."""
         with pytest.raises(ValueError):
             random_patch.stalta(time=(0.01, 0.05, 0.1))
+
+    def test_lta_must_exceed_sta(self, random_patch):
+        """Ensure the long-term window must exceed the short-term window."""
+        with pytest.raises(ParameterError, match="long-term window"):
+            random_patch.stalta(time=(0.05, 0.01))
