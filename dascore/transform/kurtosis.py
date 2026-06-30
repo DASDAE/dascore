@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.jit import maybe_numba_jit
 from dascore.utils.patch import patch_function
 
@@ -213,9 +214,16 @@ def kurtosis(
     data_2d = data.reshape(orig_shape[0], -1)
 
     step = patch_t.get_coord(dim).step
+    if step is None:
+        msg = f"Coordinate {dim} is not evenly sampled."
+        raise ParameterError(msg)
 
     if isinstance(step, np.timedelta64):
         step = step / np.timedelta64(1, "s")
+    step = abs(step)
+    if not np.isfinite(step) or step <= 0:
+        msg = f"Coordinate {dim} must have a finite, positive step."
+        raise ParameterError(msg)
 
     nwin = _validate_window(winlen, step)
 
