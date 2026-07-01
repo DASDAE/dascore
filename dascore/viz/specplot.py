@@ -110,6 +110,7 @@ def specplot(
         log=False,
         cbar=cbar,
         show=False,
+        **kwargs,
     )
 
     # Format axis labels.
