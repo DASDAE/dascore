@@ -145,8 +145,10 @@ class TestWriteDASDAE:
         """Selecting from a compressed file must match selecting in memory."""
         path = tmp_path_factory.mktemp("dasdae_compressed_select") / "out.h5"
         random_patch.io.write(path, "DASDAE", compression_level=5)
-        dist = random_patch.get_coord("distance")
-        select = {"distance": (dist.min(), dist.min() + (dist.max() - dist.min()) / 2)}
+        # Select on existing coordinate values so the bounds keep the coord's
+        # dtype (a fractional midpoint would not round-trip through int coords).
+        dist = random_patch.get_coord("distance").values
+        select = {"distance": (dist[0], dist[len(dist) // 2])}
         from_disk = dc.spool(path).select(**select)[0]
         in_memory = random_patch.select(**select)
         assert from_disk.equals(in_memory)
