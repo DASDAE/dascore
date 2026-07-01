@@ -21,6 +21,12 @@ patch = dc.get_example_patch()
 patch.io.write(write_path, "dasdae")
 ```
 
+DASDAE files can be compressed by passing a `compression_level` from 1 to 9. Level 5 uses `blosc:zstd` and is recommended for general use because it usually gives most of the size reduction without the slower writes of the highest levels.
+
+```{python}
+patch.io.write(write_path, "dasdae", compression_level=5)
+```
+
 ```{python}
 #| echo: false
 if write_path.exists():
