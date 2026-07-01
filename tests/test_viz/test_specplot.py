@@ -1,8 +1,10 @@
 """Tests for spectrum plotting."""
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.exceptions import CoordError
 
 
@@ -10,6 +12,19 @@ def test_specplot_requires_fourier_dimension(random_patch):
     """Specplot raises if the patch has no Fourier-transformed coordinate."""
     with pytest.raises(CoordError, match="Fourier-transformed coordinate"):
         random_patch.viz.specplot()
+
+
+def test_specplot_requires_2d_patch():
+    """Specplot raises a clear CoordError for non-2D patches."""
+    time = dc.to_datetime64(0) + np.arange(100) * np.timedelta64(10, "ms")
+    patch = dc.Patch(
+        data=np.ones(100),
+        coords={"time": time},
+        dims=("time",),
+    ).dft("time")
+
+    with pytest.raises(CoordError, match="2D Patch"):
+        patch.viz.specplot()
 
 
 def test_specplot_returns_axes(random_patch):

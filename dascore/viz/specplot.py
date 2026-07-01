@@ -93,6 +93,12 @@ def specplot(
     is_fft_dim = [d.startswith("ft_") for d in dims]
     if not any(is_fft_dim):
         raise CoordError("Patch does not contain a Fourier-transformed coordinate")
+    if patch.ndim != 2:
+        msg = (
+            f"Can only make specplot of 2D Patch, "
+            f"but got {patch.ndim}D Patch with dims {patch.dims}"
+        )
+        raise CoordError(msg)
 
     # Make the plot
     ax = patch.viz.waterfall(
