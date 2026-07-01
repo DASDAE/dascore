@@ -11,6 +11,7 @@ from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
     H5Reader,
+    HDF5CompressionSpec,
     HDFPatchIndexManager,
     NodeError,
     PyTablesReader,
@@ -20,7 +21,6 @@ from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
-    _get_compression_filter,
     _get_contents_from_patch_groups,
     _kwargs_empty,
     _read_patch,
@@ -61,6 +61,7 @@ class DASDAEV1(FiberIO):
         index=False,
         compression=None,
         compression_level=None,
+        shuffle=True,
         **kwargs,
     ):
         """
@@ -78,16 +79,24 @@ class DASDAEV1(FiberIO):
             This is recommended for files with many patches and not recommended
             for files with few patches.
         compression
-            The PyTables compression library for patch data and coordinate
-            arrays. The default of None writes uncompressed arrays.
+            The HDF5 compression library for patch data and coordinate
+            arrays. The default of None writes uncompressed arrays unless a
+            positive compression level is provided. Use "gzip" for portable
+            HDF5 compression.
         compression_level
             Compression level from 0 to 9. A level of 0 disables compression.
             If a compression library is provided and this is None, level 5 is
             used. If only a positive compression level is provided,
             "blosc:zstd" is used. Level 5 is recommended for general use.
+        shuffle
+            If True, apply the HDF5 shuffle filter before compression.
         """
         # write out patches
-        filters = _get_compression_filter(compression, compression_level)
+        filters = HDF5CompressionSpec(
+            compression=compression,
+            compression_level=compression_level,
+            shuffle=shuffle,
+        ).to_pytables_filters()
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool

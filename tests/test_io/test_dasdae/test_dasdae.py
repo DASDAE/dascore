@@ -14,9 +14,9 @@ from dascore.compat import random_state
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _create_or_squash_array,
-    _get_compression_filter,
     _get_patch_content_from_group,
 )
+from dascore.utils.hdf5 import HDF5CompressionSpec
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
@@ -179,7 +179,7 @@ class TestWriteDASDAE:
     def test_compressed_scalar_array_falls_back(self, tmp_path_factory):
         """DASDAE compression skips scalar arrays unsupported by CArray."""
         path = tmp_path_factory.mktemp("dasdae_compressed_scalar") / "out.h5"
-        filters = _get_compression_filter(compression_level=5)
+        filters = HDF5CompressionSpec(compression_level=5).to_pytables_filters()
         with tables.open_file(path, mode="w") as h5:
             node = _create_or_squash_array(h5, h5.root, "scalar", np.array(1), filters)
             assert node.shape == ()

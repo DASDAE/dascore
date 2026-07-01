@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from tables import Atom, Filters, NodeError
+from tables import Atom, NodeError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -11,8 +11,6 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_int
-
-DEFAULT_COMPRESSION = "blosc:zstd"
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
 _KWARG_NON_KEYS = {"file_version", "file_format", "path"}
@@ -28,19 +26,6 @@ def _create_or_get_group(h5, group, name):
     except NodeError:
         group = getattr(group, name)
     return group
-
-
-def _get_compression_filter(compression=None, compression_level=None):
-    """Return PyTables filters for DASDAE array compression."""
-    if compression_level is None:
-        compression_level = 5 if compression else 0
-    if not 0 <= compression_level <= 9:
-        msg = "compression_level must be between 0 and 9."
-        raise ValueError(msg)
-    if compression_level == 0:
-        return None
-    compression = compression or DEFAULT_COMPRESSION
-    return Filters(complevel=compression_level, complib=compression, shuffle=True)
 
 
 def _create_or_squash_array(h5, group, name, data, filters=None):

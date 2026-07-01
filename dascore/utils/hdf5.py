@@ -21,6 +21,7 @@ import tables
 from h5py import File as H5pyFile
 from packaging.version import parse as get_version
 from pandas.io.common import stringify_path
+from pydantic import model_validator
 from tables import ClosedNodeError
 from tables import File as PyTablesFile
 
@@ -36,6 +37,7 @@ from dascore.utils.misc import (
     suppress_warnings,
     unbyte,
 )
+from dascore.utils.models import DascoreBaseModel
 from dascore.utils.pd import (
     _remove_base_path,
     fill_defaults_from_pydantic,
@@ -49,6 +51,42 @@ NodeError = tables.NodeError
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
+
+DEFAULT_PYTABLES_COMPRESSION = "blosc:zstd"
+_PYTABLES_COMPRESSION_ALIASES = FrozenDict({"gzip": "zlib"})
+
+
+class HDF5CompressionSpec(DascoreBaseModel):
+    """Backend-neutral HDF5 compression settings."""
+
+    compression: str | None = None
+    compression_level: int | None = None
+    shuffle: bool = True
+
+    @model_validator(mode="after")
+    def validate_compression_level(self):
+        """Ensure compression level fits the HDF5/PyTables range."""
+        level = self.compression_level
+        if level is not None and not 0 <= level <= 9:
+            msg = "compression_level must be between 0 and 9."
+            raise ValueError(msg)
+        return self
+
+    @property
+    def effective_level(self) -> int:
+        """Return the actual compression level to use."""
+        if self.compression_level is None:
+            return 5 if self.compression else 0
+        return self.compression_level
+
+    def to_pytables_filters(self) -> tables.Filters | None:
+        """Translate compression settings to PyTables filters."""
+        level = self.effective_level
+        if level == 0:
+            return None
+        complib = self.compression or DEFAULT_PYTABLES_COMPRESSION
+        complib = _PYTABLES_COMPRESSION_ALIASES.get(complib, complib)
+        return tables.Filters(complevel=level, complib=complib, shuffle=self.shuffle)
 
 
 class _HDF5Store(pd.HDFStore):

@@ -15,6 +15,7 @@ import dascore as dc
 from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
+    HDF5CompressionSpec,
     HDFPatchIndexManager,
     PyTablesWriter,
     extract_h5_attrs,
@@ -80,6 +81,40 @@ class TestGetHDF5Handlder:
         """
         with open_hdf5_file(simple_hdf_file_handler_append, mode="r") as fi:
             assert isinstance(fi, tables.File)
+
+
+class TestHDF5CompressionSpec:
+    """Tests for backend-neutral HDF5 compression settings."""
+
+    def test_default_is_uncompressed(self):
+        """No compression inputs should produce no PyTables filters."""
+        spec = HDF5CompressionSpec()
+        assert spec.to_pytables_filters() is None
+
+    def test_level_uses_pytables_default(self):
+        """A level without a compressor uses the PyTables default."""
+        filters = HDF5CompressionSpec(compression_level=5).to_pytables_filters()
+        assert filters.complib == "blosc:zstd"
+        assert filters.complevel == 5
+        assert filters.shuffle
+
+    def test_gzip_maps_to_pytables_zlib(self):
+        """The public gzip name maps to the PyTables zlib filter."""
+        filters = HDF5CompressionSpec(
+            compression="gzip", compression_level=3
+        ).to_pytables_filters()
+        assert filters.complib == "zlib"
+        assert filters.complevel == 3
+
+    def test_level_zero_disables_compression(self):
+        """A compression level of 0 explicitly disables compression."""
+        spec = HDF5CompressionSpec(compression="gzip", compression_level=0)
+        assert spec.to_pytables_filters() is None
+
+    def test_bad_level_raises(self):
+        """Compression levels must fit the HDF5/PyTables range."""
+        with pytest.raises(ValueError, match="compression_level"):
+            HDF5CompressionSpec(compression_level=10)
 
 
 class TestHDFPatchIndexManager:
