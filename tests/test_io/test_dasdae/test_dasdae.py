@@ -138,6 +138,18 @@ class TestWriteDASDAE:
             group = next(h5.iter_nodes("/waveforms"))
             assert group.data.filters.complib == "blosc:zstd"
             assert group.data.filters.complevel == 5
+        # the compressed data (and coords) must round-trip unchanged.
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_compressed_selective_read(self, tmp_path_factory, random_patch):
+        """Selecting from a compressed file must match selecting in memory."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_select") / "out.h5"
+        random_patch.io.write(path, "DASDAE", compression_level=5)
+        dist = random_patch.get_coord("distance")
+        select = {"distance": (dist.min(), dist.min() + (dist.max() - dist.min()) / 2)}
+        from_disk = dc.spool(path).select(**select)[0]
+        in_memory = random_patch.select(**select)
+        assert from_disk.equals(in_memory)
 
     def test_write_compression_level_uses_default(self, tmp_path_factory, random_patch):
         """Compression level alone uses the default DASDAE compression library."""
