@@ -11,6 +11,7 @@ from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
     H5Reader,
+    HDF5CompressionSpec,
     HDFPatchIndexManager,
     NodeError,
     PyTablesReader,
@@ -53,7 +54,16 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def write(self, spool: SpoolType, resource: PyTablesWriter, index=False, **kwargs):
+    def write(
+        self,
+        spool: SpoolType,
+        resource: PyTablesWriter,
+        index=False,
+        compression=None,
+        compression_level=None,
+        shuffle=True,
+        **kwargs,
+    ):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -68,8 +78,25 @@ class DASDAEV1(FiberIO):
             writing but will make reading/scanning the file more efficient.
             This is recommended for files with many patches and not recommended
             for files with few patches.
+        compression
+            The HDF5 compression library for patch data and coordinate
+            arrays. The default of None writes uncompressed arrays unless a
+            positive compression level is provided. Use "gzip" for portable
+            HDF5 compression.
+        compression_level
+            Compression level from 0 to 9. A level of 0 disables compression.
+            If a compression library is provided and this is None, level 5 is
+            used. If only a positive compression level is provided,
+            "blosc:zstd" is used. Level 5 is recommended for general use.
+        shuffle
+            If True, apply the HDF5 shuffle filter before compression.
         """
         # write out patches
+        filters = HDF5CompressionSpec(
+            compression=compression,
+            compression_level=compression_level,
+            shuffle=shuffle,
+        ).to_pytables_filters()
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
@@ -81,7 +108,7 @@ class DASDAEV1(FiberIO):
         # write new patches to file
         patch_names = get_patch_names(patches).values
         for patch, name in zip(patches, patch_names):
-            _save_patch(patch, waveforms, resource, name)
+            _save_patch(patch, waveforms, resource, name, filters=filters)
         indexer = HDFPatchIndexManager(resource)
         if index or indexer.has_index:
             df = self._get_patch_summary(patches)
