@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dascore.exceptions import CoordError
 from dascore.transform.kurtosis import (
     _moving_sum,
     _recursive_kurtosis,
@@ -123,6 +124,25 @@ class TestKurtosis:
 
         assert out.dims == random_patch.dims
         assert out.data.shape == random_patch.data.shape
+
+    def test_runs_on_reversed_coordinate(self, random_patch):
+        """Descending coordinates should use their absolute sample spacing."""
+        time = random_patch.get_coord("time").data[::-1]
+        patch = random_patch.update_coords(time=time)
+
+        out = patch.kurtosis(winlen=0.01, dim="time")
+
+        assert out.dims == patch.dims
+        assert out.data.shape == patch.data.shape
+
+    def test_uneven_coordinate_raises(self, random_patch):
+        """Uneven coordinates should raise a clear CoordError."""
+        time = random_patch.get_coord("time").data.copy()
+        time[2:] += np.timedelta64(1, "s")
+        patch = random_patch.update_coords(time=time)
+
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            patch.kurtosis(winlen=0.01, dim="time")
 
     def test_invalid_winlen_raises(self, random_patch):
         """Ensure invalid winlen raises."""
