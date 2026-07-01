@@ -238,9 +238,6 @@ def _get_patch_content_from_group(group):
     for key in attrs._f_list():
         value = getattr(attrs, key)
         new_key = key.replace("_attrs_", "")
-        # need to unpack 0 dim arrays.
-        if isinstance(value, np.ndarray) and not value.shape:
-            value = np.atleast_1d(value)[0]
         out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")
