@@ -24,10 +24,7 @@ numeric = TypeVar("numeric", np.ndarray, int, float)
 @cache
 def get_registry():
     """Get the pint unit registry."""
-    try:
-        ureg = pint.UnitRegistry(cache_folder=":auto:")
-    except FileNotFoundError:
-        ureg = pint.UnitRegistry(cache_folder=None)
+    ureg = pint.UnitRegistry(cache_folder=":auto:")
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")

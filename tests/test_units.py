@@ -25,29 +25,6 @@ from dascore.units import (
 class TestUnitInit:
     """Ensure units can be initialized."""
 
-    def test_stale_pint_cache_falls_back(self, monkeypatch):
-        """Stale Pint disk cache should not prevent registry creation."""
-        from dascore import units
-
-        original = units.pint.UnitRegistry
-        cache_folders = []
-
-        def unit_registry(*args, **kwargs):
-            cache_folders.append(kwargs.get("cache_folder"))
-            if kwargs.get("cache_folder") == ":auto:":
-                raise FileNotFoundError("stale pint cache")
-            return original(*args, **kwargs)
-
-        units.get_registry.cache_clear()
-        monkeypatch.setattr(units.pint, "UnitRegistry", unit_registry)
-        try:
-            registry = units.get_registry()
-        finally:
-            units.get_registry.cache_clear()
-
-        assert cache_folders == [":auto:", None]
-        assert registry.Unit("m")
-
     def test_time(self):
         """Tests for time units."""
         sec = dc.get_unit("s")
