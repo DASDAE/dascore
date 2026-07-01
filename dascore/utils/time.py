@@ -27,24 +27,35 @@ def _float_array_to_ns(array):
 
 
 def _saturate_time(value, amount, sign: int = 1):
-    """Add/subtract a timedelta to a time-like value, saturating at int64 bounds.
-
-    Numpy silently wraps datetime64/timedelta64 overflow rather than raising,
-    so the arithmetic is performed with Python ints (via object arrays) and
-    clipped back into the valid int64 range.
-    """
+    """Add or subtract a timedelta, clamping time-like overflows."""
     is_dt = is_datetime64(value)
     is_td = is_timedelta64(value)
     if not (is_dt or is_td):
         msg = f"type {type(value)} is not supported"
         raise NotImplementedError(msg)
+
     value = to_datetime64(value) if is_dt else to_timedelta64(value)
+    amount = to_timedelta64(amount)
     dtype = "datetime64[ns]" if is_dt else "timedelta64[ns]"
     limits = np.iinfo(np.int64)
-    lower, upper = int(limits.min) + 1, int(limits.max)
-    value_ns = np.asarray(to_int(value)).astype(object)
-    amount_ns = np.asarray(sign * to_int(to_timedelta64(amount))).astype(object)
-    out = np.clip(value_ns + amount_ns, lower, upper)
+    nat, lower, upper = limits.min, limits.min + 1, limits.max
+    value_ns = np.asarray(to_int(value))
+    amount_ns = np.asarray(to_int(amount))
+    nat_mask = (value_ns == nat) | (amount_ns == nat)
+
+    left = np.where(nat_mask, 0, value_ns)
+    right = np.where(nat_mask, 0, amount_ns)
+    right = -right if sign < 0 else right
+    with np.errstate(over="ignore"):
+        out = left + right
+
+    upper_mask = (right > 0) & (out < left)
+    lower_mask = (right < 0) & (out > left)
+    nat_out = out == nat
+    if np.any(upper_mask | lower_mask | nat_out | nat_mask):
+        out = np.where(upper_mask, upper, out)
+        out = np.where(lower_mask | (nat_out & ~upper_mask), lower, out)
+        out = np.where(nat_mask, nat, out)
     return np.asarray(out).astype(np.int64).astype(dtype)[()]
 
 
