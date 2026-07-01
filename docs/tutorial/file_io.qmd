@@ -21,6 +21,12 @@ patch = dc.get_example_patch()
 patch.io.write(write_path, "dasdae")
 ```
 
+DASDAE files can be compressed with `compression_level`; level 5 is recommended. Use `compression="gzip"` for portable HDF5 compression.
+
+```{python}
+patch.io.write(write_path, "dasdae", compression_level=5)
+```
+
 ```{python}
 #| echo: false
 if write_path.exists():
