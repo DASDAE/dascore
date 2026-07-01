@@ -57,8 +57,9 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group):
+def _save_array(data, name, group, create_dataset_kwargs=None):
     """Save an array to a group, handling datetime and string values."""
+    create_dataset_kwargs = create_dataset_kwargs or {}
     data = np.asarray(data)
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
@@ -71,7 +72,8 @@ def _save_array(data, name, group):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    array_node = group.create_dataset(name, data=data)
+    kwargs = create_dataset_kwargs if data.shape else {}
+    array_node = group.create_dataset(name, data=data, **kwargs)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
     array_node.attrs["is_string"] = is_str
@@ -80,7 +82,7 @@ def _save_array(data, name, group):
     return array_node
 
 
-def _save_coords(patch, patch_group):
+def _save_coords(patch, patch_group, create_dataset_kwargs=None):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
@@ -88,7 +90,7 @@ def _save_coords(patch, patch_group):
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        array_node = _save_array(data, save_name, patch_group)
+        array_node = _save_array(data, save_name, patch_group, create_dataset_kwargs)
         step = coord.step
         if step is not None:
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
@@ -101,17 +103,17 @@ def _save_coords(patch, patch_group):
         patch_group.attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, name):
+def _save_patch(patch, wave_group, name, create_dataset_kwargs=None):
     """Save the patch to disk."""
     if name in wave_group:
         # Replace the entire patch group so stale datasets/attrs can't survive.
         del wave_group[name]
     patch_group = wave_group.create_group(name)
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group)
+    _save_coords(patch, patch_group, create_dataset_kwargs)
     # add data
     if patch.data.shape:
-        _save_array(patch.data, "data", group=patch_group)
+        _save_array(patch.data, "data", patch_group, create_dataset_kwargs)
 
 
 # --- Functions for reading

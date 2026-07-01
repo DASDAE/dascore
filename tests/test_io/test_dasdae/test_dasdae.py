@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
+import tables
 
 import dascore as dc
 from dascore.compat import random_state
@@ -33,6 +34,7 @@ from dascore.io.dasdae.utils import (
     _translate_legacy_attrs,
 )
 from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import HDF5CompressionSpec
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
@@ -138,6 +140,73 @@ class TestWriteDASDAE:
         sp_cc = dc.spool(written_dascore_correlate)
         assert isinstance(sp_cc[0], dc.Patch)
 
+    def test_write_compressed(self, tmp_path_factory, random_patch):
+        """DASDAE can write compressed arrays with user-provided levels."""
+        path = tmp_path_factory.mktemp("dasdae_compressed") / "compressed.h5"
+        dc.write(
+            random_patch,
+            path,
+            "DASDAE",
+            compression="gzip",
+            compression_level=5,
+        )
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert group["data"].compression == "gzip"
+            assert group["data"].compression_opts == 5
+        # the compressed data (and coords) must round-trip unchanged.
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_compressed_selective_read(self, tmp_path_factory, random_patch):
+        """Selecting from a compressed file must match selecting in memory."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_select") / "out.h5"
+        random_patch.io.write(path, "DASDAE", compression_level=5)
+        # Select on existing coordinate values so the bounds keep the coord's
+        # dtype (a fractional midpoint would not round-trip through int coords).
+        dist = random_patch.get_coord("distance").values
+        select = {"distance": (dist[0], dist[len(dist) // 2])}
+        from_disk = dc.spool(path).select(**select)[0]
+        in_memory = random_patch.select(**select)
+        assert from_disk.equals(in_memory)
+
+    def test_write_compression_level_uses_default(self, tmp_path_factory, random_patch):
+        """Compression level alone uses the default DASDAE compression library."""
+        path = tmp_path_factory.mktemp("dasdae_compressed") / "level_only.h5"
+        random_patch.io.write(path, "DASDAE", compression_level=3)
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert group["data"].compression == "gzip"
+            assert group["data"].compression_opts == 3
+
+    def test_write_compressed_empty_coord(self, tmp_path_factory, random_patch):
+        """Compressed DASDAE writes preserve zero-length arrays."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_empty") / "out.h5"
+        time = random_patch.get_coord("time")
+        empty_patch = random_patch.select(time=(time.max() + 3 * time.step, ...))
+        empty_patch.io.write(
+            path,
+            "dasdae",
+            compression="gzip",
+            compression_level=5,
+        )
+        new_patch = dc.read(path)[0]
+        assert empty_patch.equals(new_patch)
+
+    def test_compressed_scalar_array_falls_back(self, tmp_path_factory):
+        """DASDAE compression skips scalar arrays unsupported by h5py."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_scalar") / "out.h5"
+        kwargs = HDF5CompressionSpec(compression_level=5).to_h5py_kwargs()
+        with h5py.File(path, mode="w") as h5:
+            node = _save_array(np.array(1), "scalar", h5, kwargs)
+            assert node.shape == ()
+            assert node.compression is None
+
+    def test_bad_compression_level_raises(self, random_patch, tmp_path_factory):
+        """Compression levels outside the PyTables range are invalid."""
+        path = tmp_path_factory.mktemp("dasdae_bad_compression") / "out.h5"
+        with pytest.raises(ValueError, match="compression_level"):
+            random_patch.io.write(path, "dasdae", compression_level=10)
+
 
 class TestReadDASDAE:
     """Test for reading a dasdae format."""
@@ -229,6 +298,22 @@ class TestReadDASDAE:
         out = dc.read(path, quality=(0, 1))[0]
 
         assert out == multi_dim_coords_patch
+
+    def test_get_format_false(self, generic_hdf5):
+        """A generic HDF5 file is not a DASDAE file."""
+        parser = DASDAEV1()
+        assert not parser.get_format(generic_hdf5)
+
+    def test_read_empty_selection_returns_no_patches(
+        self, tmp_path_factory, random_patch
+    ):
+        """Selections outside an empty patch should return no patches."""
+        path = tmp_path_factory.mktemp("dasdae_read_empty_selection") / "out.h5"
+        time = random_patch.get_coord("time")
+        random_patch.io.write(path, "dasdae")
+        empty_range_start = time.max() + 3 * time.step
+        out = dc.read(path, time=(empty_range_start, ...))
+        assert len(out) == 0
 
 
 class TestScanDASDAE:
