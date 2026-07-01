@@ -136,7 +136,7 @@ class TestKurtosis:
         assert out.data.shape == patch.data.shape
 
     def test_uneven_coordinate_raises(self, random_patch):
-        """Uneven coordinates should raise a clear ParameterError."""
+        """Uneven coordinates should raise a clear CoordError."""
         time = random_patch.get_coord("time").data.copy()
         time[2:] += np.timedelta64(1, "s")
         patch = random_patch.update_coords(time=time)
