@@ -46,6 +46,15 @@ def test_specplot_uses_existing_axes(random_patch):
     assert out is ax
 
 
+def test_specplot_forwards_waterfall_kwargs(random_patch):
+    """Specplot forwards extra keyword arguments to waterfall."""
+    patch = random_patch.dft("time").abs()
+
+    ax = patch.viz.specplot(interpolation_stage="rgba")
+
+    assert ax.images[0].get_interpolation_stage() == "rgba"
+
+
 def test_specplot_relabels_frequency_axis(random_patch):
     """The ft_time axis label is rewritten as Frequency."""
     patch = random_patch.dft("time").abs()
