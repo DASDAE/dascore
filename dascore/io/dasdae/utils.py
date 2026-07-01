@@ -238,6 +238,10 @@ def _get_patch_content_from_group(group):
     for key in attrs._f_list():
         value = getattr(attrs, key)
         new_key = key.replace("_attrs_", "")
+        # Older DASDAE files can expose scalar HDF attrs as 0-D arrays with
+        # some PyTables versions; normalize them before building PatchAttrs.
+        if isinstance(value, np.ndarray) and not value.shape:
+            value = np.atleast_1d(value)[0]
         out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")

@@ -15,6 +15,7 @@ from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _create_or_squash_array,
     _get_compression_filter,
+    _get_patch_content_from_group,
 )
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -244,6 +245,22 @@ class TestScanDASDAE:
         common_keys = set(info1) & set(info2) - {"history"}
         for key in common_keys:
             assert info1[key] == info2[key]
+
+    def test_scan_unpacks_scalar_array_attrs(self):
+        """Min-deps PyTables can expose scalar HDF attrs as 0-D arrays."""
+
+        class Attrs:
+            _attrs_custom_attr = np.array(1)
+            _dims = "time,distance"
+
+            def _f_list(self):
+                return ["_attrs_custom_attr", "_dims"]
+
+        class Group:
+            _v_attrs = Attrs()
+
+        attrs = _get_patch_content_from_group(Group())
+        assert attrs["custom_attr"] == 1
 
     # TODO we need to re-think indexing before this can work.
     @pytest.mark.xfail
