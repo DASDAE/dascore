@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordError
 from dascore.transform.kurtosis import (
     _moving_sum,
     _recursive_kurtosis,
@@ -141,7 +141,7 @@ class TestKurtosis:
         time[2:] += np.timedelta64(1, "s")
         patch = random_patch.update_coords(time=time)
 
-        with pytest.raises(ParameterError, match="not evenly sampled"):
+        with pytest.raises(CoordError, match="not evenly sampled"):
             patch.kurtosis(winlen=0.01, dim="time")
 
     def test_invalid_winlen_raises(self, random_patch):
