@@ -782,9 +782,7 @@ class DataFrameSpool(BaseSpool):
             if f"{attribute}_min" in attrs:
                 attribute = f"{attribute}_min"
             else:
-                msg = (
-                    "Invalid attribute. " "Please use a valid attribute such as: 'time'"
-                )
+                msg = "Invalid attribute. Please use a valid attribute such as: 'time'"
                 raise IndexError(msg)
 
         # get a mapping from the old current index to the sorted ones

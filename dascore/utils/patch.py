@@ -345,7 +345,7 @@ def patches_to_df(
     if "history" not in df.columns:
         df = df.assign(history="")
     if "patch" not in df.columns:
-        df["patch"] = to_object_array(patches)
+        df["patch"] = None
     return df
 
 

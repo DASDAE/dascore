@@ -206,16 +206,12 @@ class TestSpoolHelpers:
 
     def test_estimate_merge_samples_degenerate_step(self):
         """Non-finite sample counts should disable streaming estimates."""
-        df = pd.DataFrame(
-            {"time_min": [0.0], "time_max": [1.0], "time_step": [0.0]}
-        )
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0], "time_step": [0.0]})
         assert _estimate_merge_samples(df, "time") is None
 
     def test_estimate_merge_samples_negative_count(self):
         """Ranges with negative sample counts should disable streaming estimates."""
-        df = pd.DataFrame(
-            {"time_min": [2.0], "time_max": [0.0], "time_step": [1.0]}
-        )
+        df = pd.DataFrame({"time_min": [2.0], "time_max": [0.0], "time_step": [1.0]})
         assert _estimate_merge_samples(df, "time") is None
 
 
