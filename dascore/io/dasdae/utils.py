@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from tables import NodeError
+from tables import Atom, NodeError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -36,12 +36,17 @@ def _create_or_squash_array(h5, group, name, data, filters=None, chunkshape=None
 
     def create_array():
         if use_carray:
-            kwargs = {"obj": data}
+            kwargs = {
+                "atom": Atom.from_dtype(data.dtype),
+                "shape": data.shape,
+            }
             if filters is not None:
                 kwargs["filters"] = filters
             if chunkshape is not None:
                 kwargs["chunkshape"] = chunkshape
-            return h5.create_carray(group, name, **kwargs)
+            array = h5.create_carray(group, name, **kwargs)
+            array[:] = data
+            return array
         return h5.create_array(group, name, data)
 
     try:

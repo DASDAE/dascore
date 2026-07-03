@@ -9,6 +9,7 @@ import numpy as np
 from dascore.constants import PatchType
 from dascore.utils.jit import maybe_numba_jit
 from dascore.utils.patch import patch_function
+from dascore.utils.time import to_float
 
 
 def _validate_window(winlen: float, step: float) -> int:
@@ -212,10 +213,7 @@ def kurtosis(
 
     data_2d = data.reshape(orig_shape[0], -1)
 
-    step = patch_t.get_coord(dim).step
-
-    if isinstance(step, np.timedelta64):
-        step = step / np.timedelta64(1, "s")
+    step = abs(to_float(patch_t.get_coord(dim, require_evenly_sampled=True).step))
 
     nwin = _validate_window(winlen, step)
 

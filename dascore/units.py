@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Sequence
 from functools import cache
 from typing import Any, TypeVar
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+from platformdirs import user_cache_path
 
 import dascore as dc
 from dascore.compat import is_array
@@ -21,10 +23,20 @@ str_or_none = TypeVar("str_or_none", None, str)
 numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
+def _get_unit_registry():
+    """Create a Pint registry, clearing stale automatic cache if needed."""
+    try:
+        return pint.UnitRegistry(cache_folder=":auto:")
+    except FileNotFoundError:
+        path = user_cache_path(appname="pint", appauthor=False)
+        shutil.rmtree(path, ignore_errors=True)
+        return pint.UnitRegistry(cache_folder=":auto:")
+
+
 @cache
 def get_registry():
     """Get the pint unit registry."""
-    ureg = pint.UnitRegistry(cache_folder=":auto:")
+    ureg = _get_unit_registry()
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")

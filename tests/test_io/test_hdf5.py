@@ -51,4 +51,4 @@ class TestCodecSerialization:
     def test_extra_field_forbidden(self):
         """Codecs reject unknown fields to catch typos."""
         with pytest.raises(ValueError, match="Extra inputs"):
-            Gzip(levl=3)
+            Gzip(not_a_field=3)
