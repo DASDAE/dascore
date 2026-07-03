@@ -88,8 +88,6 @@ def _get_varying_dim(df) -> str | None:
     varying = []
     for dim in dims:
         mins, maxs = df.get(f"{dim}_min"), df.get(f"{dim}_max")
-        if mins is None or maxs is None:
-            continue
         if mins.nunique(dropna=False) > 1 or maxs.nunique(dropna=False) > 1:
             varying.append(dim)
     return varying[0] if len(varying) == 1 else None

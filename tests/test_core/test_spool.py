@@ -12,7 +12,13 @@ import pytest
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
-from dascore.core.spool import BaseSpool, MemorySpool
+from dascore.core.spool import (
+    BaseSpool,
+    MemorySpool,
+    _estimate_merge_samples,
+    _get_varying_dim,
+    _patches_from_read,
+)
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
@@ -154,6 +160,63 @@ class TestMemorySpoolLazy:
         chunked = spool.chunk(time=1)
         assert chunked._data is None
         assert chunked._patches is None
+
+    def test_single_patch_input_uses_lazy_storage(self, random_patch):
+        """A single patch should be stored lazily just like a patch sequence."""
+        spool = MemorySpool(random_patch)
+        assert spool._patches == (random_patch,)
+        assert len(spool) == 1
+
+    def test_empty_memory_spool_has_no_dataframe(self):
+        """An empty MemorySpool should report no managing dataframe."""
+        spool = MemorySpool()
+        assert spool._get_df() is None
+
+    def test_instruction_df_builds_from_lazy_patches(self, patch_list):
+        """Lazy patch input should still build instruction dataframes on demand."""
+        spool = dc.spool(patch_list)
+        assert len(spool._get_instruction_df()) == len(patch_list)
+
+    def test_unprocessed_patches_after_dataframe_build(self, patch_list):
+        """Raw patch extraction should work for dataframe-backed memory spools."""
+        spool = MemorySpool()
+        spool._df = pd.DataFrame({"patch": patch_list})
+        assert spool._patches is None
+        assert spool._unprocessed_patches() == patch_list
+
+
+class TestSpoolHelpers:
+    """Tests for helper functions used by spool implementations."""
+
+    def test_patches_from_unusual_spool(self, random_patch):
+        """Non-memory spool results should be materialized by iteration."""
+        assert _patches_from_read((random_patch,)) == [random_patch]
+
+    def test_get_varying_dim_ignores_missing_ranges(self):
+        """Columns without min/max pairs should not count as varying dims."""
+        df = pd.DataFrame(
+            {"time_min": [0, 0], "time_max": [1, 1], "distance_min": [0, 1]}
+        )
+        assert _get_varying_dim(df) is None
+
+    def test_estimate_merge_samples_missing_columns(self):
+        """Missing range columns should disable streaming estimates."""
+        df = pd.DataFrame({"time_min": [0], "time_max": [1]})
+        assert _estimate_merge_samples(df, "time") is None
+
+    def test_estimate_merge_samples_degenerate_step(self):
+        """Non-finite sample counts should disable streaming estimates."""
+        df = pd.DataFrame(
+            {"time_min": [0.0], "time_max": [1.0], "time_step": [0.0]}
+        )
+        assert _estimate_merge_samples(df, "time") is None
+
+    def test_estimate_merge_samples_negative_count(self):
+        """Ranges with negative sample counts should disable streaming estimates."""
+        df = pd.DataFrame(
+            {"time_min": [2.0], "time_max": [0.0], "time_step": [1.0]}
+        )
+        assert _estimate_merge_samples(df, "time") is None
 
 
 class TestSpoolEquals:

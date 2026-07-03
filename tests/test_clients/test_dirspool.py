@@ -157,6 +157,27 @@ class TestLoadPatchFastPath:
         assert spool._read_patches({"file_format": "DASDAE"}) is None
         assert spool._read_patches({"file_version": "1"}) is None
 
+    def test_unusual_fiberio_spool_defers_to_generic_read(
+        self, one_directory_spool, monkeypatch
+    ):
+        """Fast path should defer if the reader returns a non-memory spool."""
+
+        class _Reader:
+            def read(self, *args, **kwargs):
+                return ()
+
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda format, version: _Reader(),
+        )
+        kwargs = {
+            "path": one_directory_spool.get_contents()["path"].iloc[0],
+            "file_format": "DASDAE",
+            "file_version": "1",
+        }
+        assert one_directory_spool._read_patches(kwargs) is None
+
 
 class TestDirectoryIndex:
     """Tests for returning summaries of all files in managed directory."""

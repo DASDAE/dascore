@@ -665,3 +665,54 @@ class TestStreamingMerge:
             p2 = p2.update(data=p2.data.astype(np.float32))
         merged = dc.spool([p1, p2]).chunk(time=None)[0]
         assert merged.data.dtype == np.float64
+
+    def test_transposes_patch_to_first_patch_dims(self, random_patch, monkeypatch):
+        """Streaming merge should tolerate patches with the same dims reordered."""
+        spool = dc.spool([])
+        p1 = random_patch.update_attrs(history=[])
+        time = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=time.max() + time.step).update_attrs(history=[])
+        p2 = p2.transpose(*reversed(p2.dims))
+        patches = iter([p1, p2])
+        monkeypatch.setattr(
+            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+        )
+        time_axis = p1.get_axis("time")
+        samples = p1.data.shape[time_axis] * 2
+        out = spool._merge_patches_streaming(None, [{}, {}], "time", samples)
+        assert out.dims == p1.dims
+        assert out.data.shape[time_axis] == samples
+
+    def test_incompatible_shapes_raise_merge_error(self, random_patch, monkeypatch):
+        """Streaming merge should wrap non-merge-dimension shape mismatches."""
+        spool = dc.spool([])
+        p1 = random_patch.update_attrs(history=[])
+        time = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=time.max() + time.step).update_attrs(history=[])
+        distance = p2.get_coord("distance")
+        p2 = p2.select(distance=(None, distance.max() - distance.step))
+        patches = iter([p1, p2])
+        monkeypatch.setattr(
+            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+        )
+        msg = "their shapes are incompatible"
+        with pytest.raises(CoordMergeError, match=msg):
+            samples = p1.data.shape[p1.get_axis("time")] * 2
+            spool._merge_patches_streaming(None, [{}, {}], "time", samples)
+
+    def test_unexpected_merge_dimension_raises(self, random_patch, monkeypatch):
+        """Streaming merge should validate the actual varying dimension."""
+        spool = dc.spool([])
+        p1 = random_patch.update_attrs(history=[])
+        dist = p1.get_coord("distance")
+        p2 = p1.update_coords(distance_min=dist.max() + dist.step).update_attrs(
+            history=[]
+        )
+        patches = iter([p1, p2])
+        monkeypatch.setattr(
+            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+        )
+        msg = "expected them to vary along time"
+        with pytest.raises(CoordMergeError, match=msg):
+            samples = p1.data.shape[p1.get_axis("time")] * 2
+            spool._merge_patches_streaming(None, [{}, {}], "time", samples)
