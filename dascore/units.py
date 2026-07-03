@@ -241,11 +241,13 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     if isinstance(quant_value, str):
         _validate_quantity_str(quant_value)
         return quant_value
-    quant = get_quantity(quant_value)
     if isinstance(quant_value, Quantity):
-        if quant.magnitude == 1.0:
-            return _unit_to_str(quant.units)
-        return str(quant)
+        if quant_value.magnitude == 1.0:
+            return _unit_to_str(quant_value.units)
+        return str(quant_value)
+    # Any other type (eg a pint Unit): validate by conversion, then use
+    # the string of the original input.
+    get_quantity(quant_value)
     return str(quant_value)
 
 

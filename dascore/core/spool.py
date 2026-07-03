@@ -665,15 +665,18 @@ class DataFrameSpool(BaseSpool):
 
 
 class MemorySpool(DataFrameSpool):
-    """A Spool for storing patches in memory."""
+    """
+    A Spool for storing patches in memory.
+
+    When created from patches, the managing dataframes are built lazily
+    (on first access by an operation which needs them, such as chunk or
+    select) and simple operations (len, integer access, iteration) are
+    served straight from the patch tuple. This makes creating a spool
+    from patches nearly free, which matters when reading many files.
+    """
 
     def __init__(self, data: PatchType | Sequence[PatchType] | None = None):
         super().__init__()
-        # When a patch, or sequence of patches, is given the managing
-        # dataframes are built lazily (on first access); simple operations
-        # (len, integer access, iteration) are served straight from the
-        # patch list. This makes creating a spool from patches nearly free,
-        # which matters when reading many files.
         self._patches: tuple[PatchType, ...] | None = None
         self._data = None
         if data is not None:

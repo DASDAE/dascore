@@ -129,14 +129,14 @@ class DirectorySpool(DataFrameSpool):
         patches = self._read_patches(final_kwargs)
         if patches is None:  # fast path doesn't apply, use generic read.
             patches = [dc.read(**final_kwargs)[0]]
-        if not len(patches):
+        if not patches:
             # Note: DataFrameSpool.__iter__ matches on "out of bounds" to
             # skip patches trimmed to nothing (see #583).
             msg = "index of [0] is out of bounds for spool."
             raise IndexError(msg)
         return patches[0]
 
-    def _read_patches(self, kwargs) -> list | None:
+    def _read_patches(self, kwargs) -> list[dc.Patch] | None:
         """
         Read patches directly through the file's FiberIO.
 
@@ -155,8 +155,7 @@ class DirectorySpool(DataFrameSpool):
             select = {
                 k: v
                 for k, v in kwargs.items()
-                if k not in ("path", "file_format", "file_version")
-                and not k.startswith("_")
+                if k not in self._drop_columns and not k.startswith("_")
             }
         else:
             select = {}
