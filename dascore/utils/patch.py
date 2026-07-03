@@ -435,7 +435,8 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
     # get patches, ensure they are oriented the same.
-    patches = [x.transpose(*dims) for x in df["patch"]]
+    dims_tuple = tuple(dims)
+    patches = [x if x.dims == dims_tuple else x.transpose(*dims) for x in df["patch"]]
     axis = patches[0].get_axis(merge_dim)
     # get data, coords, attrs for merging patch together.
     data = [x.data for x in patches]
@@ -451,6 +452,32 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
+
+
+def _patch_dim_summary(patch: PatchType) -> dict:
+    """
+    Get a dict summarizing the patch's dimensional coordinates.
+
+    The output has the dims string and {dim}_min, {dim}_max, {dim}_step
+    for each dimension: the columns [`_force_patch_merge`](
+    `dascore.utils.patch._force_patch_merge`) needs to determine the merge
+    dimension. It is much cheaper than dumping the full attrs model.
+    """
+    info = {"dims": ",".join(patch.dims)}
+    for dim in patch.dims:
+        coord = patch.get_coord(dim)
+        start, step = coord.min(), coord.step
+        if step is None:
+            # Use a typed null, as PatchAttrs.flat_dump does, so column
+            # comparisons on the resulting dataframe behave.
+            if isinstance(start, np.datetime64 | np.timedelta64):
+                step = np.timedelta64("NaT", "ns")
+            elif isinstance(start, float | np.floating):
+                step = np.nan
+        info[f"{dim}_min"] = start
+        info[f"{dim}_max"] = coord.max()
+        info[f"{dim}_step"] = step
+    return info
 
 
 def get_start_stop_step(patch: PatchType, dim):

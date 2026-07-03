@@ -34,6 +34,7 @@ from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
     _force_patch_merge,
+    _patch_dim_summary,
     _spool_up,
     concatenate_patches,
     get_patch_names,
@@ -486,10 +487,11 @@ class DataFrameSpool(BaseSpool):
                 }
             else:
                 select_kwargs = self._select_kwargs
-            patch: dc.Patch = patch.select(**select_kwargs)
-            # its unfortunate, but currently we need to regenerate the patch
-            # dict because the index doesn't carry all the dimensional info
-            info = patch.attrs.flat_dump(exclude=["history"])
+            if select_kwargs:
+                patch: dc.Patch = patch.select(**select_kwargs)
+            # The index doesn't carry all the dimensional info, so get what
+            # merging needs from the patch coords (cheaper than attr dumps).
+            info = _patch_dim_summary(patch)
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
@@ -691,6 +693,15 @@ class MemorySpool(DataFrameSpool):
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
         return kwargs["patch"]
+
+    def _unprocessed_patches(self) -> list[PatchType]:
+        """
+        Return the patches as loaded, bypassing the instruction machinery.
+
+        Unlike indexing/iterating the spool, this applies no selection or
+        merging; it simply returns the patches the spool was created with.
+        """
+        return list(self._df["patch"])
 
     # Add specific implementation of concatenate patches.
     concatenate = _spool_up(concatenate_patches)

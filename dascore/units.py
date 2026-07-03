@@ -209,6 +209,17 @@ def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
     return 1 / quant
 
 
+@cache
+def _unit_to_str(unit: Unit) -> str:
+    """
+    Get the string representation of a unit; cache the result.
+
+    Unit equality/hashing is exact (e.g. m != cm) so, unlike Quantity,
+    Unit is safe to use as a cache key.
+    """
+    return str(unit)
+
+
 def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
@@ -220,20 +231,32 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     quant_value
         A input specifying a quantity.
     """
+    # Note: this is called by the pydantic serializers of attrs and coord
+    # models, so it runs many times when working with many patches; the
+    # common paths need to stay cheap (hence _validate_quantity_str and
+    # _unit_to_str caches).
     quant_value = unbyte(quant_value)
     if quant_value is None or quant_value == "":
         return None
-    try:
-        quant = get_quantity(quant_value)
-    except UndefinedUnitError:
-        msg = f"DASCore failed to parse the following unit/quantity: {quant_value}"
-        raise UnitError(msg)
+    if isinstance(quant_value, str):
+        _validate_quantity_str(quant_value)
+        return quant_value
+    quant = get_quantity(quant_value)
     if isinstance(quant_value, Quantity):
         if quant.magnitude == 1.0:
-            quant_value = str(quant.units)
-        else:
-            quant_value = str(quant)
+            return _unit_to_str(quant.units)
+        return str(quant)
     return str(quant_value)
+
+
+@cache
+def _validate_quantity_str(quant_str: str) -> None:
+    """Raise a UnitError if the string doesn't specify a valid quantity."""
+    try:
+        get_quantity(quant_str)
+    except UndefinedUnitError:
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
+        raise UnitError(msg)
 
 
 def get_inverted_quant(quant, data_units):

@@ -69,6 +69,21 @@ def non_distance_dir_spool(tmp_path_factory):
     return dc.spool(path).update()
 
 
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
+def multi_patch_file_spool(tmp_path_factory):
+    """Create a directory whose single file contains multiple patches."""
+    path = tmp_path_factory.mktemp("multi_patch_file_spool")
+    patch_1 = dascore.examples.get_example_patch("random_das")
+    # Create a second patch contiguous with the first. Clear the history
+    # so the two patches remain mergeable.
+    time = patch_1.get_coord("time")
+    patch_2 = patch_1.update_coords(time_min=time.max() + time.step)
+    patch_1, patch_2 = (x.update_attrs(history=[]) for x in (patch_1, patch_2))
+    dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
+    return dc.spool(path).update()
+
+
 @pytest.fixture
 def directory_spool_redundant_index(random_spool, tmp_path_factory):
     """Force a spool to be indexed many times with same files."""
@@ -102,6 +117,30 @@ class TestDirectorySpoolBasics:
         new = diverse_directory_spool.select(station="big_gaps")
         contents = new.get_contents()
         assert (contents["station"] == "big_gaps").all()
+
+
+class TestMultiPatchFile:
+    """Tests for directories with files that contain multiple patches."""
+
+    def test_iteration_returns_distinct_patches(self, multi_patch_file_spool):
+        """Each row must map to its own patch, not just the file's first."""
+        spool = multi_patch_file_spool
+        contents = spool.get_contents()
+        assert len(spool) == 2
+        patches = list(spool)
+        expected = set(contents["time_min"])
+        returned = {x.attrs.time_min for x in patches}
+        assert returned == expected
+
+    def test_merge(self, multi_patch_file_spool):
+        """Ensure patches from a single file can be merged."""
+        spool = multi_patch_file_spool
+        contents = spool.get_contents()
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        patch = merged[0]
+        assert patch.attrs.time_min == contents["time_min"].min()
+        assert patch.attrs.time_max == contents["time_max"].max()
 
 
 class TestDirectoryIndex:

@@ -107,6 +107,19 @@ class TestGetQuantStr:
         out = get_quantity_str(quant)
         assert "10.0" in out
 
+    def test_equal_quantities_keep_distinct_strings(self):
+        """
+        Quantities that compare equal (e.g. 1 m and 100 cm) must still
+        return their own string representations. This guards against
+        caching results keyed on quantity equality.
+        """
+        quant_m, quant_cm = get_quantity("1 m"), get_quantity("100 cm")
+        assert quant_m == quant_cm  # sanity check: pint treats these as equal
+        str_m, str_cm = get_quantity_str(quant_m), get_quantity_str(quant_cm)
+        assert str_m != str_cm
+        assert "m" in str_m
+        assert "c" in str_cm  # cm or centimeter
+
     def test_timedelta_to_quantity(self):
         """Ensure a timedelta can be converted to a quantity."""
         dt = dc.to_timedelta64(20)
