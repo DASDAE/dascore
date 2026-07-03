@@ -148,6 +148,12 @@ WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
+[project.entry-points."dascore.codec"]
+# Storage codecs. External packages may register additional codecs by pointing
+# an entry point in this group at a dascore.io.core.BaseCodec subclass.
+GZIP = "dascore.io.hdf5:Gzip"
+BLOSC_ZSTD = "dascore.io.hdf5:BloscZstd"
+
 [project.entry-points."dascore.patch_namespace"]
 io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"

@@ -19,6 +19,7 @@ from dascore.utils.hdf5 import (
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
+from .storage import DASDAEStorage
 from .utils import (
     _get_contents_from_patch_groups,
     _kwargs_empty,
@@ -53,7 +54,14 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def write(self, spool: SpoolType, resource: PyTablesWriter, index=False, **kwargs):
+    def write(
+        self,
+        spool: SpoolType,
+        resource: PyTablesWriter,
+        index=False,
+        storage: DASDAEStorage = DASDAEStorage(),
+        **kwargs,
+    ):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -68,11 +76,19 @@ class DASDAEV1(FiberIO):
             writing but will make reading/scanning the file more efficient.
             This is recommended for files with many patches and not recommended
             for files with few patches.
+        storage
+            DASDAE storage options controlling compression and chunk layout.
+            May be a ``DASDAEStorage``, a preset name (e.g. ``"compressed"``),
+            or a dict of storage kwargs. The default writes uncompressed arrays.
         """
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
+        # Validate chunk dims against the data up front so a typo raises before
+        # anything is written rather than silently producing an un-chunked file.
+        all_dims = {dim for patch in patches for dim in patch.dims}
+        storage._validate_chunk_dims(all_dims)
         # create new node called waveforms, else suppress error if it
         # already exists.
         with contextlib.suppress(NodeError):
@@ -81,7 +97,7 @@ class DASDAEV1(FiberIO):
         # write new patches to file
         patch_names = get_patch_names(patches).values
         for patch, name in zip(patches, patch_names):
-            _save_patch(patch, waveforms, resource, name)
+            _save_patch(patch, waveforms, resource, name, storage)
         indexer = HDFPatchIndexManager(resource)
         if index or indexer.has_index:
             df = self._get_patch_summary(patches)

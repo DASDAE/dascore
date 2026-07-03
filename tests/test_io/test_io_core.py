@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import io
 from pathlib import Path
-from typing import TypeVar
+from typing import ClassVar, Literal, TypeVar
 
 import h5py
 import numpy as np
@@ -17,8 +17,17 @@ import dascore
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
-from dascore.io.core import FiberIO, PatchFileSummary
+from dascore.io.codec import get_codec, get_codec_registry
+from dascore.io.core import (
+    BaseStorage,
+    FiberIO,
+    PatchFileSummary,
+    get_codecs,
+    get_storage,
+)
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.io.dasdae.storage import DASDAEStorage
+from dascore.io.hdf5 import BloscZstd, Gzip, HDF5Codec
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
 
@@ -56,6 +65,42 @@ class _FiberImplementer(FiberIO):
 
     def get_format(self, resource):
         """Dummy get_format."""
+
+
+class _TestStorage(BaseStorage):
+    """Storage object for testing FiberIO storage discovery."""
+
+    name: ClassVar[str] = "_implementer"
+
+
+class _StorageImplementer(FiberIO):
+    """A fiber io which declares storage support."""
+
+    name = "_StorageImplementer"
+    version = "1"
+    storage_cls = _TestStorage
+
+
+@pytest.fixture
+def plugin_codec(monkeypatch):
+    """Register a dummy codec via the entry-point seam, then clean up."""
+    from dascore.io import codec as codec_mod
+
+    class _PluginCodec(HDF5Codec):
+        """A stand-in for an externally registered codec."""
+
+        name: Literal["_plugin_zlib"] = "_plugin_zlib"
+        _complib: ClassVar[str] = "zlib"
+
+    def _fake_loaders(group):
+        if group == "dascore.codec":
+            return {"_plugin_zlib": lambda: _PluginCodec}
+        return {}
+
+    monkeypatch.setattr(codec_mod, "get_entry_point_loaders", _fake_loaders)
+    get_codec_registry.cache_clear()
+    yield _PluginCodec
+    get_codec_registry.cache_clear()
 
 
 class _FiberCaster(FiberIO):
@@ -274,6 +319,129 @@ class TestFormatter:
         assert fio.implements_write
 
 
+class TestBaseStorage:
+    """Tests for the base IO storage model."""
+
+    def test_subclass_defines_name(self):
+        """Storage subclasses expose name metadata."""
+        assert _TestStorage.name == "_implementer"
+
+    def test_storage_models_are_frozen(self):
+        """Storage objects inherit DASCore's frozen model behavior."""
+        storage = _TestStorage()
+        with pytest.raises(Exception, match="frozen"):
+            storage.extra = "new"
+
+    def test_extra_field_forbidden(self):
+        """Storage models reject unknown kwargs to catch typos."""
+        with pytest.raises(ValueError, match="Extra inputs"):
+            _TestStorage(codc=None)
+
+    def test_missing_name_raises(self):
+        """Storage subclasses must define a name."""
+        with pytest.raises(InvalidFiberIOError, match="name"):
+
+            class _NamelessStorage(BaseStorage):
+                """Invalid storage object with no name."""
+
+    def test_unknown_preset_raises(self):
+        """Requesting an undefined preset raises a clear error."""
+        with pytest.raises(InvalidFiberIOError, match="preset"):
+            _TestStorage.from_preset("does_not_exist")
+
+
+class TestBaseCodec:
+    """Tests for the base IO codec model."""
+
+    def test_subclass_defines_name(self):
+        """Codec subclasses expose name metadata via the Literal field."""
+        assert Gzip().name == "gzip"
+
+
+class TestCodecRegistry:
+    """Tests for the plugin-style codec registry."""
+
+    def test_builtins_registered(self):
+        """Built-in codecs are always resolvable by name."""
+        assert get_codec("gzip") is Gzip
+        assert get_codec("blosc:zstd") is BloscZstd
+
+    def test_unknown_codec_raises(self):
+        """Unknown codec names raise with a helpful message."""
+        with pytest.raises(ValueError, match="Unknown codec"):
+            get_codec("not_a_codec")
+
+    def test_plugin_codec_registered(self, plugin_codec):
+        """A codec registered via the entry-point seam is discoverable."""
+        assert get_codec("_plugin_zlib") is plugin_codec
+
+    def test_plugin_codec_usable_in_storage(self, plugin_codec):
+        """A plugged-in codec resolves through a storage model."""
+        storage = DASDAEStorage(codec="_plugin_zlib")
+        assert isinstance(storage.codec, plugin_codec)
+
+    def test_plugin_codec_in_get_codecs(self, plugin_codec):
+        """A plugged-in HDF5 codec appears in DASDAE's supported codecs."""
+        assert plugin_codec in get_codecs("DASDAE", "1")
+
+    def test_nameless_plugin_codec_raises(self, monkeypatch):
+        """A codec registered without a 'name' default fails loudly."""
+        from dascore.io import codec as codec_mod
+
+        class _NamelessCodec(HDF5Codec):
+            """A misdeclared codec missing its name discriminator."""
+
+            _complib: ClassVar[str] = "zlib"
+
+        def _fake_loaders(group):
+            if group == "dascore.codec":
+                return {"_nameless": lambda: _NamelessCodec}
+            return {}
+
+        monkeypatch.setattr(codec_mod, "get_entry_point_loaders", _fake_loaders)
+        get_codec_registry.cache_clear()
+        with pytest.raises(InvalidFiberIOError, match="name"):
+            get_codec_registry()
+        get_codec_registry.cache_clear()
+
+
+class TestGetStorage:
+    """Tests for discovering storage support by format/version."""
+
+    def test_gets_storage_for_format(self):
+        """Storage classes can be found from registered FiberIO metadata."""
+        assert get_storage("_StorageImplementer") is _TestStorage
+
+    def test_gets_storage_for_format_and_version(self):
+        """Storage lookup honors explicit format versions."""
+        assert get_storage("_StorageImplementer", "1") is _TestStorage
+
+    def test_returns_none_for_format_without_storage(self):
+        """Formats without storage metadata return None."""
+        assert get_storage("_TestFormatter", "1") is None
+
+    def test_gets_dasdae_storage(self):
+        """DASDAE declares its public storage object."""
+        assert get_storage("DASDAE", "1") is DASDAEStorage
+
+
+class TestGetCodecs:
+    """Tests for discovering codec support by format/version."""
+
+    def test_returns_empty_for_format_without_storage(self):
+        """Formats without storage metadata return no codecs."""
+        assert get_codecs("_TestFormatter", "1") == ()
+
+    def test_gets_dasdae_codecs(self):
+        """DASDAE reports the registered HDF5 codecs it can store."""
+        assert set(get_codecs("DASDAE", "1")) == {BloscZstd, Gzip}
+
+    def test_unknown_format_raises(self):
+        """Unknown formats still raise instead of returning empty codecs."""
+        with pytest.raises(UnknownFiberFormatError):
+            get_codecs("not_a_format")
+
+
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
 
@@ -472,3 +640,13 @@ class TestGetSupportedIOTable:
 
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
+
+    def test_get_supported_io_table_includes_storage(self):
+        """The supported IO table reports storage support."""
+        result_df = FiberIO.get_supported_io_table()
+        storage_row = result_df[result_df["name"] == "_STORAGEIMPLEMENTER"].iloc[0]
+        no_storage_row = result_df[
+            (result_df["name"] == "_TESTFORMATTER") & (result_df["version"] == "1")
+        ].iloc[0]
+        assert storage_row["storage"]
+        assert not no_storage_row["storage"]

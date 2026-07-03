@@ -28,14 +28,28 @@ def _create_or_get_group(h5, group, name):
     return group
 
 
-def _create_or_squash_array(h5, group, name, data):
+def _create_or_squash_array(h5, group, name, data, filters=None, chunkshape=None):
     """Create a new array, if it exists delete and re-create."""
+    data = np.asarray(data)
+    chunked = filters is not None or chunkshape is not None
+    use_carray = bool(chunked and data.size and data.shape)
+
+    def create_array():
+        if use_carray:
+            kwargs = {"obj": data}
+            if filters is not None:
+                kwargs["filters"] = filters
+            if chunkshape is not None:
+                kwargs["chunkshape"] = chunkshape
+            return h5.create_carray(group, name, **kwargs)
+        return h5.create_array(group, name, data)
+
     try:
-        array = h5.create_array(group, name, data)
+        array = create_array()
     except NodeError:
         old_node = getattr(group, name)
         h5.remove_node(old_node)
-        array = h5.create_array(group, name, data)
+        array = create_array()
     return array
 
 
@@ -57,40 +71,62 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group._v_attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group, h5):
+def _save_array(data, name, group, h5, filters=None, chunkshape=None):
     """Save an array to a group, handle datetime flubbery."""
     # handle datetime conversions
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
     if is_dt or is_td:
         data = to_int(data)
-    array_node = _create_or_squash_array(h5, group, name, data)
+    array_node = _create_or_squash_array(
+        h5,
+        group,
+        name,
+        data,
+        filters=filters,
+        chunkshape=chunkshape,
+    )
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
 
 
-def _save_coords(patch, patch_group, h5):
+def _save_coords(patch, patch_group, h5, storage):
     """Save coordinates."""
     cm = patch.coords
+    filters = storage._get_filters()
     for name, coord in cm.coord_map.items():
         dims = cm.dim_map[name]
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        _save_array(data, save_name, patch_group, h5)
+        _save_array(
+            data,
+            save_name,
+            patch_group,
+            h5,
+            filters=filters,
+            chunkshape=storage._resolve_chunkshape(dims, data.shape),
+        )
         # then save dimensions of coordinates
         save_name = f"_cdims_{name}"
         patch_group._v_attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, h5, name):
+def _save_patch(patch, wave_group, h5, name, storage):
     """Save the patch to disk."""
     patch_group = _create_or_get_group(h5, wave_group, name)
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group, h5)
+    _save_coords(patch, patch_group, h5, storage)
     # add data
     if patch.data.shape:
-        _create_or_squash_array(h5, patch_group, "data", patch.data)
+        _create_or_squash_array(
+            h5,
+            patch_group,
+            "data",
+            patch.data,
+            filters=storage._get_filters(),
+            chunkshape=storage._resolve_chunkshape(patch.dims, patch.data.shape),
+        )
 
 
 # --- Functions for reading

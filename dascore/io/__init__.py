@@ -4,24 +4,37 @@ Modules for reading and writing fiber data.
 from __future__ import annotations
 
 import dascore.utils.pd
-from dascore.io.core import FiberIO, read, scan, scan_to_df, write, PatchFileSummary
-from dascore.utils.io import BinaryReader, BinaryWriter
+from dascore.io.codec import get_codec, get_codec_registry
+from dascore.io.core import (
+    BaseCodec,
+    BaseStorage,
+    FiberIO,
+    PatchFileSummary,
+    get_codecs,
+    get_storage,
+    read,
+    scan,
+    scan_to_df,
+    write,
+)
 from dascore.utils.hdf5 import (
-    HDF5Writer,
-    HDF5Reader,
-    PyTablesWriter,
-    PyTablesReader,
     H5Reader,
     H5Writer,
+    HDF5Reader,
+    HDF5Writer,
+    PyTablesReader,
+    PyTablesWriter,
+)
+from dascore.utils.io import (
+    BinaryReader,
+    BinaryWriter,
+    obspy_to_patch,
+    patch_to_obspy,
+    patch_to_xarray,
+    xarray_to_patch,
 )
 from dascore.utils.namespace import PatchNameSpace
 from dascore.utils.pd import dataframe_to_patch, patch_to_dataframe
-from dascore.utils.io import (
-    xarray_to_patch,
-    patch_to_xarray,
-    patch_to_obspy,
-    obspy_to_patch,
-)
 
 
 class PatchIO(PatchNameSpace):
