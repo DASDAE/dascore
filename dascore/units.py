@@ -256,9 +256,9 @@ def _validate_quantity_str(quant_str: str) -> None:
     """Raise a UnitError if the string doesn't specify a valid quantity."""
     try:
         get_quantity(quant_str)
-    except UndefinedUnitError:
+    except UndefinedUnitError as e:
         msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
-        raise UnitError(msg)
+        raise UnitError(msg) from e
 
 
 def get_inverted_quant(quant, data_units):

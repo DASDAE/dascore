@@ -143,6 +143,21 @@ class TestMultiPatchFile:
         assert patch.attrs.time_max == contents["time_max"].max()
 
 
+class TestLoadPatchFastPath:
+    """Tests for the direct FiberIO read path used by _load_patch."""
+
+    def test_requires_concrete_format_and_version(self, one_directory_spool):
+        """
+        Without a concrete format and version the fast path must defer to
+        dc.read, which detects them from the file; get_fiberio with a None
+        version would return the newest reader, not the file's version.
+        """
+        spool = one_directory_spool
+        assert spool._read_patches({"file_format": "", "file_version": ""}) is None
+        assert spool._read_patches({"file_format": "DASDAE"}) is None
+        assert spool._read_patches({"file_version": "1"}) is None
+
+
 class TestDirectoryIndex:
     """Tests for returning summaries of all files in managed directory."""
 

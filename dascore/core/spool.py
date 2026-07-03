@@ -729,7 +729,7 @@ class MemorySpool(DataFrameSpool):
                 return patches[item]
             except IndexError:
                 msg = f"index of [{item}] is out of bounds for spool."
-                raise IndexError(msg)
+                raise IndexError(msg) from None
         return super().__getitem__(item)
 
     def __iter__(self) -> PatchType:

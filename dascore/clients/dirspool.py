@@ -145,7 +145,9 @@ class DirectorySpool(DataFrameSpool):
         files. Returns None when the fast path can't be safely used.
         """
         fmt, version = kwargs.get("file_format"), kwargs.get("file_version")
-        if not fmt:
+        if not fmt or not version:
+            # Without a concrete version get_fiberio would return the newest
+            # reader; let dc.read detect the file's actual version instead.
             return None
         fiber_io = dc.io.FiberIO.manager.get_fiberio(format=fmt, version=version)
         # Only apply select kwargs when the source patch is trimmed by the
