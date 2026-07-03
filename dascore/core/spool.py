@@ -667,13 +667,101 @@ class DataFrameSpool(BaseSpool):
 class MemorySpool(DataFrameSpool):
     """A Spool for storing patches in memory."""
 
-    # tuple of attributes to remove from table
-
     def __init__(self, data: PatchType | Sequence[PatchType] | None = None):
         super().__init__()
+        # When a patch, or sequence of patches, is given the managing
+        # dataframes are built lazily (on first access); simple operations
+        # (len, integer access, iteration) are served straight from the
+        # patch list. This makes creating a spool from patches nearly free,
+        # which matters when reading many files.
+        self._patches: list[PatchType] | None = None
+        self._data = None
         if data is not None:
-            dfs = self._get_dummy_dataframes(patches_to_df(data))
-            self._df, self._source_df, self._instruction_df = dfs
+            if isinstance(data, dc.Patch):
+                self._patches = [data]
+            elif isinstance(data, Sequence) and all(
+                isinstance(x, dc.Patch) for x in data
+            ):
+                # Copy the sequence so mutating it afterwards doesn't
+                # change the spool contents.
+                self._patches = list(data)
+            else:  # eg a spool or dataframe; needs the dataframe machinery.
+                self._data = data
+
+    def _get_df(self):
+        """Build the managing dataframes from the input patches."""
+        data = self._patches if self._patches is not None else self._data
+        if data is None:
+            return None
+        df, source, instruction = self._get_dummy_dataframes(patches_to_df(data))
+        self._source_df = source
+        self._instruction_df = instruction
+        return df
+
+    def _get_source_df(self):
+        """Build the source df (happens as part of building current df)."""
+        _ = self._df
+        return self._cache.get("_source_df")
+
+    def _get_instruction_df(self):
+        """Build the instruction df (happens as part of building current df)."""
+        _ = self._df
+        return self._cache.get("_instruction_df")
+
+    def __len__(self) -> int:
+        if self._patches is not None:
+            return len(self._patches)
+        return super().__len__()
+
+    def __getitem__(self, item) -> PatchType | BaseSpool:
+        # Fast path: a spool created directly from patches (which never has
+        # select kwargs) can serve integer requests from the patch list.
+        patches = self._patches
+        if (
+            patches is not None
+            and not self._select_kwargs
+            and isinstance(item, int | np.integer)
+        ):
+            try:
+                return patches[item]
+            except IndexError:
+                msg = f"index of [{item}] is out of bounds for spool."
+                raise IndexError(msg)
+        return super().__getitem__(item)
+
+    def __iter__(self) -> PatchType:
+        patches = self._patches
+        if patches is not None and not self._select_kwargs:
+            yield from patches
+        else:
+            yield from super().__iter__()
+
+    def __eq__(self, other) -> bool:
+        """
+        Equality check which ignores the state of the lazy dataframes.
+
+        The managed dataframes are built and compared directly so that
+        equality does not depend on whether they were constructed yet.
+        """
+        if self is other:
+            return True
+        if not isinstance(other, MemorySpool):
+            return super().__eq__(other)
+        return deep_equality_check(self._eq_dict(), other._eq_dict())
+
+    def _eq_dict(self) -> dict:
+        """Get a dict for equality checks, normalizing lazy state."""
+        out = dict(self.__dict__)
+        # Build (if needed) and compare the dataframes; drop the inputs
+        # they were built from, whose form can differ for equal contents.
+        out["_cache"] = {
+            "_df": self._df,
+            "_source_df": self._source_df,
+            "_instruction_df": self._instruction_df,
+        }
+        out.pop("_patches", None)
+        out.pop("_data", None)
+        return out
 
     def __rich__(self):
         base = super().__rich__()
@@ -701,6 +789,8 @@ class MemorySpool(DataFrameSpool):
         Unlike indexing/iterating the spool, this applies no selection or
         merging; it simply returns the patches the spool was created with.
         """
+        if self._patches is not None:
+            return list(self._patches)
         return list(self._df["patch"])
 
     # Add specific implementation of concatenate patches.

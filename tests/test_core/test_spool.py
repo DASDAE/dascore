@@ -84,6 +84,69 @@ class TestSpoolBasics:
             random_spool.viz.waterfall(random_spool)
 
 
+class TestMemorySpoolLazy:
+    """
+    Tests for lazy behavior of in-memory spools.
+
+    Spools created directly from patches shouldn't build their managing
+    dataframes until an operation requires them.
+    """
+
+    @pytest.fixture()
+    def patch_list(self):
+        """Get a list of contiguous patches."""
+        return list(dc.examples.get_example_spool(length=3))
+
+    def test_simple_access_builds_no_dataframes(self, patch_list):
+        """len, integer access, and iteration should not build dataframes."""
+        spool = dc.spool(patch_list)
+        assert len(spool) == len(patch_list)
+        assert spool[0] == patch_list[0]
+        assert spool[-1] == patch_list[-1]
+        assert list(spool) == patch_list
+        assert "_df" not in spool._cache
+
+    def test_out_of_bounds_raises(self, patch_list):
+        """The fast path must raise the same IndexError as the df path."""
+        spool = dc.spool(patch_list)
+        match = "out of bounds for spool"
+        with pytest.raises(IndexError, match=match):
+            _ = spool[len(patch_list)]
+        assert "_df" not in spool._cache
+
+    def test_access_unchanged_after_df_built(self, patch_list):
+        """Patch access must return the same thing before/after df built."""
+        spool = dc.spool(patch_list)
+        lazy_patches = list(spool)
+        _ = spool.get_contents()  # forces the dataframes to build
+        assert "_df" in spool._cache
+        assert list(spool) == lazy_patches
+        assert spool[0] == lazy_patches[0]
+
+    def test_equality_independent_of_access(self, patch_list):
+        """Equal spools must stay equal regardless of what was accessed."""
+        spool1, spool2 = dc.spool(patch_list), dc.spool(patch_list)
+        _ = spool1.get_contents()  # build one spool's dataframes only.
+        assert spool1 == spool2
+        assert spool2 == spool1
+
+    def test_input_mutation_does_not_change_spool(self, patch_list):
+        """The spool contents are snapshotted at creation."""
+        data = list(patch_list)
+        spool = dc.spool(data)
+        data.pop()
+        assert len(spool) == len(patch_list)
+
+    def test_derived_spools_use_df_machinery(self, patch_list):
+        """Chunked/selected spools must go through the instruction dfs."""
+        spool = dc.spool(patch_list)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        time_coord = merged[0].get_coord("time")
+        expected_min = min(x.attrs.time_min for x in patch_list)
+        assert time_coord.min() == expected_min
+
+
 class TestSpoolEquals:
     """Tests for spool equality."""
 
