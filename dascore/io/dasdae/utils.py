@@ -11,6 +11,7 @@ import json
 import pickle
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.config import get_config
@@ -26,6 +27,7 @@ from dascore.utils.array import (
 )
 from dascore.utils.attrs import separate_coord_info
 from dascore.utils.misc import unbyte
+from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
@@ -271,9 +273,30 @@ def _get_dims(patch_group):
     return out
 
 
-def _read_patch(patch_group, **kwargs):
+def _matches_attr_filters(attrs, kwargs):
+    """Return True if attrs match any applicable attr filters in kwargs."""
+
+    def is_nullish(value):
+        """Return True if value is a scalar nullish query value."""
+        is_null = pd.isnull(value)
+        return bool(is_null) if not hasattr(is_null, "__len__") else False
+
+    query = {
+        x: y
+        for x, y in kwargs.items()
+        if x not in _KWARG_NON_KEYS and not x.startswith("_") and not is_nullish(y)
+    }
+    if not query:
+        return True
+    attrs = _translate_legacy_attrs(attrs)
+    _, attr_info = separate_coord_info(attrs, dims=attrs.get("dims", ()))
+    attr_df = pd.DataFrame([attr_info])
+    return bool(filter_df(attr_df, ignore_bad_kwargs=True, **query)[0])
+
+
+def _read_patch(patch_group, attrs=None, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _translate_legacy_attrs(_get_attrs(patch_group))
+    attrs = _translate_legacy_attrs(_get_attrs(patch_group)) if attrs is None else attrs
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
     _, attr_info = separate_coord_info(attrs, dims=dims)
