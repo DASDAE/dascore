@@ -232,6 +232,21 @@ class TestReadDASDAE:
         spool = parser.read(generic_hdf5)
         assert not len(spool)
 
+    def test_file_spool_loads_distinct_attrs(self, tmp_path, random_patch):
+        """Lazy loading should materialize the patch for each DASDAE row."""
+        path = tmp_path / "multi_patch.h5"
+        patches = [
+            random_patch.update_attrs(tag="S100", label="L100"),
+            random_patch.update_attrs(tag="S120", label="L120"),
+        ]
+
+        dc.write(dc.spool(patches), path, "DASDAE")
+        spool = dc.spool(path)
+
+        assert spool.get_contents()["tag"].to_list() == ["S100", "S120"]
+        assert [x.attrs.tag for x in spool] == ["S100", "S120"]
+        assert [x.attrs.label for x in spool] == ["L100", "L120"]
+
     def test_get_format_false(self, generic_hdf5):
         """A generic HDF5 file is not a DASDAE file."""
         parser = DASDAEV1()

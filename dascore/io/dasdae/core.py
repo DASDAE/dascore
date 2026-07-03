@@ -21,8 +21,10 @@ from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
+    _get_attrs,
     _get_contents_from_patch_groups,
     _kwargs_empty,
+    _matches_attr_filters,
     _read_patch,
     _save_patch,
     _write_meta,
@@ -145,7 +147,10 @@ class DASDAEV1(FiberIO):
         except (KeyError, IndexError):
             return dc.spool([])
         for patch_group in waveform_group:
-            patch = _read_patch(patch_group, **kwargs)
+            attrs = _get_attrs(patch_group)
+            if not _matches_attr_filters(attrs, kwargs):
+                continue
+            patch = _read_patch(patch_group, attrs=attrs, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)
