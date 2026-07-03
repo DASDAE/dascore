@@ -136,6 +136,8 @@ class TestMemorySpoolLazy:
         spool = dc.spool(data)
         data.pop()
         assert len(spool) == len(patch_list)
+        # The snapshot itself is immutable.
+        assert isinstance(spool._patches, tuple)
 
     def test_derived_spools_use_df_machinery(self, patch_list):
         """Chunked/selected spools must go through the instruction dfs."""

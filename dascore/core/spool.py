@@ -674,17 +674,17 @@ class MemorySpool(DataFrameSpool):
         # (len, integer access, iteration) are served straight from the
         # patch list. This makes creating a spool from patches nearly free,
         # which matters when reading many files.
-        self._patches: list[PatchType] | None = None
+        self._patches: tuple[PatchType, ...] | None = None
         self._data = None
         if data is not None:
             if isinstance(data, dc.Patch):
-                self._patches = [data]
+                self._patches = (data,)
             elif isinstance(data, Sequence) and all(
                 isinstance(x, dc.Patch) for x in data
             ):
-                # Copy the sequence so mutating it afterwards doesn't
-                # change the spool contents.
-                self._patches = list(data)
+                # Copy to an immutable tuple so neither mutating the input
+                # sequence nor the stored one can change the spool contents.
+                self._patches = tuple(data)
             else:  # eg a spool or dataframe; needs the dataframe machinery.
                 self._data = data
 
