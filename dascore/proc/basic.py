@@ -366,7 +366,7 @@ def normalize(
         order = int(norm[-1])
         norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
     elif norm == "max":
-        norm_values = np.max(data, axis=axis)
+        norm_values = np.max(np.abs(data), axis=axis)
     elif norm == "bit":
         pass
     else:
@@ -865,7 +865,8 @@ def demedian(patch, dim: str = "time"):
     >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
     >>> _ = ax2.set_title('Difference');
     >>>
-    >>> plt.show()
+    >>> plt.show()  # doctest: +SKIP
+    >>> plt.close(fig)
     """
     axis = patch.get_axis(dim)
     data = patch.data
@@ -923,7 +924,8 @@ def demean(patch, dim: str = "time"):
     >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
     >>> _ = ax2.set_title('Difference');
     >>>
-    >>> plt.show()
+    >>> plt.show()  # doctest: +SKIP
+    >>> plt.close(fig)
     """
     axis = patch.get_axis(dim)
     data = patch.data

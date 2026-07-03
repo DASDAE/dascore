@@ -3,8 +3,10 @@ Unified interface for moving window operations with automatic engine selection.
 
 This module provides a generic interface for 1D moving window operations
 that can use either scipy or bottleneck backends, with automatic fallback
-when optional dependencies are missing. Bottleneck median windows are aligned
-with centered scipy semantics away from edges.
+when optional dependencies are missing. Bottleneck trailing windows are shifted
+toward centered-window alignment. Odd non-median bottleneck windows match scipy
+away from edges; even non-median windows keep the requested bottleneck engine for
+performance and may differ from scipy's even-window convention.
 """
 
 from __future__ import annotations
@@ -63,7 +65,7 @@ def _apply_scipy_operation(
     ddof: int = 0,
 ) -> np.ndarray:
     """Apply scipy operation with proper handling."""
-    module_name, func_name = OPERATION_REGISTRY[operation]["scipy"]
+    _, func_name = OPERATION_REGISTRY[operation]["scipy"]
     func = _get_engine_function("scipy", operation)
     scipy_kwargs = {"mode": mode, "cval": cval, "origin": origin}
 
@@ -116,10 +118,15 @@ def _apply_bottleneck_median(
 
     func = _get_engine_function("bottleneck", "median")
     result = func(data, window=window, axis=axis, min_count=min_count)
+    return _shift_bottleneck_result(result, window, axis)
+
+
+def _shift_bottleneck_result(result: np.ndarray, window: int, axis: int) -> np.ndarray:
+    """Shift trailing bottleneck windows to centered window alignment."""
     shift = window // 2
     if shift:
-        destination = [slice(None)] * data.ndim
-        source = [slice(None)] * data.ndim
+        destination = [slice(None)] * result.ndim
+        source = [slice(None)] * result.ndim
         destination[axis] = slice(0, -shift)
         source[axis] = slice(shift, None)
         result[tuple(destination)] = result[tuple(source)]
@@ -171,7 +178,7 @@ def _apply_bottleneck_operation(
 
     extra_kwargs = {"ddof": ddof} if operation == "std" else {}
     result = func(data, window=window, axis=axis, min_count=min_count, **extra_kwargs)
-    return result
+    return _shift_bottleneck_result(result, window, axis)
 
 
 # Engine function wrappers (defined after functions)
@@ -252,6 +259,9 @@ def moving_window(
         Axis along which to operate
     engine : {"auto", "scipy", "bottleneck"}, default "auto"
         Engine to use
+        Bottleneck non-median windows keep the bottleneck engine for even
+        windows. These are shifted toward centered alignment but can differ
+        from scipy's even-window convention.
     mode
         Boundary mode. Non-default values use scipy for operations where
         bottleneck cannot preserve scipy boundary semantics.

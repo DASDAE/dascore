@@ -295,6 +295,10 @@ class TestToTimeDelta64:
             expected = -to_timedelta64(abs(val))
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
+    def test_negative_example_uses_timedelta_function(self):
+        """The negative-number example should demonstrate to_timedelta64."""
+        assert "dc.to_timedelta64(-10.5)" in to_timedelta64.__doc__
+
     def test_negative_int(self):
         """Negative ints should be a symmetric operation."""
         floats_to_test = [1, 10, 100]
