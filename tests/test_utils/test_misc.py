@@ -305,6 +305,28 @@ class TestMaybeGetItems:
         assert "sue" in out
         assert "who" not in out
 
+    def test_falsy_values_are_preserved(self):
+        """Falsy values are legitimate attributes and should not be dropped."""
+        data = {"zero": 0, "zero_float": 0.0, "empty": "", "missing": None}
+        attr_map = {
+            "zero": "zero",
+            "zero_float": "zero_float",
+            "empty": "empty",
+            "missing": "missing",
+        }
+
+        out = maybe_get_items(data, attr_map=attr_map)
+
+        assert out == {"zero": 0, "zero_float": 0.0, "empty": ""}
+
+    def test_multi_element_array_values_are_preserved(self):
+        """Array values should not be truth-tested while being copied."""
+        array = np.array([1, 2])
+
+        out = maybe_get_items({"array": array}, attr_map={"array": "array"})
+
+        np.testing.assert_array_equal(out["array"], array)
+
 
 class TestWarnOrRaise:
     """Ensure warn or raise works."""

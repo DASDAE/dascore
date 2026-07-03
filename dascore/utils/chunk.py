@@ -459,7 +459,7 @@ class ChunkManager:
                     g_stop,
                     dur,
                     overlap=overlap,
-                    step=step.iloc[0],
+                    step=step.loc[current_df.index].iloc[0],
                     keep_partials=self._keep_partials,
                 )
             except ChunkError:  # this chunk is too short, skip.

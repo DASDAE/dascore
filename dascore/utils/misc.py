@@ -177,7 +177,7 @@ def _iter_filesystem(
     ----------
     paths
         The path to the base directory to traverse. Can also use a collection
-        of paths.
+        of paths when ``include_directories`` is False.
     ext : str or None
         The extensions of files to return.
     timestamp : int or float
@@ -420,7 +420,7 @@ def maybe_get_items(
     unpack_names = set() if unpack_names is None else unpack_names
     out = {}
     for old_name, new_name in attr_map.items():
-        if not (value := obj.get(old_name, None)):
+        if (value := obj.get(old_name, None)) is None:
             continue
         val = unbyte(value)
         out[new_name] = _maybe_unpack(val) if old_name in unpack_names else val

@@ -79,6 +79,19 @@ class TestIndefiniteIntegrals:
         data_out = out.data.flatten()
         assert np.allclose(expected, data_out)
 
+    def test_integrate_multiple_dims_matches_sequential(self):
+        """Indefinite multi-dim integration should compose axis integrals."""
+        data = np.arange(12, dtype=float).reshape(3, 4)
+        coords = {"distance": np.arange(3), "time": np.arange(4)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        out = patch.integrate(dim=("distance", "time"), definite=False)
+        expected = patch.integrate(dim="distance", definite=False).integrate(
+            dim="time", definite=False
+        )
+
+        np.testing.assert_allclose(out.data, expected.data)
+
 
 class TestDefiniteIntegration:
     """Test case for definite path integration."""

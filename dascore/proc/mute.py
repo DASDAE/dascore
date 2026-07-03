@@ -73,6 +73,7 @@ class _MuteGeometry(ABC, DascoreBaseModel):
             if not isinstance(smooth, Mapping):
                 vals = [smooth] * len(dims)
                 axes = self.axes
+                smooth_dims = dims
             else:
                 # Otherwise, the smooth dict must be a subset of the dimensions.
                 if not set(smooth).issubset(set(dims)):
@@ -82,10 +83,12 @@ class _MuteGeometry(ABC, DascoreBaseModel):
                         f"smooth keys are {list(smooth)}."
                     )
                     raise ParameterError(msg)
-                vals = [smooth[dim] for dim in dims if dim in smooth]
-                axes = [self.dims.index(x) for x in smooth]
+                dim_axis_map = dict(zip(self.dims, self.axes, strict=True))
+                smooth_dims = [dim for dim in dims if dim in smooth]
+                vals = [smooth[dim] for dim in smooth_dims]
+                axes = [dim_axis_map[dim] for dim in smooth_dims]
 
-            return vals, axes
+            return vals, axes, smooth_dims
 
         def _convert_to_samples(smooth, dims, patch):
             """Convert the smooth parameter to number of samples."""
@@ -108,8 +111,8 @@ class _MuteGeometry(ABC, DascoreBaseModel):
                     out.append(coord.get_sample_count(val))
             return out
 
-        smooth_by_dims, axes = _broadcast_smooth_to_dims(self.dims, smooth)
-        smooth_ints = _convert_to_samples(smooth_by_dims, self.dims, patch)
+        smooth_by_dims, axes, smooth_dims = _broadcast_smooth_to_dims(self.dims, smooth)
+        smooth_ints = _convert_to_samples(smooth_by_dims, smooth_dims, patch)
         # Now convert to input format for scipy's gaussian filter.
         return smooth_ints, axes
 
