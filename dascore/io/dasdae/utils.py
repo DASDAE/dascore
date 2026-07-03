@@ -173,10 +173,16 @@ def _get_dims(patch_group):
 
 def _matches_attr_filters(attrs, kwargs):
     """Return True if attrs match any applicable attr filters in kwargs."""
+
+    def is_nullish(value):
+        """Return True if value is a scalar nullish query value."""
+        is_null = pd.isnull(value)
+        return bool(is_null) if not hasattr(is_null, "__len__") else False
+
     query = {
         x: y
         for x, y in kwargs.items()
-        if x not in _KWARG_NON_KEYS and not x.startswith("_") and y is not None
+        if x not in _KWARG_NON_KEYS and not x.startswith("_") and not is_nullish(y)
     }
     if not query:
         return True
