@@ -15,7 +15,12 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
-from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
+from dascore.core.spool import (
+    BaseSpool,
+    DataFrameSpool,
+    MemorySpool,
+    _patches_from_read,
+)
 from dascore.exceptions import MissingPatchError
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.docs import compose_docstring
@@ -129,11 +134,7 @@ class DirectorySpool(DataFrameSpool):
         final_kwargs.update(self._select_kwargs)
         patches = self._read_patches(final_kwargs)
         if patches is None:  # fast path doesn't apply, use generic read.
-            spool = dc.read(**final_kwargs)
-            if isinstance(spool, MemorySpool):
-                patches = spool._unprocessed_patches()
-            else:  # a FiberIO returned an unusual spool type.
-                patches = list(spool)
+            patches = _patches_from_read(dc.read(**final_kwargs))
         if not patches:
             # Iteration skips these with a warning, see #583.
             msg = (

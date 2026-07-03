@@ -10,7 +10,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS, SpoolType
-from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
+from dascore.core.spool import BaseSpool, DataFrameSpool, _patches_from_read
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
@@ -66,11 +66,7 @@ class FileSpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        spool = dc.read(**kwargs)
-        if isinstance(spool, MemorySpool):
-            patches = spool._unprocessed_patches()
-        else:  # a FiberIO returned an unusual spool type.
-            patches = list(spool)
+        patches = _patches_from_read(dc.read(**kwargs))
         if not patches:
             # Iteration skips these with a warning, see #583.
             msg = (

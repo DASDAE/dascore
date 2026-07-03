@@ -69,6 +69,13 @@ def _dim_slice(ndim: int, axis: int, start: int, stop: int) -> tuple:
     return tuple(out)
 
 
+def _patches_from_read(spool: BaseSpool) -> list[PatchType]:
+    """Get the raw patch list from a spool returned by dc.read."""
+    if isinstance(spool, MemorySpool):
+        return spool._unprocessed_patches()
+    return list(spool)  # a FiberIO returned an unusual spool type.
+
+
 def _get_varying_dim(df) -> str | None:
     """
     Get the single dimension whose range varies across rows of df.
@@ -103,7 +110,11 @@ def _estimate_merge_samples(df, dim) -> int | None:
     mins, maxs, steps = (df[x] for x in cols)
     if mins.isnull().any() or maxs.isnull().any() or steps.isnull().any():
         return None
-    counts = np.round((maxs - mins) / steps).astype(np.int64) + 1
+    ratios = (maxs - mins) / steps
+    # Degenerate steps (eg 0) make the sample counts meaningless.
+    if not np.isfinite(ratios.astype(np.float64)).all():
+        return None
+    counts = np.round(ratios).astype(np.int64) + 1
     if (counts < 0).any():
         return None
     return int(counts.sum())
@@ -610,11 +621,17 @@ class DataFrameSpool(BaseSpool):
                 shape = list(buffer.shape)
                 shape[axis] = end
                 new_buffer = np.empty(shape, dtype=buffer.dtype)
-                new_buffer[_dim_slice(buffer.ndim, axis, 0, offset)] = buffer[
-                    _dim_slice(buffer.ndim, axis, 0, offset)
-                ]
+                head = _dim_slice(buffer.ndim, axis, 0, offset)
+                new_buffer[head] = buffer[head]
                 buffer = new_buffer
-            buffer[_dim_slice(buffer.ndim, axis, offset, end)] = data
+            try:
+                buffer[_dim_slice(buffer.ndim, axis, offset, end)] = data
+            except ValueError as e:
+                msg = (
+                    f"Cannot merge patches; their shapes are incompatible "
+                    f"along the dimensions not being merged ({merge_dim})."
+                )
+                raise CoordMergeError(msg) from e
             offset = end
             coords.append(patch.coords)
             attrs.append(patch.attrs)
