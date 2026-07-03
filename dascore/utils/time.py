@@ -202,7 +202,7 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     >>> td_1 = dc.to_timedelta64(10.1232)
     >>>
     >>> # This also works on negative numbers.
-    >>> td_2 = dc.to_datetime64(-10.5)
+    >>> td_2 = dc.to_timedelta64(-10.5)
     >>>
     >>> # Convert a string to timedelta64
     >>> td_str = "1000000000 nanoseconds"

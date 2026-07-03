@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +13,8 @@ from dascore.compat import random_state
 from dascore.exceptions import FilterValueError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
+
+resample_mod = importlib.import_module("dascore.proc.resample")
 
 
 class TestInterpolate:
@@ -132,13 +136,32 @@ class TestDecimate:
         with pytest.raises(FilterValueError, match=match):
             small_patch.decimate(distance=2)
 
+    def test_scipy_decimation_gets_patch(self, random_patch, monkeypatch):
+        """The scipy decimation helper should receive the patch, not its data."""
+        calls = []
+
+        def decimate_spy(patch, factor, ftype, axis):
+            assert isinstance(patch, dc.Patch)
+            calls.append((patch, factor, ftype, axis))
+            slicer = [slice(None)] * patch.ndim
+            slicer[axis] = slice(None, None, int(factor))
+            return patch.data[tuple(slicer)]
+
+        monkeypatch.setattr(resample_mod, "_apply_scipy_decimation", decimate_spy)
+
+        out = random_patch.decimate(time=2, filter_type="iir")
+
+        patch, factor, _, axis = calls[0]
+        assert patch is random_patch
+        assert out.shape[axis] == random_patch.shape[axis] // factor
+
 
 class TestResample:
     """Tests for resampling along a given dimension."""
 
     def test_downsample_time(self, random_patch):
         """Test decreasing the temporal sampling rate."""
-        start, stop, step = get_start_stop_step(random_patch, "time")
+        _, _, step = get_start_stop_step(random_patch, "time")
         patch = random_patch
         axis = patch.get_axis("time")
         new_dt = 2 * step
@@ -209,7 +232,7 @@ class TestResample:
 
     def test_slightly_above_current_rate(self, random_patch):
         """Tests for resampling slightly above current rate."""
-        start, stop, step = get_start_stop_step(random_patch, "distance")
+        _, _, step = get_start_stop_step(random_patch, "distance")
         new_step = step + 0.0000001
         out = random_patch.resample(distance=new_step)
         assert (
@@ -219,7 +242,7 @@ class TestResample:
 
     def test_slightly_under_current_rate(self, random_patch):
         """Tests for resampling slightly under current rate."""
-        start, stop, step = get_start_stop_step(random_patch, "distance")
+        _, _, step = get_start_stop_step(random_patch, "distance")
         new_step = step - 0.0000001
         out = random_patch.resample(distance=new_step)
         assert (

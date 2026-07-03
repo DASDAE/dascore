@@ -155,6 +155,28 @@ class TestBasicChunkDF:
         time_min = df2.iloc[0]["time_min"]
         assert time_min.minute == 1
 
+    def test_chunk_uses_step_from_each_group(self):
+        """Each sampling group should use its own step for interval ends."""
+        df = pd.DataFrame(
+            {
+                "time_min": [
+                    np.datetime64("2020-01-01T00:00:00"),
+                    np.datetime64("2020-02-01T00:00:00"),
+                ],
+                "time_max": [
+                    np.datetime64("2020-01-01T00:01:39"),
+                    np.datetime64("2020-02-01T00:16:30"),
+                ],
+                "time_step": [np.timedelta64(1, "s"), np.timedelta64(10, "s")],
+            }
+        )
+
+        _, chunked = ChunkManager(time=50).chunk(df)
+
+        ten_second_group = chunked[chunked["time_step"] == np.timedelta64(10, "s")]
+        first = ten_second_group.iloc[0]
+        assert first["time_max"] - first["time_min"] == np.timedelta64(40, "s")
+
     def test_keep_leftovers(self, contiguous_df):
         """Ensure leftovers show up in df."""
         chunker = ChunkManager(overlap=None, keep_partial=True, time=28)
