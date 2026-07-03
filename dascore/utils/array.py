@@ -297,8 +297,12 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     data = patch.data
     dims = tuple(iterate(patch.dims if dim is None else dim))
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
+    if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):
+        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+        raise ParameterError(msg)
     # Iter all specified dimensions.
-    for dim, axis, _ in dfo:
+    for dim, _, _ in dfo:
+        axis = patch.get_axis(dim)
         new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
@@ -306,7 +310,10 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
         else:
             coords = patch.coords.update(**{dim: new_coord})
             data = np.expand_dims(func(data, axis=axis), axis)
-        patch = patch.new(data=data, coords=coords)
+        attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
+        attrs["coords"] = coords.to_summary_dict()
+        attrs["dims"] = coords.dims
+        patch = patch.new(data=data, coords=coords, attrs=attrs)
     return patch
 
 

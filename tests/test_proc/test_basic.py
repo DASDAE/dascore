@@ -171,6 +171,18 @@ class TestNormalize:
         bit_norm = patch.normalize("time", norm="bit")
         assert np.all(np.unique(bit_norm.data) == np.array([-1.0, 0, 1.0]))
 
+    def test_max_uses_absolute_values(self, random_patch):
+        """Max normalization should divide by maximum absolute value."""
+        data = -np.abs(random_patch.data) - 1
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize("time", norm="max")
+
+        axis = patch.get_axis("time")
+        assert np.all(out.data <= 0)
+        assert np.all(np.abs(out.data) <= 1)
+        assert np.allclose(np.max(np.abs(out.data), axis=axis), 1)
+
     def test_zero_channels(self, random_patch):
         """Ensure after operation each zero row or vector remains so."""
         zeroed_data = np.copy(random_patch.data)

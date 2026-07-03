@@ -286,6 +286,32 @@ class TestMovingWindow:
                 result_bn[tuple(indexer)], result_scipy[tuple(indexer)]
             )
 
+    @pytest.mark.parametrize("operation", ["mean", "sum", "min", "max"])
+    def test_bottleneck_operations_are_centered(self, operation):
+        """Bottleneck operations should match scipy away from edge regions."""
+        pytest.importorskip("bottleneck")
+        data = np.array(
+            [
+                [0.0, 3.0, 1.0, 8.0, 4.0, 2.0, 6.0],
+                [5.0, 4.0, 9.0, 1.0, 7.0, 3.0, 2.0],
+                [2.0, 8.0, 4.0, 6.0, 0.0, 5.0, 1.0],
+                [7.0, 1.0, 5.0, 2.0, 9.0, 6.0, 3.0],
+                [4.0, 6.0, 2.0, 5.0, 3.0, 1.0, 8.0],
+            ]
+        )
+
+        for axis, window in ((0, 3), (1, 5)):
+            result_scipy = moving_window(data, window, operation, axis, engine="scipy")
+            result_bn = moving_window(
+                data, window, operation, axis, engine="bottleneck"
+            )
+            half_window = window // 2
+            indexer = [slice(None)] * data.ndim
+            indexer[axis] = slice(half_window, -half_window)
+            np.testing.assert_allclose(
+                result_bn[tuple(indexer)], result_scipy[tuple(indexer)]
+            )
+
     def test_bottleneck_median_boundary_options(self):
         """Non-default scipy boundary options should not be ignored."""
         pytest.importorskip("bottleneck")

@@ -121,6 +121,33 @@ class TestBasicAggregations:
         assert "time" not in out.dims
         assert out.ndim == 1
 
+    def test_multi_dim_reduce_squeeze_3d(self):
+        """Squeezing multiple dims should not use stale axis numbers."""
+        data = np.arange(27, dtype=float).reshape(3, 3, 3)
+        coords = {
+            "distance": np.arange(3),
+            "time": np.arange(3),
+            "face": np.arange(3),
+        }
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time", "face"))
+        out = patch.aggregate(
+            dim=("distance", "time"), method="mean", dim_reduce="squeeze"
+        )
+        expected = np.mean(
+            patch.data,
+            axis=(patch.get_axis("distance"), patch.get_axis("time")),
+        )
+        assert out.dims == ("face",)
+        npt.assert_allclose(out.data, expected)
+
+    def test_dim_reduce_squeeze_all_dims_raises(self, random_patch):
+        """Squeeze should not create an unsupported scalar patch."""
+        msg = "at least one dimension"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.aggregate(
+                dim=("distance", "time"), method="mean", dim_reduce="squeeze"
+            )
+
     def test_dim_reduce_mean(self, random_patch):
         """Ensure the mean value can be left on the coord."""
         out = random_patch.aggregate(dim="time", method="mean", dim_reduce="mean")
