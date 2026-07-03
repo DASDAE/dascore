@@ -575,10 +575,13 @@ class DataFrameSpool(BaseSpool):
     ):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
-        df_, source_, inst_ = self._get_dummy_dataframes(df)
+        if source_df is None or instruction_df is None:
+            _, source_, inst_ = self._get_dummy_dataframes(df)
+            source_df = source_df if source_df is not None else source_
+            instruction_df = instruction_df if instruction_df is not None else inst_
         new._df = df
-        new._source_df = source_df if source_df is not None else source_
-        new._instruction_df = instruction_df if instruction_df is not None else inst_
+        new._source_df = source_df
+        new._instruction_df = instruction_df
         new._select_kwargs = dict(self._select_kwargs)
         new._select_kwargs.update(select_kwargs or {})
         new._merge_kwargs = dict(self._merge_kwargs)
@@ -795,6 +798,15 @@ class MemorySpool(DataFrameSpool):
         if self._patches is not None:
             return list(self._patches)
         return list(self._df["patch"])
+
+    @compose_docstring(doc=DataFrameSpool.new_from_df.__doc__)
+    def new_from_df(self, *args, **kwargs):
+        """{doc}."""
+        new = super().new_from_df(*args, **kwargs)
+        # The provided dataframes fully define the new spool; drop the
+        # construction input so derived spools don't retain their parents.
+        new._data = None
+        return new
 
     # Add specific implementation of concatenate patches.
     concatenate = _spool_up(concatenate_patches)

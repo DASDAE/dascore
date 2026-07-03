@@ -148,6 +148,13 @@ class TestMemorySpoolLazy:
         expected_min = min(x.attrs.time_min for x in patch_list)
         assert time_coord.min() == expected_min
 
+    def test_derived_spool_does_not_retain_parent(self, patch_list):
+        """Derived spools must not hold a reference to their parent."""
+        spool = dc.spool(patch_list)
+        chunked = spool.chunk(time=1)
+        assert chunked._data is None
+        assert chunked._patches is None
+
 
 class TestSpoolEquals:
     """Tests for spool equality."""
