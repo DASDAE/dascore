@@ -5,6 +5,7 @@ Patch function for 'short-term average' to 'long-term average' ratio transform
 from __future__ import annotations
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.misc import check_filter_kwargs
 from dascore.utils.patch import patch_function
 
@@ -52,6 +53,9 @@ def stalta(
     ... );
     """
     dim, (sta, lta) = check_filter_kwargs(kwargs)
+    if lta <= sta:
+        msg = f"The long-term window must exceed the short-term window, got {lta}."
+        raise ParameterError(msg)
 
     sta_data = patch.rolling(**{dim: sta}, samples=samples).mean()
     lta_data = patch.rolling(**{dim: lta}, samples=samples).mean()
