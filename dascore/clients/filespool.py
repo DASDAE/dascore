@@ -10,7 +10,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS, SpoolType
-from dascore.core.spool import BaseSpool, DataFrameSpool, _patches_from_read
+from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
@@ -66,7 +66,7 @@ class FileSpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        patches = _patches_from_read(dc.read(**kwargs))
+        patches = list(dc.read(**kwargs))
         if not patches:
             # Iteration skips these with a warning, see #583.
             msg = (

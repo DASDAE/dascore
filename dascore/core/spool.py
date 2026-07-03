@@ -36,13 +36,17 @@ from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
+from dascore.utils.misc import (
+    CacheDescriptor,
+    _spool_map,
+    broadcast_for_index,
+    deep_equality_check,
+)
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
     _force_patch_merge,
     _get_merge_dim,
     _get_merged_coord,
-    _patch_dim_summary,
     _spool_up,
     concatenate_patches,
     get_patch_names,
@@ -60,20 +64,6 @@ from dascore.utils.pd import (
 )
 
 T = TypeVar("T")
-
-
-def _dim_slice(ndim: int, axis: int, start: int, stop: int) -> tuple:
-    """Get an nd slice tuple selecting start:stop along axis."""
-    out = [slice(None)] * ndim
-    out[axis] = slice(start, stop)
-    return tuple(out)
-
-
-def _patches_from_read(spool: BaseSpool) -> list[PatchType]:
-    """Get the raw patch list from a spool returned by dc.read."""
-    if isinstance(spool, MemorySpool):
-        return spool._unprocessed_patches()
-    return list(spool)  # a FiberIO returned an unusual spool type.
 
 
 def _get_varying_dim(df) -> str | None:
@@ -420,10 +410,6 @@ class DataFrameSpool(BaseSpool):
     _source_df: pd.DataFrame = CacheDescriptor("_cache", "_get_source_df")
     # A dataframe of instructions for going from source_df to df
     _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
-    # A mapping of current_index to positional rows of the instruction df
-    _instruction_indices: Mapping = CacheDescriptor(
-        "_cache", "_get_instruction_indices"
-    )
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
@@ -440,15 +426,6 @@ class DataFrameSpool(BaseSpool):
 
     def _get_instruction_df(self):
         """Function to get the current df."""
-
-    def _get_instruction_indices(self):
-        """
-        Get a mapping of {current_index: positional rows} of the instruction df.
-
-        Using this avoids a full scan of the instruction df for each patch
-        request, which matters when many patches are loaded.
-        """
-        return self._instruction_df.groupby("current_index").indices
 
     def __init__(
         self, select_kwargs: dict | None = None, merge_kwargs: dict | None = None
@@ -524,7 +501,13 @@ class DataFrameSpool(BaseSpool):
         except IndexError:
             msg = f"index of [{df_ind}] is out of bounds for spool."
             raise IndexError(msg) from None
-        positions = self._instruction_indices.get(inds)
+        # Group positional instruction rows by current index (and cache) to
+        # avoid a full instruction df scan for each requested patch.
+        indices = self._cache.get("_instruction_indices")
+        if indices is None:
+            indices = instruction.groupby("current_index").indices
+            self._cache["_instruction_indices"] = indices
+        positions = indices.get(inds)
         assert positions is not None and len(positions), "no instructions found"
         df1 = instruction.iloc[positions]
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
@@ -558,7 +541,7 @@ class DataFrameSpool(BaseSpool):
             patch = self._load_trimmed_patch(patch_kwargs, joined)
             # The index doesn't carry all the dimensional info, so get what
             # merging needs from the patch coords (cheaper than attr dumps).
-            info = _patch_dim_summary(patch)
+            info = patch.coords._get_dim_summary()
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
@@ -619,11 +602,12 @@ class DataFrameSpool(BaseSpool):
                 shape = list(buffer.shape)
                 shape[axis] = end
                 new_buffer = np.empty(shape, dtype=buffer.dtype)
-                head = _dim_slice(buffer.ndim, axis, 0, offset)
+                head = broadcast_for_index(buffer.ndim, axis, slice(0, offset))
                 new_buffer[head] = buffer[head]
                 buffer = new_buffer
             try:
-                buffer[_dim_slice(buffer.ndim, axis, offset, end)] = data
+                index = broadcast_for_index(buffer.ndim, axis, slice(offset, end))
+                buffer[index] = data
             except ValueError as e:
                 msg = (
                     f"Cannot merge patches; their shapes are incompatible "
@@ -633,9 +617,9 @@ class DataFrameSpool(BaseSpool):
             offset = end
             coords.append(patch.coords)
             attrs.append(patch.attrs)
-            summaries.append(_patch_dim_summary(patch))
+            summaries.append(patch.coords._get_dim_summary())
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
-            buffer = buffer[_dim_slice(buffer.ndim, axis, 0, offset)]
+            buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
         summary_df = pd.DataFrame(summaries)
@@ -845,8 +829,6 @@ class MemorySpool(DataFrameSpool):
             elif isinstance(data, Sequence) and all(
                 isinstance(x, dc.Patch) for x in data
             ):
-                # Copy to an immutable tuple so neither mutating the input
-                # sequence nor the stored one can change the spool contents.
                 self._patches = tuple(data)
             else:  # eg a spool or dataframe; needs the dataframe machinery.
                 self._data = data
@@ -944,17 +926,6 @@ class MemorySpool(DataFrameSpool):
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
         return kwargs["patch"]
-
-    def _unprocessed_patches(self) -> list[PatchType]:
-        """
-        Return the patches as loaded, bypassing the instruction machinery.
-
-        Unlike indexing/iterating the spool, this applies no selection or
-        merging; it simply returns the patches the spool was created with.
-        """
-        if self._patches is not None:
-            return list(self._patches)
-        return list(self._df["patch"])
 
     @compose_docstring(doc=DataFrameSpool.new_from_df.__doc__)
     def new_from_df(self, *args, **kwargs):

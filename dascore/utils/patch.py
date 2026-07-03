@@ -462,32 +462,6 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     return [new_dict]
 
 
-def _patch_dim_summary(patch: PatchType) -> dict:
-    """
-    Get a dict summarizing the patch's dimensional coordinates.
-
-    The output has the dims string and {dim}_min, {dim}_max, {dim}_step
-    for each dimension: the columns [`_force_patch_merge`](
-    `dascore.utils.patch._force_patch_merge`) needs to determine the merge
-    dimension. It is much cheaper than dumping the full attrs model.
-    """
-    info = {"dims": ",".join(patch.dims)}
-    for dim in patch.dims:
-        coord = patch.get_coord(dim)
-        start, step = coord.min(), coord.step
-        if step is None:
-            # Use a typed null, as PatchAttrs.flat_dump does, so column
-            # comparisons on the resulting dataframe behave.
-            if isinstance(start, np.datetime64 | np.timedelta64):
-                step = np.timedelta64("NaT", "ns")
-            elif isinstance(start, float | np.floating):
-                step = np.nan
-        info[f"{dim}_min"] = start
-        info[f"{dim}_max"] = coord.max()
-        info[f"{dim}_step"] = step
-    return info
-
-
 def get_start_stop_step(patch: PatchType, dim):
     """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"

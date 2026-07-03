@@ -17,7 +17,6 @@ from dascore.core.spool import (
     MemorySpool,
     _estimate_merge_samples,
     _get_varying_dim,
-    _patches_from_read,
 )
 from dascore.exceptions import (
     InvalidSpoolError,
@@ -177,20 +176,9 @@ class TestMemorySpoolLazy:
         spool = dc.spool(patch_list)
         assert len(spool._get_instruction_df()) == len(patch_list)
 
-    def test_unprocessed_patches_after_dataframe_build(self, patch_list):
-        """Raw patch extraction should work for dataframe-backed memory spools."""
-        spool = MemorySpool()
-        spool._df = pd.DataFrame({"patch": patch_list})
-        assert spool._patches is None
-        assert spool._unprocessed_patches() == patch_list
-
 
 class TestSpoolHelpers:
     """Tests for helper functions used by spool implementations."""
-
-    def test_patches_from_unusual_spool(self, random_patch):
-        """Non-memory spool results should be materialized by iteration."""
-        assert _patches_from_read((random_patch,)) == [random_patch]
 
     def test_get_varying_dim_ignores_missing_ranges(self):
         """Columns without min/max pairs should not count as varying dims."""
