@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -11,15 +12,22 @@ import tables
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.io.core import BaseCodec
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.storage import DASDAEStorage
-from dascore.io.dasdae.utils import _create_or_squash_array
+from dascore.io.dasdae.utils import _create_or_squash_array, _read_array, _save_array
 from dascore.io.hdf5 import BloscZstd, Gzip
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
 # a list of fixture names for written DASDAE files
 WRITTEN_FILES = []
+
+
+class _UnsupportedCodec(BaseCodec):
+    """A non-HDF5 codec used to test DASDAE storage validation."""
+
+    name: Literal["unsupported"] = "unsupported"
 
 
 @pytest.fixture(scope="class")
@@ -72,6 +80,14 @@ def dasdae_v1_file_path(request):
 
 class TestWriteDASDAE:
     """Ensure the format can be written."""
+
+    def _assert_data_filters(self, path, *, complib, complevel=None):
+        """Assert the stored DASDAE data array has expected PyTables filters."""
+        with tables.open_file(path) as h5:
+            group = next(h5.iter_nodes("/waveforms"))
+            assert group.data.filters.complib == complib
+            if complevel is not None:
+                assert group.data.filters.complevel == complevel
 
     def test_file_exists(self, dasdae_v1_file_path):
         """The file should *of course* exist."""
@@ -127,10 +143,28 @@ class TestWriteDASDAE:
         path = tmp_path_factory.mktemp("dasdae_compressed") / "compressed.h5"
         storage = DASDAEStorage(codec=BloscZstd(level=5))
         dc.write(random_patch, path, "DASDAE", storage=storage)
-        with tables.open_file(path) as h5:
-            group = next(h5.iter_nodes("/waveforms"))
-            assert group.data.filters.complib == "blosc:zstd"
-            assert group.data.filters.complevel == 5
+        self._assert_data_filters(path, complib="blosc:zstd", complevel=5)
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_direct_write_coerces_storage(self, tmp_path_factory, random_patch):
+        """Direct DASDAEV1 writes accept the same storage shorthand as dc.write."""
+        path = tmp_path_factory.mktemp("dasdae_direct_storage") / "compressed.h5"
+        with tables.open_file(path, mode="w") as h5:
+            DASDAEV1().write(random_patch, h5, storage="compressed")
+        self._assert_data_filters(path, complib="blosc:zstd", complevel=5)
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_default_storage_skips_chunk_validation(
+        self, tmp_path_factory, random_patch, monkeypatch
+    ):
+        """Unchunked writes do not scan dims only to no-op validation."""
+        path = tmp_path_factory.mktemp("dasdae_no_chunk_validation") / "out.h5"
+
+        def raise_if_called(*args, **kwargs):
+            raise AssertionError("chunk validation should be skipped")
+
+        monkeypatch.setattr(DASDAEStorage, "_validate_chunk_dims", raise_if_called)
+        random_patch.io.write(path, "DASDAE")
         assert dc.read(path)[0].equals(random_patch)
 
     def test_compressed_selective_read(self, tmp_path_factory, random_patch):
@@ -165,19 +199,26 @@ class TestWriteDASDAE:
         """A dict/string codec shorthand is coerced by the write path."""
         path = tmp_path_factory.mktemp("dasdae_gzip") / "gzip.h5"
         random_patch.io.write(path, "DASDAE", storage={"codec": "gzip"})
-        with tables.open_file(path) as h5:
-            group = next(h5.iter_nodes("/waveforms"))
-            assert group.data.filters.complib == "zlib"
+        self._assert_data_filters(path, complib="zlib")
         assert dc.read(path)[0].equals(random_patch)
 
     def test_write_compressed_with_gzip(self, tmp_path_factory, random_patch):
         """DASDAE can use portable gzip HDF5 compression."""
         path = tmp_path_factory.mktemp("dasdae_gzip") / "gzip.h5"
         random_patch.io.write(path, "DASDAE", storage=DASDAEStorage(codec=Gzip()))
-        with tables.open_file(path) as h5:
-            group = next(h5.iter_nodes("/waveforms"))
-            assert group.data.filters.complib == "zlib"
+        self._assert_data_filters(path, complib="zlib")
         assert dc.read(path)[0].equals(random_patch)
+
+    def test_chunked_unicode_array_roundtrips(self, tmp_path_factory):
+        """Chunked/compressed string arrays preserve non-ASCII values."""
+        path = tmp_path_factory.mktemp("dasdae_unicode_array") / "out.h5"
+        data = np.array(["cafe", "café"], dtype="U8")
+        filters = DASDAEStorage.from_preset("compressed")._get_filters()
+        with tables.open_file(path, mode="w") as h5:
+            _save_array(data, "labels", h5.root, h5, filters=filters, chunkshape=(1,))
+            node = h5.root.labels
+            assert node[:].dtype.kind == "S"
+            assert np.array_equal(_read_array(node), data)
 
     def test_write_with_chunks(self, tmp_path_factory, random_patch):
         """DASDAE storage can specify a per-dimension chunk layout."""
@@ -246,6 +287,21 @@ class TestDASDAEStorage:
         """A codec dict is dispatched by its discriminator name."""
         assert DASDAEStorage(codec={"name": "gzip", "level": 3}).codec == Gzip(level=3)
 
+    def test_codec_dict_requires_name(self):
+        """Codec dictionaries must include the registry discriminator."""
+        with pytest.raises(ValueError, match="name"):
+            DASDAEStorage(codec={"level": 3})
+
+    def test_bad_codec_input_raises(self):
+        """Unsupported codec input types raise a clear error."""
+        with pytest.raises(ValueError, match="Cannot interpret codec"):
+            DASDAEStorage(codec=object())
+
+    def test_unsupported_codec_base_raises(self):
+        """DASDAE rejects codecs it cannot store in HDF5 arrays."""
+        with pytest.raises(ValueError, match="cannot store codec"):
+            DASDAEStorage(codec=_UnsupportedCodec())
+
     def test_unknown_codec_name_raises(self):
         """An unknown codec name reports it is unregistered."""
         with pytest.raises(ValueError, match="Unknown codec"):
@@ -283,6 +339,11 @@ class TestDASDAEStorage:
         storage = DASDAEStorage(chunks={"time": 5})
         # Should not raise.
         storage._validate_chunk_dims(("distance", "time"))
+
+    def test_validate_chunk_dims_no_chunks_returns(self):
+        """Default storage has no chunk dims to validate."""
+        storage = DASDAEStorage()
+        storage._validate_chunk_dims(())
 
     def test_get_codecs(self):
         """DASDAE reports the registered HDF5 codecs it can store."""

@@ -9,6 +9,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
+from dascore.io.core import _coerce_storage
 from dascore.utils.hdf5 import (
     H5Reader,
     HDFPatchIndexManager,
@@ -59,7 +60,7 @@ class DASDAEV1(FiberIO):
         spool: SpoolType,
         resource: PyTablesWriter,
         index=False,
-        storage: DASDAEStorage = DASDAEStorage(),
+        storage: DASDAEStorage | dict | str | None = None,
         **kwargs,
     ):
         """
@@ -82,13 +83,15 @@ class DASDAEV1(FiberIO):
             or a dict of storage kwargs. The default writes uncompressed arrays.
         """
         # write out patches
+        storage = _coerce_storage(storage, self)
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         # Validate chunk dims against the data up front so a typo raises before
         # anything is written rather than silently producing an un-chunked file.
-        all_dims = {dim for patch in patches for dim in patch.dims}
-        storage._validate_chunk_dims(all_dims)
+        if storage.chunks:
+            all_dims = {dim for patch in patches for dim in patch.dims}
+            storage._validate_chunk_dims(all_dims)
         # create new node called waveforms, else suppress error if it
         # already exists.
         with contextlib.suppress(NodeError):

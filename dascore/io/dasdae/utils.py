@@ -31,8 +31,11 @@ def _create_or_get_group(h5, group, name):
 def _create_or_squash_array(h5, group, name, data, filters=None, chunkshape=None):
     """Create a new array, if it exists delete and re-create."""
     data = np.asarray(data)
+    if data.dtype.kind == "U":
+        data = np.char.encode(data, "utf-8")
     chunked = filters is not None or chunkshape is not None
-    use_carray = bool(chunked and data.size and data.shape)
+    is_string = data.dtype.kind == "S"
+    use_carray = bool(chunked and data.size and data.shape and not is_string)
 
     def create_array():
         if use_carray:
@@ -79,6 +82,7 @@ def _save_attrs_and_dims(patch, patch_group):
 def _save_array(data, name, group, h5, filters=None, chunkshape=None):
     """Save an array to a group, handle datetime flubbery."""
     # handle datetime conversions
+    is_unicode = data.dtype.kind == "U"
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
     if is_dt or is_td:
@@ -93,6 +97,7 @@ def _save_array(data, name, group, h5, filters=None, chunkshape=None):
     )
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
+    array_node._v_attrs["is_unicode"] = is_unicode
 
 
 def _save_coords(patch, patch_group, h5, storage):
@@ -159,6 +164,8 @@ def _read_array(table_array):
         data = data.view("datetime64[ns]")
     if table_array._v_attrs["is_timedelta64"]:
         data = data.view("timedelta64[ns]")
+    if getattr(table_array._v_attrs, "is_unicode", False):
+        data = np.char.decode(data, "utf-8")
     return data
 
 

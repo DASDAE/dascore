@@ -22,6 +22,7 @@ from dascore.io.core import (
     BaseStorage,
     FiberIO,
     PatchFileSummary,
+    _coerce_storage,
     get_codecs,
     get_storage,
 )
@@ -79,6 +80,16 @@ class _StorageImplementer(FiberIO):
     name = "_StorageImplementer"
     version = "1"
     storage_cls = _TestStorage
+
+
+class _NoStorageImplementer(FiberIO):
+    """A fiber io with write support but no storage declaration."""
+
+    name = "_NoStorageImplementer"
+    version = "1"
+
+    def write(self, spool: SpoolType, resource):
+        """Dummy write."""
 
 
 @pytest.fixture
@@ -348,6 +359,32 @@ class TestBaseStorage:
         """Requesting an undefined preset raises a clear error."""
         with pytest.raises(InvalidFiberIOError, match="preset"):
             _TestStorage.from_preset("does_not_exist")
+
+    def test_get_codecs_empty_without_supported_bases(self):
+        """Storage without supported codec bases reports no codecs."""
+        assert _TestStorage.get_codecs() == ()
+
+
+class TestCoerceStorage:
+    """Tests for normalizing user storage inputs."""
+
+    def test_none_uses_default_storage(self):
+        """None becomes the format's default storage instance."""
+        out = _coerce_storage(None, _StorageImplementer())
+        assert out == _TestStorage()
+
+    def test_none_for_format_without_storage_stays_none(self):
+        """None is harmless for formats without storage support."""
+        assert _coerce_storage(None, _NoStorageImplementer()) is None
+
+    def test_format_without_storage_rejects_options(self):
+        """Formats without storage support reject explicit storage options."""
+        with pytest.raises(InvalidFiberIOError, match="storage options"):
+            _coerce_storage({}, _NoStorageImplementer())
+
+    def test_dict_validates_to_storage(self):
+        """Storage dictionaries are validated into the format storage model."""
+        assert _coerce_storage({}, _StorageImplementer()) == _TestStorage()
 
 
 class TestBaseCodec:

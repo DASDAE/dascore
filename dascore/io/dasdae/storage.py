@@ -115,5 +115,6 @@ class DASDAEStorage(BaseStorage):
         if self.chunks is None or not shape or len(dims) != len(shape):
             return None
         return tuple(
-            min(self.chunks.get(dim, size), size) for dim, size in zip(dims, shape)
+            min(self.chunks.get(dim, size), size)
+            for dim, size in zip(dims, shape, strict=True)
         )
