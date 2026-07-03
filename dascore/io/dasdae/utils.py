@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from tables import NodeError
 
 import dascore as dc
@@ -10,10 +11,11 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
-_KWARG_NON_KEYS = {"file_version", "file_format", "path"}
+_KWARG_NON_KEYS = {"file_version", "file_format", "path", "_modified"}
 
 
 # --- Functions for writing DASDAE format
@@ -156,9 +158,22 @@ def _get_dims(patch_group):
     return out
 
 
-def _read_patch(patch_group, **kwargs):
+def _matches_attr_filters(attrs, kwargs):
+    """Return True if attrs match any applicable attr filters in kwargs."""
+    query = {
+        x: y
+        for x, y in kwargs.items()
+        if x not in _KWARG_NON_KEYS and not x.startswith("_") and y is not None
+    }
+    if not query:
+        return True
+    attr_df = pd.DataFrame([attrs.model_dump(exclude={"coords"})])
+    return bool(filter_df(attr_df, ignore_bad_kwargs=True, **query)[0])
+
+
+def _read_patch(patch_group, attrs=None, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group) if attrs is None else attrs
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
     # Note, previously this was wrapped with try, except (Index, KeyError)
