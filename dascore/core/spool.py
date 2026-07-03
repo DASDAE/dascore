@@ -25,7 +25,13 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
-from dascore.exceptions import InvalidSpoolError, ParameterError
+from dascore.exceptions import (
+    CoordMergeError,
+    InvalidSpoolError,
+    MissingPatchError,
+    ParameterError,
+)
+from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -34,6 +40,8 @@ from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
     _force_patch_merge,
+    _get_merge_dim,
+    _get_merged_coord,
     _patch_dim_summary,
     _spool_up,
     concatenate_patches,
@@ -52,6 +60,53 @@ from dascore.utils.pd import (
 )
 
 T = TypeVar("T")
+
+
+def _dim_slice(ndim: int, axis: int, start: int, stop: int) -> tuple:
+    """Get an nd slice tuple selecting start:stop along axis."""
+    out = [slice(None)] * ndim
+    out[axis] = slice(start, stop)
+    return tuple(out)
+
+
+def _get_varying_dim(df) -> str | None:
+    """
+    Get the single dimension whose range varies across rows of df.
+
+    Returns None when no dimension varies, several do, or the dataframe
+    doesn't carry range columns for the varying dimension; those cases
+    need the fully materialized merge to sort out.
+    """
+    dims = get_dim_names_from_columns(df)
+    varying = []
+    for dim in dims:
+        mins, maxs = df.get(f"{dim}_min"), df.get(f"{dim}_max")
+        if mins is None or maxs is None:
+            continue
+        if mins.nunique(dropna=False) > 1 or maxs.nunique(dropna=False) > 1:
+            varying.append(dim)
+    return varying[0] if len(varying) == 1 else None
+
+
+def _estimate_merge_samples(df, dim) -> int | None:
+    """
+    Estimate the total number of samples along dim of the merged rows.
+
+    Returns None if the estimate cannot be made (eg unknown steps), in
+    which case streaming the merge isn't possible.
+    """
+    if dim is None:
+        return None
+    cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
+    if not set(cols).issubset(df.columns):
+        return None
+    mins, maxs, steps = (df[x] for x in cols)
+    if mins.isnull().any() or maxs.isnull().any() or steps.isnull().any():
+        return None
+    counts = np.round((maxs - mins) / steps).astype(np.int64) + 1
+    if (counts < 0).any():
+        return None
+    return int(counts.sum())
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -356,6 +411,10 @@ class DataFrameSpool(BaseSpool):
     _source_df: pd.DataFrame = CacheDescriptor("_cache", "_get_source_df")
     # A dataframe of instructions for going from source_df to df
     _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
+    # A mapping of current_index to positional rows of the instruction df
+    _instruction_indices: Mapping = CacheDescriptor(
+        "_cache", "_get_instruction_indices"
+    )
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
@@ -372,6 +431,15 @@ class DataFrameSpool(BaseSpool):
 
     def _get_instruction_df(self):
         """Function to get the current df."""
+
+    def _get_instruction_indices(self):
+        """
+        Get a mapping of {current_index: positional rows} of the instruction df.
+
+        Using this avoids a full scan of the instruction df for each patch
+        request, which matters when many patches are loaded.
+        """
+        return self._instruction_df.groupby("current_index").indices
 
     def __init__(
         self, select_kwargs: dict | None = None, merge_kwargs: dict | None = None
@@ -425,19 +493,11 @@ class DataFrameSpool(BaseSpool):
         for ind in range(len(self._df)):
             try:
                 yield self._unbox_patch(self._get_patches_from_index(ind))
-            except IndexError as e:
-                # Check if this is the known #583 pattern (coordinate mismatch)
-                msg_str = str(e)
-                if "out of bounds" in msg_str:
-                    # This is the expected #583 case where patch coordinates don't align
-                    msg = (
-                        f"Skipping patch at index {ind} due to coordinate mismatch "
-                        f"(#583): {msg_str}"
-                    )
-                    warnings.warn(msg, UserWarning, stacklevel=2)
-                else:
-                    # Some other IndexError - re-raise it as it's a real bug
-                    raise
+            except MissingPatchError as e:
+                # The patch couldn't be produced, usually because a
+                # coordinate mismatch trimmed it to nothing (see #583).
+                msg = f"Skipping patch at index {ind} (see #583): {e}"
+                warnings.warn(msg, UserWarning, stacklevel=2)
 
     def _unbox_patch(self, patch_list):
         """Unbox a single patch from a patch list, check len."""
@@ -454,9 +514,10 @@ class DataFrameSpool(BaseSpool):
             inds = self._df.index[df_ind]
         except IndexError:
             msg = f"index of [{df_ind}] is out of bounds for spool."
-            raise IndexError(msg)
-        df1 = instruction[instruction["current_index"] == inds]
-        assert not df1.empty
+            raise IndexError(msg) from None
+        positions = self._instruction_indices.get(inds)
+        assert positions is not None and len(positions), "no instructions found"
+        df1 = instruction.iloc[positions]
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
         # Occasionally, duplicates can creep into the source_df,
         # but it costs a bit to check for duplicates, so only check and drop
@@ -469,26 +530,23 @@ class DataFrameSpool(BaseSpool):
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
-        out = []
         df_dict_list = self._df_to_dict_list(joined)
         expected_len = len(joined["current_index"].unique())
+        if len(df_dict_list) > expected_len:
+            # Several sources merge into one patch. When the output size can
+            # be determined from the instructions, stream the sources into a
+            # pre-allocated array so they don't all need to be in memory with
+            # the merged output at once.
+            merge_dim = _get_varying_dim(joined)
+            samples = _estimate_merge_samples(joined, merge_dim)
+            if samples is not None:
+                patch = self._merge_patches_streaming(
+                    joined, df_dict_list, merge_dim, samples
+                )
+                return [patch]
+        out = []
         for patch_kwargs in df_dict_list:
-            # convert kwargs to format understood by parser/patch.select
-            kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
-            patch = self._load_patch(kwargs)
-            # If the limits of the source patch were not modified, we can just
-            # use the select kwargs. This is important for missing coordinates
-            # (NaN values) to not get trimmed out.
-            if kwargs.get("_modified"):
-                select_kwargs = {
-                    i: v
-                    for i, v in kwargs.items()
-                    if i in patch.dims or i in patch.coords.coord_map
-                }
-            else:
-                select_kwargs = self._select_kwargs
-            if select_kwargs:
-                patch: dc.Patch = patch.select(**select_kwargs)
+            patch = self._load_trimmed_patch(patch_kwargs, joined)
             # The index doesn't carry all the dimensional info, so get what
             # merging needs from the patch coords (cheaper than attr dumps).
             info = _patch_dim_summary(patch)
@@ -497,6 +555,90 @@ class DataFrameSpool(BaseSpool):
         if len(out) > expected_len:
             out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
         return [x["patch"] for x in out]
+
+    def _load_trimmed_patch(self, patch_kwargs, joined) -> dc.Patch:
+        """Load a single patch and trim it to its instruction range."""
+        # convert kwargs to format understood by parser/patch.select
+        kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
+        patch = self._load_patch(kwargs)
+        # If the limits of the source patch were not modified, we can just
+        # use the select kwargs. This is important for missing coordinates
+        # (NaN values) to not get trimmed out.
+        if kwargs.get("_modified"):
+            select_kwargs = {
+                i: v
+                for i, v in kwargs.items()
+                if i in patch.dims or i in patch.coords.coord_map
+            }
+        else:
+            select_kwargs = self._select_kwargs
+        if select_kwargs:
+            patch = patch.select(**select_kwargs)
+        return patch
+
+    def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):
+        """
+        Merge the patches described by the instructions along merge_dim.
+
+        Each patch is copied into a pre-allocated output array as it is
+        loaded, then released; this avoids holding all source patches and
+        the merged output in memory at the same time, as concatenating
+        would.
+        """
+        buffer, offset, axis, dims = None, 0, None, None
+        coords, attrs, summaries = [], [], []
+        for patch_kwargs in df_dict_list:
+            patch = self._load_trimmed_patch(patch_kwargs, joined)
+            if dims is None:
+                dims = patch.dims
+                axis = patch.get_axis(merge_dim)
+            elif patch.dims != dims:
+                patch = patch.transpose(*dims)
+            data = patch.data
+            if buffer is None:
+                shape = list(data.shape)
+                shape[axis] = samples
+                buffer = np.empty(shape, dtype=data.dtype)
+            # Mixed dtypes upcast, mirroring np.concatenate behavior.
+            dtype = np.result_type(buffer.dtype, data.dtype)
+            if dtype != buffer.dtype:
+                buffer = buffer.astype(dtype)
+            end = offset + data.shape[axis]
+            if end > buffer.shape[axis]:
+                # The estimate came up short (eg from slightly uneven
+                # sampling); grow the buffer to fit.
+                shape = list(buffer.shape)
+                shape[axis] = end
+                new_buffer = np.empty(shape, dtype=buffer.dtype)
+                new_buffer[_dim_slice(buffer.ndim, axis, 0, offset)] = buffer[
+                    _dim_slice(buffer.ndim, axis, 0, offset)
+                ]
+                buffer = new_buffer
+            buffer[_dim_slice(buffer.ndim, axis, offset, end)] = data
+            offset = end
+            coords.append(patch.coords)
+            attrs.append(patch.attrs)
+            summaries.append(_patch_dim_summary(patch))
+        if offset != buffer.shape[axis]:  # over-estimated; trim excess.
+            buffer = buffer[_dim_slice(buffer.ndim, axis, 0, offset)]
+        # Ensure the loaded patches only vary along the expected dimension,
+        # the same requirement _force_patch_merge enforces.
+        summary_df = pd.DataFrame(summaries)
+        found_dim = _get_merge_dim(summary_df)
+        if found_dim != merge_dim:
+            msg = (
+                f"Cannot merge patches; expected them to vary along "
+                f"{merge_dim} but found {found_dim}."
+            )
+            raise CoordMergeError(msg)
+        conf = self._merge_kwargs.get("conflicts", None)
+        drop_conflicting = conf in {"drop", "keep_first"}
+        new_coord = _get_merged_coord(summary_df, merge_dim, coords, drop_conflicting)
+        coord = new_coord.coord_map[merge_dim]
+        new_attrs = combine_patch_attrs(
+            attrs, merge_dim, coord=coord, **self._merge_kwargs
+        )
+        return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _get_dummy_dataframes(self, current):
         """
@@ -582,6 +724,8 @@ class DataFrameSpool(BaseSpool):
         new._df = df
         new._source_df = source_df
         new._instruction_df = instruction_df
+        # Discard stale instruction indices (eg from copied caches).
+        new._cache.pop("_instruction_indices", None)
         new._select_kwargs = dict(self._select_kwargs)
         new._select_kwargs.update(select_kwargs or {})
         new._merge_kwargs = dict(self._merge_kwargs)

@@ -13,7 +13,7 @@ import dascore as dc
 import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
-from dascore.exceptions import ParameterError
+from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func, suppress_warnings
@@ -565,6 +565,19 @@ class TestFileSpoolIntegrations:
         with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
             for patch in dist_differ_spool:
                 assert isinstance(patch, dc.Patch)
+
+    def test_missing_patch_error_catchable_as_index_error(self, dist_differ_spool):
+        """
+        For backwards compatibility, MissingPatchError must remain
+        catchable as an IndexError, which spool indexing used to raise.
+        """
+        assert issubclass(MissingPatchError, IndexError)
+        with suppress_warnings(UserWarning):
+            for ind in range(len(dist_differ_spool)):
+                try:
+                    dist_differ_spool[ind]
+                except IndexError:
+                    pass
 
     @pytest.mark.xfail()
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):

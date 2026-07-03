@@ -384,6 +384,51 @@ def merge_patches(
     return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
 
 
+def _get_merge_dim(df) -> str | None:
+    """
+    Get the merge dimension from a dataframe of patch dim summaries.
+
+    The merge dimension is the single dimension whose range varies between
+    rows; None means complete overlap (nothing to merge).
+    """
+    dims = df["dims"].unique()
+    assert len(dims) == 1
+    dims = dims[0].split(",")
+    dims_vary = pd.Series({x: False for x in dims})
+    for dim in dims:
+        cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
+        vals = df[cols].values
+        vals_eq = vals == vals[[0], :]
+        vals_null = pd.isnull(vals)
+        columns_equal = (vals_eq | vals_null).all(axis=1)
+        dims_vary[dim] = not np.all(columns_equal)
+    assert dims_vary.sum() <= 1, "Only one dimension can vary for forced merge"
+    if not dims_vary.any():  # the case of complete overlap.
+        return None
+    return dims_vary[dims_vary].index[0]
+
+
+def _maybe_expected_step(df, dim):
+    """Get the expected step if all steps are close, else None."""
+    col = df[f"{dim}_step"].values
+    if all_diffs_close_enough(col):
+        return get_middle_value(col)
+    return None
+
+
+def _get_merged_coord(df, merge_dim, coords, drop_conflicting=False):
+    """Get merged coordinates, also validate anticipated sampling."""
+    new_coord = merge_coord_managers(
+        coords, dim=merge_dim, drop_conflicting=drop_conflicting
+    )
+    expected_step = _maybe_expected_step(df, merge_dim)
+    if not pd.isnull(expected_step):
+        new_coord = new_coord.snap(merge_dim)[0]
+        # TODO slightly different dt can be produced, let pass for now
+        # need to think more about how the merging should work.
+    return new_coord
+
+
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     Force a merge of the patches along a dimension.
@@ -391,45 +436,8 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     This function is used in conjunction with `spool.chunk`, which
     does all the compatibility checks beforehand.
     """
-
-    def _get_merge_col(df):
-        dims = df["dims"].unique()
-        assert len(dims) == 1
-        dims = dims[0].split(",")
-        dims_vary = pd.Series({x: False for x in dims})
-        for dim in dims:
-            cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
-            vals = df[cols].values
-            vals_eq = vals == vals[[0], :]
-            vals_null = pd.isnull(vals)
-            columns_equal = (vals_eq | vals_null).all(axis=1)
-            dims_vary[dim] = not np.all(columns_equal)
-        assert dims_vary.sum() <= 1, "Only one dimension can vary for forced merge"
-        if not dims_vary.any():  # the case of complete overlap.
-            return None
-        return dims_vary[dims_vary].index[0]
-
-    def _maybe_step(df, dim):
-        """Get the expected step if all steps are close, else None."""
-        col = df[f"{dim}_step"].values
-        if all_diffs_close_enough(col):
-            return get_middle_value(col)
-        return None
-
-    def _get_new_coord(df, merge_dim, coords, drop_conflicting=False):
-        """Get new coordinates, also validate anticipated sampling."""
-        new_coord = merge_coord_managers(
-            coords, dim=merge_dim, drop_conflicting=drop_conflicting
-        )
-        expected_step = _maybe_step(df, merge_dim)
-        if not pd.isnull(expected_step):
-            new_coord = new_coord.snap(merge_dim)[0]
-            # TODO slightly different dt can be produced, let pass for now
-            # need to think more about how the merging should work.
-        return new_coord
-
     df = pd.DataFrame(patch_dict_list)
-    merge_dim = _get_merge_col(df)
+    merge_dim = _get_merge_dim(df)
     merge_kwargs = merge_kwargs if merge_kwargs is not None else {}
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
@@ -446,7 +454,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     # Determine if conflicting non-dimensional coords should be dropped.
     conf = merge_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_new_coord(df, merge_dim, coords, drop_conf_coords)
+    new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords)
     coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
     new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)

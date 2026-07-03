@@ -16,6 +16,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
+from dascore.exceptions import MissingPatchError
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.docs import compose_docstring
 from dascore.utils.pd import adjust_segments
@@ -128,12 +129,18 @@ class DirectorySpool(DataFrameSpool):
         final_kwargs.update(self._select_kwargs)
         patches = self._read_patches(final_kwargs)
         if patches is None:  # fast path doesn't apply, use generic read.
-            patches = [dc.read(**final_kwargs)[0]]
+            spool = dc.read(**final_kwargs)
+            if isinstance(spool, MemorySpool):
+                patches = spool._unprocessed_patches()
+            else:  # a FiberIO returned an unusual spool type.
+                patches = list(spool)
         if not patches:
-            # Note: DataFrameSpool.__iter__ matches on "out of bounds" to
-            # skip patches trimmed to nothing (see #583).
-            msg = "index of [0] is out of bounds for spool."
-            raise IndexError(msg)
+            # Iteration skips these with a warning, see #583.
+            msg = (
+                f"No patch in {final_kwargs.get('path')} matches the "
+                f"requested range; it may have been trimmed to nothing."
+            )
+            raise MissingPatchError(msg)
         return patches[0]
 
     def _read_patches(self, kwargs) -> list[dc.Patch] | None:
