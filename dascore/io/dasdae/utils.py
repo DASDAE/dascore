@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from tables import Atom, NodeError
+from tables import NodeError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -30,27 +30,14 @@ def _create_or_get_group(h5, group, name):
     return group
 
 
-def _create_or_squash_array(h5, group, name, data, filters=None):
+def _create_or_squash_array(h5, group, name, data):
     """Create a new array, if it exists delete and re-create."""
-    data = np.asarray(data)
-    use_carray = filters is not None and data.size and data.shape
-
-    def create_array():
-        if use_carray:
-            atom = Atom.from_dtype(data.dtype)
-            array = h5.create_carray(
-                group, name, atom=atom, shape=data.shape, filters=filters
-            )
-            array[:] = data
-            return array
-        return h5.create_array(group, name, data)
-
     try:
-        array = create_array()
+        array = h5.create_array(group, name, data)
     except NodeError:
         old_node = getattr(group, name)
         h5.remove_node(old_node)
-        array = create_array()
+        array = h5.create_array(group, name, data)
     return array
 
 
@@ -72,19 +59,19 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group._v_attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group, h5, filters=None):
+def _save_array(data, name, group, h5):
     """Save an array to a group, handle datetime flubbery."""
     # handle datetime conversions
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
     if is_dt or is_td:
         data = to_int(data)
-    array_node = _create_or_squash_array(h5, group, name, data, filters=filters)
+    array_node = _create_or_squash_array(h5, group, name, data)
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
 
 
-def _save_coords(patch, patch_group, h5, filters=None):
+def _save_coords(patch, patch_group, h5):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
@@ -92,20 +79,20 @@ def _save_coords(patch, patch_group, h5, filters=None):
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        _save_array(data, save_name, patch_group, h5, filters=filters)
+        _save_array(data, save_name, patch_group, h5)
         # then save dimensions of coordinates
         save_name = f"_cdims_{name}"
         patch_group._v_attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, h5, name, filters=None):
+def _save_patch(patch, wave_group, h5, name):
     """Save the patch to disk."""
     patch_group = _create_or_get_group(h5, wave_group, name)
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group, h5, filters=filters)
+    _save_coords(patch, patch_group, h5)
     # add data
     if patch.data.shape:
-        _create_or_squash_array(h5, patch_group, "data", patch.data, filters=filters)
+        _create_or_squash_array(h5, patch_group, "data", patch.data)
 
 
 # --- Functions for reading
@@ -244,8 +231,7 @@ def _get_patch_content_from_group(group):
     for key in attrs._f_list():
         value = getattr(attrs, key)
         new_key = key.replace("_attrs_", "")
-        # Older DASDAE files can expose scalar HDF attrs as 0-D arrays with
-        # some PyTables versions; normalize them before building PatchAttrs.
+        # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
         out[new_key] = value
