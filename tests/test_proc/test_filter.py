@@ -35,6 +35,11 @@ class TestPassFilterChecks:
         with pytest.raises(FilterValueError, match="length two sequence"):
             _ = random_patch.pass_filter(time=[1, 3, 3])
 
+    def test_scalar_kwarg_raises(self, random_patch):
+        """A non-sequence filter value should get the same clear error."""
+        with pytest.raises(FilterValueError, match="length two sequence"):
+            _ = random_patch.pass_filter(time=10)
+
     def test_all_null_kwarg_raises(self, random_patch):
         """There must be one Non-null kwarg."""
         with pytest.raises(FilterValueError, match="at least one filter"):
