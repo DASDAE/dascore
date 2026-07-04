@@ -1,6 +1,6 @@
 # Fourier Transforms in DASCore
 
-These notes provide the reasoning for DASCore's [fourier](`dascore.transform.fourier`) module implementation.
+These notes provide the reasoning for DASCore's [fourier](/reference/index.qmd#transforms) module implementation.
 
 ## Summary {#sec-summary}
 

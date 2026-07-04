@@ -23,6 +23,11 @@ logo:
   alt: "DASCore logo"
   show_title: true
 
+# Pre-render hook: add alias entries (Patch methods, re-export paths,
+# module links) to the interlink inventory so alias-style cross references
+# keep resolving.
+pre_render: scripts/greatdocs_alias_inventory.py
+
 # Bibliography so citations (e.g. @lindsey2020broadband) in docstrings and
 # narrative pages resolve instead of hanging pandoc.
 bibliography: docs/references.bib
@@ -66,15 +71,12 @@ exclude:
   - examples.EXAMPLE_PATCHES
   - examples.EXAMPLE_SPOOLS
   - examples.UnknownExampleError
-  - io.HDF5Reader
-  - io.HDF5Writer
   - io.PatchNameSpace
   - proc.ArrayLike
   - proc.PatchType
   - proc.apply_operator
   - proc.array
   - proc.compose_docstring
-  - proc.coords_from_df
   - proc.get_parent_code_name
   - proc.get_dim_axis_value
   - proc.iterate
@@ -119,7 +121,7 @@ reference:
         members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, update, viz]
       - clients.dirspool.DirectorySpool
       - name: PatchAttrs
-        members: [coords_from_dims, dim_tuple, drop, drop_private, flat_dump, from_dict, get, items, parse_coord_attributes, rename_dimension, update]
+        members: [coords_from_dims, dim_tuple, drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, parse_coord_attributes, rename_dimension, update]
       - name: CoordManager
         members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, update_from_attrs, validate_data]
       - name: proc.BaseCoord
@@ -140,6 +142,7 @@ reference:
       - proc.append_dims
       - proc.bool_patch
       - proc.conj
+      - proc.coords_from_df
       - proc.correlate
       - proc.convert_units
       - proc.correlate_shift
@@ -288,6 +291,8 @@ reference:
       - io.patch_to_xarray
       - io.BinaryReader
       - io.BinaryWriter
+      - io.H5Reader
+      - io.H5Writer
       - io.PyTablesReader
       - io.PyTablesWriter
 

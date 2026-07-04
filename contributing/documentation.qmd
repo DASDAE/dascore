@@ -140,10 +140,16 @@ Cross references provide a means of linking parts of the documentation to the AP
 This is a link to DASCore's [Patch](`dascore.Patch`).
 ```
 
-To link to qmd files in the documentation folder (eg from a docstring) the path relative to the docs folder can be used:
+Any public access path to a documented object works, including method aliases
+and re-export paths (e.g. `` `dascore.Patch.pass_filter` `` or
+`` `dascore.proc.pass_filter` ``); scripts/greatdocs_alias_inventory.py adds
+these aliases to the link inventory during the build. Module references such
+as `` `dascore.proc` `` link to the matching section of the API index.
+
+To link to a documentation page (eg from a docstring), use its site-root path:
 
 ```
-This is a link to [this qmd file](`docs/contributing/documentation.qmd`).
+See the [patch tutorial](/tutorial/patch.qmd) for examples.
 ```
 
 Cross references can be used in both docstrings and the qmd documentation pages.

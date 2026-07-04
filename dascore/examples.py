@@ -308,7 +308,7 @@ def example_event_1():
 @register_func(EXAMPLE_PATCHES, key="example_event_2")
 def example_event_2():
     """
-    [`example_event_1`](`dascore.examples.example_event_1`) with pre-processing.
+    Same as `example_event_1` but with pre-processing applied.
     """
     path = fetch("example_dasdae_event_1.h5")
     patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
