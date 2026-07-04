@@ -15,8 +15,6 @@ import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
-from scipy.signal import filtfilt, iirfilter, iirnotch, sosfilt, sosfiltfilt, zpk2sos
-from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
@@ -29,6 +27,7 @@ from dascore.units import (
     quant_sequence_to_quant_array,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import (
     broadcast_for_index,
     check_filter_kwargs,
@@ -40,6 +39,14 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.time import to_float
+
+filtfilt = lazy_import("scipy.signal", "filtfilt")
+iirfilter = lazy_import("scipy.signal", "iirfilter")
+iirnotch = lazy_import("scipy.signal", "iirnotch")
+sosfilt = lazy_import("scipy.signal", "sosfilt")
+sosfiltfilt = lazy_import("scipy.signal", "sosfiltfilt")
+zpk2sos = lazy_import("scipy.signal", "zpk2sos")
+np_savgol_filter = lazy_import("scipy.signal", "savgol_filter")
 
 
 def _check_sobel_args(dim, mode, cval):
