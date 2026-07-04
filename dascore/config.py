@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Literal
@@ -142,13 +141,9 @@ class DascoreConfig(BaseModel):
         return np.timedelta64(value)
 
 
-# The active config is held in a ContextVar (not a plain module global) so that
-# scoped `set_config(...)` overrides are thread- and async-safe: each thread or
-# task sees its own override and restores independently, matching the
-# remote-cache scope in `dascore.utils.remote_io`.
-_CONFIG: ContextVar[DascoreConfig] = ContextVar(
-    "dascore_config", default=DascoreConfig()
-)
+# The active runtime config is a process-global singleton. A scoped override
+# via `set_config(...)` is applied globally and restored on context exit.
+_CONFIG = DascoreConfig()
 
 
 class _ConfigDescriptor:
@@ -169,16 +164,17 @@ def config_attr(attr_name: str):
 
 def get_config() -> DascoreConfig:
     """Return the active runtime configuration."""
-    return _CONFIG.get()
+    return _CONFIG
 
 
 @contextmanager
-def _restore_config(token):
+def _restore_config(previous: DascoreConfig):
     """Restore the previous config when exiting a context manager."""
+    global _CONFIG
     try:
-        yield _CONFIG.get()
+        yield _CONFIG
     finally:
-        _CONFIG.reset(token)
+        _CONFIG = previous
 
 
 def set_config(new_config: DascoreConfig | None = None, **kwargs):
@@ -195,9 +191,9 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs):
 
     Notes
     -----
-    The config is stored in a `ContextVar`, so an override is scoped to the
-    current thread/task. It is applied immediately and also returns a context
-    manager which restores the previous config on exit.
+    The config is a process-global singleton. An override is applied immediately
+    and also returns a context manager which restores the previous config on
+    exit. Overrides are not thread-scoped.
 
     Examples
     --------
@@ -207,27 +203,29 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs):
     ...     assert dc.get_config().debug
     >>> assert not dc.get_config().debug
     >>>
-    >>> # Bare call: apply for the rest of the current context, then reset.
+    >>> # Bare call: apply until reset.
     >>> _ = dc.set_config(display_float_precision=5)
     >>> assert dc.get_config().display_float_precision == 5
     >>> _ = dc.reset_config()
     """
+    global _CONFIG
+    previous = _CONFIG
     if new_config is not None and kwargs:
         msg = "Cannot supply both new_config and keyword overrides."
         raise ValueError(msg)
     if new_config is None:
-        payload = get_config().model_dump()
+        payload = previous.model_dump()
         payload.update(kwargs)
         new_config = DascoreConfig(**payload)
     elif not isinstance(new_config, DascoreConfig):
         msg = "new_config must be an instance of DascoreConfig."
         raise TypeError(msg)
-    token = _CONFIG.set(new_config)
-    return _restore_config(token)
+    _CONFIG = new_config
+    return _restore_config(previous)
 
 
 def reset_config() -> DascoreConfig:
     """Reset the active runtime config to defaults."""
-    new_config = DascoreConfig()
-    _CONFIG.set(new_config)
-    return new_config
+    global _CONFIG
+    _CONFIG = DascoreConfig()
+    return _CONFIG
