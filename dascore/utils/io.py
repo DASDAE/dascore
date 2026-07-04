@@ -22,7 +22,12 @@ from dascore.utils.misc import (
     iterate,
     optional_import,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_local_path,
+    is_pathlike,
+)
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
 from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
@@ -46,7 +51,7 @@ def ensure_local_file(resource) -> Path:
 def _normalize_resource_identity(resource):
     """Normalize one pathlike input to a local Path or remote UPath."""
     if is_local_path(resource):
-        return Path(resource)
+        return coerce_to_local_path(resource)
     return coerce_to_upath(resource)
 
 

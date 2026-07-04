@@ -517,6 +517,34 @@ class TestGetFormat:
         assert seen["resource"] == path
 
 
+class TestFileUri:
+    """Local file:// URIs should behave like plain local paths."""
+
+    @pytest.fixture(scope="class")
+    def dasdae_path(self, tmp_path_factory):
+        """Write an example patch to a local dasdae file."""
+        path = tmp_path_factory.mktemp("file_uri") / "patch.h5"
+        dc.get_example_patch().io.write(path, "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def file_uri(self, dasdae_path):
+        """Return the file:// URI form of the local dasdae file."""
+        return dasdae_path.resolve().as_uri()
+
+    def test_get_format(self, file_uri, dasdae_path):
+        """get_format should agree for path and file:// URI."""
+        assert dc.get_format(file_uri) == dc.get_format(dasdae_path)
+
+    def test_scan(self, file_uri, dasdae_path):
+        """Scan should succeed for a file:// URI."""
+        assert len(dc.scan(file_uri)) == len(dc.scan(dasdae_path))
+
+    def test_read(self, file_uri, dasdae_path):
+        """Read via file:// URI should equal read via plain path."""
+        assert dc.read(file_uri)[0] == dc.read(dasdae_path)[0]
+
+
 class TestScan:
     """Tests for scanning fiber files."""
 

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from upath import UPath
 
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.paths import (
+    coerce_to_local_path,
     coerce_to_upath,
     get_path_protocol,
     is_local_path,
@@ -54,6 +57,28 @@ class TestIsLocalPath:
         assert is_local_path(tmp_path)
         assert not is_local_path("memory://dascore/test.txt")
         assert not is_local_path(object())
+
+
+class TestCoerceToLocalPath:
+    """Tests for ``coerce_to_local_path``."""
+
+    def test_plain_path_passthrough(self, tmp_path):
+        """A plain Path should be returned unchanged."""
+        assert coerce_to_local_path(tmp_path) == tmp_path
+
+    def test_plain_string(self):
+        """A plain string should become an equivalent Path."""
+        assert coerce_to_local_path("/tmp/a/b.h5") == Path("/tmp/a/b.h5")
+
+    def test_file_uri_scheme_stripped(self):
+        """A file:// URI must strip the scheme to a real filesystem path."""
+        out = coerce_to_local_path("file:///tmp/a/b.h5")
+        assert out == Path("/tmp/a/b.h5")
+        assert "://" not in str(out)
+
+    def test_local_uri_scheme_stripped(self):
+        """A local:// URI must also strip to a real filesystem path."""
+        assert coerce_to_local_path("local:///tmp/x.h5") == Path("/tmp/x.h5")
 
 
 class TestRequiresLocalDirectory:

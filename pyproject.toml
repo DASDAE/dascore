@@ -65,6 +65,7 @@ dependencies = [
 extras = [
     "xarray",
     "netCDF4",
+    "h5netcdf",
     "findiff",
     "obspy",
     "numba",

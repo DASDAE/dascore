@@ -522,6 +522,37 @@ class TestNetCDFIO:
         assert "distance" in summary.coords
         assert summary.source_patch_id == "data"
 
+    def test_remote_stream_no_download(self, example_patch, netcdf_path):
+        """Remote NetCDF should stream via h5netcdf, not download to the cache."""
+        pytest.importorskip("h5netcdf")
+        from upath import UPath
+
+        from dascore.utils.remote_io import (
+            clear_remote_file_cache,
+            get_remote_cache_path,
+        )
+
+        # Publish the file onto a non-local (memory) filesystem.
+        remote = UPath("memory://netcdf_stream_test/remote.nc")
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        with open(netcdf_path, "rb") as src, remote.open("wb") as dst:
+            dst.write(src.read())
+
+        clear_remote_file_cache()
+        cache_root = get_remote_cache_path()
+
+        def _cached_file_count() -> int:
+            return sum(1 for p in cache_root.rglob("*") if p.is_file())
+
+        # Scan and read the remote file with default config (no cache opt-in).
+        summary = dc.scan(remote)[0]
+        assert summary.source_format == "NETCDF_CF"
+        assert _cached_file_count() == 0, "scan should stream, not download"
+
+        patch = dc.read(remote)[0]
+        assert patch == example_patch
+        assert _cached_file_count() == 0, "read should stream, not download"
+
     def test_get_format(self, minimal_cf_netcdf_path):
         """Test format detection."""
         assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")

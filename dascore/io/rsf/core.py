@@ -3,13 +3,12 @@
 
 # import segyio
 import datetime as dt
-from pathlib import Path
 
 import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
-from dascore.utils.paths import coerce_to_upath, is_local_path
+from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
@@ -17,7 +16,7 @@ RSFKEYS_WRITE = ("in", "esize", "data_format")
 
 def _coerce_output_path(path):
     """Return a local Path or remote UPath-like path for writing."""
-    return Path(path) if is_local_path(path) else coerce_to_upath(path)
+    return coerce_to_local_path(path) if is_local_path(path) else coerce_to_upath(path)
 
 
 class RSFV1(FiberIO):

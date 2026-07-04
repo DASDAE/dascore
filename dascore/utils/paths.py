@@ -37,6 +37,22 @@ def is_local_path(resource) -> bool:
     return get_path_protocol(resource) in {"", "file", "local"}
 
 
+def coerce_to_local_path(resource) -> Path:
+    """
+    Return a plain `Path` for a local resource, stripping any URI scheme.
+
+    ``Path("file:///tmp/x")`` keeps the scheme as a literal path segment, so
+    local inputs carrying a ``file://`` (or ``local://``) scheme must be routed
+    through ``UPath`` first to recover the real filesystem path. Plain paths
+    take a fast path and skip that round-trip.
+    """
+    if isinstance(resource, Path):
+        return resource
+    if isinstance(resource, str) and "://" not in resource:
+        return Path(resource)
+    return Path(coerce_to_upath(resource).path)
+
+
 def requires_local_directory(resource, *, label: str):
     """Raise when directory operations are requested on non-local filesystems."""
     if is_pathlike(resource) and not is_local_path(resource):

@@ -10,7 +10,7 @@ from scipy.io.wavfile import write
 from dascore.constants import ONE_SECOND, SpoolType
 from dascore.io.core import FiberIO
 from dascore.utils.patch import check_patch_coords
-from dascore.utils.paths import coerce_to_upath, is_local_path
+from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 
 
 class WavIO(FiberIO):
@@ -55,7 +55,9 @@ class WavIO(FiberIO):
             see if this fixes the issue.
         """
         resource = (
-            Path(resource) if is_local_path(resource) else coerce_to_upath(resource)
+            coerce_to_local_path(resource)
+            if is_local_path(resource)
+            else coerce_to_upath(resource)
         )
         assert len(spool) == 1, "Only single patch spools can be written to wav"
         patch = spool[0]
