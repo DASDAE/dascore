@@ -150,7 +150,9 @@ class TestMemorySpoolLazy:
         merged = spool.chunk(time=None)
         assert len(merged) == 1
         time_coord = merged[0].get_coord("time")
-        expected_min = min(x.attrs.time_min for x in patch_list)
+        expected_min = min(
+            x.summary.get_coord_summary("time").min for x in patch_list
+        )
         assert time_coord.min() == expected_min
 
     def test_derived_spool_does_not_retain_parent(self, patch_list):

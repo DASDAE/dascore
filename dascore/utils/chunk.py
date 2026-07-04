@@ -157,6 +157,7 @@ class ChunkManager:
     # intentionally rewrite coord extents/min/max, so inherited fingerprint
     # columns are no longer expected to remain equal across merge candidates.
     _merge_ignored_columns: ClassVar[set[str]] = {
+        "dtype",
         "time_fingerprint",
         "distance_fingerprint",
     }

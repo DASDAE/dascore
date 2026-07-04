@@ -407,8 +407,6 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
             coords = patch.coords.update(**{dim: new_coord})
             data = np.expand_dims(func(data, axis=axis), axis)
         attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
-        attrs["coords"] = coords.to_summary_dict()
-        attrs["dims"] = coords.dims
         patch = patch.new(data=data, coords=coords, attrs=attrs)
     return patch
 
