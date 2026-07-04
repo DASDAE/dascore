@@ -122,7 +122,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    See also [snap](`dascore.core.Patch.snap_coords`).
+    See also [snap](`dascore.proc.snap_coords`).
 
     Examples
     --------

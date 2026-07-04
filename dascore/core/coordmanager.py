@@ -1163,7 +1163,7 @@ def get_coord_manager(
         Information about coordinates. These can be a mapping of the
         form: {name, array}, {name: (dim_name, array)}, or
         {name: ((dim_names,) array). Can also be a
-        [`CoordManager`](`dascore.core.CoordManager`).
+        [`CoordManager`](`dascore.CoordManager`).
     dims
         Tuple specify dimension names
     shape

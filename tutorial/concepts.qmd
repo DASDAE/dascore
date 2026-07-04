@@ -15,7 +15,7 @@ The `Patch` contains a contiguous block of N dimensional data and metadata.
 The `Spool` manages a group of `Patch`es. These can be in memory, on
 disk, or a remote resource.
 
-![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
+![Patch (blue) and Spool (red)](../assets/patch_n_spool.png){#fig-patch_n_spool}
 
 You will read more about Patches and Spools later on in the tutorial.
 

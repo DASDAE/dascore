@@ -107,31 +107,29 @@ print("cool beans")
 
 # Generating Documentation
 
-DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you must first [install DASCore in development mode](dev_install.qmd) then [install quarto](https://quarto.org/docs/get-started/).
-
-Next, the automatic API documents are created with scripts/build_api_docs.py
+DASCore's documentation is built with [great-docs](https://posit-dev.github.io/great-docs/), which is based on [quarto](https://quarto.org/). In order to build the documentation, you must first [install DASCore in development mode](dev_install.qmd), [install quarto](https://quarto.org/docs/get-started/), then install great-docs:
 
 ```bash
-python scripts/build_api_docs.py
+pip install great-docs
 ```
 
-Finally, the documentation can be built by calling quarto render on the docs folder:
+The entire site (API reference included) is then built with a single command run from the repository root:
 
 ```bash
-quarto render docs
+great-docs build
 ```
 
-The newly generated html can then be accessed by double-clicking on the html index at docs/_site/index.html.
+The newly generated html can then be accessed by double-clicking on the html index at great-docs/_site/index.html.
 
 Conversely, you can also preview the documentation so changes are rendered in real time in the browser:
 
 ```bash
-quarto preview docs
+great-docs preview
 ```
 
 :::{.callout-warning}
-If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml.
-Do not modify docs/_quarto.yml because it will be overwritten.
+The site structure, the curated API reference, and everything else about the build are configured in great-docs.yml at the repository root.
+The great-docs/ directory is an ephemeral build directory; do not edit or commit it.
 :::
 
 # Cross references
@@ -139,7 +137,7 @@ Do not modify docs/_quarto.yml because it will be overwritten.
 Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes, functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded by backticks like so:
 
 ```
-This is a link to DASCore's [Patch](`dascore.core.Patch`).
+This is a link to DASCore's [Patch](`dascore.Patch`).
 ```
 
 To link to qmd files in the documentation folder (eg from a docstring) the path relative to the docs folder can be used:

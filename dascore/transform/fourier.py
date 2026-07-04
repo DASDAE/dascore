@@ -262,7 +262,7 @@ def dft(
     - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
 
-    - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.
+    - See the [FFT notes](/notes/dft_notes.qmd) for more details.
 
     See Also
     --------

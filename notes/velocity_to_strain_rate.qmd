@@ -14,8 +14,8 @@ Although DASCore usually refers to these type of data as "velocity", since the u
 
 There are two functions for converting velocity data to strain rate:
 
-1. [Patch.velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
-2. [Patch.velocity_to_strain_rate_edgeless](`dascore.Patch.velocity_to_strain_rate_edgeless`)
+1. [Patch.velocity_to_strain_rate](`dascore.transform.velocity_to_strain_rate`)
+2. [Patch.velocity_to_strain_rate_edgeless](`dascore.transform.velocity_to_strain_rate_edgeless`)
 
 The first function uses a central difference scheme when possible, but also a forward/backwards difference scheme on the edges. This results in patch that is the same shape as the input patch, but, depending on the parameters, there may be some artefacts on the end channels. It only supports even `step_multiple` values which means the smallest gauge length is twice the distance step. It also supports higher order filters if the [findiff library](https://findiff.readthedocs.io/en/latest/) is installed.
 

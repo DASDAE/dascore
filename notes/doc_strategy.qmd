@@ -4,7 +4,7 @@ title: DASCore Documentation Strategy
 
 DASCore's documentation follows the [Diátaxis](https://diataxis.fr/) approach. In this system, developed by Daniele Procida, there are four types of documentation with different goals:
 
-![](../_static/diataxis.png)
+![](../assets/diataxis.png)
 
 The sections of DASCore's documentation can be classified as follows:
 

@@ -301,7 +301,7 @@ def patch_function(
       machinery multiple times from within another patch function.
 
     - If using `PatchType` or `SpoolType` type variables from the
-      [constants module](`dascore.constants`), make sure dascore is imported
+      [constants module](/reference/index.qmd), make sure dascore is imported
       as dc at the top of the file where the patch function is defined so
       the forward refs can be resolved properly for type checking.
     """
@@ -1376,7 +1376,7 @@ def concatenate_patches(
     - [`Spool.chunk`](`dascore.BaseSpool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
-      [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
+      [chunk section of the spool tutorial](/tutorial/spool.qmd#concatenate)
     """
 
     def _get_dim_and_value(kwargs):

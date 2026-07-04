@@ -6,7 +6,7 @@ execute:
 
 # Viz
 The following provides some examples of patch visualization.
-See the [viz module documentation](`dascore.viz`) for a list of visualization functions
+See the [viz module documentation](/reference/index.qmd#visualization) for a list of visualization functions
 
 ## Waterfall
 The [`waterfall patch function`](`dascore.viz.waterfall`) creates a waterfall plot of the patch data.
