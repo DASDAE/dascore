@@ -114,7 +114,7 @@ class TestAdaptAndBackendBasics:
         back.write_sources(summaries_to_records(make_summaries()))
         before = len(back.query())
 
-        def boom(paths):
+        def boom(paths, base_uri=""):
             raise RuntimeError("simulated failure")
 
         back._delete_by_paths = boom
@@ -307,6 +307,9 @@ class TestIndexerEdges:
         sub = tmp_path / "unit"
         sub.mkdir()
         (sub / "metadata.xml").write_text(metadata)
+        # hidden files and subdirectories inside a unit are ignored
+        (sub / ".hidden_state").write_text("x")
+        (sub / "logs").mkdir()
         rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
         for name in (
             "DAS_20240530T011500_000000Z.raw",
@@ -450,4 +453,48 @@ class TestPivotEdge:
         df = back.query()
         assert len(df) == 1
         assert not [c for c in df.columns if c.endswith("_def_key")]
+        back.close()
+
+
+class TestCompositeSourceIdentity:
+    """Sources are identified by (base_uri, source_path)."""
+
+    def test_same_path_different_base_coexist(self, tmp_path):
+        """Identical relative paths under different bases don't collide."""
+        base = make_summaries()[0].dump_structured()
+        one = PatchSummary(**base)
+        records_a = summaries_to_records([one], base_uri="s3://bucket-a")
+        # base_uri strip only applies when paths share the base; set directly
+        records_a = [
+            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-a"}) for r in records_a
+        ]
+        records_b = [
+            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-b"}) for r in records_a
+        ]
+        back = get_backend(tmp_path / "multi", kind="duckdb")
+        back.write_sources(records_a)
+        back.write_sources(records_b)
+        df = back.query()
+        assert len(df) == 2
+        prefixes = {p.split("/das/")[0] for p in df["path"]}
+        assert prefixes == {"s3://bucket-a", "s3://bucket-b"}
+        # deletion is base-scoped
+        back.delete_sources([records_a[0].source_path], base_uri="s3://bucket-a")
+        df = back.query()
+        assert len(df) == 1
+        assert df["path"].iloc[0].startswith("s3://bucket-b")
+        back.close()
+
+    def test_replacement_is_base_scoped(self, tmp_path):
+        """Rewriting a source under one base leaves the other base alone."""
+        base = make_summaries()[0].dump_structured()
+        one = PatchSummary(**base)
+        rec = summaries_to_records([one])[0]
+        rec_a = type(rec)(**{**rec.__dict__, "base_uri": "s3://a"})
+        rec_b = type(rec)(**{**rec.__dict__, "base_uri": "s3://b"})
+        back = get_backend(tmp_path / "scoped", kind="duckdb")
+        back.write_sources([rec_a, rec_b])
+        assert len(back.query()) == 2
+        back.write_sources([rec_a])  # replace only the s3://a copy
+        assert len(back.query()) == 2
         back.close()

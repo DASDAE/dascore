@@ -57,8 +57,8 @@ class AbstractIndexBackend(abc.ABC):
         """Insert or replace sources (and dependents) transactionally."""
 
     @abc.abstractmethod
-    def delete_sources(self, source_paths: list[str]) -> None:
-        """Remove sources and all dependent rows."""
+    def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
+        """Remove sources (identified by base_uri + path) and dependents."""
 
     @abc.abstractmethod
     def query(self, query: Query) -> pd.DataFrame:
@@ -254,7 +254,11 @@ class SQLIndexBackend(AbstractIndexBackend):
         """
         self._begin()
         try:
-            self._delete_by_paths([r.source_path for r in records])
+            by_base: dict[str, list[str]] = {}
+            for record in records:
+                by_base.setdefault(record.base_uri or "", []).append(record.source_path)
+            for base_uri, paths in by_base.items():
+                self._delete_by_paths(paths, base_uri=base_uri)
             column_map = self._ensure_attr_columns(records)
             source_id = self._next_id("sources", "source_id")
             patch_id = self._next_id("patches", "patch_id")
@@ -266,7 +270,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                 source_rows.append(
                     (
                         source_id,
-                        record.base_uri,
+                        record.base_uri or "",
                         record.source_path,
                         record.source_format,
                         record.format_version,
@@ -327,7 +331,8 @@ class SQLIndexBackend(AbstractIndexBackend):
     # variables (32766 by default) so large replacements must chunk.
     _in_clause_batch = 5000
 
-    def _delete_by_paths(self, source_paths: list[str]) -> None:
+    def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:
+        """Delete sources by (base_uri, source_path) identity."""
         if not source_paths:
             return
         batch = self._in_clause_batch
@@ -336,8 +341,9 @@ class SQLIndexBackend(AbstractIndexBackend):
             chunk = source_paths[start : start + batch]
             marks = ", ".join("?" for _ in chunk)
             found = self._fetch_df(
-                f"SELECT source_id FROM sources WHERE source_path IN ({marks})",
-                chunk,
+                f"SELECT source_id FROM sources WHERE source_path IN ({marks}) "
+                "AND base_uri = ?",
+                [*chunk, base_uri],
             )["source_id"].tolist()
             ids.extend(found)
         for start in range(0, len(ids), batch):
@@ -354,11 +360,11 @@ class SQLIndexBackend(AbstractIndexBackend):
             ):
                 self._execute(sql, chunk)
 
-    def delete_sources(self, source_paths: list[str]) -> None:
-        """Remove sources and all dependent rows."""
+    def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
+        """Remove sources (identified by base_uri + path) and dependents."""
         self._begin()
         try:
-            self._delete_by_paths(source_paths)
+            self._delete_by_paths(source_paths, base_uri=base_uri)
         except Exception:
             self._rollback()
             raise
@@ -423,7 +429,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         }
         out = out.rename(columns=renames)
         if "base_uri" in out:
-            has_base = out["base_uri"].notna()
+            has_base = out["base_uri"].notna() & (out["base_uri"] != "")
             out.loc[has_base, "path"] = (
                 out.loc[has_base, "base_uri"].str.rstrip("/")
                 + "/"
