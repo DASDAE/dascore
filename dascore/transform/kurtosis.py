@@ -134,8 +134,9 @@ def kurtosis(
     statistical moment — becomes strongly positive during such impulsive
     arrivals.
 
-    Here, kurtosis is determined in a window of lenght "winlen". We
-    then determine kurtosis of the amplitude distribution in that window.
+    Here, kurtosis is determined in a window whose length is given as a
+    dimension keyword argument (e.g. ``time=0.5``). We then determine
+    kurtosis of the amplitude distribution in that window.
     Higher kurtosis thus indicates high amplitude outliers. This in turn
     can be interpreted as a signal arrival.
 
