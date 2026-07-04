@@ -304,7 +304,7 @@ class _FiberIOManager:
         # no format found
         if not fiber_ios:
             format_list = list(self.known_formats)
-            msg = f"Unknown format {format}, " f"known formats are {format_list}"
+            msg = f"Unknown format {format}, known formats are {format_list}"
             raise UnknownFiberFormatError(msg)
         # a version is specified
         if version:

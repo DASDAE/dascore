@@ -612,10 +612,7 @@ def check_filter_sequence(filt_range):
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
     if all([pd.isnull(x) for x in mags]):
-        msg = (
-            f"pass filter requires at least one filter limit, "
-            f"you passed {filt_range}"
-        )
+        msg = f"pass filter requires at least one filter limit, you passed {filt_range}"
         raise FilterValueError(msg)
     return filt_range
 
