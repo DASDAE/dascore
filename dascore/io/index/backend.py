@@ -142,25 +142,42 @@ class SQLIndexBackend(AbstractIndexBackend):
         value = df["m"].iloc[0]
         return 1 if pd.isnull(value) else int(value) + 1
 
-    def _ensure_attr_columns(self, records: list[SourceRecord]) -> None:
-        """Lazily add typed attr columns and register them in attr_meta."""
-        known = {
-            (row.attr_name, row.value_kind) for row in self._attr_meta().itertuples()
+    def _ensure_attr_columns(
+        self, records: list[SourceRecord]
+    ) -> dict[tuple[str, str], str]:
+        """
+        Lazily add typed attr columns; return the (name, kind) -> column map.
+
+        attr_meta is the single source of truth for column names: distinct
+        attr names can sanitize to the same identifier ("Shot Number" vs
+        "shot_number"), so collisions get a deterministic numeric suffix.
+        """
+        mapping = {
+            (row.attr_name, row.value_kind): row.column_name
+            for row in self._attr_meta().itertuples()
         }
+        taken = set(mapping.values())
         needed: dict[tuple[str, str], str | None] = {}
         for record in records:
             for patch in record.patches:
                 for name, typed in patch.attrs.items():
                     key = (name, typed.kind)
-                    if key not in known and key not in needed:
+                    if key not in mapping and key not in needed:
                         needed[key] = typed.units
         for (name, kind), units in needed.items():
-            column = attr_column_name(name, kind)
+            column = base = attr_column_name(name, kind)
+            suffix = 2
+            while column in taken:
+                column = f"{base}_{suffix}"
+                suffix += 1
+            taken.add(column)
             self._execute(self.dialect.add_column("attrs", column, KIND_STORAGE[kind]))
             self._execute(
                 "INSERT INTO attr_meta VALUES (?, ?, ?, ?)",
                 (name, kind, column, units),
             )
+            mapping[(name, kind)] = column
+        return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
         """Insert many rows; engines override for faster bulk paths."""
@@ -183,7 +200,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         self._begin()
         try:
             self._delete_by_paths([r.source_path for r in records])
-            self._ensure_attr_columns(records)
+            column_map = self._ensure_attr_columns(records)
             source_id = self._next_id("sources", "source_id")
             patch_id = self._next_id("patches", "patch_id")
             now = time.time_ns()
@@ -221,8 +238,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                         )
                     )
                     columns = tuple(
-                        attr_column_name(name, tv.kind)
-                        for name, tv in patch.attrs.items()
+                        column_map[(name, tv.kind)] for name, tv in patch.attrs.items()
                     )
                     attr_groups.setdefault(columns, []).append(
                         [patch_id, *(tv.value for tv in patch.attrs.values())]
@@ -344,6 +360,10 @@ class SQLIndexBackend(AbstractIndexBackend):
                     col = pd.to_timedelta(col.astype("float64"), unit="ns")
                 elif row.value_kind == "bool":
                     col = col.astype("boolean")
+                if len(rows) > 1:
+                    # multi-kind attrs coalesce in object space; typed
+                    # extension arrays refuse cross-dtype fills
+                    col = col.astype(object).where(col.notna(), np.nan)
                 series = col if series is None else series.where(series.notna(), col)
                 out = out.drop(columns=[row.column_name])
             if series is not None:
