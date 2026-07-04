@@ -7,6 +7,7 @@ compatible libraries should go in this model.
 
 from __future__ import annotations
 
+import importlib
 from contextlib import suppress
 
 import numpy as np
@@ -18,11 +19,22 @@ from scipy.interpolate import interp1d  # NOQA
 from scipy.ndimage import zoom  # NOQA
 from upath import UPath  # NOQA
 
-from dascore.utils.imports import lazy_import
 
-decimate = lazy_import("scipy.signal", "decimate")
-resample = lazy_import("scipy.signal", "resample")
-resample_poly = lazy_import("scipy.signal", "resample_poly")
+def _lazy_import(module_name: str, attr_name: str):
+    """Return a callable proxy without importing dascore.utils during startup."""
+
+    def _wrapper(*args, **kwargs):
+        attr = getattr(importlib.import_module(module_name), attr_name)
+        return attr(*args, **kwargs)
+
+    _wrapper.__name__ = attr_name
+    _wrapper.__qualname__ = attr_name
+    return _wrapper
+
+
+decimate = _lazy_import("scipy.signal", "decimate")
+resample = _lazy_import("scipy.signal", "resample")
+resample_poly = _lazy_import("scipy.signal", "resample_poly")
 
 random_state = RandomState(42)
 

@@ -131,7 +131,7 @@ class TestMultiPatchFile:
         assert len(spool) == 2
         patches = list(spool)
         expected = set(contents["time_min"])
-        returned = {x.attrs.time_min for x in patches}
+        returned = {x.get_coord("time").min() for x in patches}
         assert returned == expected
 
     def test_merge(self, multi_patch_file_spool):
@@ -141,8 +141,9 @@ class TestMultiPatchFile:
         merged = spool.chunk(time=None)
         assert len(merged) == 1
         patch = merged[0]
-        assert patch.attrs.time_min == contents["time_min"].min()
-        assert patch.attrs.time_max == contents["time_max"].max()
+        time = patch.get_coord("time")
+        assert time.min() == contents["time_min"].min()
+        assert time.max() == contents["time_max"].max()
 
 
 class TestLoadPatchFastPath:

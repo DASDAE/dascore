@@ -635,10 +635,7 @@ class DataFrameSpool(BaseSpool):
         conf = self._merge_kwargs.get("conflicts", None)
         drop_conflicting = conf in {"drop", "keep_first"}
         new_coord = _get_merged_coord(summary_df, merge_dim, coords, drop_conflicting)
-        coord = new_coord.coord_map[merge_dim]
-        new_attrs = combine_patch_attrs(
-            attrs, merge_dim, coord=coord, **self._merge_kwargs
-        )
+        new_attrs = combine_patch_attrs(attrs, **self._merge_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _get_dummy_dataframes(self, current):

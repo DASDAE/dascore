@@ -464,8 +464,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     conf = merge_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords)
-    coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
-    new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
+    new_attrs = combine_patch_attrs(attrs, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]

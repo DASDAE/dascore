@@ -383,14 +383,16 @@ class TestFormatManager:
 
         assert out is None
 
-    def test_load_entry_point_raises_on_runtime_plugin_error(self, format_manager):
-        """Runtime plugin construction failures should not be silently skipped."""
+    def test_load_entry_point_warns_on_runtime_plugin_error(self, format_manager):
+        """Runtime plugin construction failures should warn and be skipped."""
 
         def loader():
             raise RuntimeError("boom")
 
-        with pytest.raises(RuntimeError, match="boom"):
-            format_manager._load_entry_point("broken", loader)
+        with pytest.warns(UserWarning, match="RuntimeError: boom"):
+            out = format_manager._load_entry_point("broken", loader)
+
+        assert out is None
 
     def test_prioritized_list_skips_unloaded_formats(self, format_manager):
         """Formats with no registered versions should not break prioritization."""
