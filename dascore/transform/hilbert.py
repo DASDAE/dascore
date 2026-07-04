@@ -7,12 +7,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-import scipy.signal
 
 from dascore.constants import DIM_REDUCE_DOCS, PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import patch_function
+
+scipy_hilbert = lazy_import("scipy.signal", "hilbert")
 
 
 @patch_function()
@@ -51,7 +53,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     axis = patch.get_axis(dim)
 
     # Apply Hilbert transform
-    analytic_signal = scipy.signal.hilbert(patch.data, axis=axis)
+    analytic_signal = scipy_hilbert(patch.data, axis=axis)
 
     # Return new patch with complex data
     return patch.new(data=analytic_signal)
@@ -90,7 +92,7 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     # Get the analytic signal
     patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
     axis = patch.get_axis(dim)
-    data = scipy.signal.hilbert(patch.data, axis=axis)
+    data = scipy_hilbert(patch.data, axis=axis)
     # Calculate envelope as magnitude of analytic signal
     envelope_data = np.abs(data)
     # Return new patch with envelope data
@@ -194,7 +196,7 @@ def phase_weighted_stack(
     stack_axis = patch.get_axis(stack_dim)
     data = patch.data
     # Get unit phasors. Use eps here to avoid unstable division by 0.
-    analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
+    analytic_data = scipy_hilbert(data, axis=transform_axis)
     eps = np.finfo(analytic_data.real.dtype).eps
     amp = np.maximum(np.abs(analytic_data), eps)
     unit_phasors = analytic_data / amp

@@ -5,19 +5,21 @@ from __future__ import annotations
 from typing import Literal
 
 import numpy as np
-from scipy.signal import decimate as scipy_decimate
 
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import (
     get_dim_axis_value,
     get_start_stop_step,
     patch_function,
 )
 from dascore.utils.time import to_int, to_timedelta64
+
+scipy_decimate = lazy_import("scipy.signal", "decimate")
 
 
 def _apply_scipy_decimation(patch, factor, ftype, axis):

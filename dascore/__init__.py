@@ -21,7 +21,7 @@ from dascore.version import __last_version__, __version__
 _debug = False
 
 
-def __getattr__(name):
+def __getattr__(name: str):
     """
     Lazily import select submodules on attribute access (PEP 562).
 
@@ -34,6 +34,7 @@ def __getattr__(name):
         return dascore.viz
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
+
 
 # Ensure warnings are issued only once (per warning/line)
 warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")
