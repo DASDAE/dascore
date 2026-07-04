@@ -16,7 +16,12 @@ from numpy.random import RandomState
 from rich.progress import Progress  # NOQA
 from scipy.interpolate import interp1d  # NOQA
 from scipy.ndimage import zoom  # NOQA
-from scipy.signal import decimate, resample, resample_poly  # NOQA
+
+from dascore.utils.imports import lazy_import
+
+decimate = lazy_import("scipy.signal", "decimate")
+resample = lazy_import("scipy.signal", "resample")
+resample_poly = lazy_import("scipy.signal", "resample_poly")
 
 random_state = RandomState(42)
 
