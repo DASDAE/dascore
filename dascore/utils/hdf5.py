@@ -107,10 +107,9 @@ class HDF5CompressionSpec(DascoreBaseModel):
         if level == 0:
             return {}
         compression = self.compression or "gzip"
-        if compression == "gzip":
-            compression = "gzip"
-        elif compression in _PYTABLES_COMPRESSION_ALIASES:
-            compression = _PYTABLES_COMPRESSION_ALIASES[compression]
+        for h5py_name, pytables_name in _PYTABLES_COMPRESSION_ALIASES.items():
+            if compression == pytables_name:
+                compression = h5py_name
         return {
             "compression": compression,
             "compression_opts": level,

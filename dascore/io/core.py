@@ -381,9 +381,6 @@ class _FiberIOManager:
             if not unsorted:
                 continue
             keys = sorted(unsorted, reverse=True)
-            # formats whose plugins failed to load have no fiber_ios.
-            if not keys:
-                continue
             fiber_ios = [unsorted[key] for key in keys]
             priority_fiber_ios.append(fiber_ios[0])
             if len(fiber_ios) > 1:

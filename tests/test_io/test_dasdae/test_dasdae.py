@@ -314,6 +314,20 @@ class TestReadDASDAE:
         assert [x.attrs.tag for x in spool] == ["S100", "S120"]
         assert [x.attrs.label for x in spool] == ["L100", "L120"]
 
+    def test_read_filters_patch_attrs_before_loading(self, tmp_path, random_patch):
+        """DASDAE attr filters should skip non-matching patch groups."""
+        path = tmp_path / "multi_patch.h5"
+        patches = [
+            random_patch.update_attrs(tag="S100"),
+            random_patch.update_attrs(tag="S120"),
+        ]
+        dc.write(dc.spool(patches), path, "DASDAE")
+
+        out = dc.read(path, tag="S120")
+
+        assert len(out) == 1
+        assert out[0].attrs.tag == "S120"
+
     def test_get_format_false(self, generic_hdf5):
         """A generic HDF5 file is not a DASDAE file."""
         parser = DASDAEV1()

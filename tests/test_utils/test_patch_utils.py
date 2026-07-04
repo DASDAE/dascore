@@ -30,6 +30,7 @@ from dascore.utils.patch import (
     get_patch_names,
     get_patch_window_size,
     get_window_axis_step,
+    merge_patches,
     merge_compatible_coords_attrs,
     patches_to_df,
     stack_patches,
@@ -543,6 +544,20 @@ class TestMergeCompatibleCoordsAttrs:
 
 class TestConcatenate:
     """Tests for concatenating spools."""
+
+    def test_deprecated_merge_patches_uses_spool_chunk(self, random_patch):
+        """The deprecated merge helper should still merge compatible patches."""
+        patch_1 = random_patch.update_attrs(history=[])
+        time = patch_1.get_coord("time")
+        patch_2 = patch_1.update_coords(time_min=time.max() + time.step).update_attrs(
+            history=[]
+        )
+
+        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
+            out = merge_patches([patch_1, patch_2])
+
+        assert len(out) == 1
+        assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
 
     def test_different_dims_raises(self, random_patch):
         """Patches can't be concated when they have different dims."""

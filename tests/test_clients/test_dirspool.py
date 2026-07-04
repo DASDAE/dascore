@@ -181,6 +181,33 @@ class TestLoadPatchFastPath:
         }
         assert one_directory_spool._read_patches(kwargs) is None
 
+    def test_multi_patch_selection_defers_to_generic_read(
+        self, one_directory_spool, random_patch, monkeypatch
+    ):
+        """Fast path should not choose the first patch from multi-patch reads."""
+
+        class _Reader:
+            def read(self, *args, **kwargs):
+                patch_2 = random_patch.update_attrs(tag="second")
+                return dc.spool([random_patch, patch_2])
+
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda format, version: _Reader(),
+        )
+        path = one_directory_spool.get_contents()["path"].iloc[0]
+        monkeypatch.setattr(one_directory_spool, "_select_kwargs", {"tag": "second"})
+        kwargs = {
+            "path": path,
+            "file_format": "DASDAE",
+            "file_version": "1",
+            "_modified": True,
+            "tag": "second",
+        }
+
+        assert one_directory_spool._read_patches(kwargs) is None
+
 
 class TestDirectoryIndex:
     """Tests for returning summaries of all files in managed directory."""

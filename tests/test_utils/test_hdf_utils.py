@@ -110,6 +110,15 @@ class TestHDF5CompressionSpec:
         assert filters.complib == "zlib"
         assert filters.complevel == 3
 
+    def test_zlib_maps_to_h5py_gzip(self):
+        """The PyTables zlib name maps back to h5py's gzip filter."""
+        kwargs = HDF5CompressionSpec(
+            compression="zlib", compression_level=3
+        ).to_h5py_kwargs()
+
+        assert kwargs["compression"] == "gzip"
+        assert kwargs["compression_opts"] == 3
+
     def test_level_zero_disables_compression(self):
         """A compression level of 0 explicitly disables compression."""
         spec = HDF5CompressionSpec(compression="gzip", compression_level=0)

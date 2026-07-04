@@ -169,8 +169,8 @@ class DirectorySpool(DataFrameSpool):
         if not isinstance(spool, MemorySpool):
             return None
         patches = list(spool)
-        # Without selection, a multi-patch file is ambiguous: the row refers
-        # to one specific patch. Let the generic path pick the right one.
-        if len(patches) > 1 and not select:
+        # A multi-patch file is ambiguous: the row refers to one specific
+        # patch. Let the generic path resolve source_patch_id.
+        if len(patches) > 1:
             return None
         return patches
