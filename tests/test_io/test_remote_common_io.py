@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 import dascore as dc
@@ -15,7 +17,20 @@ from tests.test_io._common_io_test_utils import (
 )
 from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
 
-pytestmark = [pytest.mark.network, pytest.mark.timeout(30)]
+# The localhost HTTP + fsspec/aiohttp streaming path can intermittently deadlock
+# on Windows (the async read stalls while h5py probes remote HDF5 metadata),
+# which pytest-timeout then aborts. This is a known Windows flakiness in that
+# fallback path, not a DASCore logic issue; see the win32 skip in
+# test_remote_http.py. Skip the localhost-HTTP matrix on Windows to keep CI
+# deterministic while still exercising it fully on Linux and macOS.
+pytestmark = [
+    pytest.mark.network,
+    pytest.mark.timeout(30),
+    pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Flaky localhost-HTTP fsspec/aiohttp streaming on Windows.",
+    ),
+]
 
 REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
 REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
