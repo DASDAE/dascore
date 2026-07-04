@@ -85,13 +85,17 @@ ATTR_META = MappingProxyType(
     }
 )
 
-COORDS = MappingProxyType(
+# Unique coordinate summaries, deduplicated across patches. The def_key
+# is the CoordSummary fingerprint when the scan provides one (semantic
+# value identity) or a hash of the stored summary fields otherwise
+# (lossless for the index; too weak for value-identity claims).
+COORD_DEFS = MappingProxyType(
     {
-        "patch_id": "int64",
-        "coord_name": "str",
+        "coord_def_id": "int64",
+        "def_key": "str",
+        "fingerprint": "str",  # nullable; semantic hash from CoordSummary
         "value_kind": "str",  # num | time | str
         "dtype": "str",
-        "coord_dims": "str",
         "length": "int64",
         "units": "str",  # original unit string; numeric values stored SI
         "min_num": "float64",
@@ -104,7 +108,17 @@ COORDS = MappingProxyType(
         "max_str": "str",
         "is_monotonic": "bool",
         "is_relative": "bool",
-        "coord_hash": "str",
+    }
+)
+
+# Links a patch to its coord defs; the name and dims are patch-level
+# semantics (two patches can share values under different names).
+PATCH_COORDS = MappingProxyType(
+    {
+        "patch_id": "int64",
+        "coord_name": "str",
+        "coord_dims": "str",
+        "coord_def_id": "int64",
     }
 )
 
@@ -115,7 +129,8 @@ TABLES = MappingProxyType(
         "patches": PATCHES,
         "attrs": ATTRS_BASE,
         "attr_meta": ATTR_META,
-        "coords": COORDS,
+        "coord_defs": COORD_DEFS,
+        "patch_coords": PATCH_COORDS,
     }
 )
 
@@ -125,8 +140,10 @@ RESERVED_ATTR_COLUMNS = frozenset({"patch_id"})
 # Secondary indexes: without these, engines that use nested-loop plans
 # (SQLite) go quadratic on the correlated coords EXISTS subquery.
 INDEXES = (
-    ("idx_coords_patch", "coords", "patch_id"),
-    ("idx_coords_name", "coords", "coord_name"),
+    ("idx_pcoords_patch", "patch_coords", "patch_id"),
+    ("idx_pcoords_name", "patch_coords", "coord_name"),
+    ("idx_pcoords_def", "patch_coords", "coord_def_id"),
+    ("idx_defs_key", "coord_defs", "def_key"),
     ("idx_attrs_patch", "attrs", "patch_id"),
     ("idx_patches_source", "patches", "source_id"),
     ("idx_sources_path", "sources", "source_path"),

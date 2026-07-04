@@ -22,10 +22,11 @@ from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import SourceRecord, attr_column_name
 from dascore.io.index.query import Query, apply_residuals, build_query_sql
 from dascore.io.index.schema import (
-    COORDS,
+    COORD_DEFS,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
+    PATCH_COORDS,
     PATCHES,
     SOURCES,
     TABLES,
@@ -179,6 +180,60 @@ class SQLIndexBackend(AbstractIndexBackend):
             mapping[(name, kind)] = column
         return mapping
 
+    def _ensure_coord_defs(self, defs_needed: dict) -> dict[str, int]:
+        """
+        Ensure unique coord definitions exist; return def_key -> id.
+
+        Coord summaries are deduplicated across patches: identical values
+        (by fingerprint, or by summary content when no fingerprint is
+        available) share one coord_defs row. This is what will later let
+        chunk/merge recognize shared coordinates by id equality.
+        """
+        keys = list(defs_needed)
+        mapping: dict[str, int] = {}
+        batch = self._in_clause_batch
+        for start in range(0, len(keys), batch):
+            chunk = keys[start : start + batch]
+            marks = ", ".join("?" for _ in chunk)
+            found = self._fetch_df(
+                f"SELECT def_key, coord_def_id FROM coord_defs "
+                f"WHERE def_key IN ({marks})",
+                chunk,
+            )
+            mapping.update(
+                zip(found["def_key"], (int(x) for x in found["coord_def_id"]))
+            )
+        new_keys = [k for k in keys if k not in mapping]
+        next_id = self._next_id("coord_defs", "coord_def_id")
+        def_rows = []
+        for key in new_keys:
+            c = defs_needed[key]
+            def_rows.append(
+                (
+                    next_id,
+                    key,
+                    c.coord_hash,
+                    c.value_kind,
+                    c.dtype,
+                    c.length,
+                    c.units,
+                    c.min_num,
+                    c.max_num,
+                    c.step_num,
+                    c.min_ns,
+                    c.max_ns,
+                    c.step_ns,
+                    c.min_str,
+                    c.max_str,
+                    c.is_monotonic,
+                    c.is_relative,
+                )
+            )
+            mapping[key] = next_id
+            next_id += 1
+        self._bulk_insert("coord_defs", tuple(COORD_DEFS), def_rows)
+        return mapping
+
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
         """Insert many rows; engines override for faster bulk paths."""
         if not rows:
@@ -204,7 +259,8 @@ class SQLIndexBackend(AbstractIndexBackend):
             source_id = self._next_id("sources", "source_id")
             patch_id = self._next_id("patches", "patch_id")
             now = time.time_ns()
-            source_rows, patch_rows, coord_rows = [], [], []
+            source_rows, patch_rows, link_rows = [], [], []
+            defs_needed: dict[str, object] = {}
             attr_groups: dict[tuple[str, ...], list] = {}
             for record in records:
                 source_rows.append(
@@ -243,36 +299,22 @@ class SQLIndexBackend(AbstractIndexBackend):
                     attr_groups.setdefault(columns, []).append(
                         [patch_id, *(tv.value for tv in patch.attrs.values())]
                     )
-                    coord_rows.extend(
-                        (
-                            patch_id,
-                            c.coord_name,
-                            c.value_kind,
-                            c.dtype,
-                            c.coord_dims,
-                            c.length,
-                            c.units,
-                            c.min_num,
-                            c.max_num,
-                            c.step_num,
-                            c.min_ns,
-                            c.max_ns,
-                            c.step_ns,
-                            c.min_str,
-                            c.max_str,
-                            c.is_monotonic,
-                            c.is_relative,
-                            c.coord_hash,
-                        )
-                        for c in patch.coords
-                    )
+                    for c in patch.coords:
+                        key = c.def_key
+                        defs_needed.setdefault(key, c)
+                        link_rows.append((patch_id, c.coord_name, c.coord_dims, key))
                     patch_id += 1
                 source_id += 1
             self._bulk_insert("sources", tuple(SOURCES), source_rows)
             self._bulk_insert("patches", tuple(PATCHES), patch_rows)
             for columns, rows in attr_groups.items():
                 self._bulk_insert("attrs", ("patch_id", *columns), rows)
-            self._bulk_insert("coords", tuple(COORDS), list(coord_rows))
+            def_ids = self._ensure_coord_defs(defs_needed)
+            self._bulk_insert(
+                "patch_coords",
+                tuple(PATCH_COORDS),
+                [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
+            )
             self._execute("UPDATE meta_data SET last_indexed_ns = ?", (now,))
         except Exception:
             # A failed rollback must not mask the original error.
@@ -301,8 +343,9 @@ class SQLIndexBackend(AbstractIndexBackend):
         for start in range(0, len(ids), batch):
             chunk = ids[start : start + batch]
             id_marks = ", ".join("?" for _ in chunk)
+            # coord_defs rows may orphan; harmless, a rebuild compacts them
             for sql in (
-                f"DELETE FROM coords WHERE patch_id IN "
+                f"DELETE FROM patch_coords WHERE patch_id IN "
                 f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
                 f"DELETE FROM attrs WHERE patch_id IN "
                 f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
@@ -404,9 +447,8 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     def coord_names(self) -> set[str]:
         """Return coord names known to the index."""
-        return set(
-            self._fetch_df("SELECT DISTINCT coord_name FROM coords")["coord_name"]
-        )
+        df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
+        return set(df["coord_name"])
 
 
 def resolve_query(

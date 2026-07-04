@@ -197,7 +197,8 @@ def build_coord_clause(
     value,
 ) -> None:
     """
-    Add an EXISTS clause on the coords table for one coord predicate.
+    Add an EXISTS clause over patch_coords/coord_defs for one coord
+    predicate.
 
     Candidacy only: envelope overlap, never false negatives. Exact
     membership/boolean masks are applied at patch load, above this layer.
@@ -224,26 +225,28 @@ def build_coord_clause(
         "str": ("min_str", "max_str"),
         None: (None, None),
     }[kind]
-    conditions = ["c.patch_id = p.patch_id", "c.coord_name = ?"]
+    conditions = ["pc.patch_id = p.patch_id", "pc.coord_name = ?"]
     params: list = [name]
     if kind is not None:
         if kind in ("time", "dur"):
             # absolute queries match absolute coords, durations relative.
-            conditions.append("c.is_relative = ?")
+            conditions.append("cd.is_relative = ?")
             params.append(kind == "dur")
             kind_match = "time"
         else:
             kind_match = kind
-        conditions.append("c.value_kind = ?")
+        conditions.append("cd.value_kind = ?")
         params.append(kind_match)
         if lo is not None:
-            conditions.append(f"c.{max_col} >= ?")
+            conditions.append(f"cd.{max_col} >= ?")
             params.append(lo)
         if hi is not None:
-            conditions.append(f"c.{min_col} <= ?")
+            conditions.append(f"cd.{min_col} <= ?")
             params.append(hi)
     where.add(
-        "EXISTS (SELECT 1 FROM coords c WHERE " + " AND ".join(conditions) + ")",
+        "EXISTS (SELECT 1 FROM patch_coords pc "
+        "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+        "WHERE " + " AND ".join(conditions) + ")",
         *params,
     )
 

@@ -9,6 +9,7 @@ units here, so cross-patch comparisons in the index are always valid.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -42,7 +43,7 @@ class TypedValue:
 
 @dataclass(frozen=True)
 class CoordRecord:
-    """One row of the coords table (typed columns split by kind)."""
+    """One patch-coord entry (typed columns split by kind)."""
 
     coord_name: str
     value_kind: str
@@ -61,6 +62,40 @@ class CoordRecord:
     is_monotonic: bool | None = None
     is_relative: bool | None = None
     coord_hash: str | None = None
+
+    @property
+    def def_key(self) -> str:
+        """
+        Deduplication key for the coord definition.
+
+        The CoordSummary fingerprint when available ("fp:" prefix; exact
+        value identity), otherwise a hash of the stored summary fields
+        ("sum:" prefix; lossless for the index but too weak for
+        value-identity claims). Name and dims are patch-level and
+        excluded.
+        """
+        if self.coord_hash:
+            # truncated: 128 bits is ample and key size shows up in the
+            # def_key index for archives with mostly-unique time coords
+            return f"fp:{self.coord_hash[:32]}"
+        fields = (
+            self.value_kind,
+            self.dtype,
+            self.length,
+            self.units,
+            self.min_num,
+            self.max_num,
+            self.step_num,
+            self.min_ns,
+            self.max_ns,
+            self.step_ns,
+            self.min_str,
+            self.max_str,
+            self.is_monotonic,
+            self.is_relative,
+        )
+        digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
+        return f"sum:{digest}"
 
 
 @dataclass(frozen=True)

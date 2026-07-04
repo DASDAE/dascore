@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 from test_index_contract import make_summaries
 
+import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.io.index.backend import adapt_params, resolve_query
@@ -368,5 +369,62 @@ class TestFinalCoverage:
         monkeypatch.setattr(pathlib.Path, "unlink", bad_unlink)
         back.write_sources(summaries_to_records(make_summaries()[1:2]))
         monkeypatch.undo()
+        assert len(back.query()) == 2
+        back.close()
+
+
+class TestCoordDeduplication:
+    """Coord summaries are stored once per unique definition."""
+
+    def test_shared_coord_stored_once(self, tmp_path):
+        """Identical distance coords across patches share one def row."""
+        back = get_backend(tmp_path / "dedup", kind="duckdb")
+        back.write_sources(summaries_to_records(make_summaries()))
+        links = back._fetch_df("SELECT * FROM patch_coords")
+        defs = back._fetch_df("SELECT * FROM coord_defs")
+        assert len(defs) < len(links)
+        # das1 and das2 share an identical distance coord: one def, two links
+        dist_links = links[links["coord_name"] == "distance"]
+        das_defs = dist_links["coord_def_id"].value_counts()
+        assert (das_defs >= 2).any()
+        back.close()
+
+    def test_defs_reused_across_writes(self, tmp_path):
+        """A second write with known coords creates no new defs."""
+        back = get_backend(tmp_path / "reuse", kind="duckdb")
+        summaries = make_summaries()
+        back.write_sources(summaries_to_records(summaries[:1]))
+        n_defs = len(back._fetch_df("SELECT * FROM coord_defs"))
+        # das2 shares the distance def with das1; only time is new
+        back.write_sources(summaries_to_records(summaries[1:2]))
+        n_defs_after = len(back._fetch_df("SELECT * FROM coord_defs"))
+        assert n_defs_after == n_defs + 1
+        back.close()
+
+    def test_fingerprint_backed_defs(self, tmp_path):
+        """Summaries from real patches carry fingerprints into defs."""
+        summary = PatchSummary.from_patch(dc.get_example_patch())
+        structured = summary.dump_structured()
+        structured.update(
+            {
+                "source_path": "fp/one.h5",
+                "source_format": "DASDAE",
+                "source_version": "1",
+            }
+        )
+        back = get_backend(tmp_path / "fp", kind="duckdb")
+        back.write_sources(summaries_to_records([PatchSummary(**structured)]))
+        defs = back._fetch_df("SELECT def_key, fingerprint FROM coord_defs")
+        assert defs["fingerprint"].notna().all()
+        assert defs["def_key"].str.startswith("fp:").all()
+        back.close()
+
+    def test_orphan_defs_tolerated(self, tmp_path):
+        """Deleting sources leaves defs behind without breaking queries."""
+        back = get_backend(tmp_path / "orphan", kind="duckdb")
+        back.write_sources(summaries_to_records(make_summaries()))
+        n_defs = len(back._fetch_df("SELECT * FROM coord_defs"))
+        back.delete_sources(["das/file_1.h5", "das/file_2.h5"])
+        assert len(back._fetch_df("SELECT * FROM coord_defs")) == n_defs
         assert len(back.query()) == 2
         back.close()
