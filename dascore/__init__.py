@@ -20,5 +20,21 @@ from dascore.version import __last_version__, __version__
 # flag for disabling progress bar when debugging
 _debug = False
 
+
+def __getattr__(name: str):
+    """
+    Lazily import select submodules on attribute access (PEP 562).
+
+    The viz module imports matplotlib, which is slow, so it is deferred
+    until first use to keep `import dascore` fast.
+    """
+    if name == "viz":
+        import dascore.viz
+
+        return dascore.viz
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 # Ensure warnings are issued only once (per warning/line)
 warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")

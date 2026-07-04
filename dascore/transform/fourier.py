@@ -15,8 +15,6 @@ from typing import Any, Literal
 
 import numpy as np
 import numpy.fft as nft
-from scipy.signal import ShortTimeFFT
-from scipy.signal.windows import get_window
 
 import dascore as dc
 from dascore import units
@@ -27,6 +25,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError, PatchError
 from dascore.units import Quantity, invert_quantity, percent
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
@@ -37,6 +36,9 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
+
+ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
+get_window = lazy_import("scipy.signal.windows", "get_window")
 
 DFT_OUTPUT_DATA_TYPE_MAP = {
     "AS": "amplitude_spectrum",

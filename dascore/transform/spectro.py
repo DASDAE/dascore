@@ -5,13 +5,13 @@ from __future__ import annotations
 from operator import mul
 
 import numpy as np
-from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_compatible_values, get_coord
 from dascore.utils.deprecate import deprecate
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
@@ -19,6 +19,8 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.transformatter import FourierTransformatter
+
+scipy_spectrogram = lazy_import("scipy.signal", "spectrogram")
 
 
 def _get_new_original_coord(old_coord, array):
