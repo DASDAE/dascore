@@ -238,6 +238,8 @@ class TestBrokenEntryPoint:
         eps["NOT_REAL_FORMAT__V1"] = bad_loader
         manager.__dict__["_eps"] = eps
         manager.__dict__.pop("known_formats", None)
+        # clear the method cache so load_plugins runs again for this instance.
+        manager.__dict__.pop("_cache", None)
         return manager
 
     def test_load_plugins_warns_and_skips(self, broken_ep_manager):
