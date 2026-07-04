@@ -37,6 +37,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
     _FallbackFileObj,
     _get_cached_local_file,
+    _http_headers_from_storage_options,
     clear_remote_file_cache,
     get_remote_cache_path,
     get_remote_cache_scope,
@@ -701,7 +702,12 @@ class TestIOResourceManager:
         class _HTTPResource:
             def __init__(self):
                 self.protocol = "http"
-                self.storage_options = {"User-Agent": "dascore-test"}
+                # fsspec/UPath nests HTTP headers under a "headers" key rather
+                # than as top-level storage_options entries.
+                self.storage_options = {
+                    "headers": {"User-Agent": "dascore-test"},
+                    "client_kwargs": {"trust_env": True},
+                }
 
             def __str__(self):
                 return "http://example.com/data.bin"
@@ -743,6 +749,7 @@ class TestIOResourceManager:
 
         assert local_path.read_bytes() == b"abc"
         assert seen["url"] == "http://example.com/data.bin"
+        # Nested headers are forwarded; non-header storage options are not.
         assert seen["headers"] == {"User-agent": "dascore-test"}
         assert seen["timeout"] == 60.0
         assert response.read_sizes == [2, 2, 2]
@@ -913,6 +920,75 @@ class TestRemoteIOFallback:
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(ValueError("different error"))
         assert not is_no_range_http_error(RuntimeError("range requests"))
+
+
+class TestHttpHeadersFromStorageOptions:
+    """Tests for translating fsspec storage options into urllib headers."""
+
+    class _Resource:
+        def __init__(self, storage_options):
+            self.storage_options = storage_options
+
+    def _expected_basic(self):
+        """Return the expected basic-auth header for user/pass 'u'/'p'."""
+        import base64
+
+        return "Basic " + base64.b64encode(b"u:p").decode()
+
+    def test_nested_headers_forwarded(self):
+        """Headers nested under the 'headers' key should be forwarded."""
+        resource = self._Resource({"headers": {"X-Tok": "abc", "X-Num": 5}})
+        out = _http_headers_from_storage_options(resource)
+        assert out == {"X-Tok": "abc", "X-Num": "5"}
+
+    def test_top_level_auth_tuple_becomes_authorization(self):
+        """A (user, pass) auth tuple should become a Basic auth header."""
+        resource = self._Resource({"auth": ("u", "p")})
+        out = _http_headers_from_storage_options(resource)
+        assert out["Authorization"] == self._expected_basic()
+
+    def test_client_kwargs_auth_becomes_authorization(self):
+        """Basic-auth-like objects in client_kwargs should be translated."""
+
+        class _BasicAuth:
+            login = "u"
+            password = "p"
+
+        resource = self._Resource({"client_kwargs": {"auth": _BasicAuth()}})
+        out = _http_headers_from_storage_options(resource)
+        assert out["Authorization"] == self._expected_basic()
+
+    def test_explicit_authorization_header_wins(self):
+        """An explicit Authorization header should not be overwritten by auth."""
+        resource = self._Resource(
+            {"headers": {"Authorization": "Bearer TOK"}, "auth": ("u", "p")}
+        )
+        out = _http_headers_from_storage_options(resource)
+        assert out["Authorization"] == "Bearer TOK"
+
+    def test_untranslatable_client_kwargs_ignored(self):
+        """Non-auth client_kwargs cannot map to urllib and are dropped."""
+        resource = self._Resource({"client_kwargs": {"trust_env": True}})
+        assert _http_headers_from_storage_options(resource) == {}
+
+    def test_string_auth_not_translated(self):
+        """A bare string auth value is not basic auth and yields no header."""
+        resource = self._Resource({"auth": "some-token"})
+        assert _http_headers_from_storage_options(resource) == {}
+
+    def test_partial_auth_object_ignored(self):
+        """An auth object missing a password yields no Authorization header."""
+
+        class _PartialAuth:
+            login = "u"
+            password = None
+
+        resource = self._Resource({"auth": _PartialAuth()})
+        assert _http_headers_from_storage_options(resource) == {}
+
+    def test_empty_storage_options(self):
+        """A resource with no storage options yields no headers."""
+        assert _http_headers_from_storage_options(self._Resource({})) == {}
 
     def test_fallback_file_obj_switches_once_and_preserves_position(self):
         """_FallbackFileObj should retry on the local file and preserve cursor."""

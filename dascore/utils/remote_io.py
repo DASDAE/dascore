@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
 import tempfile
 import warnings
+from collections.abc import Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
@@ -122,6 +124,63 @@ def clear_remote_file_cache():
     _REMOTE_RESOURCE_CACHE.clear()
 
 
+def _basic_auth_header(auth) -> str | None:
+    """
+    Build an HTTP Basic ``Authorization`` header value from an fsspec auth spec.
+
+    Handles the two shapes fsspec/aiohttp use for basic auth:
+    - a ``(login, password)`` sequence (fsspec ``auth=(user, pass)``), and
+    - an object exposing ``login``/``password`` (``aiohttp.BasicAuth``).
+
+    Returns ``None`` for anything else (e.g. token objects, SSL contexts) since
+    those cannot be expressed as a blocking ``urllib`` request header.
+    """
+    login = password = None
+    if isinstance(auth, str | bytes):
+        return None
+    if isinstance(auth, Sequence) and len(auth) == 2:
+        login, password = auth
+    else:
+        login = getattr(auth, "login", None)
+        password = getattr(auth, "password", None)
+    if login is None or password is None:
+        return None
+    token = base64.b64encode(f"{login}:{password}".encode()).decode("ascii")
+    return f"Basic {token}"
+
+
+def _http_headers_from_storage_options(resource) -> dict[str, str]:
+    """
+    Extract HTTP request headers from an fsspec/UPath resource.
+
+    fsspec stores HTTP headers nested under a ``headers`` key in
+    ``storage_options`` (e.g. ``{"headers": {"Authorization": "Bearer ..."}}``),
+    not as top-level entries. Only string-valued headers are forwarded because
+    ``urllib`` rejects non-string header values.
+
+    Basic-auth credentials passed as ``auth=(user, pass)`` or via
+    ``client_kwargs={"auth": aiohttp.BasicAuth(...)}`` are translated into an
+    ``Authorization`` header so credentials survive the blocking ``urllib``
+    download fallback. An explicit ``Authorization`` header always wins. Other
+    ``client_kwargs`` (SSL contexts, cookies, timeouts) cannot be mapped onto a
+    ``urllib`` request and are not forwarded.
+    """
+    storage_options = getattr(resource, "storage_options", None) or {}
+    headers = storage_options.get("headers", {}) or {}
+    out = {
+        str(key): str(value)
+        for key, value in headers.items()
+        if isinstance(value, str | bytes | int | float)
+    }
+    # Derive an Authorization header from basic-auth options unless one is set.
+    if not any(key.lower() == "authorization" for key in out):
+        client_kwargs = storage_options.get("client_kwargs") or {}
+        auth = storage_options.get("auth", client_kwargs.get("auth"))
+        if auth is not None and (auth_header := _basic_auth_header(auth)):
+            out["Authorization"] = auth_header
+    return out
+
+
 def _download_remote_file(path, local_path: Path):
     """Download a remote path into its cache location."""
     resource = coerce_to_upath(path)
@@ -140,7 +199,7 @@ def _download_remote_file(path, local_path: Path):
             # ``resource.open(...)``. The fallback path can be entered while an
             # active fsspec HTTP read is already in progress, and re-entering
             # that stack from inside the fallback can deadlock.
-            headers = dict(getattr(resource, "storage_options", {}) or {})
+            headers = _http_headers_from_storage_options(resource)
             # Supported public inputs are normalized to a real UPath first, so
             # `protocol` and `str(resource)` come from the same object and do
             # not need separate scheme validation here.

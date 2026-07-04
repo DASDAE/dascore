@@ -123,6 +123,21 @@ class _ManagedH5pyFile:
         return getattr(self._handle, item)
 
 
+def get_h5py_file(handle) -> H5pyFile:
+    """
+    Return the underlying ``h5py.File`` for a DASCore h5 handle.
+
+    Consumers such as the ``h5netcdf`` xarray engine require a real
+    ``h5py.File``/group and do not accept DASCore's ``_ManagedH5pyFile`` proxy.
+    Unwrapping the proxy preserves DASCore's ownership: closing the returned
+    ``h5py.File`` remains the responsibility of the managing handle (or the
+    ``IOResourceManager``), not the consumer.
+    """
+    if isinstance(handle, _ManagedH5pyFile):
+        return handle._handle
+    return handle
+
+
 def open_h5_resource(
     resource,
     *,

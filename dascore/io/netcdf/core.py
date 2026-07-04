@@ -8,7 +8,7 @@ import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, _make_scan_payload
-from dascore.utils.hdf5 import H5Reader
+from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.io import patch_to_xarray, xarray_to_patch
 from dascore.utils.misc import optional_import
 
@@ -20,6 +20,28 @@ from .utils import (
     is_netcdf4_file,
     parse_cf_version,
 )
+
+
+def _open_xarray_dataset(resource: H5Reader):
+    """
+    Open one NetCDF-4 resource as an xarray dataset without downloading it.
+
+    NetCDF-4 is HDF5, so DASCore hands the streaming ``h5py`` handle it already
+    uses for format detection to xarray's ``h5netcdf`` engine. Remote resources
+    are read over the network via ``h5py`` range requests (the same streaming
+    and no-range fallback path as remote HDF5) rather than being materialized
+    locally first. The ``netCDF4`` C engine is not used here because it requires
+    a real filesystem path.
+
+    The returned dataset owns only the ``h5netcdf`` wrapper; closing it does not
+    close DASCore's underlying ``h5py`` handle, which stays owned by the
+    ``IOResourceManager``.
+    """
+    xr = optional_import("xarray")
+    # h5netcdf is the streaming-capable engine; import here for a clear error.
+    optional_import("h5netcdf")
+    h5_file = get_h5py_file(resource)
+    return xr.open_dataset(h5_file, engine="h5netcdf")
 
 
 class NetCDFCFV18(FiberIO):
@@ -43,10 +65,9 @@ class NetCDFCFV18(FiberIO):
             pass
         return False
 
-    def read(self, resource: Path, **kwargs) -> SpoolType:
-        """Read a NetCDF-4 file into a Spool."""
-        xr = optional_import("xarray")
-        with xr.open_dataset(resource) as dataset:
+    def read(self, resource: H5Reader, **kwargs) -> SpoolType:
+        """Read a NetCDF-4 file into a Spool, streaming remote resources."""
+        with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
             data_array = dataset[data_var_name].load()
             patch = self._patch_from_dataset(dataset, data_var_name, data_array)
@@ -94,10 +115,13 @@ class NetCDFCFV18(FiberIO):
         )
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
-        """Scan NetCDF file metadata without loading the full payload array."""
-        xr = optional_import("xarray")
-        dataset_path = resource.filename
-        with xr.open_dataset(dataset_path) as dataset:
+        """Scan NetCDF file metadata without loading the full payload array.
+
+        Remote resources are streamed via the ``h5netcdf`` engine over the
+        existing ``h5py`` handle, so only metadata bytes are fetched and the
+        file is not downloaded.
+        """
+        with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
             # None is a valid xarray key for XDAS-style files whose primary
             # payload is stored under a None variable name.

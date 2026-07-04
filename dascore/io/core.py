@@ -51,7 +51,7 @@ from dascore.utils.models import (
     DateTime64,
     TimeDelta64,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path
+from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
@@ -572,7 +572,9 @@ class _FiberIOManager:
                 suffix = path.suffix
             else:
                 local_path = (
-                    coerce_to_upath(path) if not is_local_path(path) else Path(path)
+                    coerce_to_local_path(path)
+                    if is_local_path(path)
+                    else coerce_to_upath(path)
                 )
                 exists = local_path.exists()
                 suffix = local_path.suffix
@@ -809,7 +811,11 @@ class FiberIO:
             return True
         is_remote = not is_local_path(resource)
         try:
-            path = coerce_to_upath(resource) if is_remote else Path(resource)
+            path = (
+                coerce_to_upath(resource)
+                if is_remote
+                else coerce_to_local_path(resource)
+            )
             return path.stat().st_mtime > timestamp
         except Exception:
             if not is_remote:
@@ -982,7 +988,9 @@ def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **k
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path | UPath):
-            path = coerce_to_upath(el) if not is_local_path(el) else Path(el)
+            path = (
+                coerce_to_local_path(el) if is_local_path(el) else coerce_to_upath(el)
+            )
             if path.exists():
                 generator = _iter_filesystem(
                     path,

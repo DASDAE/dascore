@@ -28,7 +28,6 @@ class DascoreConfig(BaseModel):
     model_config = ConfigDict(
         frozen=True,
         validate_default=True,
-        validate_assignment=True,
         arbitrary_types_allowed=True,
     )
 
@@ -142,6 +141,8 @@ class DascoreConfig(BaseModel):
         return np.timedelta64(value)
 
 
+# The active runtime config is a process-global singleton. A scoped override
+# via `set_config(...)` is applied globally and restored on context exit.
 _CONFIG = DascoreConfig()
 
 
@@ -176,10 +177,37 @@ def _restore_config(previous: DascoreConfig):
         _CONFIG = previous
 
 
-def set_config(
-    new_config: DascoreConfig | None = None, **kwargs
-):  # pragma: no cover - exercised via context manager use
-    """Set the active runtime config and return a restoring context manager."""
+def set_config(new_config: DascoreConfig | None = None, **kwargs):
+    """
+    Set the active runtime config and return a restoring context manager.
+
+    Parameters
+    ----------
+    new_config
+        A complete [`DascoreConfig`](`dascore.config.DascoreConfig`) to install.
+        Mutually exclusive with keyword overrides.
+    **kwargs
+        Individual field overrides applied on top of the current config.
+
+    Notes
+    -----
+    The config is a process-global singleton. An override is applied immediately
+    and also returns a context manager which restores the previous config on
+    exit. Overrides are not thread-scoped.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # Scoped override (restored on block exit) -- the common case.
+    >>> with dc.set_config(debug=True):
+    ...     assert dc.get_config().debug
+    >>> assert not dc.get_config().debug
+    >>>
+    >>> # Bare call: apply until reset.
+    >>> _ = dc.set_config(display_float_precision=5)
+    >>> assert dc.get_config().display_float_precision == 5
+    >>> _ = dc.reset_config()
+    """
     global _CONFIG
     previous = _CONFIG
     if new_config is not None and kwargs:
