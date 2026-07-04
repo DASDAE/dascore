@@ -425,3 +425,36 @@ class TestMetadata:
         sources = backend.get_sources()
         assert len(sources) == 4
         assert set(sources["source_format"]) == {"PRODML", "DASDAE"}
+
+
+class TestCoordPivot:
+    """Per-coord envelope columns in the flat relation."""
+
+    def test_generic_coord_envelopes_present(self, backend):
+        """Non-conventional dims get {name}_min/max/step columns."""
+        df = backend.query()
+        for col in ("lag_time_min", "lag_time_max", "frequency_min"):
+            assert col in df.columns
+        corr = df[df["tag"] == "corr"]
+        assert pd.api.types.is_timedelta64_dtype(corr["lag_time_min"].dtype) or (
+            corr["lag_time_min"].map(lambda x: hasattr(x, "total_seconds")).all()
+        )
+
+    def test_time_distance_envelopes_not_duplicated(self, backend):
+        """patches-level envelopes are authoritative; pivot skips them."""
+        df = backend.query()
+        assert pd.api.types.is_datetime64_dtype(df["time_min"])
+        assert df.columns.tolist().count("distance_min") == 1
+
+    def test_def_key_columns_private_and_shared(self, backend):
+        """_{name}_def_key exists for every coord; shared coords share keys."""
+        df = backend.query()
+        assert "_distance_def_key" in df.columns
+        das = df[df["station"].isin(["STA1", "STA2"])]
+        assert das["_distance_def_key"].nunique() == 1
+
+    def test_pivot_respects_query(self, backend):
+        """A filtered result only pivots the rows it contains."""
+        df = backend.query(Query(attrs={"tag": "corr"}))
+        assert df["lag_time_min"].notna().all()
+        assert "frequency_min" not in df.columns or df["frequency_min"].isna().all()

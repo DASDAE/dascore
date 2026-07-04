@@ -428,3 +428,26 @@ class TestCoordDeduplication:
         assert len(back._fetch_df("SELECT * FROM coord_defs")) == n_defs
         assert len(back.query()) == 2
         back.close()
+
+
+class TestPivotEdge:
+    """Pivot with coord-less patches."""
+
+    def test_no_coords_patch(self, tmp_path):
+        """A patch with no coords pivots to nothing, without error."""
+        summary = PatchSummary(
+            attrs={"tag": "bare"},
+            coords={},
+            dims=(),
+            shape=(),
+            dtype="float32",
+            source_path="bare.h5",
+            source_format="DASDAE",
+            source_version="1",
+        )
+        back = get_backend(tmp_path / "bare", kind="duckdb")
+        back.write_sources(summaries_to_records([summary]))
+        df = back.query()
+        assert len(df) == 1
+        assert not [c for c in df.columns if c.endswith("_def_key")]
+        back.close()

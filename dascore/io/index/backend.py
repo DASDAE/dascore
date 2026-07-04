@@ -373,6 +373,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         sql, params, residuals = build_query_sql(query, self.dialect, attr_meta)
         df = self._fetch_df(sql, params)
         df = self._flatten(df, attr_meta)
+        df = self._pivot_coords(df)
         if residuals:
             df = apply_residuals(df, residuals)
         return df.reset_index(drop=True)
@@ -430,6 +431,74 @@ class SQLIndexBackend(AbstractIndexBackend):
             )
             out = out.drop(columns=["base_uri"])
         return out.drop(columns=["source_id"], errors="ignore")
+
+    def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add per-coord envelope columns to the flat relation.
+
+        Emits {name}_min/{name}_max/{name}_step for every coord in the
+        result beyond the time/distance envelopes already cached on
+        patches (memory-spool parity: chunking on any dim needs these),
+        plus a private _{name}_def_key column for every coord — the
+        globally-stable coordinate identity future chunk/merge grouping
+        uses (private so it does not yet participate in merge
+        compatibility comparisons).
+        """
+        if out.empty or "patch_id" not in out.columns:
+            return out
+        ids = out["patch_id"].tolist()
+        frames = []
+        batch = self._in_clause_batch
+        for start in range(0, len(ids), batch):
+            chunk = ids[start : start + batch]
+            marks = ", ".join("?" for _ in chunk)
+            frames.append(
+                self._fetch_df(
+                    "SELECT pc.patch_id, pc.coord_name, cd.def_key, "
+                    "cd.value_kind, cd.is_relative, cd.min_num, cd.max_num, "
+                    "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
+                    "cd.min_str, cd.max_str "
+                    "FROM patch_coords pc "
+                    "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+                    f"WHERE pc.patch_id IN ({marks})",
+                    chunk,
+                )
+            )
+        coords = pd.concat(frames, ignore_index=True)
+        if coords.empty:
+            return out
+        for name, group in coords.groupby("coord_name"):
+            mins, maxs, steps, keys = {}, {}, {}, {}
+            for row in group.itertuples():
+                keys[row.patch_id] = row.def_key
+                if row.value_kind == "num":
+                    mn, mx = row.min_num, row.max_num
+                    st = row.step_num
+                elif row.value_kind == "time":
+                    conv = (
+                        pd.to_timedelta
+                        if pd.notnull(row.is_relative) and row.is_relative
+                        else pd.to_datetime
+                    )
+                    mn = conv(int(row.min_ns), unit="ns")
+                    mx = conv(int(row.max_ns), unit="ns")
+                    st = (
+                        pd.to_timedelta(int(row.step_ns), unit="ns")
+                        if pd.notnull(row.step_ns)
+                        else None
+                    )
+                else:
+                    mn, mx, st = row.min_str, row.max_str, None
+                mins[row.patch_id], maxs[row.patch_id] = mn, mx
+                steps[row.patch_id] = st
+            out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # time/distance envelopes already live on patches
+            if name in ("time", "distance"):
+                continue
+            out[f"{name}_min"] = out["patch_id"].map(mins)
+            out[f"{name}_max"] = out["patch_id"].map(maxs)
+            out[f"{name}_step"] = out["patch_id"].map(steps)
+        return out
 
     # --- introspection -----------------------------------------------
 
