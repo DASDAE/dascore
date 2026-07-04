@@ -36,7 +36,7 @@ print(loaded.dims)
 
 ## Writing Patches to Disk
 
-Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](`dascore.io.dasdae`)
+Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](https://github.com/DASDAE/dascore/tree/master/dascore/io/dasdae)
 
 ```{python}
 from pathlib import Path

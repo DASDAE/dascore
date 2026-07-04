@@ -1167,7 +1167,6 @@ def scan(
     >>> summary_list = dc.scan(file_path)
     >>> summary = summary_list[0]
 
-    See also [`iter_fs_contents`](`dascore.utils.misc.iter_fs_contents`)
     """
     out = []
     fiber_io_hint: dict[str, FiberIO] = {}
