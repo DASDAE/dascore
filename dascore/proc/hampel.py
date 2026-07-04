@@ -150,7 +150,7 @@ def hampel_filter(
 
     See Also
     --------
-    - [Despiking recipe](`docs/recipes/despiking.qmd`)
+    - [Despiking recipe](/recipes/despiking.qmd)
 
     Examples
     --------

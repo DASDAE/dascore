@@ -339,7 +339,7 @@ The following methods help trim, reshape, and manipulate coordinates.
 
 ## Select
 
-Patches are trimmed using the [`Patch.select`](`dascore.Patch.select`) method. Unlike [`Patch.order`](`dascore.Patch.order`), `select` will not change the order of the affected dimensions, it will only remove elements. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `...` indicating an open interval. 
+Patches are trimmed using the [`Patch.select`](`dascore.proc.select`) method. Unlike [`Patch.order`](`dascore.proc.order`), `select` will not change the order of the affected dimensions, it will only remove elements. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `...` indicating an open interval. 
 
 ```{python}
 import numpy as np
@@ -413,7 +413,7 @@ assert len(sub_patch.get_array('distance')) == 4
 ```
 
 ## Order
- Order is similar to [`Patch.select`](`dascore.Patch.select`), but will re-arrange data to the order specified by a value array. This may also cause parts of the patch to be duplicated.
+ Order is similar to [`Patch.select`](`dascore.proc.select`), but will re-arrange data to the order specified by a value array. This may also cause parts of the patch to be duplicated.
 
 ```{python}
 import numpy as np
@@ -436,7 +436,7 @@ assert np.all(dist_order2 == patch_dist2.get_array("distance"))
 ## New dimensions
 
 Sometimes it can be useful to add new (empty) dimensions to a Patch.
-[`Patch.append_dims`](`dascore.Patch.append_dims`) does this.
+[`Patch.append_dims`](`dascore.proc.append_dims`) does this.
 
 ```python
 import dascore as dc
@@ -477,11 +477,11 @@ out = (
     .pass_filter(time=(..., 10))
 )
 ```
-The processing methods are located in the [dascore.proc](`dascore.proc`) module. The [patch processing tutorial](processing.qmd) provides more information about processing routines.
+The processing methods are located in the [dascore.proc](/reference/index.qmd#patch-processing) module. The [patch processing tutorial](processing.qmd) provides more information about processing routines.
 
 # Visualization
 
-DASCore provides some visualization functions in the [dascore.viz](`dascore.viz`) module or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will likely do more interesting visualizations.
+DASCore provides some visualization functions in the [dascore.viz](/reference/index.qmd#visualization) module or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will likely do more interesting visualizations.
 
 ```{python}
 import dascore as dc
@@ -501,7 +501,7 @@ Because patches should be treated as immutable objects, they can't be modified w
 
 ## Update
 
-[`Patch.update`](`dascore.core.patch.Patch.update`) uses the `Patch` instances as a template and returns a new `Patch` instances with one or more aspects modified.
+[`Patch.update`](`dascore.proc.update`) uses the `Patch` instances as a template and returns a new `Patch` instances with one or more aspects modified.
 
 ```{python}
 import dascore as dc
@@ -516,7 +516,7 @@ new_data_patch = pa.update(attrs=dict(station="TMU"))
 
 ## Update attrs
 
-[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making changes to the attrs (metadata) while keeping the unaffected metadata (`Patch.update` would completely replace the old attrs).
+[`Patch.update_attrs`](`dascore.proc.update_attrs`) is for making changes to the attrs (metadata) while keeping the unaffected metadata (`Patch.update` would completely replace the old attrs).
 
 ```{python}
 import dascore as dc
@@ -535,7 +535,7 @@ assert pa1.attrs.new_attr == 42
 
 ## Update coords
 
-[`Patch.update_coords`](`dascore.core.patch.Patch.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
+[`Patch.update_coords`](`dascore.proc.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
  - Modifying (updating) existing coordinates
  - Adding new coordinates
  - Changing coordinate dimensional association
@@ -680,9 +680,9 @@ As mentioned in the [units section of the concept page](concepts.qmd#units), DAS
 
 There are two methods for configuring the units associated with a `Patch`.
 
-[`Patch.set_units`](`dascore.Patch.set_units`) sets the units on a patch or its coordinates. Old units are simply overwritten without performing any conversions. The first argument sets the data units and the keywords set the coordinate units.
+[`Patch.set_units`](`dascore.proc.set_units`) sets the units on a patch or its coordinates. Old units are simply overwritten without performing any conversions. The first argument sets the data units and the keywords set the coordinate units.
 
-[`Patch.convert_units`](`dascore.Patch.convert_units`) converts data or coordinates units by appropriately transforming the data or coordinates arrays. If no units exist they will simply be set.
+[`Patch.convert_units`](`dascore.proc.convert_units`) converts data or coordinates units by appropriately transforming the data or coordinates arrays. If no units exist they will simply be set.
 
 ```{python}
 import dascore as dc
@@ -724,7 +724,7 @@ sub_selected = pa.select(distance=(10*ft, 10*m))
 dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
 ```
 
-See the documentation on [`Patch.select`](`dascore.Patch.select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
+See the documentation on [`Patch.select`](`dascore.proc.select`) and [`Patch.pass_filter`](`dascore.proc.pass_filter`) for more details.
 
 # Patch operations
 

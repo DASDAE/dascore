@@ -52,7 +52,7 @@ ax.set_ylim(-.2, .2);
 
 ## Slope Filtering
 
-One advantage of the F-K transform is the ability to manipulate signals based on their apparent velocities. [`Patch.slope_filter`](`dascore.Patch.slope_filter`) can be used for this purpose.
+One advantage of the F-K transform is the ability to manipulate signals based on their apparent velocities. [`Patch.slope_filter`](`dascore.proc.slope_filter`) can be used for this purpose.
 
 For example, given the first example event, we can apply a slope filter whose range covers reasonable seismic velocities. The `filt` parameter specifies the slope (apparent velocities). It is a 4 length sequence of the form [va, vb, vc, vd] where velocities between `vb` and `vc` are unchanged (or set to zero if `invert=True`) and values between `va` and `vb`, as well as those between `vc` and `vd`, are tapered.
 
@@ -69,7 +69,7 @@ It's important to remember that *apparent* velocities (>= velocity) are filtered
 
 ### Phase Separation
 
-Another application of [`slope_filter`](`dascore.Patch.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 m/s and the S velocity is about 2700 m/s. The following code highlights S waves, but also introduces some artifacts: 
+Another application of [`slope_filter`](`dascore.proc.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 m/s and the S velocity is about 2700 m/s. The following code highlights S waves, but also introduces some artifacts: 
 
 ```{python}
 # velocities in m/s (distance in meters, time in seconds)

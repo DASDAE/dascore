@@ -1,0 +1,55 @@
+# Proposed replacement for the doc-build workflows using great-docs.
+# One command (great-docs build) replaces scripts/build_api_docs.py +
+# quarto render, and the output additionally contains llms.txt,
+# llms-full.txt, per-page markdown, SKILL.md and .well-known/agent-skills.
+#
+# NOTE (prototype): kept alongside the old workflows for comparison; a real
+# migration would fold this into build_deploy_master_docs.yaml,
+# build_deploy_stable_docs.yaml and test_doc_build.yml.
+
+name: BuildDocsGreatDocs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: "0"
+
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.8.27
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dascore and great-docs
+        run: |
+          python -m pip install -e ".[docs]" great-docs
+
+      - name: Prepare test data
+        run: |
+          python scripts/modify_h5_file.py || true
+
+      - name: Build documentation
+        run: |
+          great-docs build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: ./great-docs/_site
+          # .well-known/agent-skills must survive packaging
+          include-hidden-files: true
+          retention-days: 7
+
+      # Deployment: `quarto publish` no longer applies; push great-docs/_site
+      # with the netlify CLI instead, e.g.:
+      #   npx netlify-cli deploy --prod --dir great-docs/_site
+      # or use great-docs setup-github-pages for a Pages deployment.

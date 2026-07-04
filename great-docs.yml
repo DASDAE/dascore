@@ -1,0 +1,334 @@
+# Great Docs Configuration for DASCore
+# See https://posit-dev.github.io/great-docs/user-guide/configuration.html
+#
+# This replaces the previous custom doc build (scripts/build_api_docs.py,
+# scripts/_index_api.py, scripts/_render_api.py, scripts/_qmd_builder.py,
+# scripts/_validate_links.py, and docs/filters/fill_links.py).
+
+display_name: DASCore
+
+# Docstring format used throughout the package.
+parser: numpy
+
+# Runtime introspection (needed so @compose_docstring-templated docstrings
+# render with their substitutions filled in).
+dynamic: true
+
+site_url: "https://dascore.org"
+repo: "https://github.com/DASDAE/dascore"
+
+logo:
+  light: assets/logo.png
+  dark: assets/logo.png
+  alt: "DASCore logo"
+  show_title: true
+
+# Bibliography so citations (e.g. @lindsey2020broadband) in docstrings and
+# narrative pages resolve instead of hanging pandoc.
+bibliography: docs/references.bib
+
+authors:
+  - name: The DASDAE contributors
+    role: Author
+    github: DASDAE
+
+# Narrative documentation. Each section becomes a top-level site directory
+# matching the old site layout, so existing relative links keep working.
+sections:
+  - title: Tutorial
+    dir: tutorial
+  - title: Recipes
+    dir: recipes
+    index: true
+  - title: Notes
+    dir: notes
+    index: true
+  - title: Contributing
+    dir: contributing
+    index: true
+  - title: About
+    dir: about
+    index: true
+
+# Names picked up by discovery that are implementation details or
+# accidental re-exports (dascore modules do not define __all__).
+exclude:
+  - clients
+  - warnings
+  - compat.MATERIALIZE_NOW
+  - compat.random_state
+  - examples.compose_docstring
+  - examples.fetch
+  - examples.iterate
+  - examples.get_patch_names
+  - examples.random_state
+  - examples.register_func
+  - examples.EXAMPLE_PATCHES
+  - examples.EXAMPLE_SPOOLS
+  - examples.UnknownExampleError
+  - io.HDF5Reader
+  - io.HDF5Writer
+  - io.PatchNameSpace
+  - proc.ArrayLike
+  - proc.PatchType
+  - proc.apply_operator
+  - proc.array
+  - proc.compose_docstring
+  - proc.coords_from_df
+  - proc.get_parent_code_name
+  - proc.get_dim_axis_value
+  - proc.iterate
+  - proc.select_values_description
+  - proc.CoordError
+  - proc.ParameterError
+  - proc.PatchCoordinateError
+  - proc.PatchError
+  - units.assert_dtype_compatible_with_units
+  - units.dtype_time_like
+  - units.is_array
+  - units.is_datetime64
+  - units.is_timedelta64
+  - units.iterate
+  - units.maybe_convert_percent_to_fraction
+  - units.numeric
+  - units.quant_sequence_to_quant_array
+  - units.str_or_none
+  - units.unbyte
+  - units.UnitError
+  - viz.PatchNameSpace
+
+# Curated API reference. Grouped by task, mirroring how the tutorial
+# introduces the library.
+reference:
+  - title: Getting Data In and Out
+    desc: Read, scan, and write fiber-optic sensing data files
+    contents:
+      - spool
+      - read
+      - scan
+      - scan_to_df
+      - write
+      - get_format
+
+  - title: Core Classes
+    desc: The central data structures of DASCore
+    contents:
+      - name: Patch
+        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, assign_coords, get_patch_name, iresample, iselect, tran, T]
+      - name: BaseSpool
+        members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, update, viz]
+      - clients.dirspool.DirectorySpool
+      - name: PatchAttrs
+        members: [coords_from_dims, dim_tuple, drop, drop_private, flat_dump, from_dict, get, items, parse_coord_attributes, rename_dimension, update]
+      - name: CoordManager
+        members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, update_from_attrs, validate_data]
+      - name: proc.BaseCoord
+        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_attrs_dict, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
+      - get_coord
+      - get_coord_manager
+
+  - title: Patch Processing
+    desc: >
+      Processing routines. Each of these functions is also attached to
+      Patch as a method (e.g. patch.pass_filter(...)).
+    contents:
+      - proc.abs
+      - proc.add_distance_to
+      - proc.align_patch_coords
+      - proc.align_to_coord
+      - proc.angle
+      - proc.append_dims
+      - proc.bool_patch
+      - proc.conj
+      - proc.correlate
+      - proc.convert_units
+      - proc.correlate_shift
+      - proc.decimate
+      - proc.demean
+      - proc.detrend
+      - proc.demedian
+      - proc.drop_coords
+      - proc.drop_private_coords
+      - proc.dropna
+      - proc.equals
+      - proc.fillna
+      - proc.flip
+      - proc.full
+      - proc.gaussian_filter
+      - proc.get_array
+      - proc.get_axis
+      - proc.hampel_filter
+      - proc.imag
+      - proc.interpolate
+      - proc.line_mute
+      - proc.make_broadcastable_to
+      - proc.median_filter
+      - proc.normalize
+      - proc.notch_filter
+      - proc.order
+      - proc.pad
+      - proc.pass_filter
+      - proc.pipe
+      - proc.real
+      - proc.rename_coords
+      - proc.resample
+      - proc.rolling
+      - proc.roll
+      - proc.savgol_filter
+      - proc.select
+      - proc.set_dims
+      - proc.set_units
+      - proc.simplify_units
+      - proc.slope_filter
+      - proc.slope_mute
+      - proc.snap_coords
+      - proc.sobel_filter
+      - proc.sort_coords
+      - proc.squeeze
+      - proc.standardize
+      - proc.taper
+      - proc.taper_range
+      - proc.transpose
+      - proc.update
+      - proc.update_attrs
+      - proc.update_coords
+      - proc.where
+      - proc.whiten
+      - proc.wiener_filter
+      - patch_function
+
+  - title: Transforms
+    desc: Transformations that change patch units or domain
+    contents:
+      - transform.dft
+      - transform.idft
+      - transform.rfft
+      - transform.stft
+      - transform.istft
+      - transform.spectrogram
+      - transform.envelope
+      - transform.differentiate
+      - transform.fbe
+      - transform.hilbert
+      - transform.integrate
+      - transform.kurtosis
+      - transform.stalta
+      - transform.dispersion_phase_shift
+      - transform.phase_weighted_stack
+      - transform.radians_to_strain
+      - transform.tau_p
+      - transform.velocity_to_strain_rate
+      - transform.velocity_to_strain_rate_edgeless
+
+  - title: Visualization
+    desc: Matplotlib-based plotting of patches
+    contents:
+      - viz.waterfall
+      - viz.wiggle
+      - viz.spectrogram
+      - viz.specplot
+      - viz.map_fiber
+
+  - title: Example Data
+    desc: Functions for generating example patches and spools
+    contents:
+      - get_example_patch
+      - get_example_spool
+      - examples.chirp
+      - examples.deformation_rate_event_1
+      - examples.delta_patch
+      - examples.dispersion_event
+      - examples.diverse_spool
+      - examples.example_event_1
+      - examples.example_event_2
+      - examples.febus_dss_mine_1
+      - examples.febus_dss_mine_2
+      - examples.forge_dss
+      - examples.forge_dts
+      - examples.nd_patch
+      - examples.patch_with_null
+      - examples.random_directory_spool
+      - examples.random_patch
+      - examples.random_patch_lat_lon
+      - examples.random_patch_xyz
+      - examples.random_spool
+      - examples.ricker_moveout
+      - examples.sin_wave_patch
+      - examples.spool_to_directory
+      - examples.wacky_dim_coord_patch
+
+  - title: Units and Time
+    desc: Unit and time conversion utilities
+    contents:
+      - get_quantity
+      - get_unit
+      - to_datetime64
+      - to_timedelta64
+      - to_float
+      - units.convert_units
+      - units.get_factor_and_unit
+      - units.get_filter_units
+      - units.get_inverted_quant
+      - units.get_quantity_str
+      - units.get_registry
+      - units.invert_quantity
+      - units.is_percent
+
+  - title: IO Interfaces
+    desc: Interoperability with other libraries and the FiberIO plugin system
+    contents:
+      - io.FiberIO
+      - io.PatchIO
+      - io.PatchFileSummary
+      - io.dataframe_to_patch
+      - io.patch_to_dataframe
+      - io.obspy_to_patch
+      - io.patch_to_obspy
+      - io.xarray_to_patch
+      - io.patch_to_xarray
+      - io.BinaryReader
+      - io.BinaryWriter
+      - io.PyTablesReader
+      - io.PyTablesWriter
+
+  - title: Utilities
+    desc: Assorted helper utilities
+    contents:
+      - utils.array.apply_ufunc
+      - utils.array.apply_array_func
+      - utils.patch.merge_compatible_coords_attrs
+
+  - title: Exceptions
+    desc: Exception classes raised by DASCore
+    contents:
+      - exceptions.DASCoreError
+      - exceptions.AttributeMergeError
+      - exceptions.ChunkError
+      - exceptions.CoordError
+      - exceptions.CoordDataError
+      - exceptions.CoordMergeError
+      - exceptions.CoordSortError
+      - exceptions.DASVaderCompatibilityError
+      - exceptions.DependencyError
+      - exceptions.FilterValueError
+      - exceptions.IncompatiblePatchError
+      - exceptions.InvalidFiberFileError
+      - exceptions.InvalidFiberIOError
+      - exceptions.InvalidFileHandlerError
+      - exceptions.InvalidIndexVersionError
+      - exceptions.InvalidSpoolError
+      - exceptions.InvalidTimeRangeError
+      - exceptions.MissingOptionalDependencyError
+      - exceptions.ParameterError
+      - exceptions.PatchAttributeError
+      - exceptions.PatchBroadcastError
+      - exceptions.PatchConversionError
+      - exceptions.PatchCoordinateError
+      - exceptions.PatchError
+      - exceptions.TimeError
+      - exceptions.UnitError
+      - exceptions.UnknownExampleError
+      - exceptions.UnknownFiberFormatError
+      - exceptions.UnsupportedKeywordError
+
+jupyter: python3

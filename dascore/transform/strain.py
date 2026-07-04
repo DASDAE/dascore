@@ -84,7 +84,7 @@ def velocity_to_strain_rate(
     gauge_length is more complex with higher oder filters. See
     @yang2022filtering for more info.
 
-    See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
+    See the [`velocity_to_strain_rate` note](/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
 
     The [edgeless](`dascore.Patch.velocity_to_strain_rate_edgeless`) version
@@ -166,7 +166,7 @@ def velocity_to_strain_rate_edgeless(
     the sampling along the distance dimension.
 
     See the
-    [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
+    [`velocity_to_strain_rate` note](/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
     """
     if step_multiple <= 0:

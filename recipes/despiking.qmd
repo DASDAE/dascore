@@ -11,7 +11,7 @@ This recipe demonstrates how to remove spikes from DAS data.
 
 The Hampel filter is effective for removing outliers (spikes) in data by identifying values that deviate significantly from the local median in terms of median absolute deviation [(MAD)](https://en.wikipedia.org/wiki/Median_absolute_deviation). This makes it particularly useful for cleaning DAS data that may contain various types of noise spikes.
 
-DASCore provides the [`Patch.hampel_filter`](`dascore.Patch.hampel_filter`). The filter works by:
+DASCore provides the [`Patch.hampel_filter`](`dascore.proc.hampel_filter`). The filter works by:
 
 1. Computing the local median within a sliding window (optionally along multiple dimensions)
 2. Calculating the median absolute deviation (MAD) within the same window
