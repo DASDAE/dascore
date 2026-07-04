@@ -602,11 +602,15 @@ def order_range_tuple(range_tuple):
 
 def check_filter_sequence(filt_range):
     """Ensure the filter sequence is the right shape."""
+    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
+        msg = (
+            f"filter range must be a length two sequence of (low, high), "
+            f"not {filt_range}. Use None or ... for an open end, "
+            f"e.g. time=(None, 10) for a 10 Hz lowpass."
+        )
+        raise FilterValueError(msg)
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
-    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
-        msg = f"filter range must be a length two sequence not {filt_range}"
-        raise FilterValueError(msg)
     if all([pd.isnull(x) for x in mags]):
         msg = (
             f"pass filter requires at least one filter limit, "
