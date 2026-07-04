@@ -9,17 +9,26 @@ queries from the index backend.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import UPath
+from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.io.index.backend import get_backend, resolve_query
-from dascore.io.index.ingest import summaries_to_records
-from dascore.io.indexer import AbstractIndexer
+from dascore.io.index.ingest import SourceRecord, summaries_to_records
+from dascore.io.indexer import (
+    AbstractIndexer,
+    _directory_writable,
+    _get_index_map,
+    _update_index_map,
+)
 from dascore.utils.misc import _iter_filesystem
+from dascore.utils.paths import requires_local_directory
 
 # Structural columns the spool machinery must not see: unique-per-patch
 # values block chunk merge-compatibility grouping, which compares all
@@ -43,19 +52,58 @@ class DBDirectoryIndexer(AbstractIndexer):
     """
 
     ext: str | None = None
+    # user-level file tracking index locations for unwritable data dirs
+    index_map_path: Path = config_attr("directory_index_map_path")
 
     def __init__(
         self,
         path: str | Path,
-        engine: str = "duckdb",
+        engine: str = "sqlite",
         index_path: str | Path | None = None,
     ):
+        path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)
+        requires_local_directory(path, label="DBDirectoryIndexer")
         self.path = Path(path).absolute()
         self.engine = engine
-        if index_path is None:
-            index_path = self.path / f".dascore_index_{engine}"
-        self.index_path = Path(index_path)
+        self.index_path = Path(self._find_index_path(index_path))
+        # A brand-new index triggers one automatic update on first query,
+        # matching the historic auto-index-on-first-access behavior.
+        self._initial_update_done = self.index_path.exists()
         self._backend = get_backend(self.index_path, kind=engine)
+
+    @property
+    def _index_name(self) -> str:
+        return f".dascore_index_{self.engine}"
+
+    def _find_index_path(self, index_path=None) -> Path:
+        """
+        Find where the index lives (or should live).
+
+        Mirrors the historic DirectoryIndexer behavior: in-directory by
+        default; when the data directory is read-only the index lives in
+        the dascore cache and its location is recorded in the index map.
+        """
+        map_key = f"{self.path}::{self.engine}"
+        if index_path:
+            update = {map_key: str(Path(index_path).absolute())}
+            _update_index_map(update, cache_path=str(self.index_map_path))
+            return Path(index_path)
+        expected = self.path / self._index_name
+        with suppress(PermissionError):
+            if expected.exists():
+                return expected
+        path_map = _get_index_map(cache_path=str(self.index_map_path))
+        if out := path_map.get(map_key):
+            return Path(out)
+        if not _directory_writable(self.path):
+            name = f"_dascore_index_{abs(hash(self.path))}_{self.engine}"
+            index_path = self.index_map_path.parent / name
+            _update_index_map(
+                {map_key: str(index_path.absolute())},
+                cache_path=str(self.index_map_path),
+            )
+            return index_path
+        return expected
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__} ({self.engine}) managing: {self.path}"
@@ -71,14 +119,57 @@ class DBDirectoryIndexer(AbstractIndexer):
         """
         return self
 
-    def _current_files(self) -> dict[str, tuple[int, int, Path]]:
-        """Map relative posix path -> (mtime_ns, size, absolute path)."""
-        out = {}
-        for file_path in _iter_filesystem(self.path, ext=self.ext):
-            stat = file_path.stat()
-            rel = file_path.relative_to(self.path).as_posix()
-            out[rel] = (stat.st_mtime_ns, stat.st_size, file_path)
-        return out
+    def _rel(self, path: Path) -> str:
+        """Relative posix path of a file under the spool root."""
+        return Path(path).relative_to(self.path).as_posix()
+
+    def _directory_format(self, path: Path) -> bool:
+        """Return True when a directory is itself one FiberIO scan unit."""
+        try:
+            dc.get_format(path)
+        except Exception:
+            return False
+        return True
+
+    def _walk(self) -> dict[str, tuple[int, int, Path]]:
+        """
+        Walk the spool directory, honoring directory-format scan units.
+
+        Maps relative path -> (mtime_ns, size, abs path) for every scan
+        unit. A directory-format unit (e.g. XMLBinary) appears as one
+        entry keyed by the directory, with aggregate stats — max member
+        mtime and summed member size — so member modification, addition,
+        and removal all register as a change. Mirrors the skip protocol
+        dc.scan uses so members are not offered individually.
+        """
+        files: dict[str, tuple[int, int, Path]] = {}
+        gen = _iter_filesystem(self.path, ext=self.ext, include_directories=True)
+        signal = None
+        while True:
+            try:
+                # send(None) is equivalent to next() and also starts it
+                candidate = gen.send(signal)
+            except StopIteration:
+                break
+            signal = None
+            if candidate is None:  # the reply to a "skip" send
+                continue
+            path = Path(candidate)
+            if path.is_dir():
+                if self._directory_format(path):
+                    signal = "skip"
+                    max_mtime, total_size = 0, 0
+                    for sub in path.rglob("*"):
+                        if not sub.is_file() or sub.name.startswith("."):
+                            continue
+                        stat = sub.stat()
+                        max_mtime = max(max_mtime, stat.st_mtime_ns)
+                        total_size += stat.st_size
+                    files[self._rel(path)] = (max_mtime, total_size, path)
+                continue
+            stat = path.stat()
+            files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
+        return files
 
     def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
@@ -87,31 +178,66 @@ class DBDirectoryIndexer(AbstractIndexer):
         Change detection compares each source's stored (mtime_ns,
         size_bytes) against the filesystem — never a global watermark —
         and stale-source removal is folded in (the walk is the dominant
-        cost; removal afterwards is nearly free).
+        cost; removal afterwards is nearly free). Directory-format scan
+        units (e.g. XMLBinary) are rescanned whole when any member file
+        changes.
         """
-        current = self._current_files()
+        self._initial_update_done = True
+        files = self._walk()
         stored = {
-            row.source_path: (row.mtime_ns, row.size_bytes)
+            row.source_path: (
+                None
+                if pd.isnull(row.mtime_ns)
+                else (int(row.mtime_ns), int(row.size_bytes))
+            )
             for row in self._backend.get_sources().itertuples()
         }
-        stale = [path for path in stored if path not in current]
+        stale = [path for path in stored if path not in files]
         changed = [
             rel
-            for rel, (mtime, size, _) in current.items()
+            for rel, (mtime, size, _) in files.items()
             if stored.get(rel) != (mtime, size)
         ]
+        if paths is not None:
+            # restrict the rescan (not stale removal) to the given paths
+            keep = set()
+            for one in paths:
+                one = Path(one)
+                rel = (
+                    one.relative_to(self.path).as_posix()
+                    if one.is_absolute()
+                    else one.as_posix()
+                )
+                keep.add(rel)
+            changed = [rel for rel in changed if rel in keep]
         if stale:
             self._backend.delete_sources(stale)
         if changed:
-            abs_paths = [current[rel][2] for rel in changed]
-            summaries = dc.scan(abs_paths, progress=progress)
+            scan_paths = [files[rel][2] for rel in changed]
+            summaries = dc.scan(scan_paths, progress=progress)
             # scan reports absolute source paths; stat maps use them too
             records = summaries_to_records(
                 summaries,
                 relative_to=str(self.path),
-                mtimes_ns={str(current[r][2]): current[r][0] for r in changed},
-                sizes_bytes={str(current[r][2]): current[r][1] for r in changed},
+                mtimes_ns={str(p): m for _, (m, _, p) in files.items()},
+                sizes_bytes={str(p): s for _, (_, s, p) in files.items()},
             )
+            # Every visited path gets a sources row, even when scanning
+            # produced no patches (e.g. a non-fiber file). Otherwise such
+            # files look "new" on every update and force perpetual
+            # rescans.
+            recorded = {rec.source_path for rec in records}
+            for rel in set(changed) - recorded:
+                mtime, size, _ = files[rel]
+                records.append(
+                    SourceRecord(
+                        source_path=rel,
+                        source_format="",
+                        format_version="",
+                        mtime_ns=mtime,
+                        size_bytes=size,
+                    )
+                )
             if records:
                 self._backend.write_sources(records)
         return self
@@ -123,6 +249,8 @@ class DBDirectoryIndexer(AbstractIndexer):
         Bare kwargs resolve attrs-first then coords; `_attrs`/`_coords`
         disambiguate explicitly (see the selector semantics spec).
         """
+        if not self._initial_update_done:
+            self.update(progress=None)
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
         df = df.drop(columns=list(_SPOOL_HIDDEN_COLUMNS), errors="ignore")

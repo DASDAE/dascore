@@ -8,12 +8,11 @@ import warnings
 from contextlib import suppress
 from pathlib import Path
 
+import h5py
 import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-import tables as tb
-import tables.parameters
 
 import dascore as dc
 import dascore.examples as ex
@@ -84,9 +83,6 @@ def pytest_sessionstart(session):
     # If running in CI make sure to turn off matplotlib.
     if os.environ.get("CI", False):
         matplotlib.use("Agg")
-
-    # need to set nodes to 32 to avoid crash on p3.11. See pytables#977.
-    tables.parameters.NODE_CACHE_SLOTS = 32
 
     # Test-time debug defaults are applied by fixture to avoid state leakage.
 
@@ -609,9 +605,9 @@ def generic_hdf5(tmp_path_factory):
     parent.mkdir()
     path = parent / "simple.hdf5"
 
-    with tb.open_file(str(path), "w") as fi:
-        group = fi.create_group("/", "bob")
-        fi.create_carray(group, "data", obj=random_state.rand(10))
+    with h5py.File(str(path), "w") as fi:
+        group = fi.create_group("bob")
+        group.create_dataset("data", data=random_state.rand(10))
     return path
 
 

@@ -231,12 +231,19 @@ class TestMisc:
         return out_dir
 
     def test_chunk_all_time_merges_to_single_patch(self, g1_two_file_directory):
-        """Ensure chunk(time=None) merges both g1 files into one patch."""
+        """Ensure chunk(time=None) merges both g1 files into one patch.
+
+        The files carry per-file attrs (temperature, freqoffset) that
+        differ, so conflict="keep_first" is required — matching what an
+        in-memory spool of the same patches requires. (The old HDF5 index
+        silently dropped these attrs, which masked the conflict for
+        directory spools.)
+        """
         spool = dc.spool(g1_two_file_directory)
         # These weren't directly adjacent files so we adjust the tolerance.
         match = "There is a gap in the patch along dimension time"
         with pytest.warns(UserWarning, match=match):
-            merged = spool.chunk(time=None, tolerance=3)
+            merged = spool.chunk(time=None, tolerance=3, conflict="keep_first")
         assert len(merged) == 1
 
     def test_mtx_read_raises(self, g1_mtx_buffer):

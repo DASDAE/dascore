@@ -53,8 +53,7 @@ dependencies = [
      "pooch>=1.2",
      "pydantic>2.1",
      "rich",
-     "tables>=3.7",
-     "typing_extensions>=4.12",
+      "typing_extensions>=4.12",
      "universal-pathlib",
      "pint>=0.24.4",
      "scipy>=1.15",
@@ -62,7 +61,12 @@ dependencies = [
 
 [project.optional-dependencies]
 
+duckdb = [
+    "duckdb",
+]
+
 extras = [
+    "duckdb",
     "xarray",
     "netCDF4",
     "h5netcdf",
@@ -242,8 +246,6 @@ norecursedirs = [
     "worktrees",
 ]
 filterwarnings = [
-    # Ignore hdf5 warnings from pytables, See pytables #1035
-    'ignore::Warning:tables:'
 ]
 markers = [
     "network: tests that require network-style filesystem access",

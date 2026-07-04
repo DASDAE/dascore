@@ -8,7 +8,6 @@ from pathlib import Path
 
 import h5py
 import pytest
-from tables import File
 from upath import UPath
 
 import dascore as dc
@@ -18,8 +17,6 @@ from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
-    HDF5Reader,
-    HDF5Writer,
     LocalH5Reader,
     open_h5_resource,
 )
@@ -149,14 +146,15 @@ class TestGetHandleFromResource:
 
     def test_path_to_hdf5_reader(self, generic_hdf5):
         """Ensure we get a reader from tmp path reader."""
-        with closing(get_handle_from_resource(generic_hdf5, HDF5Reader)) as handle:
-            assert isinstance(handle, File)
+        with closing(get_handle_from_resource(generic_hdf5, H5Reader)) as handle:
+            assert "bob" in handle  # h5py-file-like
 
     def test_path_to_hdf5_writer(self, tmp_path):
-        """Ensure we get a reader from tmp path reader."""
+        """Ensure we get a writer from tmp path."""
         path = tmp_path / "test_hdf_writer.h5"
-        with closing(get_handle_from_resource(path, HDF5Writer)) as handle:
-            assert isinstance(handle, File)
+        with closing(get_handle_from_resource(path, H5Writer)) as handle:
+            handle.create_group("waveforms")
+            assert "waveforms" in handle
 
     def test_get_path(self, tmp_path):
         """Ensure we can get a path."""
@@ -446,9 +444,9 @@ class TestGetHandleFromResource:
         with pytest.raises(NotImplementedError):
             get_handle_from_resource(bad_instance, BinaryWriter)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Writer)
+            get_handle_from_resource(bad_instance, H5Writer)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Reader)
+            get_handle_from_resource(bad_instance, H5Reader)
 
 
 class TestIOResourceManager:
@@ -471,13 +469,12 @@ class TestIOResourceManager:
             assert isinstance(path_from_hint, Path)
             path = man.get_resource(Path)
             assert isinstance(path, Path)
-            hf = man.get_resource(HDF5Writer)
+            hf = man.get_resource(H5Writer)
             fi = man.get_resource(BinaryWriter)
-            # Why didn't pytables implement the stream like pythons?
-            assert hf.isopen
+            assert not hf.closed
             assert not fi.closed
-        # after the context manager exists everything should be closed.
-        assert not hf.isopen
+        # after the context manager exits everything should be closed.
+        assert hf.closed
         assert fi.closed
 
     def test_get_none_resource_returns_source(self):

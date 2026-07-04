@@ -11,7 +11,6 @@ dependencies:
   - pooch>=1.2
   - xarray
   - pre-commit
-  - pytables
   - h5py
   - matplotlib>=3.5
   - scipy>=1.15.0

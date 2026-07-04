@@ -14,8 +14,6 @@ import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import MissingPatchError, ParameterError
-from dascore.io.core import PatchFileSummary
-from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func, suppress_warnings
 
 DIRECTORY_SPOOLS = []
@@ -233,8 +231,16 @@ class TestDirectoryIndex:
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = list(PatchFileSummary.model_fields)
-        assert set(basic_index_df).issuperset(schema_fields)
+        expected = {
+            "path",
+            "file_format",
+            "file_version",
+            "dims",
+            "time_min",
+            "time_max",
+            "time_step",
+        }
+        assert set(basic_index_df).issuperset(expected)
 
     def test_patches_extracted(self, basic_file_spool):
         """Ensure the patches can be extracted."""
@@ -483,10 +489,10 @@ class TestGetContents:
     """Tests for getting the contents of the spool."""
 
     def test_str_columns_in_dataframe(self, diverse_directory_spool):
-        """Ensure all the string columns are in index."""
+        """Ensure the conventional string columns are in the index."""
         df = diverse_directory_spool.get_contents()
-        expected = HDFPatchIndexManager._min_itemsize
-        assert set(df.columns).issuperset(set(expected))
+        expected = {"path", "file_format", "file_version", "dims", "station"}
+        assert set(df.columns).issuperset(expected)
 
 
 class TestIndexing:
@@ -611,13 +617,15 @@ class TestFileSpoolIntegrations:
             assert coord.max() <= depth_tup[1]
 
     def test_differing_distances(self, dist_differ_spool):
-        """Ensure iteration still works with conditions described in #583."""
+        """Iteration works cleanly under the conditions described in #583.
+
+        The generic index stores per-file distance ranges, so the select
+        already excluded the short-distance file; no patch needs the
+        historic skip-with-warning workaround.
+        """
         assert len(dist_differ_spool)
-        # #583 would raise on iterating. Verify that a warning is issued when
-        # a patch is skipped due to coordinate mismatch.
-        with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
-            for patch in dist_differ_spool:
-                assert isinstance(patch, dc.Patch)
+        for patch in dist_differ_spool:
+            assert isinstance(patch, dc.Patch)
 
     def test_missing_patch_error_catchable_as_index_error(self, dist_differ_spool):
         """
@@ -632,12 +640,9 @@ class TestFileSpoolIntegrations:
                 except IndexError:
                     pass
 
-    @pytest.mark.xfail()
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):
-        """Selecting outside of distance range should reduce spool length."""
-        # Need to implement new indexing before this will pass.
-        with suppress_warnings(UserWarning):
-            assert len(dist_differ_spool) == 1
+        """Selecting outside of distance range reduces spool length (#583)."""
+        assert len(dist_differ_spool) == 1
 
     def test_iteration_unexpected_index_error(self, basic_file_spool):
         """

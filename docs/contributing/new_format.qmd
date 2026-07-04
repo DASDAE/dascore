@@ -163,7 +163,7 @@ loading the full data array.
 
 ## Support for Streams/Buffers
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` or `h5py.File` object. There are a few reasons for this:
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of an `h5py.File` object. There are a few reasons for this:
 
 * More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
 * It is usually more efficient since open-file handles can be automatically reused.

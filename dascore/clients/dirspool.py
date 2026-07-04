@@ -1,7 +1,7 @@
 """
 A spool for working with file systems.
 
-The spool uses a simple hdf5 index for keeping track of files.
+The spool uses a database index (sqlite by default) to track files.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
 from dascore.exceptions import MissingPatchError
-from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
+from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.indexer import AbstractIndexer
 from dascore.utils.docs import compose_docstring
 from dascore.utils.pd import adjust_segments
 
@@ -43,9 +44,9 @@ class DirectorySpool(DataFrameSpool):
     select_kwargs
         Dict of keyword arguments to restrict output contents.
     index_engine
-        If set, use the database index backend of this kind ("duckdb",
-        "sqlite", or "parquet") instead of the HDF5 index. Experimental;
-        see the spool index design discussion (#648).
+        The database backend for the index: "sqlite" (default, no extra
+        dependencies), "duckdb", or "parquet" (both require duckdb). See
+        the spool index design discussion (#648).
     """
 
     _drop_columns = ("file_format", "file_version", "path", "source_patch_id")
@@ -58,7 +59,7 @@ class DirectorySpool(DataFrameSpool):
         preferred_format: str | None = None,
         select_kwargs: dict | None = None,
         merge_kwargs: dict | None = None,
-        index_engine: str | None = None,
+        index_engine: str = "sqlite",
     ):
         super().__init__(select_kwargs=select_kwargs, merge_kwargs=merge_kwargs)
         # Init file spool from another file spool
@@ -69,14 +70,9 @@ class DirectorySpool(DataFrameSpool):
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
         elif isinstance(base_path, Path | str | UPath):
-            if index_engine is not None:
-                from dascore.io.index.indexer import DBDirectoryIndexer
-
-                self.indexer = DBDirectoryIndexer(
-                    base_path, engine=index_engine, index_path=index_path
-                )
-            else:
-                self.indexer = DirectoryIndexer(base_path, index_path=index_path)
+            self.indexer = DBDirectoryIndexer(
+                base_path, engine=index_engine, index_path=index_path
+            )
         assert hasattr(self, "indexer"), "indexer not set."
         self._preferred_format = preferred_format
 

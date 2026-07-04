@@ -134,6 +134,10 @@ def typed_value(value) -> TypedValue | None:
     """
     if _is_missing(value):
         return None
+    # containers/arrays are complex attrs: never indexable scalars (and
+    # they must not reach the datetime fallback, which accepts arrays).
+    if isinstance(value, np.ndarray | list | tuple | set | frozenset | dict | bytes):
+        return None
     # bool must precede int (bool is a subclass of int).
     if isinstance(value, bool | np.bool_):
         return TypedValue("bool", bool(value))
@@ -310,7 +314,8 @@ def summaries_to_records(
         store_path = path
         root = base_uri or relative_to
         if root and path.startswith(root):
-            store_path = path[len(root) :].lstrip("/")
+            # "." (not "") when the source IS the root (directory units)
+            store_path = path[len(root) :].lstrip("/") or "."
         out.append(
             SourceRecord(
                 source_path=store_path,
