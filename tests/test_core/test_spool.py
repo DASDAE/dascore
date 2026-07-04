@@ -12,7 +12,12 @@ import pytest
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
-from dascore.core.spool import BaseSpool, MemorySpool
+from dascore.core.spool import (
+    BaseSpool,
+    MemorySpool,
+    _estimate_merge_samples,
+    _get_varying_dim,
+)
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
@@ -82,6 +87,122 @@ class TestSpoolBasics:
         msg = "Apply 'viz' on a Patch object"
         with pytest.raises(AttributeError, match=msg):
             random_spool.viz.waterfall(random_spool)
+
+
+class TestMemorySpoolLazy:
+    """
+    Tests for lazy behavior of in-memory spools.
+
+    Spools created directly from patches shouldn't build their managing
+    dataframes until an operation requires them.
+    """
+
+    @pytest.fixture()
+    def patch_list(self):
+        """Get a list of contiguous patches."""
+        return list(dc.examples.get_example_spool(length=3))
+
+    def test_simple_access_builds_no_dataframes(self, patch_list):
+        """len, integer access, and iteration should not build dataframes."""
+        spool = dc.spool(patch_list)
+        assert len(spool) == len(patch_list)
+        assert spool[0] == patch_list[0]
+        assert spool[-1] == patch_list[-1]
+        assert list(spool) == patch_list
+        assert "_df" not in spool._cache
+
+    def test_out_of_bounds_raises(self, patch_list):
+        """The fast path must raise the same IndexError as the df path."""
+        spool = dc.spool(patch_list)
+        match = "out of bounds for spool"
+        with pytest.raises(IndexError, match=match):
+            _ = spool[len(patch_list)]
+        assert "_df" not in spool._cache
+
+    def test_access_unchanged_after_df_built(self, patch_list):
+        """Patch access must return the same thing before/after df built."""
+        spool = dc.spool(patch_list)
+        lazy_patches = list(spool)
+        _ = spool.get_contents()  # forces the dataframes to build
+        assert "_df" in spool._cache
+        assert list(spool) == lazy_patches
+        assert spool[0] == lazy_patches[0]
+
+    def test_equality_independent_of_access(self, patch_list):
+        """Equal spools must stay equal regardless of what was accessed."""
+        spool1, spool2 = dc.spool(patch_list), dc.spool(patch_list)
+        _ = spool1.get_contents()  # build one spool's dataframes only.
+        assert spool1 == spool2
+        assert spool2 == spool1
+
+    def test_input_mutation_does_not_change_spool(self, patch_list):
+        """The spool contents are snapshotted at creation."""
+        data = list(patch_list)
+        spool = dc.spool(data)
+        data.pop()
+        assert len(spool) == len(patch_list)
+        # The snapshot itself is immutable.
+        assert isinstance(spool._patches, tuple)
+
+    def test_derived_spools_use_df_machinery(self, patch_list):
+        """Chunked/selected spools must go through the instruction dfs."""
+        spool = dc.spool(patch_list)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        time_coord = merged[0].get_coord("time")
+        expected_min = min(
+            x.summary.get_coord_summary("time").min for x in patch_list
+        )
+        assert time_coord.min() == expected_min
+
+    def test_derived_spool_does_not_retain_parent(self, patch_list):
+        """Derived spools must not hold a reference to their parent."""
+        spool = dc.spool(patch_list)
+        chunked = spool.chunk(time=1)
+        assert chunked._data is None
+        assert chunked._patches is None
+
+    def test_single_patch_input_uses_lazy_storage(self, random_patch):
+        """A single patch should be stored lazily just like a patch sequence."""
+        spool = MemorySpool(random_patch)
+        assert spool._patches == (random_patch,)
+        assert len(spool) == 1
+
+    def test_empty_memory_spool_has_no_dataframe(self):
+        """An empty MemorySpool should report no managing dataframe."""
+        spool = MemorySpool()
+        assert spool._get_df() is None
+
+    def test_instruction_df_builds_from_lazy_patches(self, patch_list):
+        """Lazy patch input should still build instruction dataframes on demand."""
+        spool = dc.spool(patch_list)
+        assert len(spool._get_instruction_df()) == len(patch_list)
+
+
+class TestSpoolHelpers:
+    """Tests for helper functions used by spool implementations."""
+
+    def test_get_varying_dim_ignores_missing_ranges(self):
+        """Columns without min/max pairs should not count as varying dims."""
+        df = pd.DataFrame(
+            {"time_min": [0, 0], "time_max": [1, 1], "distance_min": [0, 1]}
+        )
+        assert _get_varying_dim(df) is None
+
+    def test_estimate_merge_samples_missing_columns(self):
+        """Missing range columns should disable streaming estimates."""
+        df = pd.DataFrame({"time_min": [0], "time_max": [1]})
+        assert _estimate_merge_samples(df, "time") is None
+
+    def test_estimate_merge_samples_degenerate_step(self):
+        """Non-finite sample counts should disable streaming estimates."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0], "time_step": [0.0]})
+        assert _estimate_merge_samples(df, "time") is None
+
+    def test_estimate_merge_samples_negative_count(self):
+        """Ranges with negative sample counts should disable streaming estimates."""
+        df = pd.DataFrame({"time_min": [2.0], "time_max": [0.0], "time_step": [1.0]})
+        assert _estimate_merge_samples(df, "time") is None
 
 
 class TestSpoolEquals:

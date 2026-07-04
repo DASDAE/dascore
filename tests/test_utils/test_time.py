@@ -90,6 +90,11 @@ class TestToDateTime64:
         out = to_datetime64(None)
         assert pd.isnull(out)
 
+    def test_pandas_nat(self):
+        """Pandas NaT should return numpy NaT."""
+        out = to_datetime64(pd.NaT)
+        assert pd.isnull(out)
+
     def test_pandas_timestamp(self):
         """Ensure a timestamp returns the datetime64."""
         ts = pd.Timestamp("2020-01-03")
@@ -296,6 +301,10 @@ class TestToTimeDelta64:
             out = to_timedelta64(-val)
             expected = -to_timedelta64(abs(val))
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
+
+    def test_negative_example_uses_timedelta_function(self):
+        """The negative-number example should demonstrate to_timedelta64."""
+        assert "dc.to_timedelta64(-10.5)" in to_timedelta64.__doc__
 
     def test_negative_int(self):
         """Negative ints should be a symmetric operation."""

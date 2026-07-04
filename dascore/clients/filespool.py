@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, SpoolType
 from dascore.core.spool import BaseSpool, DataFrameSpool
+from dascore.exceptions import MissingPatchError
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
 

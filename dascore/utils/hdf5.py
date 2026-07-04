@@ -63,7 +63,6 @@ NodeError = tables.NodeError
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
 
-
 class _ManagedH5pyFile:
     """
     DASCore's internal h5py handle wrapper with deterministic close behavior.

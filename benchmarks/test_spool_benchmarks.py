@@ -2,15 +2,43 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.utils.time import to_timedelta64
 
 
 @pytest.fixture
 def spool_no_gap():
     """Get test spool with no gaps."""
     return dc.get_example_spool("random_das", length=10)
+
+
+def _make_contiguous_patches(count, shape=(50, 100), time_step=0.004):
+    """Make small patches contiguous in time."""
+    base = dc.get_example_patch(
+        "random_das",
+        time_min="2023-01-01",
+        shape=shape,
+        time_step=time_step,
+        distance_step=1.0,
+    ).update_attrs(history=[])
+    duration = to_timedelta64(shape[1] * time_step)
+    start = np.datetime64("2023-01-01")
+    return [
+        base.update_coords(time_min=start + i * duration).update_attrs(history=[])
+        for i in range(count)
+    ]
+
+
+@pytest.fixture(scope="module")
+def many_file_directory(tmp_path_factory):
+    """Create a directory of many small contiguous DASDAE files."""
+    path = tmp_path_factory.mktemp("many_file_benchmark")
+    for i, patch in enumerate(_make_contiguous_patches(25)):
+        patch.io.write(path / f"file_{i:03d}.h5", "dasdae")
+    return path
 
 
 @pytest.fixture
@@ -105,3 +133,61 @@ class TestSelectionBenchmarks:
         spool = diverse_spool
         spool.select(tag="some_*")
         spool.select(station="wayou?")
+
+
+class TestManyFileDirectoryBenchmarks:
+    """Benchmarks for working with a directory of many files."""
+
+    @pytest.fixture
+    def indexed_spool(self, many_file_directory):
+        """Get an indexed spool of the directory."""
+        return dc.spool(many_file_directory).update(progress=None)
+
+    @pytest.mark.benchmark
+    def test_index_directory(self, many_file_directory):
+        """Time indexing a directory of many files."""
+        for index_path in many_file_directory.glob(".dascore*"):
+            index_path.unlink()
+        spool = dc.spool(many_file_directory).update(progress=None)
+        assert len(spool)
+
+    @pytest.mark.benchmark
+    def test_merge_many_files(self, indexed_spool):
+        """Time merging many files into a single patch."""
+        merged = indexed_spool.chunk(time=None)
+        patches = list(merged)
+        assert len(patches) == 1
+
+    @pytest.mark.benchmark
+    def test_iterate_chunked(self, indexed_spool):
+        """Time loading chunks which each span several files."""
+        # each file spans 0.4s, so each chunk merges 4 files.
+        chunked = indexed_spool.chunk(time=1.6)
+        for patch in chunked:
+            assert isinstance(patch, dc.Patch)
+
+
+class TestMemorySpoolBenchmarks:
+    """Benchmarks for in-memory spool creation and access."""
+
+    @pytest.fixture(scope="class")
+    def many_patches(self):
+        """Get a list of many small contiguous patches."""
+        return _make_contiguous_patches(100)
+
+    @pytest.mark.benchmark
+    def test_spool_from_patches_access(self, many_patches):
+        """Time creating a spool from patches and accessing its contents."""
+        spool = dc.spool(many_patches)
+        assert len(spool) == len(many_patches)
+        assert isinstance(spool[0], dc.Patch)
+        assert isinstance(spool[-1], dc.Patch)
+        for patch in spool:
+            assert isinstance(patch, dc.Patch)
+
+    @pytest.mark.benchmark
+    def test_merge_many_patches(self, many_patches):
+        """Time merging many in-memory patches into one."""
+        merged = dc.spool(many_patches).chunk(time=None)
+        assert len(merged) == 1
+        assert isinstance(merged[0], dc.Patch)

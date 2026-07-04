@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
@@ -17,9 +16,12 @@ from dascore.compat import random_state
 from dascore.config import set_config
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
+
+spy_chirp = lazy_import("scipy.signal", "chirp")
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Sequence
 from functools import cache
 from typing import Any, TypeVar
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+from platformdirs import user_cache_path
 
 import dascore as dc
 from dascore.compat import is_array
@@ -21,10 +23,20 @@ str_or_none = TypeVar("str_or_none", None, str)
 numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
+def _get_unit_registry():
+    """Create a Pint registry, clearing stale automatic cache if needed."""
+    try:
+        return pint.UnitRegistry(cache_folder=":auto:")
+    except FileNotFoundError:
+        path = user_cache_path(appname="pint", appauthor=False)
+        shutil.rmtree(path, ignore_errors=True)
+        return pint.UnitRegistry(cache_folder=":auto:")
+
+
 @cache
 def get_registry():
     """Get the pint unit registry."""
-    ureg = pint.UnitRegistry(cache_folder=":auto:")
+    ureg = _get_unit_registry()
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")
@@ -197,6 +209,17 @@ def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
     return 1 / quant
 
 
+@cache
+def _unit_to_str(unit: Unit) -> str:
+    """
+    Get the string representation of a unit; cache the result.
+
+    Unit equality/hashing is exact (e.g. m != cm) so, unlike Quantity,
+    Unit is safe to use as a cache key.
+    """
+    return str(unit)
+
+
 def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
@@ -208,20 +231,34 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     quant_value
         A input specifying a quantity.
     """
+    # Note: this is called by the pydantic serializers of attrs and coord
+    # models, so it runs many times when working with many patches; the
+    # common paths need to stay cheap (hence _validate_quantity_str and
+    # _unit_to_str caches).
     quant_value = unbyte(quant_value)
     if quant_value is None or quant_value == "":
         return None
-    try:
-        quant = get_quantity(quant_value)
-    except UndefinedUnitError:
-        msg = f"DASCore failed to parse the following unit/quantity: {quant_value}"
-        raise UnitError(msg)
+    if isinstance(quant_value, str):
+        _validate_quantity_str(quant_value)
+        return quant_value
     if isinstance(quant_value, Quantity):
-        if quant.magnitude == 1.0:
-            quant_value = str(quant.units)
-        else:
-            quant_value = str(quant)
+        if quant_value.magnitude == 1.0:
+            return _unit_to_str(quant_value.units)
+        return str(quant_value)
+    # Any other type (eg a pint Unit): validate by conversion, then use
+    # the string of the original input.
+    get_quantity(quant_value)
     return str(quant_value)
+
+
+@cache
+def _validate_quantity_str(quant_str: str) -> None:
+    """Raise a UnitError if the string doesn't specify a valid quantity."""
+    try:
+        get_quantity(quant_str)
+    except UndefinedUnitError as e:
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
+        raise UnitError(msg) from e
 
 
 def get_inverted_quant(quant, data_units):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from scipy.signal import detrend as scipy_detrend
-
 from dascore.constants import PatchType
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import patch_function
+
+scipy_detrend = lazy_import("scipy.signal", "detrend")
 
 
 @patch_function()

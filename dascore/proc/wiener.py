@@ -4,11 +4,12 @@ Wiener filtering functionality for noise reduction.
 
 from __future__ import annotations
 
-from scipy.signal import wiener
-
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import get_patch_window_size, patch_function
+
+wiener = lazy_import("scipy.signal", "wiener")
 
 
 @patch_function()

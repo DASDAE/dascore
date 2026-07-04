@@ -12,7 +12,6 @@ from rich.text import Text
 import dascore as dc
 import dascore.proc.coords
 import dascore.utils.io
-import dascore.viz
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs

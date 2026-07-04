@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
+import tables
 
 import dascore as dc
 from dascore.compat import random_state
@@ -229,6 +230,51 @@ class TestReadDASDAE:
         out = dc.read(path, quality=(0, 1))[0]
 
         assert out == multi_dim_coords_patch
+
+    def test_file_spool_loads_distinct_attrs(self, tmp_path, random_patch):
+        """Lazy loading should materialize the patch for each DASDAE row."""
+        path = tmp_path / "multi_patch.h5"
+        patches = [
+            random_patch.update_attrs(tag="S100", label="L100"),
+            random_patch.update_attrs(tag="S120", label="L120"),
+        ]
+
+        dc.write(dc.spool(patches), path, "DASDAE")
+        spool = dc.spool(path)
+
+        assert spool.get_contents()["tag"].to_list() == ["S100", "S120"]
+        assert [x.attrs.tag for x in spool] == ["S100", "S120"]
+        assert [x.attrs.label for x in spool] == ["L100", "L120"]
+
+    def test_read_filters_patch_attrs_before_loading(self, tmp_path, random_patch):
+        """DASDAE attr filters should skip non-matching patch groups."""
+        path = tmp_path / "multi_patch.h5"
+        patches = [
+            random_patch.update_attrs(tag="S100"),
+            random_patch.update_attrs(tag="S120"),
+        ]
+        dc.write(dc.spool(patches), path, "DASDAE")
+
+        out = dc.read(path, tag="S120")
+
+        assert len(out) == 1
+        assert out[0].attrs.tag == "S120"
+
+    def test_get_format_false(self, generic_hdf5):
+        """A generic HDF5 file is not a DASDAE file."""
+        parser = DASDAEV1()
+        assert not parser.get_format(generic_hdf5)
+
+    def test_read_empty_selection_returns_no_patches(
+        self, tmp_path_factory, random_patch
+    ):
+        """Selections outside an empty patch should return no patches."""
+        path = tmp_path_factory.mktemp("dasdae_read_empty_selection") / "out.h5"
+        time = random_patch.get_coord("time")
+        random_patch.io.write(path, "dasdae")
+        empty_range_start = time.max() + 3 * time.step
+        out = dc.read(path, time=(empty_range_start, ...))
+        assert len(out) == 0
 
 
 class TestScanDASDAE:

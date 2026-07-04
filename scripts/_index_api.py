@@ -28,6 +28,17 @@ def _get_file_path(obj):
     return Path(path)
 
 
+def _is_environment_path(path) -> bool:
+    """
+    Return True if the path belongs to an environment nested in the project.
+
+    Virtual environments (e.g. .venv) created inside the repository would
+    otherwise be traversed as if their contents were part of the project.
+    """
+    excluded = {"site-packages", ".venv", "venv", ".pixi", ".tox", ".nox"}
+    return bool(excluded.intersection(Path(path).parts))
+
+
 def _get_base_address(path, base_path):
     """
     Get the base address inherent in the path.
@@ -36,6 +47,8 @@ def _get_base_address(path, base_path):
 
     dascore.core.patch
     """
+    if _is_environment_path(path):
+        return ""
     try:
         out = Path(path).relative_to(Path(base_path))
     except ValueError:
@@ -164,6 +177,9 @@ def parse_project(obj, key=None):
         # this is something outside of dascore or we have already seen it.
         if str(base_path) not in str(path) or obj_id in data_dict:
             return
+        # skip contents of environments (e.g. .venv) nested in the project.
+        if _is_environment_path(path):
+            return
         # load all the modules first
         if isinstance(obj, ModuleType):
             key = _get_address(obj, path.relative_to(base_path))
@@ -193,6 +209,8 @@ def parse_project(obj, key=None):
                         continue
                     sub_path = _get_file_path(sub_obj)
                     if str(base_path) not in str(sub_path):
+                        continue
+                    if _is_environment_path(sub_path):
                         continue
                     sub_key = f"{key}.{sub_name}"
                     # make sure this is where the method is defined else skip

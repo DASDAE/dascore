@@ -194,7 +194,7 @@ def _iter_filesystem(
     ----------
     paths
         The path to the base directory to traverse. Can also use a collection
-        of paths.
+        of paths when ``include_directories`` is False.
     ext : str or None
         The extensions of files to return.
     timestamp : int or float
@@ -622,7 +622,7 @@ def maybe_get_items(
     unpack_names = set() if unpack_names is None else unpack_names
     out = {}
     for old_name, new_name in attr_map.items():
-        if not (value := obj.get(old_name, None)):
+        if (value := obj.get(old_name, None)) is None:
             continue
         val = unbyte(value)
         out[new_name] = _maybe_unpack(val) if old_name in unpack_names else val
@@ -804,16 +804,17 @@ def order_range_tuple(range_tuple):
 
 def check_filter_sequence(filt_range):
     """Ensure the filter sequence is the right shape."""
+    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
+        msg = (
+            f"filter range must be a length two sequence of (low, high), "
+            f"not {filt_range}. Use None or ... for an open end, "
+            f"e.g. time=(None, 10) for a 10 Hz lowpass."
+        )
+        raise FilterValueError(msg)
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
-    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
-        msg = f"filter range must be a length two sequence not {filt_range}"
-        raise FilterValueError(msg)
     if all([pd.isnull(x) for x in mags]):
-        msg = (
-            f"pass filter requires at least one filter limit, "
-            f"you passed {filt_range}"
-        )
+        msg = f"pass filter requires at least one filter limit, you passed {filt_range}"
         raise FilterValueError(msg)
     return filt_range
 

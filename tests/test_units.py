@@ -25,6 +25,41 @@ from dascore.units import (
 class TestUnitInit:
     """Ensure units can be initialized."""
 
+    def test_stale_pint_cache_falls_back(self, monkeypatch):
+        """Stale Pint disk cache should not prevent registry creation."""
+        from dascore import units
+
+        class FakeRegistry:
+            pass
+
+        cache_folders = []
+        removed_paths = []
+        cache_path = "pint-cache"
+        fake_registry = FakeRegistry()
+
+        def unit_registry(*args, **kwargs):
+            cache_folders.append(kwargs.get("cache_folder"))
+            if len(cache_folders) == 1 and kwargs.get("cache_folder") == ":auto:":
+                raise FileNotFoundError("stale pint cache")
+            return fake_registry
+
+        def rmtree(path, ignore_errors):
+            removed_paths.append((path, ignore_errors))
+
+        monkeypatch.setattr(units.pint, "UnitRegistry", unit_registry)
+        monkeypatch.setattr(
+            units,
+            "user_cache_path",
+            lambda appname, appauthor: cache_path,
+        )
+        monkeypatch.setattr(units.shutil, "rmtree", rmtree)
+
+        registry = units._get_unit_registry()
+
+        assert cache_folders == [":auto:", ":auto:"]
+        assert removed_paths == [(cache_path, True)]
+        assert registry is fake_registry
+
     def test_time(self):
         """Tests for time units."""
         sec = dc.get_unit("s")
@@ -71,6 +106,19 @@ class TestGetQuantStr:
         quant = get_quantity("10 m /s")
         out = get_quantity_str(quant)
         assert "10.0" in out
+
+    def test_equal_quantities_keep_distinct_strings(self):
+        """
+        Quantities that compare equal (e.g. 1 m and 100 cm) must still
+        return their own string representations. This guards against
+        caching results keyed on quantity equality.
+        """
+        quant_m, quant_cm = get_quantity("1 m"), get_quantity("100 cm")
+        assert quant_m == quant_cm  # sanity check: pint treats these as equal
+        str_m, str_cm = get_quantity_str(quant_m), get_quantity_str(quant_cm)
+        assert str_m != str_cm
+        assert "m" in str_m
+        assert "c" in str_cm  # cm or centimeter
 
     def test_timedelta_to_quantity(self):
         """Ensure a timedelta can be converted to a quantity."""

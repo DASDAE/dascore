@@ -15,8 +15,10 @@ from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
+    _get_attrs,
     _get_contents_from_patch_groups_generic,
     _kwargs_empty,
+    _matches_attr_filters,
     _read_patch,
     _save_patch,
     _write_meta,
@@ -48,7 +50,12 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def write(self, spool: SpoolType, resource: H5Writer, **kwargs):
+    def write(
+        self,
+        spool: SpoolType,
+        resource: H5Writer,
+        **kwargs,
+    ):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -105,6 +112,9 @@ class DASDAEV1(FiberIO):
         for patch_group in waveform_group.values():
             patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
             if source_patch_ids and patch_name not in source_patch_ids:
+                continue
+            attrs = _get_attrs(patch_group)
+            if not _matches_attr_filters(attrs, kwargs):
                 continue
             patch = _read_patch(patch_group, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):

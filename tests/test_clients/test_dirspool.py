@@ -13,7 +13,7 @@ import dascore as dc
 import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
-from dascore.exceptions import ParameterError
+from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func, suppress_warnings
@@ -57,6 +57,21 @@ def non_distance_dir_spool(tmp_path_factory):
     )
     path = tmp_path_factory.mktemp("no_distance_spool")
     dc.write(pa1, path / "patch_1.h5", "dasdae")
+    return dc.spool(path).update()
+
+
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
+def multi_patch_file_spool(tmp_path_factory):
+    """Create a directory whose single file contains multiple patches."""
+    path = tmp_path_factory.mktemp("multi_patch_file_spool")
+    patch_1 = dascore.examples.get_example_patch("random_das")
+    # Create a second patch contiguous with the first. Clear the history
+    # so the two patches remain mergeable.
+    time = patch_1.get_coord("time")
+    patch_2 = patch_1.update_coords(time_min=time.max() + time.step)
+    patch_1, patch_2 = (x.update_attrs(history=[]) for x in (patch_1, patch_2))
+    dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
     return dc.spool(path).update()
 
 
@@ -104,6 +119,94 @@ class TestDirectorySpoolBasics:
         spool = DirectorySpool(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
+
+
+class TestMultiPatchFile:
+    """Tests for directories with files that contain multiple patches."""
+
+    def test_iteration_returns_distinct_patches(self, multi_patch_file_spool):
+        """Each row must map to its own patch, not just the file's first."""
+        spool = multi_patch_file_spool
+        contents = spool.get_contents()
+        assert len(spool) == 2
+        patches = list(spool)
+        expected = set(contents["time_min"])
+        returned = {x.get_coord("time").min() for x in patches}
+        assert returned == expected
+
+    def test_merge(self, multi_patch_file_spool):
+        """Ensure patches from a single file can be merged."""
+        spool = multi_patch_file_spool
+        contents = spool.get_contents()
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        patch = merged[0]
+        time = patch.get_coord("time")
+        assert time.min() == contents["time_min"].min()
+        assert time.max() == contents["time_max"].max()
+
+
+class TestLoadPatchFastPath:
+    """Tests for the direct FiberIO read path used by _load_patch."""
+
+    def test_requires_concrete_format_and_version(self, one_directory_spool):
+        """
+        Without a concrete format and version the fast path must defer to
+        dc.read, which detects them from the file; get_fiberio with a None
+        version would return the newest reader, not the file's version.
+        """
+        spool = one_directory_spool
+        assert spool._read_patches({"file_format": "", "file_version": ""}) is None
+        assert spool._read_patches({"file_format": "DASDAE"}) is None
+        assert spool._read_patches({"file_version": "1"}) is None
+
+    def test_unusual_fiberio_spool_defers_to_generic_read(
+        self, one_directory_spool, monkeypatch
+    ):
+        """Fast path should defer if the reader returns a non-memory spool."""
+
+        class _Reader:
+            def read(self, *args, **kwargs):
+                return ()
+
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda format, version: _Reader(),
+        )
+        kwargs = {
+            "path": one_directory_spool.get_contents()["path"].iloc[0],
+            "file_format": "DASDAE",
+            "file_version": "1",
+        }
+        assert one_directory_spool._read_patches(kwargs) is None
+
+    def test_multi_patch_selection_defers_to_generic_read(
+        self, one_directory_spool, random_patch, monkeypatch
+    ):
+        """Fast path should not choose the first patch from multi-patch reads."""
+
+        class _Reader:
+            def read(self, *args, **kwargs):
+                patch_2 = random_patch.update_attrs(tag="second")
+                return dc.spool([random_patch, patch_2])
+
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda format, version: _Reader(),
+        )
+        path = one_directory_spool.get_contents()["path"].iloc[0]
+        monkeypatch.setattr(one_directory_spool, "_select_kwargs", {"tag": "second"})
+        kwargs = {
+            "path": path,
+            "file_format": "DASDAE",
+            "file_version": "1",
+            "_modified": True,
+            "tag": "second",
+        }
+
+        assert one_directory_spool._read_patches(kwargs) is None
 
 
 class TestDirectoryIndex:
@@ -515,6 +618,19 @@ class TestFileSpoolIntegrations:
         with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
             for patch in dist_differ_spool:
                 assert isinstance(patch, dc.Patch)
+
+    def test_missing_patch_error_catchable_as_index_error(self, dist_differ_spool):
+        """
+        For backwards compatibility, MissingPatchError must remain
+        catchable as an IndexError, which spool indexing used to raise.
+        """
+        assert issubclass(MissingPatchError, IndexError)
+        with suppress_warnings(UserWarning):
+            for ind in range(len(dist_differ_spool)):
+                try:
+                    dist_differ_spool[ind]
+                except IndexError:
+                    pass
 
     @pytest.mark.xfail()
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):

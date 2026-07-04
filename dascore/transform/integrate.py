@@ -63,9 +63,9 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     We need to calculate the distance weighted average for the areas between
     samples for the integration dimension.
     """
-    out = np.zeros_like(patch.data)
     array = patch.data
     for dx_or_val, ax in zip(dxs_or_vals, axes):
+        out = np.zeros_like(array)
         # if coordinate values are provided need to get diffs.
         if is_array(dx_or_val):
             dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
@@ -77,7 +77,8 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
         # get average values of trapezoid between points
         avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
         out[stop_indexer] = np.cumsum(avs, axis=ax)
-    return out, patch.coords  # coords shouldn't change
+        array = out
+    return array, patch.coords  # coords shouldn't change
 
 
 @patch_function(data_type="")

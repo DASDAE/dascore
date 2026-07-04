@@ -331,6 +331,7 @@ class _FiberIOManager:
     def __init__(self, entry_point: str):
         self._entry_point = entry_point
         self._loaded_eps: set[str] = set()
+        self._failed_formats: set[str] = set()
         self._format_version = defaultdict(dict)
         self._extension_list = defaultdict(list)
         # This is a dict of {input_type: (fiberio_name, version)}
@@ -354,7 +355,8 @@ class _FiberIOManager:
     @property
     def unloaded_formats(self):
         """Return names of known formats."""
-        return sorted(self.known_formats - set(self._format_version))
+        loaded_or_failed = set(self._format_version) | self._failed_formats
+        return sorted(self.known_formats - loaded_or_failed)
 
     @cached_method
     def _get_fiber_io_by_input_type(self, input_type) -> set[FiberIO]:
@@ -405,14 +407,24 @@ class _FiberIOManager:
                 fiberio = self._load_entry_point(name, loader)
                 if fiberio is not None:
                     self.register_fiberio(fiberio)
+            if form not in self._format_version:
+                self._failed_formats.add(form)
+        # The selected format(s) should now be loaded
+        assert set(formats).isdisjoint(self.unloaded_formats)
         return
 
     def _load_entry_point(self, name: str, loader) -> FiberIO | None:
         """Load one FiberIO entry point, skipping broken registrations."""
         try:
             return loader()()
-        except (ImportError, MissingOptionalDependencyError) as exc:
-            msg = f"Failed to load FiberIO plugin {name!r}: {exc}"
+        except Exception as exc:
+            msg = (
+                f"Failed to load FiberIO plugin {name!r} "
+                f"({exc.__class__.__name__}: {exc}); skipping it. "
+                "This can happen when an entry point from a previous install "
+                "is stale; reinstalling dascore (or the package providing the "
+                "plugin) may fix it."
+            )
             warnings.warn(msg, UserWarning, stacklevel=2)
             return None
 
@@ -520,7 +532,7 @@ class _FiberIOManager:
         # no format found
         if not fiber_ios:
             format_list = list(self.known_formats)
-            msg = f"Unknown format {format}, " f"known formats are {format_list}"
+            msg = f"Unknown format {format}, known formats are {format_list}"
             raise UnknownFiberFormatError(msg)
         # a version is specified
         if version:
