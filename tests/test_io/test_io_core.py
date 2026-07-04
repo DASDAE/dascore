@@ -411,6 +411,41 @@ class TestFormatManager:
         assert isinstance(prioritized, tuple)
 
 
+class TestBrokenEntryPoint:
+    """Tests for graceful handling of unloadable FiberIO entry points."""
+
+    @pytest.fixture()
+    def broken_ep_manager(self):
+        """Return a manager with an entry point that cannot be loaded."""
+        manager = copy.deepcopy(FiberIO.manager)
+
+        def bad_loader():
+            raise ModuleNotFoundError("No module named 'dascore.io.not_real'")
+
+        eps = manager._eps.copy()
+        eps["NOT_REAL_FORMAT__V1"] = bad_loader
+        manager.__dict__["_eps"] = eps
+        manager.__dict__.pop("known_formats", None)
+        # clear the method cache so load_plugins runs again for this instance.
+        manager.__dict__.pop("_cache", None)
+        return manager
+
+    def test_load_plugins_warns_and_skips(self, broken_ep_manager):
+        """A stale/broken entry point should warn, not raise."""
+        with pytest.warns(UserWarning, match="Failed to load FiberIO"):
+            broken_ep_manager.load_plugins()
+        assert "NOT_REAL_FORMAT" not in broken_ep_manager.unloaded_formats
+
+    def test_other_formats_still_usable(self, broken_ep_manager):
+        """Remaining FiberIOs should work after a plugin fails to load."""
+        with pytest.warns(UserWarning, match="Failed to load FiberIO"):
+            broken_ep_manager.load_plugins()
+        out = list(broken_ep_manager.yield_fiberio("DASDAE", "1"))
+        assert len(out) == 1
+        # The prioritized list (used by scan/read) must also not choke.
+        assert len(list(broken_ep_manager.yield_fiberio()))
+
+
 class TestFormatter:
     """Tests for adding file supports through Formatter."""
 

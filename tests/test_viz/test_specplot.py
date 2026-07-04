@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, PatchError
 
 
 def test_specplot_requires_fourier_dimension(random_patch):
@@ -24,6 +24,14 @@ def test_specplot_requires_2d_patch():
     ).dft("time")
 
     with pytest.raises(CoordError, match="2D Patch"):
+        patch.viz.specplot()
+
+
+def test_specplot_complex_data_raises(random_patch):
+    """Specplot on complex data raises with a hint to use abs() first."""
+    patch = random_patch.dft("time")
+
+    with pytest.raises(PatchError, match=r"abs\(\)"):
         patch.viz.specplot()
 
 

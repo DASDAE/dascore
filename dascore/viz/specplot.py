@@ -6,10 +6,11 @@ from collections.abc import Sequence
 from typing import Literal
 
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib import ticker
 
 from dascore.constants import PatchType
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, PatchError
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import _get_dim_label
 
@@ -99,6 +100,13 @@ def specplot(
             f"but got {patch.ndim}D Patch with dims {patch.dims}"
         )
         raise CoordError(msg)
+    if np.iscomplexobj(patch.data):
+        msg = (
+            "specplot requires real-valued data but the patch data are "
+            "complex. Convert to amplitude first, e.g. "
+            "patch.abs().viz.specplot()."
+        )
+        raise PatchError(msg)
 
     # Make the plot
     ax = patch.viz.waterfall(
