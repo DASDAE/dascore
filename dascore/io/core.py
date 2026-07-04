@@ -110,6 +110,7 @@ class _FiberIOManager:
     def __init__(self, entry_point: str):
         self._entry_point = entry_point
         self._loaded_eps: set[str] = set()
+        self._failed_formats: set[str] = set()
         self._format_version = defaultdict(dict)
         self._extension_list = defaultdict(list)
         # This is a dict of {input_type: (fiberio_name, version)}
@@ -133,7 +134,8 @@ class _FiberIOManager:
     @property
     def unloaded_formats(self):
         """Return names of known formats."""
-        return sorted(self.known_formats - set(self._format_version))
+        loaded_or_failed = set(self._format_version) | self._failed_formats
+        return sorted(self.known_formats - loaded_or_failed)
 
     @cached_method
     def _get_fiber_io_by_input_type(self, input_type) -> set[FiberIO]:
@@ -156,6 +158,9 @@ class _FiberIOManager:
         for format_name in self.known_formats:
             unsorted = self._format_version[format_name]
             keys = sorted(unsorted, reverse=True)
+            # formats whose plugins failed to load have no fiber_ios.
+            if not keys:
+                continue
             fiber_ios = [unsorted[key] for key in keys]
             priority_fiber_ios.append(fiber_ios[0])
             if len(fiber_ios) > 1:
@@ -178,8 +183,20 @@ class _FiberIOManager:
         # Load one, or all, formats
         for form in formats:
             entries = [name for name in self._eps.index if name.startswith(form)]
-            for eps in self._eps.loc[entries]:
-                self.register_fiberio(eps()())
+            for name, eps in self._eps.loc[entries].items():
+                try:
+                    self.register_fiberio(eps()())
+                except Exception as e:
+                    msg = (
+                        f"Failed to load FiberIO plugin '{name}' "
+                        f"({e.__class__.__name__}: {e}); skipping it. "
+                        "This can happen when an entry point from a previous "
+                        "install is stale; reinstalling dascore (or the "
+                        "package providing the plugin) may fix it."
+                    )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+            if form not in self._format_version:
+                self._failed_formats.add(form)
         # The selected format(s) should now be loaded
         assert set(formats).isdisjoint(self.unloaded_formats)
 
