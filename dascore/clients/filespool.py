@@ -11,6 +11,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS, SpoolType
 from dascore.core.spool import BaseSpool, DataFrameSpool
+from dascore.exceptions import MissingPatchError
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
 
@@ -65,7 +66,15 @@ class FileSpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        return dc.read(**kwargs)[0]
+        patches = list(dc.read(**kwargs))
+        if not patches:
+            # Iteration skips these with a warning, see #583.
+            msg = (
+                f"No patch in {self._path} matches the requested range; "
+                f"it may have been trimmed to nothing."
+            )
+            raise MissingPatchError(msg)
+        return patches[0]
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self: SpoolType, progress: PROGRESS_LEVELS = "standard") -> Self:
