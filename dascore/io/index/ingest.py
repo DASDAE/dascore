@@ -272,6 +272,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
 def summaries_to_records(
     summaries: list[PatchSummary],
     base_uri: str | None = None,
+    relative_to: str | None = None,
     mtimes_ns: dict[str, int] | None = None,
     sizes_bytes: dict[str, int] | None = None,
 ) -> list[SourceRecord]:
@@ -283,7 +284,12 @@ def summaries_to_records(
     summaries
         Patch summaries, e.g. from `dc.scan`.
     base_uri
-        Optional common root; source paths are stored relative to it.
+        Optional common root persisted with each source (remote spools);
+        source paths are stored relative to it.
+    relative_to
+        Optional local spool root: source paths are stored relative to it
+        but the root itself is *not* persisted (local directory spools
+        resolve against their current root, per the design doc).
     mtimes_ns, sizes_bytes
         Optional maps of source_path -> stat values. When omitted the
         caller is responsible for change detection.
@@ -302,8 +308,9 @@ def summaries_to_records(
                 record = PatchRecord(**{**record.__dict__, "source_patch_id": str(num)})
             patches.append(record)
         store_path = path
-        if base_uri and path.startswith(base_uri):
-            store_path = path[len(base_uri) :].lstrip("/")
+        root = base_uri or relative_to
+        if root and path.startswith(root):
+            store_path = path[len(root) :].lstrip("/")
         out.append(
             SourceRecord(
                 source_path=store_path,
