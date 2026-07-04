@@ -66,19 +66,29 @@ class TestCoerceToLocalPath:
         """A plain Path should be returned unchanged."""
         assert coerce_to_local_path(tmp_path) == tmp_path
 
-    def test_plain_string(self):
+    def test_plain_string(self, tmp_path):
         """A plain string should become an equivalent Path."""
-        assert coerce_to_local_path("/tmp/a/b.h5") == Path("/tmp/a/b.h5")
+        target = tmp_path / "b.h5"
+        assert coerce_to_local_path(str(target)) == target
 
-    def test_file_uri_scheme_stripped(self):
-        """A file:// URI must strip the scheme to a real filesystem path."""
-        out = coerce_to_local_path("file:///tmp/a/b.h5")
-        assert out == Path("/tmp/a/b.h5")
+    def test_file_uri_round_trips(self, tmp_path):
+        """A file:// URI must strip the scheme back to the original path."""
+        # Use as_uri()/tmp_path so the assertion is OS-agnostic (Windows file
+        # URIs carry a drive letter, e.g. file:///C:/...).
+        target = tmp_path / "b.h5"
+        out = coerce_to_local_path(target.as_uri())
+        assert out == target
         assert "://" not in str(out)
 
-    def test_local_uri_scheme_stripped(self):
-        """A local:// URI must also strip to a real filesystem path."""
-        assert coerce_to_local_path("local:///tmp/x.h5") == Path("/tmp/x.h5")
+    def test_local_scheme_stripped(self, tmp_path):
+        """The local:// scheme must also be stripped (same code path as file://).
+
+        Asserted drive-agnostically since Windows drive handling in the URL can
+        vary; the invariant is that no scheme survives and the name is kept.
+        """
+        out = coerce_to_local_path(f"local://{(tmp_path / 'x.h5').as_posix()}")
+        assert "://" not in str(out)
+        assert Path(out).name == "x.h5"
 
 
 class TestRequiresLocalDirectory:

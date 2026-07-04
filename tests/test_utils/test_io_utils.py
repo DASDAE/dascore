@@ -971,6 +971,21 @@ class TestHttpHeadersFromStorageOptions:
         resource = self._Resource({"client_kwargs": {"trust_env": True}})
         assert _http_headers_from_storage_options(resource) == {}
 
+    def test_string_auth_not_translated(self):
+        """A bare string auth value is not basic auth and yields no header."""
+        resource = self._Resource({"auth": "some-token"})
+        assert _http_headers_from_storage_options(resource) == {}
+
+    def test_partial_auth_object_ignored(self):
+        """An auth object missing a password yields no Authorization header."""
+
+        class _PartialAuth:
+            login = "u"
+            password = None
+
+        resource = self._Resource({"auth": _PartialAuth()})
+        assert _http_headers_from_storage_options(resource) == {}
+
     def test_empty_storage_options(self):
         """A resource with no storage options yields no headers."""
         assert _http_headers_from_storage_options(self._Resource({})) == {}

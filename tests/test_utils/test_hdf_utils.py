@@ -16,10 +16,12 @@ from dascore.config import set_config
 from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
+    H5Reader,
     HDFPatchIndexManager,
     LocalPyTablesReader,
     PyTablesWriter,
     extract_h5_attrs,
+    get_h5py_file,
     h5_matches_structure,
     open_hdf5_file,
 )
@@ -200,6 +202,30 @@ class TestHDFReaders:
             h5.create_group("/", "waveforms")
         with closing(LocalPyTablesReader.get_handle(path)) as handle:
             assert isinstance(handle, tables.File)
+
+
+class TestGetH5pyFile:
+    """Tests for unwrapping managed h5py handles."""
+
+    def test_unwraps_managed_handle(self, tmp_path):
+        """A managed h5py handle should unwrap to a real h5py.File."""
+        path = tmp_path / "managed.h5"
+        with h5py.File(path, "w"):
+            pass
+        handle = H5Reader.get_handle(path)
+        try:
+            out = get_h5py_file(handle)
+            assert isinstance(out, h5py.File)
+        finally:
+            handle.close()
+
+    def test_passthrough_raw_handle(self, tmp_path):
+        """A raw (non-managed) handle should pass through unchanged."""
+        path = tmp_path / "raw.h5"
+        with h5py.File(path, "w"):
+            pass
+        with h5py.File(path, "r") as raw:
+            assert get_h5py_file(raw) is raw
 
 
 class TestH5MatchesStructure:
