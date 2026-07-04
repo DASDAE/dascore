@@ -6,6 +6,7 @@ import pytest
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
+from dascore.exceptions import MissingPatchError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 
 
@@ -60,3 +61,12 @@ class TestBasic:
         assert len(spool) == 3
         for patch in spool:
             assert isinstance(patch, dc.Patch)
+
+    def test_empty_read_raises_missing_patch(self, terra15_file_spool, monkeypatch):
+        """An empty read result should raise the skip-aware missing patch error."""
+        monkeypatch.setattr(
+            "dascore.clients.filespool.dc.read", lambda **kwargs: dc.spool([])
+        )
+        msg = "No patch in .* matches the requested range"
+        with pytest.raises(MissingPatchError, match=msg):
+            terra15_file_spool._load_patch({"path": terra15_file_spool._path})

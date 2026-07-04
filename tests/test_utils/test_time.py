@@ -88,6 +88,11 @@ class TestToDateTime64:
         out = to_datetime64(None)
         assert pd.isnull(out)
 
+    def test_pandas_nat(self):
+        """Pandas NaT should return numpy NaT."""
+        out = to_datetime64(pd.NaT)
+        assert pd.isnull(out)
+
     def test_pandas_timestamp(self):
         """Ensure a timestamp returns the datetime64."""
         ts = pd.Timestamp("2020-01-03")

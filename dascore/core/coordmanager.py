@@ -1049,6 +1049,29 @@ class CoordManager(DascoreBaseModel):
             out[name] = coord.to_summary(dims=dim_map[name])
         return out
 
+    def _get_dim_summary(self) -> dict:
+        """
+        Get a flat dict with the dims string and each dimension's range.
+
+        The output has {dim}_min, {dim}_max and {dim}_step keys for each
+        dimension; much cheaper than dumping the full summary models.
+        """
+        info = {"dims": ",".join(self.dims)}
+        for dim in self.dims:
+            coord = self.coord_map[dim]
+            start, step = coord.min(), coord.step
+            if step is None:
+                # Use a typed null, as PatchAttrs.flat_dump does, so column
+                # comparisons on the resulting dataframe behave.
+                if isinstance(start, np.datetime64 | np.timedelta64):
+                    step = np.timedelta64("NaT", "ns")
+                elif isinstance(start, float | np.floating):
+                    step = np.nan
+            info[f"{dim}_min"] = start
+            info[f"{dim}_max"] = coord.max()
+            info[f"{dim}_step"] = step
+        return info
+
     def get_coord(self, coord_name: str) -> BaseCoord:
         """
         Retrieve a single coordinate from the coordinate manager.
