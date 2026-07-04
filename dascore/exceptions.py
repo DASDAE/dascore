@@ -39,6 +39,16 @@ class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
 
 
+class MissingPatchError(IndexError, PatchError):
+    """
+    Raised when no patch can be produced for a spool entry.
+
+    This typically happens when a patch is trimmed to nothing by
+    a coordinate selection (see #583). Subclasses IndexError for
+    backwards compatibility.
+    """
+
+
 class CoordError(ValueError, PatchError):
     """Raised when something is wrong with a Coordinate."""
 

@@ -13,9 +13,11 @@ import pandas as pd
 from rich.text import Text
 from typing_extensions import Self
 
+import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS
-from dascore.core.spool import BaseSpool, DataFrameSpool
+from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
+from dascore.exceptions import MissingPatchError
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.docs import compose_docstring
 from dascore.utils.pd import adjust_segments
@@ -126,4 +128,49 @@ class DirectorySpool(DataFrameSpool):
         """Given a row from the managed dataframe, return a patch."""
         final_kwargs = dict(kwargs)
         final_kwargs.update(self._select_kwargs)
-        return self._read_and_resolve_patch(final_kwargs)
+        patches = self._read_patches(final_kwargs)
+        if patches is None:  # fast path doesn't apply, use generic read.
+            return self._read_and_resolve_patch(final_kwargs)
+        if not patches:
+            # Iteration skips these with a warning, see #583.
+            msg = (
+                f"No patch in {final_kwargs.get('path')} matches the "
+                f"requested range; it may have been trimmed to nothing."
+            )
+            raise MissingPatchError(msg)
+        return patches[0]
+
+    def _read_patches(self, kwargs) -> list[dc.Patch] | None:
+        """
+        Read patches directly through the file's FiberIO.
+
+        This skips the format detection of dc.read and the spool indexing
+        machinery applied to its output, which add up when loading many
+        files. Returns None when the fast path can't be safely used.
+        """
+        fmt, version = kwargs.get("file_format"), kwargs.get("file_version")
+        if not fmt or not version:
+            # Without a concrete version get_fiberio would return the newest
+            # reader; let dc.read detect the file's actual version instead.
+            return None
+        fiber_io = dc.io.FiberIO.manager.get_fiberio(format=fmt, version=version)
+        # Only apply select kwargs when the source patch is trimmed by the
+        # instruction df or the spool itself; otherwise the whole file is
+        # wanted and selection is wasted work.
+        if kwargs.get("_modified") or self._select_kwargs:
+            select = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in self._drop_columns and not k.startswith("_")
+            }
+        else:
+            select = {}
+        spool = fiber_io.read(kwargs["path"], **select)
+        if not isinstance(spool, MemorySpool):
+            return None
+        patches = list(spool)
+        # Without selection, a multi-patch file is ambiguous: the row refers
+        # to one specific patch. Let the generic path pick the right one.
+        if len(patches) > 1 and not select:
+            return None
+        return patches

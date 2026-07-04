@@ -415,6 +415,14 @@ class TestPatchesToDF:
         out = patches_to_df(df)
         assert "history" in out.columns
 
+    def test_patch_column_added(self, random_spool):
+        """Ensure the patch column gets added when dataframe input lacks it."""
+        df = random_spool.get_contents().drop(columns="patch", errors="ignore")
+        out = patches_to_df(df)
+        assert "patch" in out.columns
+        assert len(out["patch"]) == len(df)
+        assert out["patch"].isnull().all()
+
 
 class TestAlignPatches:
     """Tests for aligning patches."""
