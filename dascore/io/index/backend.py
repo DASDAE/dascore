@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import abc
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
@@ -258,30 +259,41 @@ class SQLIndexBackend(AbstractIndexBackend):
             self._bulk_insert("coords", tuple(COORDS), list(coord_rows))
             self._execute("UPDATE meta_data SET last_indexed_ns = ?", (now,))
         except Exception:
-            self._rollback()
+            # A failed rollback must not mask the original error.
+            with suppress(Exception):
+                self._rollback()
             raise
         self._commit()
+
+    # Batch size for IN (...) parameter lists; SQLite caps bound
+    # variables (32766 by default) so large replacements must chunk.
+    _in_clause_batch = 5000
 
     def _delete_by_paths(self, source_paths: list[str]) -> None:
         if not source_paths:
             return
-        marks = ", ".join("?" for _ in source_paths)
-        ids = self._fetch_df(
-            f"SELECT source_id FROM sources WHERE source_path IN ({marks})",
-            source_paths,
-        )["source_id"].tolist()
-        if not ids:
-            return
-        id_marks = ", ".join("?" for _ in ids)
-        for sql in (
-            f"DELETE FROM coords WHERE patch_id IN "
-            f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
-            f"DELETE FROM attrs WHERE patch_id IN "
-            f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
-            f"DELETE FROM patches WHERE source_id IN ({id_marks})",
-            f"DELETE FROM sources WHERE source_id IN ({id_marks})",
-        ):
-            self._execute(sql, ids)
+        batch = self._in_clause_batch
+        ids: list = []
+        for start in range(0, len(source_paths), batch):
+            chunk = source_paths[start : start + batch]
+            marks = ", ".join("?" for _ in chunk)
+            found = self._fetch_df(
+                f"SELECT source_id FROM sources WHERE source_path IN ({marks})",
+                chunk,
+            )["source_id"].tolist()
+            ids.extend(found)
+        for start in range(0, len(ids), batch):
+            chunk = ids[start : start + batch]
+            id_marks = ", ".join("?" for _ in chunk)
+            for sql in (
+                f"DELETE FROM coords WHERE patch_id IN "
+                f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
+                f"DELETE FROM attrs WHERE patch_id IN "
+                f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
+                f"DELETE FROM patches WHERE source_id IN ({id_marks})",
+                f"DELETE FROM sources WHERE source_id IN ({id_marks})",
+            ):
+                self._execute(sql, chunk)
 
     def delete_sources(self, source_paths: list[str]) -> None:
         """Remove sources and all dependent rows."""
