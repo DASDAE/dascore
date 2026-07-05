@@ -94,7 +94,9 @@ def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
     token = next(_counter)
     records = []
     for num, patch in enumerate(patches):
-        summary = dc.PatchSummary.from_patch(patch)
+        # patch.summary is a cached_property: reuse fingerprints and
+        # summaries the patch already computed instead of rebuilding.
+        summary = patch.summary
         path = f"memory://catalog_{token}/{num}"
         record = patch_record(summary)
         records.append(
