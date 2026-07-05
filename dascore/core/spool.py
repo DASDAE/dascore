@@ -29,6 +29,7 @@ from dascore.constants import (
 from dascore.exceptions import (
     CoordMergeError,
     InvalidSpoolError,
+    InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
 )
@@ -222,10 +223,24 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         Sub-select parts of the spool.
 
         Can be used to specify dimension ranges, or unix-style matches
-        on string attributes.
+        on string attributes. Bare keyword names resolve against
+        attributes first, then coordinates; unknown names raise.
 
         Parameters
         ----------
+        _attrs
+            A dict of attribute selections; names validate as attributes
+            only (disambiguates names shared with coordinates).
+        _coords
+            A dict of coordinate selections; names validate as
+            coordinates only.
+        samples
+            If True, selections are coordinate-only and given in sample
+            indices; they never exclude patches, but are applied to each
+            patch as it loads.
+        relative
+            If True, range bounds are relative to the spool's coordinate
+            envelope: positive from the start, negative from the end.
         **kwargs
             Specifies query. Can be of the form {dim_name=(start, stop)}
             or {attr_name=query}.
@@ -403,6 +418,16 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         raise AttributeError(msg)
 
 
+def _relative_offset(gmin, gmax, value):
+    """Resolve one relative bound against a global envelope."""
+    if value is None or value is Ellipsis:
+        return None
+    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
+        delta = dc.to_timedelta64(abs(float(value)))
+        return (gmin + delta) if value >= 0 else (gmax - delta)
+    return (gmin + value) if value >= 0 else (gmax + value)
+
+
 class DataFrameSpool(BaseSpool):
     """An abstract class for spools whose contents are managed by a dataframe."""
 
@@ -419,6 +444,8 @@ class DataFrameSpool(BaseSpool):
     # attributes which effect merge groups for internal patches
     _group_columns = ("network", "station", "dims", "data_type", "tag")
     _drop_columns = ("patch",)
+    # patch-local selections (samples=True) applied as patches load
+    _post_selects: tuple = ()
 
     def _get_df(self):
         """Function to get the current df."""
@@ -435,6 +462,7 @@ class DataFrameSpool(BaseSpool):
         self._cache = {}
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
+        self._post_selects = ()
 
     def _select_from_array(self, array) -> Self:
         """Create new spool with contents changed from array input."""
@@ -568,6 +596,15 @@ class DataFrameSpool(BaseSpool):
             select_kwargs = self._select_kwargs
         if select_kwargs:
             patch = patch.select(**select_kwargs)
+        # patch-local selections (samples=True) recorded by spool.select
+        for post_kwargs, samples in self._post_selects:
+            usable = {
+                k: v
+                for k, v in post_kwargs.items()
+                if k in patch.dims or k in patch.coords.coord_map
+            }
+            if usable:
+                patch = patch.select(**usable, samples=samples)
         return patch
 
     def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):
@@ -742,11 +779,113 @@ class DataFrameSpool(BaseSpool):
         new._select_kwargs.update(select_kwargs or {})
         new._merge_kwargs = dict(self._merge_kwargs)
         new._merge_kwargs.update(merge_kwargs or {})
+        new._post_selects = self._post_selects
         return new
 
+    def _select_namespaces(self) -> tuple[set[str], set[str]]:
+        """Return (attr names, coord names) selectable on this spool."""
+        columns = set(self._df.columns)
+        coords = {
+            c.removesuffix("_min")
+            for c in columns
+            if c.endswith("_min") and f"{c.removesuffix('_min')}_max" in columns
+        }
+        skip = set(self._drop_columns) | {"coord_names", "dims"}
+        attrs = {
+            c
+            for c in columns
+            if not c.startswith("_")
+            and not c.endswith(("_min", "_max", "_step", "_units"))
+            and c not in skip
+        }
+        return attrs, coords
+
+    def _resolve_select_kwargs(self, _attrs, _coords, kwargs) -> dict:
+        """
+        Validate and merge select kwargs per the selector spec.
+
+        Bare names resolve attrs-first, then coords; unknown names raise
+        (see #435). The _attrs/_coords namespaces validate against their
+        own side only.
+        """
+        attrs, coords = self._select_namespaces()
+        out = {}
+        for name, value in (_attrs or {}).items():
+            if name not in attrs:
+                msg = f"{name!r} is not an attribute of this spool."
+                raise InvalidSpoolQueryError(msg)
+            out[name] = value
+        for name, value in (_coords or {}).items():
+            if name not in coords:
+                msg = f"{name!r} is not a coordinate of this spool."
+                raise InvalidSpoolQueryError(msg)
+            out[name] = value
+        for name, value in kwargs.items():
+            if name in out:
+                msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
+                raise InvalidSpoolQueryError(msg)
+            if name not in attrs and name not in coords:
+                msg = (
+                    f"{name!r} is neither an attribute nor a coordinate of "
+                    f"this spool. Attributes: {sorted(attrs)}; "
+                    f"coordinates: {sorted(coords)}."
+                )
+                raise InvalidSpoolQueryError(msg)
+            out[name] = value
+        return out
+
+    def _relative_select_kwargs(self, kwargs: dict) -> dict:
+        """Resolve relative bounds against the spool's global envelopes."""
+        df = self._df
+        out = {}
+        for name, value in kwargs.items():
+            lo_col, hi_col = f"{name}_min", f"{name}_max"
+            if lo_col not in df.columns:
+                msg = f"Cannot use relative select on {name!r}."
+                raise InvalidSpoolQueryError(msg)
+            if not (isinstance(value, tuple) and len(value) == 2):
+                msg = f"relative=True requires (start, stop) ranges, got {value!r}."
+                raise InvalidSpoolQueryError(msg)
+            gmin, gmax = df[lo_col].min(), df[hi_col].max()
+            lo, hi = value
+            out[name] = (
+                _relative_offset(gmin, gmax, lo),
+                _relative_offset(gmin, gmax, hi),
+            )
+        return out
+
     @compose_docstring(doc=BaseSpool.select.__doc__)
-    def select(self, **kwargs) -> Self:
+    def select(
+        self,
+        *,
+        _attrs: dict | None = None,
+        _coords: dict | None = None,
+        samples: bool = False,
+        relative: bool = False,
+        **kwargs,
+    ) -> Self:
         """{doc}."""
+        kwargs = self._resolve_select_kwargs(_attrs, _coords, kwargs)
+        if samples:
+            # sample indices are patch-local: never filter the spool,
+            # record the selection and apply it as patches load (#447).
+            _, coords = self._select_namespaces()
+            non_coords = set(kwargs) - coords
+            if non_coords:
+                msg = (
+                    f"samples=True selections are coordinate-only; got "
+                    f"{sorted(non_coords)}."
+                )
+                raise InvalidSpoolQueryError(msg)
+            new = self.new_from_df(
+                self._df,
+                source_df=self._source_df,
+                instruction_df=self._instruction_df,
+            )
+            new._post_selects = (*self._post_selects, (kwargs, True))
+            return new
+        if relative:
+            kwargs = self._relative_select_kwargs(kwargs)
         _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(

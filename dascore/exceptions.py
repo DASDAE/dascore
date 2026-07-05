@@ -31,6 +31,10 @@ class ParameterError(ValueError, DASCoreError):
     """Raised when something is wrong with an input parameter."""
 
 
+class InvalidSpoolQueryError(ParameterError):
+    """Raised when a spool query references unknown names or bad values."""
+
+
 class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 

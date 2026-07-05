@@ -19,15 +19,11 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidSpoolQueryError
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import typed_value
 
 _GLOB_CHARS = frozenset("*?[")
-
-
-class InvalidSpoolQueryError(ParameterError):
-    """Raised when a spool query references unknown names or bad values."""
 
 
 @dataclass(frozen=True)
