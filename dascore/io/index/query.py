@@ -297,6 +297,24 @@ def apply_residuals(df: pd.DataFrame, residuals: dict[str, re.Pattern]) -> pd.Da
     return df
 
 
+def relative_offset(gmin, gmax, value):
+    """
+    Resolve one relative bound against a global [gmin, gmax] envelope.
+
+    Positive offsets measure from the start, negative from the end;
+    None/Ellipsis bounds stay open. Datetime envelopes take numeric
+    seconds offsets.
+    """
+    import dascore as dc
+
+    if value is None or value is Ellipsis:
+        return None
+    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
+        delta = dc.to_timedelta64(abs(float(value)))
+        return (gmin + delta) if value >= 0 else (gmax - delta)
+    return (gmin + value) if value >= 0 else (gmax + value)
+
+
 def glob_match(value, pattern: str) -> bool:
     """Reference glob semantics (used by pandas fallbacks and tests)."""
     return isinstance(value, str) and fnmatch.fnmatch(value, pattern)

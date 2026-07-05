@@ -21,14 +21,17 @@ import itertools
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, patch_record
-from dascore.io.index.query import InvalidSpoolQueryError, Query
+from dascore.io.index.query import (
+    InvalidSpoolQueryError,
+    Query,
+    relative_offset,
+)
 
 _MEMORY_ENGINES = frozenset({"sqlite", "duckdb"})
 _counter = itertools.count()
@@ -281,8 +284,8 @@ class PatchCatalog:
                 raise InvalidSpoolQueryError(msg)
             lo, hi = value
             out[name] = (
-                _offset(gmin, gmax, lo),
-                _offset(gmin, gmax, hi),
+                relative_offset(gmin, gmax, lo),
+                relative_offset(gmin, gmax, hi),
             )
         return out
 
@@ -377,13 +380,3 @@ class PatchCatalog:
         """Close the backend (root and all views share it)."""
         if self._backend is not None:
             self._backend.close()
-
-
-def _offset(gmin, gmax, value):
-    """Resolve one relative bound against a global envelope."""
-    if value is None or value is Ellipsis:
-        return None
-    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
-        delta = dc.to_timedelta64(abs(value))
-        return (gmin + delta) if value >= 0 else (gmax - delta)
-    return (gmin + value) if value >= 0 else (gmax + value)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import re
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 
 import numpy as np
@@ -344,7 +344,7 @@ def summaries_to_records(
             record = patch_record(summary)
             if record.source_patch_id == "" and len(group) > 1:
                 # positional identity within the source, per design doc
-                record = PatchRecord(**{**record.__dict__, "source_patch_id": str(num)})
+                record = replace(record, source_patch_id=str(num))
             patches.append(record)
         store_path = path
         root = base_uri or relative_to

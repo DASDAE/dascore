@@ -63,7 +63,6 @@ from dascore.utils.pd import (
     filter_df,
     get_column_names_from_dim,
     get_dim_names_from_columns,
-    split_df_query,
 )
 
 T = TypeVar("T")
@@ -416,16 +415,6 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
         )
         raise AttributeError(msg)
-
-
-def _relative_offset(gmin, gmax, value):
-    """Resolve one relative bound against a global envelope."""
-    if value is None or value is Ellipsis:
-        return None
-    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
-        delta = dc.to_timedelta64(abs(float(value)))
-        return (gmin + delta) if value >= 0 else (gmax - delta)
-    return (gmin + value) if value >= 0 else (gmax + value)
 
 
 class DataFrameSpool(BaseSpool):
@@ -848,9 +837,11 @@ class DataFrameSpool(BaseSpool):
                 raise InvalidSpoolQueryError(msg)
             gmin, gmax = df[lo_col].min(), df[hi_col].max()
             lo, hi = value
+            from dascore.io.index.query import relative_offset
+
             out[name] = (
-                _relative_offset(gmin, gmax, lo),
-                _relative_offset(gmin, gmax, hi),
+                relative_offset(gmin, gmax, lo),
+                relative_offset(gmin, gmax, hi),
             )
         return out
 
@@ -886,7 +877,6 @@ class DataFrameSpool(BaseSpool):
             return new
         if relative:
             kwargs = self._relative_select_kwargs(kwargs)
-        _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,
@@ -901,7 +891,6 @@ class DataFrameSpool(BaseSpool):
             # Drop rows that are no longer needed.
             source_df=source,
             instruction_df=inst,
-            select_kwargs=extra_kwargs,
         )
         return out
 
