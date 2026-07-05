@@ -372,8 +372,8 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     # --- queries -----------------------------------------------------
 
-    def query(self, query: Query | None = None) -> pd.DataFrame:
-        """Return the flat patch-row relation for a query."""
+    def query(self, query=None) -> pd.DataFrame:
+        """Return the flat patch-row relation for a query (or several)."""
         query = query if query is not None else Query()
         attr_meta = self._attr_meta()
         sql, params, residuals = build_query_sql(query, self.dialect, attr_meta)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -252,24 +253,26 @@ def build_coord_clause(
 
 
 def build_query_sql(
-    query: Query,
+    query: Query | Sequence[Query],
     dialect: BaseDialect,
     attr_meta: pd.DataFrame,
 ) -> tuple[str, list, dict[str, re.Pattern]]:
     """
-    Build the flat-relation SELECT for a query.
+    Build the flat-relation SELECT for one or more AND-composed queries.
 
     Returns (sql, params, residuals) where residuals maps attr names to
     regex patterns that must be re-applied to the resulting dataframe.
     """
+    queries = [query] if isinstance(query, Query) else list(query)
     where = _Where()
     residuals: dict[str, re.Pattern] = {}
-    for name, value in query.attrs.items():
-        residual = build_attr_clause(where, dialect, attr_meta, name, value)
-        if residual is not None:
-            residuals[name] = residual
-    for name, value in query.coords.items():
-        build_coord_clause(where, dialect, name, value)
+    for one in queries:
+        for name, value in one.attrs.items():
+            residual = build_attr_clause(where, dialect, attr_meta, name, value)
+            if residual is not None:
+                residuals[name] = residual
+        for name, value in one.coords.items():
+            build_coord_clause(where, dialect, name, value)
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
     attr_cols = "".join(
