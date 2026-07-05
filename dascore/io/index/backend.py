@@ -37,6 +37,25 @@ from dascore.io.index.schema import (
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
 
 
+def _ns_to_time(series: pd.Series, flavor: str) -> pd.Series:
+    """
+    Convert nullable ns-integer columns to datetime64/timedelta64 exactly.
+
+    Never goes through float64: ns epochs exceed float64's 2**53 integer
+    range, and the resulting ~100 ns corruption breaks merge boundary
+    arithmetic downstream.
+    """
+    mask = series.isna()
+    values = np.zeros(len(series), dtype="int64")
+    if (~mask).any():
+        values[~mask.to_numpy()] = series[~mask].astype("int64").to_numpy()
+    dtype = "datetime64[ns]" if flavor == "datetime" else "timedelta64[ns]"
+    out = pd.Series(values.view(dtype), index=series.index)
+    if mask.any():
+        out[mask] = pd.NaT
+    return out
+
+
 def adapt_params(params) -> list:
     """Convert numpy scalars (and NaN) to plain python for DB drivers."""
     out = []
@@ -387,14 +406,15 @@ class SQLIndexBackend(AbstractIndexBackend):
     def _flatten(self, df: pd.DataFrame, attr_meta: pd.DataFrame) -> pd.DataFrame:
         """Post-process raw SQL output into the flat-relation contract."""
         out = df.copy()
-        # structural time columns: ns ints -> numpy time types
+        # structural time columns: ns ints -> numpy time types (exactly)
         for col, flavor in _TIME_COLS.items():
             if col in out:
-                as_int = out[col].astype("float64")  # NaN-safe intermediate
-                if flavor == "datetime":
-                    out[col] = pd.to_datetime(as_int, unit="ns")
-                else:
-                    out[col] = pd.to_timedelta(as_int, unit="ns")
+                out[col] = _ns_to_time(out[col], flavor)
+        # numeric envelopes: engines return object columns when all-NULL;
+        # downstream sorting needs float64 with NaN, never object None.
+        for col in ("distance_min", "distance_max", "distance_step"):
+            if col in out:
+                out[col] = pd.to_numeric(out[col])
         # typed attr columns -> original names (coalesce multi-kind attrs)
         for name in attr_meta["attr_name"].unique():
             rows = attr_meta[attr_meta["attr_name"] == name]
@@ -405,9 +425,9 @@ class SQLIndexBackend(AbstractIndexBackend):
                     continue
                 col = out[row.column_name]
                 if row.value_kind == "time":
-                    col = pd.to_datetime(col.astype("float64"), unit="ns")
+                    col = _ns_to_time(col, "datetime")
                 elif row.value_kind == "dur":
-                    col = pd.to_timedelta(col.astype("float64"), unit="ns")
+                    col = _ns_to_time(col, "timedelta")
                 elif row.value_kind == "bool":
                     col = col.astype("boolean")
                 if len(rows) > 1:
@@ -498,12 +518,24 @@ class SQLIndexBackend(AbstractIndexBackend):
                 mins[row.patch_id], maxs[row.patch_id] = mn, mx
                 steps[row.patch_id] = st
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
-            # time/distance envelopes already live on patches
+            kinds = set(group["value_kind"])
+            # time/distance envelopes already live on patches...
             if name in ("time", "distance"):
+                col = f"{name}_min"
+                # ...but relative-time patches leave them NULL by design;
+                # when the whole result is relative, serve timedelta
+                # envelopes so chunking on relative time works (#553).
+                if col in out.columns and out[col].isnull().all() and mins:
+                    out[f"{name}_min"] = out["patch_id"].map(mins)
+                    out[f"{name}_max"] = out["patch_id"].map(maxs)
+                    out[f"{name}_step"] = out["patch_id"].map(steps)
                 continue
             out[f"{name}_min"] = out["patch_id"].map(mins)
             out[f"{name}_max"] = out["patch_id"].map(maxs)
             out[f"{name}_step"] = out["patch_id"].map(steps)
+            if kinds == {"num"}:  # object-None -> float NaN for sorting
+                for suffix in ("_min", "_max", "_step"):
+                    out[f"{name}{suffix}"] = pd.to_numeric(out[f"{name}{suffix}"])
         return out
 
     # --- introspection -----------------------------------------------

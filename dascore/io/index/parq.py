@@ -62,7 +62,10 @@ class ParquetBackend(SQLIndexBackend):
             self._con.executemany(sql, rows)
 
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
-        return self._con.execute(sql, adapt_params(params)).df()
+        # arrow keeps nullable BIGINT exact (df() would use float64,
+        # corrupting ns timestamps beyond float's 2**53 integer range)
+        reader = self._con.execute(sql, adapt_params(params)).arrow()
+        return reader.read_all().to_pandas(integer_object_nulls=True)
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
         from dascore.io.index.duck import duck_bulk_insert

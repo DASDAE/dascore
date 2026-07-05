@@ -358,6 +358,7 @@ def patches_to_df(
         df["patch"] = None
     return df
 
+
 @deprecate(
     info=(
         "merge_patches is deprecated. Use spool.chunk instead. "
@@ -583,15 +584,17 @@ def get_patch_names(
     # Handle special cases.
     if "name" in col_set:
         return df["name"].astype(str)
-    if "path" in col_set and df["path"].astype(str).str.len().gt(0).any():
-        return _get_filename(df["path"], strip_extension)
-    # Determine the requested fields and get the ones that are there.
+    path_ser = df["path"].astype(str) if "path" in col_set else None
+    if path_ser is not None:
+        # synthetic in-memory identities are not real file names
+        usable = path_ser.str.len().gt(0) & ~path_ser.str.startswith("memory://")
+        if usable.any():
+            return _get_filename(df["path"], strip_extension)
+    # Determine the requested fields; absent columns render as empty so
+    # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
-    requested_fields = list(attrs) + list(*coord_fields)
-    current = set(df.columns)
-    fields = [x for x in requested_fields if x in current]
-    # Get a sub dataframe and convert any datetime things to strings.
-    sub = df[fields].pipe(_format_time_columns).fillna("").astype(str)
+    fields = list(attrs) + list(*coord_fields)
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).fillna("").astype(str)
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 

@@ -832,10 +832,15 @@ class MemorySpool(DataFrameSpool):
     from patches nearly free, which matters when reading many files.
     """
 
+    # synthetic catalog identity columns must not join patch kwargs
+    # comparisons or chunk merge-compatibility checks
+    _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
+
     def __init__(self, data: PatchType | Sequence[PatchType] | None = None):
         super().__init__()
         self._patches: tuple[PatchType, ...] | None = None
         self._data = None
+        self._catalog = None
         if data is not None:
             if isinstance(data, dc.Patch):
                 self._patches = (data,)
@@ -851,10 +856,24 @@ class MemorySpool(DataFrameSpool):
         data = self._patches if self._patches is not None else self._data
         if data is None:
             return None
-        df, source, instruction = self._get_dummy_dataframes(patches_to_df(data))
+        if self._patches is not None:
+            # patch-list spools run on the index catalog: one metadata
+            # engine (and one select semantics) for every spool type.
+            current = self._get_catalog().to_df()
+        else:  # spools/dataframes: legacy flat-dump path (patch column)
+            current = patches_to_df(data)
+        df, source, instruction = self._get_dummy_dataframes(current)
         self._source_df = source
         self._instruction_df = instruction
         return df
+
+    def _get_catalog(self):
+        """Get (lazily creating) the catalog for patch-list spools."""
+        from dascore.io.index.catalog import PatchCatalog
+
+        if self._catalog is None:
+            self._catalog = PatchCatalog.from_patches(self._patches)
+        return self._catalog
 
     def _get_source_df(self):
         """Build the source df (happens as part of building current df)."""
@@ -909,16 +928,26 @@ class MemorySpool(DataFrameSpool):
 
     def _eq_dict(self) -> dict:
         """Get a dict for equality checks, normalizing lazy state."""
+
+        def _strip_identity(df):
+            # synthetic per-catalog identities (memory:// paths, ids) are
+            # not content; equal spools must compare equal without them.
+            drop = ("path", "_patch_id", "source_patch_id", "file_format")
+            if df is None:
+                return df
+            return df.drop(columns=list(drop), errors="ignore")
+
         out = dict(self.__dict__)
         # Build (if needed) and compare the dataframes; drop the inputs
         # they were built from, whose form can differ for equal contents.
         out["_cache"] = {
-            "_df": self._df,
-            "_source_df": self._source_df,
-            "_instruction_df": self._instruction_df,
+            "_df": _strip_identity(self._df),
+            "_source_df": _strip_identity(self._source_df),
+            "_instruction_df": _strip_identity(self._instruction_df),
         }
         out.pop("_patches", None)
         out.pop("_data", None)
+        out.pop("_catalog", None)
         return out
 
     def __rich__(self):
@@ -938,7 +967,9 @@ class MemorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
-        return kwargs["patch"]
+        if (patch := kwargs.get("patch")) is not None:
+            return patch
+        return self._catalog.resolver.resolve(kwargs)
 
     @compose_docstring(doc=DataFrameSpool.new_from_df.__doc__)
     def new_from_df(self, *args, **kwargs):
@@ -947,6 +978,9 @@ class MemorySpool(DataFrameSpool):
         # The provided dataframes fully define the new spool; drop the
         # construction input so derived spools don't retain their parents.
         new._data = None
+        new._patches = None
+        # derived spools resolve patches through the shared catalog
+        new._catalog = self._catalog
         return new
 
     # Add specific implementation of concatenate patches.

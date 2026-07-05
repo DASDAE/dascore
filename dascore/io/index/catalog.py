@@ -119,16 +119,20 @@ class PatchCatalog:
         self,
         *,
         backend=None,
-        backend_factory=None,
         resolver: PatchResolver | None = None,
         syncer=None,
+        pending: tuple = (),
+        engine: str = "sqlite",
         queries: tuple[Query, ...] = (),
         residuals: tuple[tuple[dict, bool, bool], ...] = (),
     ):
         self._backend = backend
-        self._backend_factory = backend_factory
         self.resolver = resolver
         self._syncer = syncer
+        # live patches not yet ingested; kept (not a closure) so catalogs
+        # pickle and can rebuild their backend after unpickling.
+        self._pending = tuple(pending)
+        self._engine = engine
         self._queries = tuple(queries)
         self._residuals = tuple(residuals)
         self._df_cache: pd.DataFrame | None = None
@@ -146,16 +150,7 @@ class PatchCatalog:
         if engine not in _MEMORY_ENGINES:
             msg = f"In-memory catalogs support {sorted(_MEMORY_ENGINES)}, not {engine}."
             raise ValueError(msg)
-        resolver = LiveResolver()
-        pending = tuple(patches)
-
-        def factory():
-            backend = get_backend(":memory:", kind=engine)
-            if pending:
-                backend.write_sources(_live_records(pending, resolver))
-            return backend
-
-        return cls(backend_factory=factory, resolver=resolver)
+        return cls(resolver=LiveResolver(), pending=tuple(patches), engine=engine)
 
     @classmethod
     def from_directory(
@@ -180,8 +175,26 @@ class PatchCatalog:
     def backend(self):
         """The index backend, bootstrapping lazily on first use."""
         if self._backend is None:
-            self._backend = self._backend_factory()
+            self._backend = get_backend(":memory:", kind=self._engine)
+            if self._pending:
+                self._backend.write_sources(_live_records(self._pending, self.resolver))
         return self._backend
+
+    def __getstate__(self) -> dict:
+        """
+        Pickle without the live DB connection.
+
+        Live catalogs rebuild their backend from pending patches on next
+        use; the resolver registry (which pickled rows reference) rides
+        along unchanged, so already-realized views keep resolving.
+        """
+        state = dict(self.__dict__)
+        state["_backend"] = None
+        if isinstance(self.resolver, LiveResolver) and not state["_pending"]:
+            # allow rebuilding the backend from the registered patches
+            registry = self.resolver._registry
+            state["_pending"] = tuple(registry.values())
+        return state
 
     def _view(self, queries, residuals) -> PatchCatalog:
         out = PatchCatalog(
@@ -195,6 +208,15 @@ class PatchCatalog:
 
     def _invalidate(self) -> None:
         self._df_cache = None
+
+    def __deepcopy__(self, memo) -> PatchCatalog:
+        """
+        Derived spools share the catalog (live registry + connection).
+
+        DataFrameSpool copies spool state on select/chunk; catalog state
+        is read-shared, matching the single-writer model.
+        """
+        return self
 
     @property
     def is_view(self) -> bool:
@@ -267,9 +289,19 @@ class PatchCatalog:
     # --- realization ------------------------------------------------------
 
     def to_df(self) -> pd.DataFrame:
-        """The flat patch-row relation under the composed selection."""
+        """
+        The spool-facing flat patch-row relation under the selection.
+
+        Unique-per-patch structural columns (patch_id and friends) are
+        hidden or renamed private so chunk merge-compatibility (which
+        compares all non-private columns) is not spuriously blocked.
+        """
         if self._df_cache is None:
-            self._df_cache = self.backend.query(list(self._queries) or None)
+            df = self.backend.query(list(self._queries) or None)
+            df = df.drop(
+                columns=["n_dims", "sample_count_total", "shape"], errors="ignore"
+            ).rename(columns={"patch_id": "_patch_id"})
+            self._df_cache = df
         return self._df_cache
 
     def __len__(self) -> int:
