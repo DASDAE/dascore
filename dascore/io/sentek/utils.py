@@ -58,7 +58,7 @@ def _get_time_from_file_name(name) -> np.datetime64:
     minute = time_str[10:12]
     second = float(time_str[12:]) / 1_000
     iso = f"{year}-{month}-{day}T{hour}:{minute}:{second:02f}"
-    return np.datetime64(iso)
+    return np.datetime64(iso, "ns")
 
 
 def _get_patch_attrs(fid, extras=None):
