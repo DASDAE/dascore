@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _get_ax,
@@ -20,8 +21,12 @@ from dascore.utils.plotting import (
 def _set_scale(im, scale, scale_type, color_coords):
     """Set the scale of the color bar based on scale and scale_type."""
     # check scale parameters
-    assert scale_type in {"absolute", "relative"}
-    assert isinstance(scale, float | int) or len(scale) == 2
+    if scale_type not in {"absolute", "relative"}:
+        msg = f"scale_type must be 'absolute' or 'relative', got {scale_type!r}"
+        raise ParameterError(msg)
+    if not (isinstance(scale, float | int) or len(scale) == 2):
+        msg = "scale must be a number or a length-2 sequence"
+        raise ParameterError(msg)
     # make sure we have a len two array
     modifier = 1
     if scale_type == "relative":
@@ -88,15 +93,21 @@ def map_fiber(
     """
     dims = []
     if isinstance(x, str):
-        assert x in patch.coords, f"{x} not found in patch coordinates"
+        if x not in patch.coords:
+            msg = f"{x} not found in patch coordinates"
+            raise ParameterError(msg)
         dims.append(x)
         x = patch.coords.get_array(x)
     if isinstance(y, str):
-        assert y in patch.coords, f"{y} not found in patch coordinates"
+        if y not in patch.coords:
+            msg = f"{y} not found in patch coordinates"
+            raise ParameterError(msg)
         dims.append(y)
         y = patch.coords.get_array(y)
     if isinstance(color, str):
-        assert color in patch.coords, f"{color} not found in patch coordinates"
+        if color not in patch.coords:
+            msg = f"{color} not found in patch coordinates"
+            raise ParameterError(msg)
         data_type = color
         data_units = patch.attrs.coords[color].units
         color = patch.coords.get_array(color)

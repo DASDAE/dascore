@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
@@ -196,7 +197,9 @@ def correlate(
             "(e.g., select(lag_time=(...)))"
         )
         warnings.warn(msg, DeprecationWarning)
-    assert len(patch.dims) == 2, "must be a 2D patch."
+    if len(patch.dims) != 2:
+        msg = "must be a 2D patch."
+        raise ParameterError(msg)
     dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
     # Get the axis and coord over which fft should be calculated.
     fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
