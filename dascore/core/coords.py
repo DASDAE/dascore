@@ -347,7 +347,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
-        assert self.ndim <= 1, "Select only works on 1D coords."
+        if self.ndim > 1:
+            msg = "Select only works on 1D coords."
+            raise CoordError(msg)
         inds = np.arange(len(self))
         valid_values = np.isin(inds, array)
         return self[valid_values], valid_values
@@ -430,7 +432,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         if self == other:
             return self, other, slice(None), slice(None)
-        assert self.ndim == 1, "can only align 1D arrays."
+        if self.ndim != 1:
+            msg = "can only align 1D coords."
+            raise CoordError(msg)
         if isinstance(self, CoordPartial) or isinstance(other, CoordPartial):
             valid_non_coord(self, other)
             return self, other, slice(None), slice(None)
@@ -821,7 +825,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, raise an error if the number of samples obtained exceeds
             the length of the coordinate.
         """
-        assert self.ndim == 1, "get sample count only works for 1D coords."
+        if self.ndim != 1:
+            msg = "get sample count only works for 1D coords."
+            raise CoordError(msg)
         if not self.evenly_sampled:
             msg = "Coordinate is not evenly sampled, can't get sample count."
             raise CoordError(msg)
@@ -1100,7 +1106,9 @@ class CoordPartial(BaseCoord):
         """
         {doc}
         """
-        assert self.ndim == 1, "change_length only works on 1D coords."
+        if self.ndim != 1:
+            msg = "change_length only works on 1D coords."
+            raise CoordError(msg)
         return get_coord(shape=(length,))
 
     def to_summary(self, dims=()) -> CoordSummary:
@@ -1162,7 +1170,9 @@ class CoordRange(BaseCoord):
         start, stop, step, shape = _attrs
         if not pd.isnull(shape):
             shape = tuple(iterate(shape))
-            assert len(shape) == 1, "Coord range only works for 1D coords."
+            if len(shape) != 1:
+                msg = "Coord range only works for 1D coords."
+                raise CoordError(msg)
             length = shape[0]
             if pd.isnull(start):
                 start = stop - step * length
@@ -1361,6 +1371,7 @@ class CoordRange(BaseCoord):
         """
         {doc}
         """
+        # CoordRange is always 1D by construction; keep as an internal invariant.
         assert self.ndim == 1, "Can only change length for 1D coords."
         if (current := len(self)) == length:
             return self
