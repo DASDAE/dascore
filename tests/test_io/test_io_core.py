@@ -510,6 +510,11 @@ class TestGetFormat:
             pass
         return path
 
+    def test_empty_hdf5_no_format(self, empty_h5_path):
+        """Ensure the empty hdf5 doesn't have a format."""
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(empty_h5_path)
+
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormatError):
