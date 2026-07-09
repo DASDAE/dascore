@@ -9,6 +9,7 @@ from scipy.io.wavfile import read as read_wav
 
 import dascore as dc
 from dascore.constants import ONE_SECOND
+from dascore.exceptions import ParameterError
 
 
 class TestWriteWav:
@@ -68,3 +69,10 @@ class TestWriteWav:
             # Verify content of first file
             sr, data = read_wav(str(wavs[0]))
         assert sr == int(ONE_SECOND / patch.get_coord("time").step)
+
+    def test_multi_patch_spool_raises(self, audio_patch, tmp_path_factory):
+        """Writing a spool with more than one patch to wav should raise."""
+        path = tmp_path_factory.mktemp("wave_multi") / "temp.wav"
+        spool = dc.spool([audio_patch, audio_patch])
+        with pytest.raises(ParameterError, match="single patch spools"):
+            dc.write(spool, path, "wav")

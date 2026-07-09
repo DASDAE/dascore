@@ -23,7 +23,9 @@ def _get_taper_slices(patch, kwargs):
     dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.coords.coord_map[dim]
     if isinstance(value, Sequence | np.ndarray):
-        assert len(value) == 2, "Length 2 sequence required."
+        if len(value) != 2:
+            msg = "Length 2 sequence required."
+            raise ParameterError(msg)
         start, stop = value[0], value[1]
     else:
         start, stop = value, value
