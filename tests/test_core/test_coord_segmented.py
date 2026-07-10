@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
+import dascore as dc
 from dascore.core.coords import (
     CoordMonotonicArray,
     CoordPartial,
@@ -798,3 +799,200 @@ class TestEdgeCases:
         bad = [float_gap_coord.segments[0], time_seg]
         with pytest.raises(ValidationError, match="compatible dtypes"):
             float_gap_coord._rebuild(bad)
+
+
+class TestReviewFindings:
+    """Regression tests for review findings on PR #749."""
+
+    def test_mixed_int_float_segments_raise(self):
+        """Mixing int and float segments could corrupt large ints; reject."""
+        floats = get_coord(data=np.array([0.0, 1.0]))
+        big = 2**53 + 1
+        ints = get_coord(data=np.array([big, big + 2], dtype=np.int64))
+        with pytest.raises(CoordError, match="compatible dtypes"):
+            concat_coords(floats, ints)
+
+    def test_int_width_promotion_lossless(self):
+        """Different int widths share a kind and concatenate exactly."""
+        # Non-uniform diffs keep these as array segments; a float pass
+        # would corrupt values above 2**53.
+        small = CoordMonotonicArray(values=np.array([0, 1, 3], dtype=np.int32))
+        big_val = 2**53 + 1
+        big = CoordMonotonicArray(
+            values=np.array([big_val, big_val + 2, big_val + 3], dtype=np.int64)
+        )
+        coord = concat_coords(small, big)
+        assert coord.values[-3] == big_val
+        assert coord.values[-1] == big_val + 3
+
+    def test_reverse_ns_select_monotonic(self):
+        """Reverse ns-datetime lookup must not go through floats."""
+        ns = np.timedelta64(1, "ns")
+        t0 = np.datetime64("2024-01-01T00:00:00", "ns")
+        values = t0 + np.array([95, 85, 75]) * ns
+        coord = get_coord(data=values)
+        assert coord.reverse_sorted
+        probe = t0 + 75 * ns
+        out, _ = coord.select((probe, probe))
+        assert len(out) == 1
+        assert out.values[0] == probe
+
+    def test_reverse_ns_select_segmented(self):
+        """The exact reverse-segmented scenario from review."""
+        ns = np.timedelta64(1, "ns")
+        t0 = np.datetime64("2024-01-01T00:00:00", "ns")
+        c1 = get_coord(data=t0 + np.array([95, 85, 75]) * ns)
+        c2 = get_coord(data=t0 + np.array([60, 50, 40]) * ns)
+        coord = concat_coords(c1, c2)
+        assert coord.reverse_sorted
+        probe = t0 + 75 * ns
+        out, _ = coord.select((probe, probe))
+        assert len(out) == 1
+        assert out.values[0] == probe
+
+    def test_reverse_unsigned_select(self):
+        """Unsigned reverse coords negate via float (would wrap natively)."""
+        # Direct construction; get_coord inference wraps on descending uints.
+        coord = CoordMonotonicArray(values=np.array([30, 20, 5], dtype=np.uint64))
+        assert coord.reverse_sorted
+        out, _ = coord.select((20, 20))
+        assert len(out) == 1
+        assert out.values[0] == 20
+
+    def test_quantity_tolerance_numeric(self, float_gap_coord):
+        """Unit-bearing tolerances convert to coordinate units."""
+        coord = float_gap_coord.set_units("m")
+        out = coord.simplify(get_quantity("3 m"))
+        assert isinstance(out, CoordRange)
+        # 300 cm is the same tolerance in other units.
+        out2 = coord.simplify(get_quantity("300 cm"))
+        assert out2 == out
+
+    def test_quantity_tolerance_time(self, time_gap_coord):
+        """Time coords accept time-dimensional quantity tolerances."""
+        out = time_gap_coord.simplify(get_quantity("2000 ms"))
+        assert isinstance(out, CoordRange)
+        df = time_gap_coord.get_discontinuities("gaps", tolerance=get_quantity("10 s"))
+        assert df.empty
+
+    def test_quantity_tolerance_bad_dimensionality(self, time_gap_coord):
+        """Dimensionality mismatches raise."""
+        with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
+            time_gap_coord.simplify(get_quantity("1 m"))
+
+    def test_patch_round_trip(self, float_gap_coord):
+        """Segmented coords survive attachment to a Patch (CoordManager)."""
+        time = dc.to_datetime64(np.arange(10))
+        rng = np.random.default_rng(42)
+        patch = dc.Patch(
+            data=rng.random((len(float_gap_coord), 10)),
+            coords={"distance": float_gap_coord, "time": time},
+            dims=("distance", "time"),
+        )
+        attached = patch.get_coord("distance")
+        assert isinstance(attached, CoordSegmented)
+        assert np.array_equal(attached.values, float_gap_coord.values)
+        # update_coords goes through the model_dump round trip.
+        updated = patch.update_coords(distance=float_gap_coord)
+        assert isinstance(updated.get_coord("distance"), CoordSegmented)
+        # selection across the gap trims data consistently.
+        sub = patch.select(distance=(5.0, 18.0))
+        assert sub.shape == (9, 10)
+        assert np.array_equal(
+            sub.get_coord("distance").values,
+            np.array([5.0, 6, 7, 8, 9, 15, 16, 17, 18]),
+        )
+        # equality of identically constructed patches works.
+        patch2 = patch.new()
+        assert patch == patch2
+
+
+class TestFromArray:
+    """Tests for CoordSegmented.from_array."""
+
+    def test_gapped_uniform_array(self):
+        """Uniform runs separated by a gap become two range segments."""
+        values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
+        coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
+        assert coord.segment_count == 2
+        assert all(isinstance(x, CoordRange) for x in coord.segments)
+        assert np.array_equal(coord.values, values)
+        gaps = coord.get_discontinuities("gaps")
+        assert len(gaps) == 1
+        assert gaps.iloc[0]["index"] == 4
+
+    def test_fully_uniform_returns_range(self):
+        """A gapless uniform array degrades to a plain range."""
+        coord = CoordSegmented.from_array(np.arange(10.0))
+        assert isinstance(coord, CoordRange)
+
+    def test_irregular_returns_monotonic(self):
+        """Arrays with no uniform runs come back as one monotonic coord."""
+        values = np.array([0.0, 1.0, 2.1, 3.3, 4.0])
+        coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordMonotonicArray)
+        assert np.array_equal(coord.values, values)
+
+    def test_isolated_sample_between_gaps(self):
+        """A lone sample between gaps becomes its own segment."""
+        values = np.array([0.0, 1, 2, 10, 20, 21, 22])
+        coord = CoordSegmented.from_array(values)
+        assert coord.segment_count == 3
+        assert np.array_equal(coord.values, values)
+        assert len(coord.get_discontinuities()) == 2
+
+    def test_datetime_gap(self):
+        """Datetime arrays with internal gaps segment exactly."""
+        one_s = np.timedelta64(1, "s")
+        t0 = np.datetime64("2020-01-01", "ns")
+        values = np.concatenate(
+            [t0 + np.arange(5) * one_s, t0 + (np.arange(5) + 8) * one_s]
+        )
+        coord = CoordSegmented.from_array(values)
+        assert coord.segment_count == 2
+        assert np.array_equal(coord.values, values)
+        assert len(coord.get_discontinuities("gaps")) == 1
+
+    def test_tolerance_absorbs_gap(self):
+        """A tolerance re-fits the result with bounded error."""
+        values = np.array([0.0, 1, 2, 3, 6, 7, 8, 9])
+        coord = CoordSegmented.from_array(values, tolerance=2.0)
+        assert isinstance(coord, CoordRange)
+        assert np.max(np.abs(coord.values - values)) <= 2.0
+
+    def test_reverse_array(self):
+        """Reverse-sorted arrays segment correctly."""
+        values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
+        coord = CoordSegmented.from_array(values)
+        assert coord.segment_count == 2
+        assert coord.reverse_sorted
+        assert np.array_equal(coord.values, values)
+
+    def test_short_arrays_pass_through(self):
+        """Arrays too short to segment build plain coords."""
+        assert len(CoordSegmented.from_array(np.array([1.0, 2.0]))) == 2
+        assert len(CoordSegmented.from_array(np.array([1.0]))) == 1
+
+    def test_non_monotonic_raises(self):
+        """Unsorted or duplicated values are rejected."""
+        with pytest.raises(CoordError, match="monotonic"):
+            CoordSegmented.from_array(np.array([0.0, 2.0, 1.0, 3.0]))
+        with pytest.raises(CoordError, match="monotonic"):
+            CoordSegmented.from_array(np.array([0.0, 1.0, 1.0, 2.0]))
+
+    def test_nan_raises(self):
+        """Missing values are rejected."""
+        with pytest.raises(CoordError, match="missing"):
+            CoordSegmented.from_array(np.array([0.0, np.nan, 2.0]))
+
+    def test_2d_raises(self):
+        """Only 1D arrays are supported."""
+        with pytest.raises(CoordError, match="1D"):
+            CoordSegmented.from_array(np.zeros((3, 3)))
+
+    def test_units(self):
+        """Units land on the result."""
+        values = np.array([0.0, 1, 2, 10, 11, 12])
+        coord = CoordSegmented.from_array(values, units="m")
+        assert get_quantity(coord.units) == get_quantity("m")

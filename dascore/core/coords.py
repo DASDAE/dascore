@@ -65,7 +65,13 @@ from dascore.utils.models import (
     DascoreBaseModel,
     UnitQuantity,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    is_timedelta64,
+    to_float,
+    to_int,
+)
 
 # Valid values for min/max
 min_max_type = TypeVar("min_max_type")
@@ -1681,6 +1687,23 @@ class CoordArray(BaseCoord):
         return (("array", hash_array(self.values)),)
 
 
+def _negate_for_search(values):
+    """
+    Negate values so descending arrays can use ascending searchsorted.
+
+    Exactness matters: converting ns-precision datetimes (or large ints) to
+    float collapses nearby values, so time-like values negate on their int
+    ns representation and signed numerics negate natively. Only unsigned
+    ints (which would wrap) fall back to float.
+    """
+    array = np.atleast_1d(np.asarray(values))
+    if dtype_time_like(array.dtype):
+        return -to_int(array)
+    if array.dtype.kind == "u":
+        return -to_float(array)
+    return -array
+
+
 class CoordMonotonicArray(CoordArray):
     """A coordinate with strictly increasing or decreasing values."""
 
@@ -1727,8 +1750,8 @@ class CoordMonotonicArray(CoordArray):
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
-            values = to_float(values) * -1
-            new_value = to_float(new_value) * -1
+            values = _negate_for_search(values)
+            new_value = _negate_for_search(new_value)
         # side = "right" if forward else "left"
         # out = np.atleast_1d(np.searchsorted(values, new_value, side=side))
         # Search values. Ensure the returned index is in bounds (eg values GT
@@ -1840,10 +1863,12 @@ def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
         if not len(seg):
             msg = "Segments must not be empty."
             raise CoordError(msg)
-    dtypes = {np.dtype(s.dtype) for s in segments}
-    time_like = {dtype_time_like(x) for x in dtypes}
-    kinds = {x.kind for x in dtypes}
-    if len(time_like) > 1 or (True in time_like and len(kinds) > 1):
+    # Width promotion within one dtype kind is lossless (i4+i8, f4+f8,
+    # M8[s]+M8[ns]); mixing kinds (e.g. int64 + float64) can silently alter
+    # values (ints above 2**53), so it is rejected outright.
+    kinds = {np.dtype(s.dtype).kind for s in segments}
+    if len(kinds) > 1:
+        dtypes = {np.dtype(s.dtype) for s in segments}
         msg = f"Segments must share compatible dtypes, got {dtypes}."
         raise CoordError(msg)
     units = {get_quantity(s.units) for s in segments}
@@ -2206,6 +2231,9 @@ class CoordSegmented(BaseCoord):
         """Coerce the tolerance to the dtype expected for value deviations."""
         if tolerance is None:
             tolerance = 0
+        if hasattr(tolerance, "units"):  # pint quantity tolerances
+            target = "s" if dtype_time_like(self.dtype) else self.units
+            tolerance = convert_units(tolerance.magnitude, target, tolerance.units)
         if dtype_time_like(self.dtype):
             tolerance = dc.to_timedelta64(tolerance)
             zero = dc.to_timedelta64(0)
@@ -2288,6 +2316,71 @@ class CoordSegmented(BaseCoord):
             return values[-1] - values[-2]
         return None
 
+    @classmethod
+    def from_array(cls, array, tolerance=None, units=None) -> BaseCoord:
+        """
+        Build a coordinate from a monotonic array, detecting uniform runs.
+
+        Values are preserved exactly; each maximal evenly sampled run becomes
+        an evenly sampled segment and each internal sampling break becomes a
+        segment boundary, so gaps inside the array are queryable via
+        [`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`).
+        Fully uniform arrays come back as a plain
+        [`CoordRange`](`dascore.core.coords.CoordRange`) and arrays with no
+        detectable runs as a plain monotonic coordinate.
+
+        Parameters
+        ----------
+        array
+            A strictly monotonic 1D array (numeric, datetime64, or
+            timedelta64) with no missing values.
+        tolerance
+            If not None, apply
+            [`simplify`](`dascore.core.coords.BaseCoord.simplify`) with this
+            tolerance to the result, re-fitting jittery runs and absorbing
+            small gaps with bounded error.
+        units
+            Units for the coordinate.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.core.coords import CoordSegmented
+        >>>
+        >>> values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
+        >>> coord = CoordSegmented.from_array(values)
+        >>> assert coord.segment_count == 2
+        >>> assert len(coord.get_discontinuities("gaps")) == 1
+        """
+        values = np.asarray(array)
+        if values.ndim != 1:
+            msg = "from_array requires a 1D array."
+            raise CoordError(msg)
+        if pd.isnull(values).any():
+            msg = "from_array does not support missing values."
+            raise CoordError(msg)
+        if len(values) < 3:
+            out = get_coord(data=values, units=units)
+        else:
+            diffs = np.diff(values)
+            zero = diffs[0] - diffs[0]
+            if not (np.all(diffs > zero) or np.all(diffs < zero)):
+                msg = "from_array requires strictly monotonic values."
+                raise CoordError(msg)
+            # A diff belongs to a uniform run when it matches a neighboring
+            # diff; isolated diffs are seams (gaps or sampling changes).
+            eq_next = diffs[:-1] == diffs[1:]
+            in_run = np.zeros(len(diffs), dtype=bool)
+            in_run[1:] |= eq_next
+            in_run[:-1] |= eq_next
+            splits = np.flatnonzero(~in_run) + 1
+            blocks = np.split(values, splits)
+            segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
+            out = concat_coords(*segments)
+        if tolerance is not None:
+            out = out.simplify(tolerance)
+        return out
+
 
 def concat_coords(*coords, units=None) -> BaseCoord:
     """
@@ -2324,6 +2417,8 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     """
     flat = []
     for coord in coords:
+        if isinstance(coord, dict):  # model_dump round-trip payloads
+            coord = _coerce_segment(coord)
         if isinstance(coord, CoordSegmented):
             flat.extend(coord.segments)
         elif isinstance(coord, CoordRange | CoordMonotonicArray):
@@ -2695,9 +2790,12 @@ def get_coord(
         return None, None, None, is_monotonic
 
     if segments is not None:
-        others = (data, values, start, min, stop, max, step, shape, dtype)
-        if any(x is not None for x in others):
-            msg = "segments cannot be combined with other get_coord inputs."
+        # shape/dtype/step are derived fields on CoordSegmented, so they
+        # legitimately appear alongside segments when round-tripping a
+        # model_dump (e.g. through CoordManager); ignore them here.
+        others = (data, values, start, min, stop, max)
+        if any(x is not None for x in others) or not pd.isnull(step):
+            msg = "segments cannot be combined with other coordinate value inputs."
             raise CoordError(msg)
         return concat_coords(*segments, units=units)
 
