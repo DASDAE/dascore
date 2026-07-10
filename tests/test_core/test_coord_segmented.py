@@ -361,7 +361,7 @@ class TestSelect:
 
     def test_select_samples(self, float_gap_coord):
         """Samples-based selection works via base machinery (stop exclusive)."""
-        out, indexer = float_gap_coord.select((2, 12), samples=True)
+        out, _ = float_gap_coord.select((2, 12), samples=True)
         assert len(out) == 10
         assert np.array_equal(out.values, float_gap_coord.values[2:12])
 
@@ -374,7 +374,7 @@ class TestSelect:
     def test_select_bool_array(self, float_gap_coord):
         """Boolean mask selection materializes correctly."""
         mask = float_gap_coord.values > 8.0
-        out, indexer = float_gap_coord.select(mask)
+        out, _ = float_gap_coord.select(mask)
         assert np.array_equal(out.values, float_gap_coord.values[mask])
 
     def test_select_value_array(self, float_gap_coord):
@@ -384,7 +384,7 @@ class TestSelect:
 
     def test_select_none_returns_all(self, float_gap_coord):
         """A null select keeps everything."""
-        out, indexer = float_gap_coord.select(None)
+        out, _ = float_gap_coord.select(None)
         assert out == float_gap_coord
 
 
@@ -639,6 +639,20 @@ class TestRoundTrips:
         coord = concat_coords(get_coord(data=v1), get_coord(data=v2))
         assert np.array_equal(coord.values, np.concatenate([v1, v2]))
 
+    def test_ns_precision_sort_order(self):
+        """Segments closer than float epoch resolution still sort correctly.
+
+        Casting ns datetimes to float collapses differences below ~128 ns
+        at modern epochs, so the envelope sort must use native values.
+        """
+        ns = np.timedelta64(1, "ns")
+        t0 = np.datetime64("2024-01-01T00:00:00", "ns")
+        v1 = t0 + np.arange(3) * 10 * ns
+        v2 = t0 + (np.arange(3) * 10 + 35) * ns
+        assert float(v1[0]) == float(v2[0])  # the collapse this guards against
+        coord = concat_coords(get_coord(data=v2), get_coord(data=v1))
+        assert np.array_equal(coord.values, np.concatenate([v1, v2]))
+
     def test_empty_from_coord(self, float_gap_coord):
         """Emptying a segmented coord gives a zero-length coordinate."""
         out = float_gap_coord.empty()
@@ -657,3 +671,130 @@ class TestRoundTrips:
         """new(data=...) falls back to plain coord creation."""
         out = float_gap_coord.new(data=np.arange(10.0))
         assert isinstance(out, CoordRange)
+
+
+class TestEdgeCases:
+    """Edge and guard-path behaviors."""
+
+    def test_promotion_requires_bit_exact_round_trip(self):
+        """Equal float diffs alone don't promote; values must round-trip."""
+        # [0, 0.1, 0.2] has bit-equal diffs but a range cannot reproduce
+        # the values exactly, so it must stay an array segment.
+        values = np.array([0.0, 0.1, 0.2])
+        assert len(np.unique(np.diff(values))) == 1
+        out = concat_coords(CoordMonotonicArray(values=values))
+        assert isinstance(out, CoordMonotonicArray)
+
+    def test_slice_can_promote_and_fuse(self):
+        """Slicing an array segment uniform lets it fuse with a range."""
+        a = get_coord(start=0.0, stop=10.0, step=1.0)
+        b = CoordMonotonicArray(values=np.array([10.0, 11.0, 12.0, 13.5]))
+        coord = concat_coords(a, b)
+        assert coord.segment_count == 2
+        out = coord[0:13]
+        assert isinstance(out, CoordRange)
+        assert np.array_equal(out.values, np.arange(13.0))
+
+    def test_segments_must_be_coords(self):
+        """Raw arrays passed as segments raise."""
+        with pytest.raises(ValidationError, match="must be coordinates"):
+            CoordSegmented(segments=(np.arange(3),))
+
+    def test_unsupported_segment_class_raises(self):
+        """Coord classes other than range/monotonic are rejected."""
+        from dascore.core.coords import CoordArray
+
+        bad = CoordArray(values=np.array([3.0, 1.0, 2.0]))
+        good = get_coord(start=10.0, stop=20.0, step=1.0)
+        with pytest.raises(ValidationError, match="CoordRange or CoordMonotonic"):
+            CoordSegmented(segments=(bad, good))
+
+    def test_empty_segment_raises(self):
+        """Zero-length segments are rejected."""
+        empty = CoordMonotonicArray(values=np.array([], dtype=np.float64))
+        good = get_coord(start=10.0, stop=20.0, step=1.0)
+        with pytest.raises(ValidationError, match="must not be empty"):
+            CoordSegmented(segments=(empty, good))
+
+    def test_no_segments_raises(self):
+        """An empty segment tuple is rejected."""
+        with pytest.raises(ValidationError, match="at least one segment"):
+            CoordSegmented(segments=())
+
+    def test_single_coord_instance_as_segments(self):
+        """A bare coordinate as segments is wrapped, then fails the 2+ rule."""
+        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
+        with pytest.raises(ValidationError, match="fuse"):
+            CoordSegmented(segments=c1)
+
+    def test_validator_passes_non_dict_through(self, float_gap_coord):
+        """The before-validator leaves non-dict payloads alone."""
+        out = CoordSegmented._validate_segments(float_gap_coord)
+        assert out is float_gap_coord
+
+    def test_eq_other_types(self, float_gap_coord):
+        """Equality is False for other coord types and segment counts."""
+        mono = get_coord(data=float_gap_coord.values)
+        assert float_gap_coord != mono
+        three = concat_coords(
+            float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
+        )
+        assert float_gap_coord != three
+
+    def test_zero_dim_index_returns_scalar(self, float_gap_coord):
+        """A 0-d array index returns a scalar value."""
+        out = float_gap_coord[np.array(10)]
+        assert out == 15.0
+
+    def test_shift_mixed_segments(self, mixed_segment_coord):
+        """Shifting moves array segments as well as ranges."""
+        out = mixed_segment_coord.update_limits(min=100.0)
+        assert np.allclose(out.values, mixed_segment_coord.values + 100.0)
+
+    def test_simplify_single_sample_segment(self):
+        """Length-one segments cannot be fit and pass through simplify."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            CoordMonotonicArray(values=np.array([99.0])),
+        )
+        out = coord.simplify(0.5)
+        assert out == coord
+
+    def test_discontinuities_after_array_segment(self):
+        """The expected step after an array segment comes from its diffs."""
+        coord = concat_coords(
+            CoordMonotonicArray(values=np.array([0.0, 1.0, 2.5])),
+            get_coord(start=10.0, stop=20.0, step=1.0),
+        )
+        df = coord.get_discontinuities()
+        assert len(df) == 1
+        # expected local spacing is 2.5 - 1.0 = 1.5; delta is 10 - 2.5 = 7.5.
+        assert df.iloc[0]["excess"] == 6.0
+
+    def test_discontinuities_after_single_sample_segment(self):
+        """No expected step after a length-one segment (excess is null)."""
+        coord = concat_coords(
+            CoordMonotonicArray(values=np.array([0.0])),
+            get_coord(start=10.0, stop=20.0, step=1.0),
+        )
+        df = coord.get_discontinuities()
+        assert len(df) == 1
+        assert pd.isnull(df.iloc[0]["excess"])
+        # boundaries with unknown spacing are never reported as gaps.
+        assert coord.get_discontinuities("gaps").empty
+
+    def test_base_get_discontinuities_bad_kind(self):
+        """The BaseCoord implementation validates kind too."""
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        with pytest.raises(ParameterError, match="kind"):
+            coord.get_discontinuities("overlaps")
+
+    def test_rebuild_reraises_real_errors(self, float_gap_coord):
+        """_rebuild only swallows errors caused by segments fusing to one."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        time_seg = get_coord(
+            start=t0, stop=t0 + np.timedelta64(10, "s"), step=np.timedelta64(1, "s")
+        )
+        bad = [float_gap_coord.segments[0], time_seg]
+        with pytest.raises(ValidationError, match="compatible dtypes"):
+            float_gap_coord._rebuild(bad)

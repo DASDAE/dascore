@@ -2049,10 +2049,8 @@ class CoordSegmented(BaseCoord):
         return self.__class__(segments=segments)
 
     def _rebuild(self, segments) -> BaseCoord:
-        """Build the simplest coordinate from a list of segments."""
+        """Build the simplest coordinate from a (non-empty) list of segments."""
         segments = tuple(segments)
-        if not segments:
-            return self.empty()
         if len(segments) == 1:
             return segments[0]
         try:
@@ -2108,12 +2106,12 @@ class CoordSegmented(BaseCoord):
             return self._select_by_samples(args)
         # Index math is delegated to an equivalent monotonic array (the values
         # are identical by construction); the resulting slice is re-applied
-        # segment-wise so structure is preserved.
+        # segment-wise so structure is preserved. Array args were handled
+        # above, so monotonic select always returns a slice here.
         _, indexer = self._as_monotonic().select(args, relative=relative)
-        if isinstance(indexer, slice):
-            start_i, stop_i, _ = indexer.indices(len(self))
-            return self._slice_segments(start_i, stop_i), indexer
-        return get_coord(data=self.values[indexer], units=self.units), indexer
+        assert isinstance(indexer, slice)
+        start_i, stop_i, _ = indexer.indices(len(self))
+        return self._slice_segments(start_i, stop_i), indexer
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
@@ -2236,8 +2234,9 @@ class CoordSegmented(BaseCoord):
         else:
             step = span / (n - 1)
             zero = 0
-        if (step > zero) != ascending or step == zero:
-            return None
+        # Strictly monotonic segments guarantee a nonzero step matching the
+        # sort direction.
+        assert step != zero and (step > zero) == ascending
         candidate = CoordRange(
             start=first, stop=last + step, step=step, units=self.units
         ).change_length(n)
@@ -2349,7 +2348,8 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     _validate_segment_compat(tuple(flat))
     multi = [x for x in flat if len(x) > 1]
     ascending = multi[0].sorted if multi else True
-    flat.sort(key=lambda x: to_float(x.min()), reverse=not ascending)
+    # Sort on native values; float conversion would collapse ns datetimes.
+    flat.sort(key=lambda x: x.min(), reverse=not ascending)
     if len(flat) == 1:
         return _maybe_promote_segment(flat[0])
     _validate_segment_chain(tuple(flat))
