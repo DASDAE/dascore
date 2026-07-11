@@ -31,7 +31,76 @@ from dascore.io.index.ingest import (
     summaries_to_records as s2r,
 )
 from dascore.io.index.query import InvalidSpoolQueryError, glob_match
-from dascore.units import get_quantity
+from dascore.units import get_quantity, m
+
+
+class TestNormalizeSourcePatchId:
+    """The single source-patch-id normalizer handles every missing form."""
+
+    def test_missing_forms_become_empty(self):
+        """None, empty string, and pandas NaN/NaT all normalize to ''."""
+        from dascore.core.summary import normalize_source_patch_id
+
+        assert normalize_source_patch_id(None) == ""
+        assert normalize_source_patch_id("") == ""
+        assert normalize_source_patch_id(float("nan")) == ""
+        assert normalize_source_patch_id(np.nan) == ""
+        assert normalize_source_patch_id(pd.NaT) == ""
+
+    def test_numpy_scalar_becomes_plain_string(self):
+        """A numpy scalar is unwrapped before stringifying."""
+        from dascore.core.summary import normalize_source_patch_id
+
+        assert normalize_source_patch_id(np.int64(42)) == "42"
+
+    def test_plain_values_stringify(self):
+        """Ordinary ids pass through as strings."""
+        from dascore.core.summary import normalize_source_patch_id
+
+        assert normalize_source_patch_id("abc") == "abc"
+        assert normalize_source_patch_id(7) == "7"
+
+    def test_non_scalar_falls_through(self):
+        """A value pd.isnull cannot evaluate as a scalar still stringifies."""
+        from dascore.core.summary import normalize_source_patch_id
+
+        # pd.isnull on a list returns an array (truth value is ambiguous),
+        # so the helper must swallow that and fall through to str().
+        assert normalize_source_patch_id([1, 2]) == "[1, 2]"
+
+
+class TestCanonicalRange:
+    """_canonical_range recognizes only numeric ranges."""
+
+    def test_bare_and_quantity_bounds(self):
+        """Bare numbers and quantities become SI magnitudes."""
+        from dascore.io.index.catalog import _canonical_range
+
+        assert _canonical_range((20, 60)).magnitudes == (20.0, 60.0)
+        # 20 m .. 60 m -> SI metres
+        assert _canonical_range((20 * m, 60 * m)).magnitudes == (20.0, 60.0)
+
+    def test_open_bounds_kept(self):
+        """A half-open numeric range keeps its open end as None."""
+        from dascore.io.index.catalog import _canonical_range
+
+        assert _canonical_range((None, 60)).magnitudes == (None, 60.0)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            np.array([True, False]),  # boolean mask, not a range
+            (None, None),  # fully open: no numeric content
+            (True, False),  # bool bounds are not numeric ranges
+            ("a", "b"),  # string bounds are not numeric ranges
+            (1, 2, 3),  # wrong arity
+        ],
+    )
+    def test_non_numeric_ranges_return_none(self, value):
+        """Anything that is not a bounded numeric range yields None."""
+        from dascore.io.index.catalog import _canonical_range
+
+        assert _canonical_range(value) is None
 
 
 @pytest.fixture(scope="module")

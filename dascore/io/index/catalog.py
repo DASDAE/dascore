@@ -55,14 +55,6 @@ class _CanonicalRange:
     def __init__(self, magnitudes: tuple):
         self.magnitudes = magnitudes
 
-    def __repr__(self) -> str:
-        return f"_CanonicalRange({self.magnitudes!r})"
-
-    def __eq__(self, other) -> bool:
-        return (
-            isinstance(other, _CanonicalRange) and other.magnitudes == self.magnitudes
-        )
-
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
         from dascore.units import get_quantity

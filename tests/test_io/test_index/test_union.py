@@ -46,6 +46,15 @@ class TestMemoryUnion:
         assert any(x is p1 for x in loaded)
         assert any(x is p2 for x in loaded)
 
+    def test_union_of_materialized_member(self):
+        """A sorted (materialized but catalog-backed) member unions by ids."""
+        sp = dc.get_example_spool("random_das")
+        other = dc.get_example_spool("diverse_das")
+        materialized = sp.sort("time")  # dataframe path, keeps its catalog
+        assert not materialized._catalog_native
+        combined = materialized + other
+        assert len(combined) == len(sp) + len(other)
+
     def test_select_on_union(self):
         """Selection works over the merged metadata."""
         sp1 = dc.get_example_spool("random_das")
@@ -249,3 +258,9 @@ class TestExportPushdown:
         catalog.to_df()
         records = catalog.backend.export_records()
         assert sum(len(r.patches) for r in records) == 5
+
+    def test_export_empty_patch_ids(self):
+        """Exporting an empty id set returns no records without querying."""
+        catalog = PatchCatalog.from_patches([dc.get_example_patch()])
+        catalog.to_df()
+        assert catalog.backend.export_records(patch_ids=[]) == []

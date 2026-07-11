@@ -160,6 +160,21 @@ class TestSamples:
         with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
             spool.select(tag="random", samples=True)
 
+    def test_samples_on_materialized_spool(self, spool):
+        """Samples select works after chunk (the dataframe select path)."""
+        # chunk first so the derived spool is materialized, not catalog-native
+        materialized = spool.chunk(time=None)
+        assert not materialized._catalog_native
+        out = materialized.select(distance=(0, 10), samples=True)
+        assert len(out) == len(materialized)
+        assert len(out[0].get_coord("distance")) == 10
+
+    def test_non_coord_on_materialized_raises(self, spool):
+        """The coordinate-only rule also holds on the dataframe path."""
+        materialized = spool.chunk(time=None)
+        with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
+            materialized.select(tag="random", samples=True)
+
 
 class TestRelative:
     """relative=True resolves against the spool envelope (#362)."""
@@ -185,6 +200,36 @@ class TestRelative:
         out = spool.select(_coords={"time": (1, -1)}, tag="random", relative=True)
         assert len(out)
         assert set(out.get_contents()["tag"]) == {"random"}
+
+    def test_relative_on_materialized_spool(self, spool):
+        """Relative select works after chunk (the dataframe select path)."""
+        materialized = spool.chunk(time=None)
+        assert not materialized._catalog_native
+        gmin = materialized.get_contents()["time_min"].min()
+        gmax = materialized.get_contents()["time_max"].max()
+        out = materialized.select(time=(1, -1), relative=True)
+        merged = out.chunk(time=None)[0]
+        time = merged.get_coord("time")
+        assert time.min() >= np.datetime64(gmin) + np.timedelta64(1, "s")
+        assert time.max() <= np.datetime64(gmax) - np.timedelta64(1, "s")
+
+
+class TestMaterializedNamespaces:
+    """_attrs/_coords validation on the dataframe (materialized) path."""
+
+    def test_namespaces_and_unknown_names(self, spool):
+        """Namespaced selects and unknown-name errors on a chunked spool."""
+        materialized = spool.chunk(time=None)
+        assert not materialized._catalog_native
+        assert len(materialized.select(_attrs={"tag": "random"})) == len(materialized)
+        with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
+            materialized.select(_attrs={"distance": (0, 10)})
+        with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):
+            materialized.select(_coords={"tag": "random"})
+        with pytest.raises(InvalidSpoolQueryError, match="both"):
+            materialized.select(tag="random", _attrs={"tag": "random"})
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            materialized.select(nope=1)
 
 
 class TestExistingBehaviorKept:
@@ -313,3 +358,15 @@ class TestUnitCanonicalSelection:
         )
         assert float(coord.min()) >= 65
         assert float(coord.max()) <= 197
+
+    def test_boolean_mask_selectors(self, ft_patch):
+        """Boolean masks (array and list) select coordinates patch-locally."""
+        coord = ft_patch.get_coord("distance")
+        mask = np.zeros(len(coord), dtype=bool)
+        mask[:5] = True
+        # ndarray mask
+        got = dc.spool([ft_patch]).select(distance=mask)
+        assert len(got[0].get_coord("distance")) == 5
+        # equivalent list-of-bools mask
+        got_list = dc.spool([ft_patch]).select(distance=list(mask))
+        assert len(got_list[0].get_coord("distance")) == 5
