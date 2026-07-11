@@ -479,7 +479,21 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
 
 class DataFrameSpool(BaseSpool):
-    """An abstract class for spools whose contents are managed by a dataframe."""
+    """
+    An abstract class for spools whose contents are managed by a dataframe.
+
+    A spool is in one of two internal states:
+
+    - **catalog-backed** (``_catalog_native`` and ``_catalog is not None``):
+      rows map one-to-one to a ``PatchCatalog`` query, so metadata
+      operations (length, selection) can stay lazy and push down to the
+      index. Use ``_is_catalog_backed()`` to test this and
+      ``_ensure_catalog()`` to enter it without realizing the relation.
+    - **materialized**: the managed dataframe/instruction frames are the
+      authoritative contents. Operations that restructure or reorder rows
+      (chunk, sort, slice) leave catalog-backed mode via
+      ``new_from_df`` (which clears ``_catalog_native``).
+    """
 
     # A dataframe which represents contents as they will be output
     _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
@@ -494,9 +508,15 @@ class DataFrameSpool(BaseSpool):
     _drop_columns = ("patch",)
     # patch-local selections (samples=True) applied as patches load
     _post_selects: tuple = ()
+    # The catalog backing this spool (None until one is built).
+    _catalog = None
     # True while rows directly represent a PatchCatalog query. Operations
     # which restructure/order rows switch back to the dataframe machinery.
     _catalog_native = False
+
+    def _is_catalog_backed(self) -> bool:
+        """True when rows map one-to-one to a live catalog query."""
+        return self._catalog_native and self._catalog is not None
 
     def _get_df(self):
         """Function to get the current df."""
@@ -560,9 +580,8 @@ class DataFrameSpool(BaseSpool):
         # it is cached, on the dataframe path, or when constructor
         # select_kwargs post-filter rows outside the catalog's queries.
         if (
-            self._catalog_native
+            self._is_catalog_backed()
             and not self._select_kwargs
-            and getattr(self, "_catalog", None) is not None
             and "_df" not in self._cache
         ):
             return len(self._catalog)
@@ -795,14 +814,13 @@ class DataFrameSpool(BaseSpool):
         Restructured rows (e.g. chunked views) no longer map to sources
         and contribute their materialized patches instead.
         """
-        catalog = getattr(self, "_catalog", None)
-        if catalog is None:
+        if self._catalog is None:
             return super()._as_catalog_member()
         if self._catalog_native:
-            return catalog, None
+            return self._catalog, None
         df = self._df
         if "_patch_id" in df.columns:
-            return catalog, df["_patch_id"].tolist()
+            return self._catalog, df["_patch_id"].tolist()
         return super()._as_catalog_member()
 
     def _chunk_working_df(self) -> pd.DataFrame:
@@ -1188,7 +1206,7 @@ class MemorySpool(DataFrameSpool):
 
     def _get_df(self):
         """Build the managing dataframes from the input patches."""
-        if self._catalog is not None and self._catalog_native:
+        if self._is_catalog_backed():
             current = self._catalog.to_df()
             df, source, instruction = self._get_dummy_dataframes(current)
             self._source_df = source
