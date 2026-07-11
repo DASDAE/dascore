@@ -525,33 +525,24 @@ class SQLIndexBackend(AbstractIndexBackend):
     _in_clause_batch = 5000
 
     def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:
-        """Delete sources by (base_uri, source_path) identity."""
+        """
+        Delete sources by (base_uri, source_path) identity.
+
+        The schema declares sources -> patches -> attrs/patch_coords with
+        ON DELETE CASCADE and the connection enables foreign keys, so
+        deleting the sources removes every dependent row. coord_defs are
+        intentionally left (they may orphan; a rebuild compacts them).
+        """
         if not source_paths:
             return
         batch = self._in_clause_batch
-        ids: list = []
         for start in range(0, len(source_paths), batch):
             chunk = source_paths[start : start + batch]
             marks = ", ".join("?" for _ in chunk)
-            found = self._fetch_df(
-                f"SELECT source_id FROM sources WHERE source_path IN ({marks}) "
-                "AND base_uri = ?",
+            self._execute(
+                f"DELETE FROM sources WHERE source_path IN ({marks}) AND base_uri = ?",
                 [*chunk, base_uri],
-            )["source_id"].tolist()
-            ids.extend(found)
-        for start in range(0, len(ids), batch):
-            chunk = ids[start : start + batch]
-            id_marks = ", ".join("?" for _ in chunk)
-            # coord_defs rows may orphan; harmless, a rebuild compacts them
-            for sql in (
-                f"DELETE FROM patch_coords WHERE patch_id IN "
-                f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
-                f"DELETE FROM attrs WHERE patch_id IN "
-                f"(SELECT patch_id FROM patches WHERE source_id IN ({id_marks}))",
-                f"DELETE FROM patches WHERE source_id IN ({id_marks})",
-                f"DELETE FROM sources WHERE source_id IN ({id_marks})",
-            ):
-                self._execute(sql, chunk)
+            )
 
     def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
         """Remove sources (identified by base_uri + path) and dependents."""

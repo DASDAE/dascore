@@ -394,11 +394,24 @@ class TestSourceLifecycle:
         assert "NEW1" in set(df["station"])
 
     def test_delete_cascades(self, backend):
-        """Delete cascades."""
+        """Delete cascades to patches, attrs, and coord links via the FK."""
+        before = backend._fetch_df("SELECT patch_id FROM patches")
+        gone = backend._fetch_df(
+            "SELECT p.patch_id FROM patches p JOIN sources s "
+            "ON s.source_id = p.source_id WHERE s.source_path = 'das/file_1.h5'"
+        )["patch_id"].tolist()
+        assert gone  # the source had patches to cascade-delete
         backend.delete_sources(["das/file_1.h5"])
         df = backend.query()
         assert len(df) == 3
         assert "das/file_1.h5" not in set(df["path"])
+        # the deleted source's patches (and their dependents) are gone,
+        # not merely filtered out of the query.
+        remaining = set(backend._fetch_df("SELECT patch_id FROM patches")["patch_id"])
+        assert remaining == set(before["patch_id"]) - set(gone)
+        for table in ("attrs", "patch_coords"):
+            ids = set(backend._fetch_df(f"SELECT patch_id FROM {table}")["patch_id"])
+            assert not (ids & set(gone))
 
     def test_reopen_persists(self, backend, tmp_path):
         """Reopen persists."""

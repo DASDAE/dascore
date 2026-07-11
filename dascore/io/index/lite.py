@@ -115,7 +115,9 @@ class SQLiteBackend(SQLIndexBackend):
         self._con.execute(sql, _adapt(params))
 
     def _executemany(self, sql: str, seq_of_params) -> None:
-        self._con.executemany(sql, [_adapt(p) for p in seq_of_params])
+        # sqlite3.executemany consumes an iterator, so adapt lazily rather
+        # than materializing a second copy of each already-built batch.
+        self._con.executemany(sql, (_adapt(p) for p in seq_of_params))
 
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
         # numpy_nullable assembly keeps nullable INTEGER columns exact;
