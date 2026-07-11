@@ -49,7 +49,8 @@ class SQLiteBackend(SQLIndexBackend):
     dialect = SQLiteDialect()
 
     def __init__(self, path: str | Path):
-        self._con = sqlite3.connect(str(path))
+        self._path = str(path)
+        self._con = sqlite3.connect(self._path)
         # autocommit off; we manage transactions explicitly.
         self._con.isolation_level = None
         self._con.execute("PRAGMA foreign_keys = ON")
@@ -63,6 +64,27 @@ class SQLiteBackend(SQLIndexBackend):
         except Exception:
             self._con.close()
             raise
+
+    def __getstate__(self) -> dict:
+        """
+        Pickle by database path; the file is the durable state.
+
+        This makes file-backed spools usable with process pools: the
+        receiving process reopens its own connection. In-memory backends
+        have no file to reopen; their owners (catalogs) serialize their
+        contents separately and never pickle the backend itself.
+        """
+        if self._path == ":memory:":
+            msg = (
+                "In-memory index backends cannot be pickled; pickle their "
+                "owning catalog/spool instead."
+            )
+            raise TypeError(msg)
+        return {"_path": self._path}
+
+    def __setstate__(self, state: dict) -> None:
+        """Reconnect to the database file."""
+        self.__init__(state["_path"])
 
     def _execute(self, sql: str, params=()) -> None:
         self._con.execute(sql, _adapt(params))

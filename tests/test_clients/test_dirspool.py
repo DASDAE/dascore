@@ -758,3 +758,39 @@ class TestFileSpoolIntegrations:
             with pytest.raises(IndexError, match="unexpected error from pandas"):
                 for _ in basic_file_spool:
                     pass
+
+
+def _patch_shape(patch):
+    """Module-level helper (process pools need picklable functions)."""
+    return patch.shape
+
+
+class TestDirectorySpoolSerialization:
+    """Directory spools must pickle (process-backed map depends on it)."""
+
+    def test_pickle_round_trip(self, basic_file_spool):
+        """A directory spool pickles and reopens its own connection."""
+        import pickle
+
+        loaded = pickle.loads(pickle.dumps(basic_file_spool))
+        assert len(loaded) == len(basic_file_spool)
+        assert loaded[0].shape == basic_file_spool[0].shape
+
+    def test_pickle_selected_view(self, basic_file_spool):
+        """Selected views keep their selection through pickling."""
+        import pickle
+
+        df = basic_file_spool.get_contents()
+        sub = basic_file_spool.select(time=(df["time_min"].min(), None))
+        loaded = pickle.loads(pickle.dumps(sub))
+        assert len(loaded) == len(sub)
+
+    def test_process_pool_map(self, basic_file_spool):
+        """Spool.map works with a process pool executor."""
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=1) as client:
+            out = list(
+                basic_file_spool.map(_patch_shape, client=client, progress=False)
+            )
+        assert len(out) == len(basic_file_spool)

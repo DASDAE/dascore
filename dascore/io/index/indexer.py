@@ -79,12 +79,12 @@ class DBDirectoryIndexer(AbstractIndexer):
 
         Older DASCore versions recorded PyTables (.h5) index locations in
         the index map; passing those to sqlite3 fails with an opaque
-        error instead of building the replacement index.
+        error instead of building the replacement index. Only the file
+        header decides — users may legitimately choose any suffix for a
+        custom index path.
         """
         if not path.exists():
             return False
-        if path.suffix.lower() in (".h5", ".hdf5"):
-            return True
         with suppress(OSError), open(path, "rb") as fh:
             header = fh.read(16)
             return len(header) >= 16 and not header.startswith(b"SQLite format 3")

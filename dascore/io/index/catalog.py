@@ -315,12 +315,17 @@ class PatchCatalog:
         where a brand-new directory index gets its one automatic update.
         """
         if self._backend is None:
-            self._backend = get_backend(":memory:")
-            if self._rebuild_records:
-                self._backend.write_sources(list(self._rebuild_records))
-                self._rebuild_records = ()
-            elif registry := getattr(self.resolver, "_registry", None):
-                self._backend.write_sources(_live_records(registry))
+            if self._syncer is not None:
+                # Directory catalogs re-adopt the (unpickled) syncer's
+                # backend; both must keep sharing one connection.
+                self._backend = self._syncer._backend
+            else:
+                self._backend = get_backend(":memory:")
+                if self._rebuild_records:
+                    self._backend.write_sources(list(self._rebuild_records))
+                    self._rebuild_records = ()
+                elif registry := getattr(self.resolver, "_registry", None):
+                    self._backend.write_sources(_live_records(registry))
         if self._syncer is not None and self._syncer.ensure_updated():
             self._invalidate()
         return self._backend
