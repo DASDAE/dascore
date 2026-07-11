@@ -51,6 +51,16 @@ class DascoreConfig(BaseModel):
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
     )
+    sampling_group_tolerance: float = Field(
+        default=0.05,
+        gt=0,
+        description=(
+            "Relative sampling-interval difference above which patches are "
+            "never combined during chunk/merge operations. E.g. the default "
+            "0.05 keeps patches whose steps differ by more than 5% in "
+            "separate groups."
+        ),
+    )
     groupby_attrs: tuple[str, ...] = Field(
         default=(
             "network",

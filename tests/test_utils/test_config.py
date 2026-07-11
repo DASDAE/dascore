@@ -100,3 +100,19 @@ class TestSetConfig:
         """List inputs coerce to the immutable tuple form."""
         with set_config(groupby_attrs=["tag"]):
             assert get_config().groupby_attrs == ("tag",)
+
+    def test_sampling_group_tolerance_default(self):
+        """The default sampling group tolerance is 5%."""
+        assert get_config().sampling_group_tolerance == 0.05
+
+    def test_sampling_group_tolerance_override(self):
+        """sampling_group_tolerance round-trips through scoped set_config."""
+        previous = get_config()
+        with set_config(sampling_group_tolerance=0.01):
+            assert get_config().sampling_group_tolerance == 0.01
+        assert get_config() == previous
+
+    def test_sampling_group_tolerance_must_be_positive(self):
+        """Non-positive tolerances are rejected."""
+        with pytest.raises(ValueError, match="sampling_group_tolerance"):
+            set_config(sampling_group_tolerance=0)
