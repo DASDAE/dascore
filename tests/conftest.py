@@ -512,15 +512,18 @@ def diverse_spool():
 def diverse_directory_spool(diverse_spool_directory):
     """Save the diverse spool contents to a directory."""
     out = dc.spool(diverse_spool_directory).update()
-    return out
+    yield out
+    # release the SQLite index handle so Windows can clean the temp dir
+    out.indexer.close()
 
 
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = DirectorySpool(two_patch_directory).update()
-    return out.update()
+    out = DirectorySpool(two_patch_directory).update().update()
+    yield out
+    out.indexer.close()
 
 
 @pytest.fixture(scope="class")

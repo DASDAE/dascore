@@ -293,12 +293,21 @@ class TestDirectoryIndex:
         """An index should be returned."""
         assert basic_file_spool.indexer.index_path.exists()
 
-    def test_index_len(self, basic_index_df, two_patch_directory):
-        """An index should be returned."""
-        spool = dc.spool(two_patch_directory)
+    def test_index_len(self, random_patch, tmp_path):
+        """Deleting and rebuilding the index reproduces the contents."""
+        # own directory so no other spool holds the index file open
+        dc.write(random_patch, tmp_path / "a.hdf5", "dasdae")
+        dc.write(random_patch.update_attrs(tag="b"), tmp_path / "b.hdf5", "dasdae")
+        spool = dc.spool(tmp_path)
+        spool.get_contents()  # build the index
+        # close the connection so the index file can be replaced (Windows
+        # cannot delete a file with an open handle), then rebuild fresh.
+        spool.indexer.close()
         spool.indexer.index_path.unlink()
-        df = spool.update().get_contents()
-        bank_paths = list(Path(two_patch_directory).rglob("*hdf5"))
+        rebuilt = dc.spool(tmp_path).update()
+        df = rebuilt.get_contents()
+        rebuilt.indexer.close()
+        bank_paths = list(Path(tmp_path).rglob("*hdf5"))
         assert isinstance(df, pd.DataFrame)
         assert len(bank_paths) == len(df)
 
