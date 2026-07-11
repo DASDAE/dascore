@@ -20,6 +20,7 @@ class PickleIO(FiberIO):
 
     name = "PICKLE"
     preferred_extensions = ("pkl", "pickle")
+    multi_patch_write = True
 
     def _header_is_dascore(self, byte_stream):
         """Return True if the first few bytes mention dascore classes."""

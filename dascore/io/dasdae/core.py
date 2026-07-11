@@ -49,6 +49,7 @@ class DASDAEV1(FiberIO):
     name = "DASDAE"
     preferred_extensions = ("h5", "hdf5")
     version = "1"
+    multi_patch_write = True
 
     def write(
         self,
@@ -73,10 +74,16 @@ class DASDAEV1(FiberIO):
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
-        # write new patches to file
+        # write new patches to file, ensuring unique group names within this
+        # batch so same-named patches (e.g. gap-split siblings that differ
+        # only along a non-named dimension) don't overwrite each other.
         patch_names = get_patch_names(patches).values
+        counts: dict[str, int] = {}
         for patch, name in zip(patches, patch_names):
-            _save_patch(patch, waveforms, name)
+            num = counts.get(name, 0)
+            counts[name] = num + 1
+            unique_name = name if num == 0 else f"{name}__{num}"
+            _save_patch(patch, waveforms, unique_name)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""

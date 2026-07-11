@@ -944,6 +944,80 @@ class TestReviewFindings:
         assert patch == patch2
 
 
+class TestSplitGapsAndWrite:
+    """Tests for patch.split_gaps and the write-path split behavior."""
+
+    @pytest.fixture()
+    def gapped_patch(self, float_gap_coord):
+        """A patch whose distance coordinate has one gap."""
+        rng = np.random.default_rng(31)
+        time = dc.to_datetime64(np.arange(10))
+        return dc.Patch(
+            data=rng.random((len(float_gap_coord), 10)),
+            coords={"distance": float_gap_coord, "time": time},
+            dims=("distance", "time"),
+        )
+
+    def test_split_gaps(self, gapped_patch):
+        """Splitting yields contiguous patches partitioning the data."""
+        spool = gapped_patch.split_gaps()
+        assert len(spool) == 2
+        p1, p2 = spool
+        assert isinstance(p1.get_coord("distance"), CoordRange)
+        assert isinstance(p2.get_coord("distance"), CoordRange)
+        assert np.array_equal(p1.data, gapped_patch.data[:10])
+        assert np.array_equal(p2.data, gapped_patch.data[10:])
+        combined = np.concatenate(
+            [p1.get_coord("distance").values, p2.get_coord("distance").values]
+        )
+        assert np.array_equal(combined, gapped_patch.get_coord("distance").values)
+
+    def test_split_gaps_no_gaps(self):
+        """Contiguous patches come back unchanged in a length 1 spool."""
+        patch = dc.get_example_patch()
+        spool = patch.split_gaps()
+        assert len(spool) == 1
+        assert spool[0] == patch
+
+    def test_split_gaps_explicit_dim(self, gapped_patch):
+        """A specific dimension can be requested."""
+        assert len(gapped_patch.split_gaps(dim="distance")) == 2
+        assert len(gapped_patch.split_gaps(dim="time")) == 1
+
+    def test_split_gaps_bad_dim(self, gapped_patch):
+        """Unknown dimensions raise."""
+        with pytest.raises(ParameterError, match="dim must be one of"):
+            gapped_patch.split_gaps(dim="bob")
+
+    def test_write_gapped_raises_by_default(self, gapped_patch, tmp_path):
+        """Writing a gapped patch without split=True raises."""
+        with pytest.raises(ParameterError, match="split=True"):
+            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae")
+
+    def test_write_split_round_trip(self, gapped_patch, tmp_path):
+        """split=True writes contiguous patches that round trip exactly."""
+        path = tmp_path / "gapped.h5"
+        dc.write(gapped_patch, path, "dasdae", split=True)
+        spool = dc.spool(path)
+        assert len(spool) == 2
+        patches = sorted(spool, key=lambda p: p.get_coord("distance").min())
+        combined = np.concatenate([p.data for p in patches])
+        assert np.array_equal(combined, gapped_patch.data)
+        coords = np.concatenate([p.get_coord("distance").values for p in patches])
+        assert np.array_equal(coords, gapped_patch.get_coord("distance").values)
+
+    def test_write_split_single_patch_format_raises(self, gapped_patch, tmp_path):
+        """Formats that hold one patch per file raise cleanly."""
+        with pytest.raises(ParameterError, match="single patch per file"):
+            dc.write(gapped_patch, tmp_path / "gapped.wav", "wav", split=True)
+
+    def test_write_contiguous_unaffected(self, tmp_path):
+        """Normal patches write exactly as before, split flag or not."""
+        patch = dc.get_example_patch()
+        path = dc.write(patch, tmp_path / "normal.h5", "dasdae", split=True)
+        assert path.exists()
+
+
 class TestFromArray:
     """Tests for CoordSegmented.from_array."""
 
