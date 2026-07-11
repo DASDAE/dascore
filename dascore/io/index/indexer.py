@@ -73,6 +73,23 @@ class DBDirectoryIndexer(AbstractIndexer):
     def _index_name(self) -> str:
         return ".dascore_index.sqlite3"
 
+    @staticmethod
+    def _is_legacy_or_foreign_index(path: Path) -> bool:
+        """Return True if an existing file is not a SQLite database.
+
+        Older DASCore versions recorded PyTables (.h5) index locations in
+        the index map; passing those to sqlite3 fails with an opaque
+        error instead of building the replacement index.
+        """
+        if not path.exists():
+            return False
+        if path.suffix.lower() in (".h5", ".hdf5"):
+            return True
+        with suppress(OSError), open(path, "rb") as fh:
+            header = fh.read(16)
+            return len(header) >= 16 and not header.startswith(b"SQLite format 3")
+        return False
+
     def _find_index_path(self, index_path=None) -> Path:
         """
         Find where the index lives (or should live).
@@ -92,7 +109,12 @@ class DBDirectoryIndexer(AbstractIndexer):
                 return expected
         path_map = _get_index_map(cache_path=str(self.index_map_path))
         if out := path_map.get(map_key):
-            return Path(out)
+            mapped = Path(out)
+            # Index-map entries from older DASCore versions can point at
+            # the retired PyTables (.h5) index; those are not usable and
+            # a fresh SQLite index is built in their place.
+            if not self._is_legacy_or_foreign_index(mapped):
+                return mapped
         if not _directory_writable(self.path):
             name = f"_dascore_index_{abs(hash(self.path))}.sqlite3"
             index_path = self.index_map_path.parent / name

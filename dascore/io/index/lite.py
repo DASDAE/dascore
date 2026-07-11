@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,10 @@ class SQLiteBackend(SQLIndexBackend):
         self._con.isolation_level = None
         self._con.execute("PRAGMA foreign_keys = ON")
         self._con.execute("PRAGMA busy_timeout = 30000")
+        # Catalog views share this backend object, so tying connection
+        # cleanup to *its* collection is safe (close() stays idempotent
+        # for explicit use).
+        self._finalizer = weakref.finalize(self, self._con.close)
         try:
             super().__init__()
         except Exception:
@@ -97,4 +102,6 @@ class SQLiteBackend(SQLIndexBackend):
 
     def close(self) -> None:
         """Close the database connection."""
+        # detach the GC finalizer; closing twice is harmless but tidy.
+        self._finalizer.detach()
         self._con.close()

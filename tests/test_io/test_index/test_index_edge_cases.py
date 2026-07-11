@@ -662,3 +662,60 @@ class TestCompositeSourceIdentity:
         back.write_sources([rec_a])  # replace only the s3://a copy
         assert len(back.query()) == 2
         back.close()
+
+
+class TestResourceCleanup:
+    """Backends must not leak SQLite connections (review P2)."""
+
+    def test_gc_closes_connection(self):
+        """Garbage collection closes the backend connection silently."""
+        import gc
+        import warnings as warnings_mod
+
+        import dascore as dc
+
+        spool = dc.spool([dc.get_example_patch()])
+        spool.get_contents()  # realize the backend
+        with warnings_mod.catch_warnings(record=True) as caught:
+            warnings_mod.simplefilter("always", ResourceWarning)
+            del spool
+            gc.collect()
+        resource = [w for w in caught if issubclass(w.category, ResourceWarning)]
+        assert not resource
+
+    def test_explicit_close_idempotent(self):
+        """Explicit close works and GC afterwards stays quiet."""
+        from dascore.io.index.catalog import PatchCatalog
+
+        import dascore as dc
+
+        catalog = PatchCatalog.from_patches([dc.get_example_patch()])
+        catalog.to_df()
+        catalog.close()
+
+
+class TestLegacyIndexMap:
+    """Index-map entries pointing at retired .h5 indexes are bypassed."""
+
+    def test_legacy_entry_ignored(self, tmp_path):
+        """A mapped legacy HDF5 index does not break index creation."""
+        import h5py
+
+        import dascore as dc
+        from dascore.io.index.indexer import (
+            DBDirectoryIndexer,
+            _update_index_map,
+        )
+
+        # data directory with one file, plus a fake legacy index mapping.
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        dc.write(dc.get_example_patch(), data_dir / "a.h5", "dasdae")
+        legacy = tmp_path / "legacy_index.h5"
+        with h5py.File(legacy, "w") as fh:
+            fh.create_dataset("x", data=[1, 2, 3])
+        map_path = tmp_path / "cache_paths.json"
+        with dc.set_config(directory_index_map_path=map_path):
+            _update_index_map({str(data_dir): str(legacy)}, cache_path=str(map_path))
+            spool = dc.spool(data_dir).update()
+            assert len(spool) == 1
