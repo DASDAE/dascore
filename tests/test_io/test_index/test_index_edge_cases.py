@@ -19,9 +19,10 @@ import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
-from dascore.io.index.backend import adapt_params, resolve_query
+from dascore.io.index.backend import _ns_to_time, adapt_params, resolve_query
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.io.index.ingest import (
+    SourceRecord,
     _coord_record,
     typed_value,
 )
@@ -303,6 +304,87 @@ class TestUnitHeterogeneity:
         got = back.query(Query(attrs={"resolution": (0.5, 2.0)}))
         assert list(got["path"]) == ["a.h5"]
         back.close()
+
+
+class TestExactNsFetch:
+    """Nullable ns-integer columns must never round through float64."""
+
+    # an epoch-ns value float64 rounds to ...768: exactness is observable
+    NS = 1_752_244_251_123_456_789
+
+    def _summary(self, path, coords, dims):
+        return PatchSummary(
+            attrs={"tag": "ns"},
+            coords=coords,
+            dims=dims,
+            shape=tuple(10 for _ in dims),
+            dtype="float32",
+            source_path=path,
+            source_format="DASDAE",
+            source_version="1",
+        )
+
+    def test_time_envelopes_exact_when_column_nullable(self, tmp_path):
+        """NULLs from other kinds/patches must not degrade ns columns."""
+        t0 = np.datetime64(self.NS, "ns")
+        with_time = self._summary(
+            "abs.h5",
+            {
+                "event_time": {
+                    "dtype": "datetime64",
+                    "min": t0,
+                    "max": t0 + np.timedelta64(60, "s"),
+                    "dims": ("event_time",),
+                    "len": 10,
+                }
+            },
+            ("event_time",),
+        )
+        # a numeric coord puts NULL min_ns rows in the same link fetch,
+        # and no time coord leaves patches.time_min NULL for this patch.
+        numeric_only = self._summary(
+            "num.h5",
+            {
+                "distance": {
+                    "dtype": "float64",
+                    "min": 0.0,
+                    "max": 10.0,
+                    "dims": ("distance",),
+                    "len": 10,
+                }
+            },
+            ("distance",),
+        )
+        back = get_backend(tmp_path / "exact.sqlite3")
+        back.write_sources(summaries_to_records([with_time, numeric_only]))
+        df = back.query().set_index("path")
+        got = df.loc["abs.h5", "event_time_min"]
+        assert pd.Timestamp(got).value == self.NS
+        back.close()
+
+    def test_mtime_ns_exact_with_null_row(self, tmp_path):
+        """A single NULL mtime row must not corrupt the others (rescans)."""
+        back = get_backend(tmp_path / "mtime.sqlite3")
+        records = [
+            SourceRecord(
+                source_path="a.h5",
+                source_format="",
+                format_version="",
+                mtime_ns=self.NS,
+                size_bytes=1,
+            ),
+            SourceRecord(source_path="b.h5", source_format="", format_version=""),
+        ]
+        back.write_sources(records)
+        sources = back.get_sources().set_index("source_path")
+        assert int(sources.loc["a.h5", "mtime_ns"]) == self.NS
+        back.close()
+
+    def test_float_ns_column_rejected(self):
+        """The conversion helper refuses already-corrupted float input."""
+        series = pd.Series([1.5e18, np.nan], name="min_ns")
+        with pytest.raises(TypeError, match="already corrupted"):
+            _ns_to_time(series, "datetime")
 
 
 class TestIngestEdges:

@@ -51,8 +51,17 @@ def _ns_to_time(series: pd.Series, flavor: str) -> pd.Series:
 
     Never goes through float64: ns epochs exceed float64's 2**53 integer
     range, and the resulting ~100 ns corruption breaks merge boundary
-    arithmetic downstream.
+    arithmetic downstream. Float input means precision was already lost
+    upstream (a fetch path rounding nullable integers through float64),
+    so it is rejected rather than silently converted.
     """
+    if series.dtype.kind == "f":
+        msg = (
+            f"ns column {series.name!r} arrived as {series.dtype}; values "
+            "above 2**53 ns are already corrupted. Fetch nullable integer "
+            "columns exactly (e.g. pandas nullable Int64)."
+        )
+        raise TypeError(msg)
     mask = series.isna()
     values = np.zeros(len(series), dtype="int64")
     if (~mask).any():
@@ -132,7 +141,13 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     @abc.abstractmethod
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
-        """Execute a SELECT and return a dataframe."""
+        """
+        Execute a SELECT and return a dataframe.
+
+        Contract: nullable integer columns must round-trip exactly (use a
+        nullable integer dtype, never float64) — ns epochs exceed
+        float64's 2**53 integer range.
+        """
 
     @abc.abstractmethod
     def _begin(self) -> None:

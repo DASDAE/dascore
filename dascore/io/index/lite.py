@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from dascore.io.index.backend import SQLIndexBackend, adapt_params
@@ -14,6 +15,31 @@ from dascore.io.index.dialect import SQLiteDialect
 def _adapt(params):
     """Convert numpy/py types sqlite3 can't bind natively."""
     return [int(p) if isinstance(p, bool) else p for p in adapt_params(params)]
+
+
+def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert nullable extension columns back to classic numpy dtypes.
+
+    Fetching with dtype_backend="numpy_nullable" is what keeps nullable
+    INTEGER columns exact (the default assembly rounds >2**53 ns values
+    through float64), but downstream spool code expects classic dtypes.
+    Only int columns that actually hold NULLs stay nullable (Int64) —
+    the exactness they exist for; consumers handle them via isna().
+    """
+    for name in df.columns:
+        col = df[name]
+        dtype = col.dtype
+        if not isinstance(dtype, pd.api.extensions.ExtensionDtype):
+            continue
+        if dtype.kind == "i":
+            if not col.isna().any():
+                df[name] = col.to_numpy(dtype="int64")
+        elif dtype.kind == "f":
+            df[name] = col.to_numpy(dtype="float64", na_value=np.nan)
+        else:  # string/boolean/... -> classic object with None for missing
+            df[name] = col.to_numpy(dtype=object, na_value=None)
+    return df
 
 
 class SQLiteBackend(SQLIndexBackend):
@@ -40,7 +66,14 @@ class SQLiteBackend(SQLIndexBackend):
         self._con.executemany(sql, [_adapt(p) for p in seq_of_params])
 
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
-        return pd.read_sql_query(sql, self._con, params=_adapt(params))
+        # numpy_nullable assembly keeps nullable INTEGER columns exact;
+        # the default path rounds them through float64, corrupting ns
+        # epochs (>2**53). A dtype= hint does NOT prevent that: pandas
+        # builds float64 first and casts after.
+        df = pd.read_sql_query(
+            sql, self._con, params=_adapt(params), dtype_backend="numpy_nullable"
+        )
+        return _classic_dtypes(df)
 
     def _begin(self) -> None:
         self._con.execute("BEGIN IMMEDIATE")
