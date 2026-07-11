@@ -18,7 +18,7 @@ from functools import cache
 import numpy as np
 import pandas as pd
 
-from dascore.core.summary import PatchSummary
+from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.io.index.schema import KINDS, RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.time import to_datetime64, to_int, to_timedelta64
@@ -325,7 +325,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
     shape = tuple(int(x) for x in summary.shape)
     return PatchRecord(
-        source_patch_id=summary.source_patch_id or "",
+        source_patch_id=normalize_source_patch_id(summary.source_patch_id),
         dims=",".join(summary.dims),
         shape=",".join(str(x) for x in shape),
         n_dims=len(summary.dims),
@@ -490,7 +490,7 @@ def assemble_source_records(
                 )
             patch_records.append(
                 PatchRecord(
-                    source_patch_id=_py_scalar(patch.source_patch_id) or "",
+                    source_patch_id=normalize_source_patch_id(patch.source_patch_id),
                     dims=_py_scalar(patch.dims) or "",
                     shape=_py_scalar(patch.shape) or "",
                     n_dims=_py_scalar(patch.n_dims),

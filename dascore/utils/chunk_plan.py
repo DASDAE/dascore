@@ -189,7 +189,9 @@ def _user_stacklevel() -> int:
     """
     import inspect
 
-    package_dir = str(Path(__file__).resolve().parents[2])
+    # The dascore package directory, resolved from the package itself so
+    # this does not depend on this module's location within it.
+    package_dir = str(Path(dc.__file__).resolve().parent)
     # Frames after this helper's own align exactly with warn's numbering:
     # level 1 is the frame calling warn.
     for level, frame_info in enumerate(inspect.stack()[1:], start=1):

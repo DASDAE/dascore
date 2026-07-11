@@ -26,6 +26,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
+from dascore.core.summary import normalize_source_patch_id
 from dascore.exceptions import MissingPatchError
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, patch_record
@@ -122,13 +123,8 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
 
 
 def _row_source_patch_id(row: Mapping) -> str:
-    """Return the row's source_patch_id as a string ("" when missing).
-
-    Rows fetched through pandas represent missing text values as NaN,
-    which is truthy, so a plain `or ""` does not normalize them.
-    """
-    value = row.get("source_patch_id")
-    return "" if value is None or pd.isnull(value) else str(value)
+    """Return the row's source_patch_id as a normalized string."""
+    return normalize_source_patch_id(row.get("source_patch_id"))
 
 
 class PatchResolver(abc.ABC):

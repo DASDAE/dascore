@@ -32,7 +32,7 @@ from dascore.constants import (
 from dascore.core.attrs import PatchAttrs, str_validator
 from dascore.core.coordmanager import CoordManager
 from dascore.core.spool import DataFrameSpool
-from dascore.core.summary import PatchSummary
+from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberFileError,
@@ -264,9 +264,9 @@ def _resolve_read_spool(spool, source_patch_id: object = "") -> dc.Patch:
     patch without preserving that reload metadata on it; only trust that
     when the patch doesn't claim a different identity.
     """
-    source_patch_id = str(source_patch_id or "")
+    source_patch_id = normalize_source_patch_id(source_patch_id)
     if source_patch_id and len(spool) == 1:
-        found = str(spool[0].attrs.get("_source_patch_id", "") or "")
+        found = normalize_source_patch_id(spool[0].attrs.get("_source_patch_id", ""))
         if found in ("", source_patch_id):
             return spool[0]
     return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
@@ -287,7 +287,8 @@ def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
         matches = [
             patch
             for patch in spool
-            if str(patch.attrs.get("_source_patch_id", "") or "") == source_patch_id
+            if normalize_source_patch_id(patch.attrs.get("_source_patch_id", ""))
+            == source_patch_id
         ]
         if len(matches) == 1:
             return matches[0]
