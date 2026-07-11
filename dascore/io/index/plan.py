@@ -8,13 +8,14 @@ catalog's flat relation (one row per patch: `{dim}_min/max/step` envelopes,
 per output patch) plus a members table binding each output to trimmed
 slices of source patches. No patch data is touched; assembly happens later.
 
-Portions of the interval/instruction math are ported from
-`dascore.utils.chunk.ChunkManager` (which this planner replaces at
-cutover) with the spec's adjudicated corrections applied.
+Portions of the interval/instruction math were ported from the old
+`ChunkManager` (now removed) with the spec's adjudicated corrections
+applied; `Spool.chunk` runs on these plans.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -36,6 +37,9 @@ from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timed
 # Columns which never participate in conflict policing and never carry to
 # outputs: source bookkeeping (outputs are not file rows).
 _SOURCE_COLUMNS = ("path", "file_format", "file_version", "source_patch_id")
+# The default continuity tolerance; looser values warn when they force
+# merges (#662).
+_DEFAULT_TOLERANCE = 1.5
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,16 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
 
 
+def _dim_def_key_columns(df: pd.DataFrame, name: str) -> list[str]:
+    """Return def-key column names for every non-chunked dimension."""
+    dim_names: set[str] = set()
+    if "dims" in df.columns:
+        for dims_str in df["dims"].dropna().unique():
+            dim_names.update(str(dims_str).split(","))
+    dim_names.discard(name)
+    return [f"_{x}_def_key" for x in sorted(dim_names)]
+
+
 def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     """Label rows whose steps are within relative tolerance (spec 2.3)."""
     col = to_float(step.values)
@@ -129,9 +143,10 @@ def _partition(df, name, group_attrs, tolerance, sampling_tolerance) -> pd.Serie
     cols = [x for x in group_attrs if x in df.columns]
     if "dims" in df.columns:
         cols.append("dims")
-    cols += [
-        x for x in df.columns if x.endswith("_def_key") and x != f"_{name}_def_key"
-    ]
+    # Structural identity: def keys of non-chunked *dimensions* only
+    # (spec 2.2). Non-dimensional coordinate conflicts are policed at
+    # assembly per the `conflict` argument, never partitioned on.
+    cols += [x for x in _dim_def_key_columns(df, name) if x in df.columns]
     base = (
         df.groupby(cols, dropna=False, sort=False).ngroup()
         if cols
@@ -140,10 +155,25 @@ def _partition(df, name, group_attrs, tolerance, sampling_tolerance) -> pd.Serie
     samp = _sampling_group(step, sampling_tolerance)
     cell = base.astype(str) + "_" + samp.astype(str)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
+    forced_merge = False
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
-        cont.loc[index] = _continuity_group(s, e, st, tolerance).astype(np.int64)
+        labels = _continuity_group(s, e, st, tolerance).astype(np.int64)
+        cont.loc[index] = labels
+        # See #662: warn when a loosened tolerance forces merges the
+        # default would not have produced.
+        if tolerance > _DEFAULT_TOLERANCE and not forced_merge:
+            default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
+            forced_merge = default.nunique() > labels.nunique()
+    if forced_merge:
+        msg = (
+            f"There is a gap in the patch along dimension {name} but a "
+            f"merge tolerance of {tolerance} was used to force merging "
+            "the patches. As a result, some patches in the chunked spool "
+            "may be unevenly sampled, or have their sampling rate increased."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=4)
     return cell + "_" + cont.astype(str)
 
 
@@ -190,9 +220,9 @@ def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
         if conflict == "keep_first":
             carried[col] = sub[col].iloc[0]
         # conflict == "drop": omit the column entirely.
-    # Structural def keys carry (single-valued within a partition).
-    for col in sub.columns:
-        if col.endswith("_def_key") and col != f"_{name}_def_key":
+    # Structural (dimension) def keys carry — single-valued by partitioning.
+    for col in _dim_def_key_columns(sub, name):
+        if col in sub.columns:
             carried[col] = sub[col].iloc[0]
     return carried
 
@@ -206,6 +236,7 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
     overlaps keep the first member, deterministically).
     """
     min_name, max_name = f"{name}_min", f"{name}_max"
+    step_name = f"{name}_step"
     sub = sub.sort_values([min_name, "_patch_id"], kind="stable")
     original = sub[[min_name, max_name]].reset_index(drop=True)
     sub = _remove_overlaps(sub, name)
@@ -216,8 +247,16 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
     original = original[keep].reset_index(drop=True)
     if sub.empty or outputs.empty:
         return pd.DataFrame(
-            columns=["output_id", "_patch_id", min_name, max_name, "_modified"]
+            columns=[
+                "output_id",
+                "_patch_id",
+                min_name,
+                max_name,
+                step_name,
+                "_modified",
+            ]
         )
+    steps = sub[step_name].values
     src1 = sub[min_name].values
     src2 = sub[max_name].values
     chu1 = outputs[min_name].values
@@ -248,6 +287,7 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
                     "_patch_id": sub["_patch_id"].iloc[src_num],
                     min_name: lo,
                     max_name: hi,
+                    step_name: steps[src_num],
                     "_modified": not unchanged,
                 }
             )
@@ -298,7 +338,7 @@ def build_chunk_plan(
         raise ParameterError(msg)
 
     min_name, max_name = f"{name}_min", f"{name}_max"
-    if min_name not in df.columns:
+    if min_name not in df.columns and not df.empty:
         msg = f"No patch in the spool has a {name!r} dimension to chunk."
         raise ChunkError(msg)
     empty_members = pd.DataFrame(
@@ -314,6 +354,12 @@ def build_chunk_plan(
         group=_resolve_group_attrs(group, set(df.columns)),
         sampling_group_tolerance=dc.get_config().sampling_group_tolerance,
     )
+    if df.empty:
+        outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
+        return ChunkPlan(outputs, empty_members, name, value, params)
+    if "_patch_id" not in df.columns:
+        # Positional identity fallback for plain dataframes.
+        df = df.assign(_patch_id=np.arange(len(df)))
     # Missing chunk-dim envelopes (spec 7 / D2).
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if null_rows.any():

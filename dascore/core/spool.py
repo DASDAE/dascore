@@ -34,7 +34,6 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.attrs import combine_patch_attrs
-from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
@@ -49,6 +48,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _get_merge_dim,
     _get_merged_coord,
+    _split_coord_merge_kwargs,
     _spool_up,
     concatenate_patches,
     get_patch_names,
@@ -174,6 +174,8 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         snap_coords: bool = True,
         tolerance: float = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "raise",
         **kwargs,
     ) -> Self:
         """
@@ -188,13 +190,24 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             If True, keep the segments which are smaller than chunk size.
             This often occurs because of data gaps or at end of chunks.
         snap_coords
-            If True, snap the coords on joined patches such that the spacing
-            remains constant.
+            If True (default), simplify the coordinates of joined patches to
+            an evenly sampled range when doing so moves no coordinate value
+            by more than `tolerance` samples. Merges whose gaps exceed that
+            keep an exact segmented coordinate instead.
         tolerance
-            The maximum number of samples a block of data can be spaced (gap) and
-            still be considered contiguous.
+            The maximum number of samples a block of data can be spaced (gap)
+            and still be considered contiguous.
         conflict
             {conflict_desc}
+        group
+            Attributes which partition patches into separate outputs (their
+            values differing is never an error). Defaults to the config
+            option `groupby_attrs`; unlike the default, explicitly passed
+            names must exist on at least one patch. Dimensions and
+            coordinate identities always partition implicitly.
+        missing_dim
+            What to do when patches lack the chunked dimension: "raise"
+            (default) or "drop" (exclude them from the output).
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -430,8 +443,6 @@ class DataFrameSpool(BaseSpool):
     _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
     _merge_kwargs: Mapping | None = FrozenDict()
-    # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "tag")
     _drop_columns = ("patch",)
     # patch-local selections (samples=True) applied as patches load
     _post_selects: tuple = ()
@@ -661,10 +672,13 @@ class DataFrameSpool(BaseSpool):
                 f"{merge_dim} but found {found_dim}."
             )
             raise CoordMergeError(msg)
-        conf = self._merge_kwargs.get("conflicts", None)
+        attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self._merge_kwargs)
+        conf = attr_kwargs.get("conflicts", None)
         drop_conflicting = conf in {"drop", "keep_first"}
-        new_coord = _get_merged_coord(summary_df, merge_dim, coords, drop_conflicting)
-        new_attrs = combine_patch_attrs(attrs, **self._merge_kwargs)
+        new_coord = _get_merged_coord(
+            summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
+        )
+        new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _get_dummy_dataframes(self, current):
@@ -726,29 +740,57 @@ class DataFrameSpool(BaseSpool):
         snap_coords: bool = True,
         tolerance: float = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "raise",
         **kwargs,
     ) -> Self:
         """{doc}"""
-        df = self._source_df.drop(columns=list(self._drop_columns), errors="ignore")
-        chunker = ChunkManager(
+        from dascore.io.index.plan import build_chunk_plan
+
+        source = self._source_df
+        working = source.drop(columns=list(self._drop_columns), errors="ignore")
+        if "_patch_id" in source.columns:
+            working = working.assign(_patch_id=source["_patch_id"])
+        else:
+            working = working.assign(_patch_id=np.arange(len(source)))
+        plan = build_chunk_plan(
+            working,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
-            group_columns=self._group_columns,
             tolerance=tolerance,
             conflict=conflict,
+            group=group,
+            missing_dim=missing_dim,
             **kwargs,
         )
-        in_df, out_df = chunker.chunk(df)
-        if df.empty:
-            instructions = None
-        else:
-            instructions = chunker.get_instruction_df(in_df, out_df)
+        merge_kwargs = {
+            "conflicts": conflict,
+            "snap_coords": snap_coords,
+            "tolerance": tolerance,
+        }
+        if plan.outputs.empty:
+            empty = source.iloc[0:0]
+            return self.new_from_df(empty, merge_kwargs=merge_kwargs)
+        out_df = plan.outputs.drop(columns=["output_id"]).reset_index(drop=True)
+        # Instructions bind plan members back to source rows by patch id.
+        pid_to_index = pd.Series(source.index.values, index=working["_patch_id"].values)
+        names = [f"{plan.dim}_min", f"{plan.dim}_max", f"{plan.dim}_step"]
+        instructions = (
+            plan.members.assign(
+                source_index=lambda x: x["_patch_id"].map(pid_to_index),
+                current_index=lambda x: x["output_id"],
+            )
+            .drop(columns=["output_id", "_patch_id"])
+            .loc[:, ["source_index", "current_index", *names, "_modified"]]
+            .set_index("source_index")
+            .sort_values("current_index")
+        )
         return self.new_from_df(
             out_df,
-            source_df=self._source_df,
+            source_df=source,
             instruction_df=instructions,
-            merge_kwargs={"conflicts": conflict},
+            merge_kwargs=merge_kwargs,
         )
 
     def new_from_df(

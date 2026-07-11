@@ -26,6 +26,7 @@ from dascore.constants import (
 )
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
@@ -40,7 +41,6 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
-    all_diffs_close_enough,
     get_middle_value,
     iterate,
     to_object_array,
@@ -418,25 +418,52 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _maybe_expected_step(df, dim):
-    """Get the expected step if all steps are close, else None."""
+def _middle_step(df, dim):
+    """Return the middle value of non-null member steps, or None."""
     col = df[f"{dim}_step"].values
-    if all_diffs_close_enough(col):
-        return get_middle_value(col)
-    return None
+    valid = col[~pd.isnull(col)]
+    if not len(valid):
+        return None
+    return get_middle_value(valid)
 
 
-def _get_merged_coord(df, merge_dim, coords, drop_conflicting=False):
-    """Get merged coordinates, also validate anticipated sampling."""
-    new_coord = merge_coord_managers(
+def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
+    """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
+    merge_kwargs = dict(merge_kwargs or {})
+    coord_kwargs = {
+        "snap_coords": merge_kwargs.pop("snap_coords", True),
+        "tolerance": merge_kwargs.pop("tolerance", 1.5),
+    }
+    return merge_kwargs, coord_kwargs
+
+
+def _get_merged_coord(
+    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+):
+    """
+    Get merged coordinates for patches combined along merge_dim.
+
+    The merged dimension coordinate is built by truth-preserving
+    concatenation of the member coords (exactly contiguous members fuse to
+    a plain range; recorded seams otherwise), then — when `snap_coords` —
+    simplified with bounded error: no value moves more than
+    `tolerance * step`. Merges whose gaps exceed that stay segmented
+    (honestly non-uniform) rather than being relabeled.
+    """
+    from dascore.core.coords import concat_coords
+
+    new_cm = merge_coord_managers(
         coords, dim=merge_dim, drop_conflicting=drop_conflicting
     )
-    expected_step = _maybe_expected_step(df, merge_dim)
-    if not pd.isnull(expected_step):
-        new_coord = new_coord.snap(merge_dim)[0]
-        # TODO slightly different dt can be produced, let pass for now
-        # need to think more about how the merging should work.
-    return new_coord
+    try:
+        merged = concat_coords(*[cm.coord_map[merge_dim] for cm in coords])
+    except CoordError:
+        # Non-monotonic (or otherwise unsegmentable) member coordinates:
+        # keep the raw value concatenation.
+        return new_cm
+    if snap_coords and (step := _middle_step(df, merge_dim)) is not None:
+        merged = merged.simplify(tolerance * np.abs(step))
+    return new_cm.update(**{merge_dim: merged})
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
@@ -448,7 +475,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_dim(df)
-    merge_kwargs = merge_kwargs if merge_kwargs is not None else {}
+    attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(merge_kwargs)
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
@@ -462,10 +489,12 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
-    conf = merge_kwargs.get("conflicts", None)
+    conf = attr_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords)
-    new_attrs = combine_patch_attrs(attrs, **merge_kwargs)
+    new_coord = _get_merged_coord(
+        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
+    )
+    new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]

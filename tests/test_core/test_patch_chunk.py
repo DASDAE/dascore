@@ -307,9 +307,13 @@ class TestChunkMerge:
         return p1, p2
 
     def test_merge_unequal_other(self, distance_adjacent):
-        """When distance values are not equal time shouldn't be merge-able."""
-        with pytest.raises(CoordMergeError):
-            distance_adjacent.chunk(time=...)
+        """Unequal distance coords partition rather than raise (0.2 change).
+
+        Patches whose non-chunked dimension coordinates differ are never
+        combined; they simply land in separate output patches.
+        """
+        out = distance_adjacent.chunk(time=...)
+        assert len(out) == len(distance_adjacent)
 
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
@@ -502,8 +506,11 @@ class TestChunkMerge:
         """Tests for chunking when some patches have non coordinate dimensions."""
         patches = [random_patch.mean("time") for _ in range(3)]
         spool = dc.spool(patches)
-        chunked = spool.chunk(time=None)
-        # Since the time dims are NaN, this can't work.
+        # Losing patches silently would be data loss; this raises by default
+        # (0.2 change) with missing_dim="drop" restoring the old behavior.
+        with pytest.raises(ChunkError, match="missing_dim"):
+            spool.chunk(time=None)
+        chunked = spool.chunk(time=None, missing_dim="drop")
         assert not len(chunked)
 
     def test_merge_with_conflicting_private_coords(
