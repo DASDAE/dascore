@@ -154,3 +154,63 @@ class TestExistingBehaviorKept:
         t0 = df["time_min"].min()
         out = spool.select(time=(t0, t0 + np.timedelta64(2, "s")))
         assert len(out) == 1
+
+
+class TestUnitCanonicalSelection:
+    """Coordinate selection on non-SI patches (review P1).
+
+    The index stores numeric coordinate summaries in canonical SI, so
+    range bounds are interpreted as SI end to end: bare numbers mean
+    canonical SI, quantities convert, and the exact per-patch residual
+    converts back to each patch's native units.
+    """
+
+    @pytest.fixture(scope="class")
+    def ft_patch(self):
+        """An example patch with distance in feet (0..~984 ft)."""
+        return dc.get_example_patch().convert_units(distance="ft")
+
+    def test_bare_numbers_are_canonical_si(self, ft_patch):
+        """(20, 60) means 20-60 m even on a feet-coordinate patch."""
+        coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
+        assert float(coord.min()) >= 65  # 20 m == 65.6 ft
+        assert float(coord.max()) <= 197  # 60 m == 196.9 ft
+
+    def test_quantity_selector(self, ft_patch):
+        """Quantity bounds select the same physical interval."""
+        from dascore.units import m
+
+        selected = dc.spool([ft_patch]).select(distance=(20 * m, 60 * m))
+        assert len(selected.get_contents()) == 1  # no DimensionalityError
+        coord = selected[0].get_coord("distance")
+        assert float(coord.min()) >= 65
+        assert float(coord.max()) <= 197
+
+    def test_quantity_in_native_units(self, ft_patch):
+        """Quantities in the coordinate's own units also work."""
+        from dascore.units import get_quantity
+
+        ft = get_quantity("ft")
+        coord = (
+            dc.spool([ft_patch])
+            .select(distance=(100 * ft, 200 * ft))[0]
+            .get_coord("distance")
+        )
+        assert float(coord.min()) >= 99
+        assert float(coord.max()) <= 201
+
+    def test_unitless_coords_unchanged(self):
+        """Coordinates without units keep plain numeric semantics."""
+        patch = dc.get_example_patch()
+        coord = dc.spool([patch]).select(distance=(20, 60))[0].get_coord("distance")
+        assert 20 <= float(coord.min()) and float(coord.max()) <= 60
+
+    def test_directory_spool(self, ft_patch, tmp_path):
+        """The same semantics hold for file-backed spools."""
+        from dascore.units import m
+
+        dc.write(ft_patch, tmp_path / "ft.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        coord = spool.select(distance=(20 * m, 60 * m))[0].get_coord("distance")
+        assert float(coord.min()) >= 65
+        assert float(coord.max()) <= 197

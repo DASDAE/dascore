@@ -37,6 +37,56 @@ from dascore.utils.misc import is_memory_uri
 from dascore.utils.pd import adjust_segments
 
 
+def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
+    """
+    Split coordinate range selectors into canonical forms.
+
+    Numeric coordinate summaries are stored in canonical SI units, so
+    range bounds resolve to SI magnitudes for the index/dataframe side.
+    The exact per-patch residual gets the same bounds as *quantities*
+    (in the canonical unit) so `Patch.select` converts them to each
+    patch's native coordinate units; re-applying raw numbers would trim
+    a different physical interval on non-SI patches. Bare numbers are
+    interpreted as canonical SI, matching the index contract.
+
+    Coordinates without a single recorded unit (unitless, time-like, or
+    heterogeneous) pass through unchanged.
+    """
+    from dascore.units import convert_units, get_quantity
+
+    meta = backend._coord_meta(set(coords))
+    units_by_name: dict[str, set] = {}
+    for row in meta.itertuples():
+        units = getattr(row, "units", None)
+        if row.value_kind == "num" and units is not None and not pd.isnull(units):
+            units_by_name.setdefault(row.coord_name, set()).add(str(units))
+    si_coords, residual_coords = {}, {}
+    for name, value in coords.items():
+        units = units_by_name.get(name)
+        unit = next(iter(units)) if units and len(units) == 1 else None
+        if unit is None or not isinstance(value, tuple):
+            si_coords[name] = residual_coords[name] = value
+            continue
+        quant = get_quantity(unit)
+        si_bounds, residual_bounds = [], []
+        for bound in value:
+            if bound is None or bound is Ellipsis:
+                si_bounds.append(None)
+                residual_bounds.append(None)
+                continue
+            if hasattr(bound, "units"):  # pint quantity -> SI magnitude
+                magnitude = convert_units(
+                    bound.magnitude, to_units=unit, from_units=bound.units
+                )
+            else:  # bare numbers are canonical SI
+                magnitude = float(bound)
+            si_bounds.append(magnitude)
+            residual_bounds.append(magnitude * quant)
+        si_coords[name] = tuple(si_bounds)
+        residual_coords[name] = tuple(residual_bounds)
+    return si_coords, residual_coords
+
+
 def _row_source_patch_id(row: Mapping) -> str:
     """Return the row's source_patch_id as a string ("" when missing).
 
@@ -423,10 +473,16 @@ class PatchCatalog:
                 attrs=query.attrs,
                 coords=self._relative_to_absolute(query.coords),
             )
-        # coord range predicates are re-applied exactly at patch load
+        # coord range predicates are re-applied exactly at patch load;
+        # the residual carries canonical quantities so per-patch native
+        # units are respected while the query side stays SI.
         residuals = self._residuals
         if query.coords:
-            residuals = (*residuals, (dict(query.coords), False, False))
+            si_coords, residual_coords = _canonical_coord_selectors(
+                self.backend, query.coords
+            )
+            query = Query(attrs=query.attrs, coords=si_coords)
+            residuals = (*residuals, (residual_coords, False, False))
         return self._view((*self._queries, query), residuals)
 
     def _relative_to_absolute(self, kwargs: dict) -> dict:
@@ -491,8 +547,16 @@ class PatchCatalog:
         trim_hint = {}
         for coords, samples, _ in self._residuals:
             if not samples:
+                # Quantity bounds stay out of reader hints: readers take
+                # numbers in their native units, so a converted-narrower
+                # hint could drop data exactness cannot restore.
                 trim_hint.update(
-                    {k: v for k, v in coords.items() if isinstance(v, tuple)}
+                    {
+                        k: v
+                        for k, v in coords.items()
+                        if isinstance(v, tuple)
+                        and not any(hasattr(b, "units") for b in v)
+                    }
                 )
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)

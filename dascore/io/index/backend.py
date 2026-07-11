@@ -589,12 +589,8 @@ class SQLIndexBackend(AbstractIndexBackend):
                 # coordinate envelope like time_min) would corrupt the
                 # frame; structural columns win. Reserved fixed names are
                 # already refused at ingest.
-                sanitized = attr_meta.loc[
-                    attr_meta["attr_name"] == name, "column_name"
-                ]
-                out = out.drop(
-                    columns=[x for x in sanitized if x in out.columns]
-                )
+                sanitized = attr_meta.loc[attr_meta["attr_name"] == name, "column_name"]
+                out = out.drop(columns=[x for x in sanitized if x in out.columns])
                 continue
             rows = attr_meta[attr_meta["attr_name"] == name]
             kinds = set(rows["value_kind"])
@@ -793,6 +789,10 @@ def resolve_query(
     """
     from dascore.io.index.query import InvalidSpoolQueryError
 
+    def _drop_noops(mapping: dict) -> dict:
+        """Bare None/... selectors are no-ops, matching Patch.select."""
+        return {k: v for k, v in mapping.items() if v is not None and v is not Ellipsis}
+
     # accept the same open/slice range forms patch-level select does
     attrs = {k: normalize_range_forms(v) for k, v in (_attrs or {}).items()}
     coords = {k: normalize_range_forms(v) for k, v in (_coords or {}).items()}
@@ -819,7 +819,7 @@ def resolve_query(
     for name in coords:
         if name not in known_coords:
             raise InvalidSpoolQueryError(f"{name!r} is not a coordinate of this spool.")
-    return Query(attrs=attrs, coords=coords)
+    return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))
 
 
 def get_backend(path: str | Path) -> AbstractIndexBackend:

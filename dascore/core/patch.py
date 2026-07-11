@@ -266,7 +266,6 @@ class Patch(NamespaceOwner):
         """
         return PatchSummary.from_patch(self)
 
-
     @property
     def coords(self) -> CoordManager:
         """

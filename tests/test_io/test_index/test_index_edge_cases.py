@@ -685,9 +685,8 @@ class TestResourceCleanup:
 
     def test_explicit_close_idempotent(self):
         """Explicit close works and GC afterwards stays quiet."""
-        from dascore.io.index.catalog import PatchCatalog
-
         import dascore as dc
+        from dascore.io.index.catalog import PatchCatalog
 
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
@@ -703,7 +702,6 @@ class TestLegacyIndexMap:
 
         import dascore as dc
         from dascore.io.index.indexer import (
-            DBDirectoryIndexer,
             _update_index_map,
         )
 

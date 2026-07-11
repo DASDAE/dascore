@@ -1005,6 +1005,10 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
+        # Realize contents first: fresh patch-list spools only become
+        # catalog-native on realization, and the catalog path owns the
+        # full selector semantics (e.g. unit canonicalization).
+        _ = self._df
         if self._catalog_native:
             catalog = self._catalog.select(
                 _attrs=_attrs,
