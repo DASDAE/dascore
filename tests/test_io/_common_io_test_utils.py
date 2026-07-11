@@ -5,6 +5,7 @@ from __future__ import annotations
 import signal as signal_mod
 import socket
 import threading
+import time
 from contextlib import contextmanager
 from urllib import error as urllib_error
 
@@ -73,6 +74,7 @@ def skip_on_timeout(seconds: float, label: str):
         threading.current_thread() is not threading.main_thread()
         or not hasattr(signal_mod, "SIGALRM")
         or not hasattr(signal_mod, "ITIMER_REAL")
+        or not hasattr(signal_mod, "getitimer")
         or not hasattr(signal_mod, "setitimer")
     ):
         try:
@@ -82,6 +84,19 @@ def skip_on_timeout(seconds: float, label: str):
         return
 
     previous_handler = signal_mod.getsignal(signal_mod.SIGALRM)
+    previous_delay, previous_interval = signal_mod.getitimer(signal_mod.ITIMER_REAL)
+
+    # Let an earlier outer deadline (such as pytest-timeout) remain authoritative.
+    if previous_delay > 0 and previous_delay <= seconds:
+        try:
+            yield
+        except TimeoutError as exc:
+            pytest.skip(str(exc))
+        return
+
+    previous_deadline = (
+        time.monotonic() + previous_delay if previous_delay > 0 else None
+    )
 
     def _handle_timeout(_signum, _frame):
         raise TimeoutError(f"{label} exceeded {seconds} seconds")
@@ -95,3 +110,6 @@ def skip_on_timeout(seconds: float, label: str):
     finally:
         signal_mod.setitimer(signal_mod.ITIMER_REAL, 0)
         signal_mod.signal(signal_mod.SIGALRM, previous_handler)
+        if previous_deadline is not None:
+            remaining = max(0.0, previous_deadline - time.monotonic())
+            signal_mod.setitimer(signal_mod.ITIMER_REAL, remaining, previous_interval)

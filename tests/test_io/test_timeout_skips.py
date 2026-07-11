@@ -34,6 +34,63 @@ class TestTimeoutSkipHelpers:
             with skip_on_timeout(1, "fixture setup"):
                 raise TimeoutError("fixture setup timed out")
 
+    def test_earlier_outer_alarm_unchanged(self, monkeypatch):
+        """An earlier outer timeout must remain authoritative."""
+        timer_calls = []
+        handler_calls = []
+        monkeypatch.setattr(io_test_utils.signal_mod, "getsignal", lambda *_: object())
+        monkeypatch.setattr(
+            io_test_utils.signal_mod, "getitimer", lambda *_: (2.0, 0.0)
+        )
+        monkeypatch.setattr(
+            io_test_utils.signal_mod,
+            "setitimer",
+            lambda *args: timer_calls.append(args),
+        )
+        monkeypatch.setattr(
+            io_test_utils.signal_mod,
+            "signal",
+            lambda *args: handler_calls.append(args),
+        )
+
+        with pytest.raises(pytest.skip.Exception, match="operation timed out"):
+            with skip_on_timeout(5, "inner timeout"):
+                raise TimeoutError("operation timed out")
+
+        assert timer_calls == []
+        assert handler_calls == []
+
+    def test_later_outer_alarm_restored(self, monkeypatch):
+        """A later outer timeout is restored with elapsed time deducted."""
+        previous_handler = object()
+        timer_calls = []
+        handler_calls = []
+        monotonic = iter((100.0, 102.0))
+        monkeypatch.setattr(
+            io_test_utils.signal_mod, "getsignal", lambda *_: previous_handler
+        )
+        monkeypatch.setattr(
+            io_test_utils.signal_mod, "getitimer", lambda *_: (10.0, 0.5)
+        )
+        monkeypatch.setattr(
+            io_test_utils.signal_mod,
+            "setitimer",
+            lambda *args: timer_calls.append(args),
+        )
+        monkeypatch.setattr(
+            io_test_utils.signal_mod,
+            "signal",
+            lambda *args: handler_calls.append(args),
+        )
+        monkeypatch.setattr(io_test_utils.time, "monotonic", lambda: next(monotonic))
+
+        with skip_on_timeout(5, "inner timeout"):
+            pass
+
+        timer = io_test_utils.signal_mod.ITIMER_REAL
+        assert timer_calls == [(timer, 5), (timer, 0), (timer, 8.0, 0.5)]
+        assert handler_calls[-1] == (signal_mod.SIGALRM, previous_handler)
+
     def test_wait_for_http_path_raises_timeout(self, monkeypatch):
         """The low-level probe helper should only report a timeout condition."""
         values = chain([0.0, 0.1, 6.0], repeat(6.0))
