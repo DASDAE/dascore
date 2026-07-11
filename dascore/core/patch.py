@@ -100,6 +100,9 @@ class Patch(NamespaceOwner):
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
+        # Lineage identity: minted eagerly so copies made at any point
+        # (deepcopy/pickle carry __dict__) share it deterministically.
+        self._instance_id = uuid4().hex
 
     def __eq__(self, other):
         """Compare one Patch."""
@@ -263,18 +266,6 @@ class Patch(NamespaceOwner):
         """
         return PatchSummary.from_patch(self)
 
-    @cached_property
-    def _instance_id(self) -> str:
-        """
-        A stable identity for this patch instance.
-
-        Minted lazily; once computed it rides along with copies and
-        pickles (patches are immutable, so identical copies sharing an
-        identity is correct). Patch operations produce new instances
-        with new identities. Never stored in attrs, so it cannot affect
-        equality or survive into saved files.
-        """
-        return uuid4().hex
 
     @property
     def coords(self) -> CoordManager:

@@ -528,7 +528,13 @@ class PatchCatalog:
     def remove(self, source_paths: Sequence[str], base_uri: str = "") -> PatchCatalog:
         """Remove sources (and their patches) from the catalog."""
         self._require_root("remove")
-        self.backend.delete_sources(list(source_paths), base_uri=base_uri)
+        source_paths = list(source_paths)
+        self.backend.delete_sources(source_paths, base_uri=base_uri)
+        # The live registry is the store for in-memory patches; it must
+        # stay in step with the backend rows (pickling rebuilds from it).
+        registry = self.resolver.live_entries() if self.resolver else {}
+        for path in source_paths:
+            registry.pop(path, None)
         self._invalidate()
         return self
 

@@ -148,11 +148,14 @@ class TestPatchIdentity:
         assert len(dc.spool([patch, patch])) == 1
 
     def test_deepcopy_shares_identity(self):
-        """Copies of an immutable patch share its identity."""
+        """Copies of an immutable patch share its identity.
+
+        Identity is minted eagerly at construction, so copies share it
+        regardless of when they are made (no access-order dependence).
+        """
         import copy
 
         patch = dc.get_example_patch()
-        _ = patch._instance_id  # mint before copying
         clone = copy.deepcopy(patch)
         assert clone._instance_id == patch._instance_id
         assert len(dc.spool([patch, clone])) == 1
@@ -188,3 +191,19 @@ class TestPatchIdentity:
         combined = dc.spool([p1]) + dc.spool([p2])
         loaded = pickle.loads(pickle.dumps(combined))
         assert len(loaded) == 2
+
+    def test_remove_updates_live_registry(self):
+        """Removing a live source removes it from the store as well."""
+        import pickle
+
+        patch = dc.get_example_patch()
+        catalog = PatchCatalog.from_patches([patch])
+        path = catalog.to_df().iloc[0]["path"]
+        catalog.remove([path])
+        assert len(catalog.to_df()) == 0
+        # A pickled catalog rebuilds from the registry; the removed patch
+        # must not resurrect.
+        loaded = pickle.loads(pickle.dumps(catalog))
+        loaded.attr_names()  # bootstrap the backend
+        loaded._invalidate()
+        assert len(loaded.to_df()) == 0
