@@ -370,14 +370,13 @@ def summaries_to_records(
         Optional maps of source_path -> stat values. When omitted the
         caller is responsible for change detection.
     """
-    # Index paths are stored as POSIX so comparison and deletion are
-    # separator-agnostic across platforms (PatchSummary.source_path and
-    # the spool root are OS-native, so on Windows they carry backslashes).
+    # Group by the original (OS-native) source path so the mtimes_ns /
+    # sizes_bytes maps, which the caller keys by that same path, still
+    # resolve. Index paths themselves are stored as POSIX so comparison
+    # and deletion are separator-agnostic across platforms.
     by_source: dict[str, list[PatchSummary]] = {}
     for summary in summaries:
-        by_source.setdefault(str(summary.source_path).replace("\\", "/"), []).append(
-            summary
-        )
+        by_source.setdefault(str(summary.source_path), []).append(summary)
     root = base_uri or relative_to
     root_posix = str(root).replace("\\", "/") if root else None
     out = []
@@ -390,10 +389,11 @@ def summaries_to_records(
                 # positional identity within the source, per design doc
                 record = replace(record, source_patch_id=str(num))
             patches.append(record)
-        store_path = path
-        if root_posix and path.startswith(root_posix):
+        posix_path = path.replace("\\", "/")
+        store_path = posix_path
+        if root_posix and posix_path.startswith(root_posix):
             # "." (not "") marks a source that IS the root (directory units)
-            store_path = path[len(root_posix) :].lstrip("/") or "."
+            store_path = posix_path[len(root_posix) :].lstrip("/") or "."
         out.append(
             SourceRecord(
                 source_path=store_path,

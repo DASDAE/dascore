@@ -221,7 +221,11 @@ class TestStressNoFalseNegatives:
                         get_quantity(str(csum.units)).to_base_units().magnitude
                     )
                 if float(csum.min) * factor <= hi and float(csum.max) * factor >= lo:
-                    assert str(summary.source_path) in got, (name, lo, hi)
+                    assert str(summary.source_path).replace("\\", "/") in got, (
+                        name,
+                        lo,
+                        hi,
+                    )
 
     def test_random_time_ranges(self, backend, summaries):
         """Absolute time queries against datetime coords."""
@@ -236,7 +240,7 @@ class TestStressNoFalseNegatives:
                 if csum is None or "datetime" not in str(csum.dtype):
                     continue
                 if csum.min <= hi and csum.max >= lo:
-                    assert str(summary.source_path) in got
+                    assert str(summary.source_path).replace("\\", "/") in got
 
     def test_attr_equality_roundtrip(self, backend, summaries):
         """Str attr equality returns every patch carrying that value."""
@@ -252,4 +256,4 @@ class TestStressNoFalseNegatives:
                 continue
             name, value = next(iter(attrs.items()))
             got = set(backend.query(Query(attrs={name: value}))["path"])
-            assert str(summary.source_path) in got
+            assert str(summary.source_path).replace("\\", "/") in got

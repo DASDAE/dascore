@@ -356,7 +356,7 @@ class TestNoFalseNegatives:
                     continue
                 overlaps = tcoord.min <= hi and tcoord.max >= lo
                 if overlaps:
-                    assert str(summary.source_path) in result_paths
+                    assert str(summary.source_path).replace("\\", "/") in result_paths
 
     def test_random_numeric_ranges(self, backend):
         """Random numeric ranges."""
@@ -375,7 +375,7 @@ class TestNoFalseNegatives:
                     continue
                 scale = factor[str(dcoord.units.units)] if dcoord.units else 1.0
                 if dcoord.min * scale <= hi and dcoord.max * scale >= lo:
-                    assert str(summary.source_path) in result_paths
+                    assert str(summary.source_path).replace("\\", "/") in result_paths
 
 
 class TestSourceLifecycle:
