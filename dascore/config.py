@@ -94,20 +94,6 @@ class DascoreConfig(BaseModel):
         description="Time buffer applied when querying cached directory indexes.",
     )
 
-    # HDF index writing.
-    hdf_index_complib: str = Field(
-        default="blosc:lz4",
-        description="Compression library used when writing DASCore HDF index files.",
-    )
-    hdf_index_complevel: int = Field(
-        default=5,
-        description="Compression level used when writing DASCore HDF index files.",
-    )
-    hdf_index_max_retries: int = Field(
-        default=3,
-        description="Maximum number of retries for concurrent HDF index access.",
-    )
-
     # Progress display.
     progress_basic_refresh_per_second: float = Field(
         default=0.25,

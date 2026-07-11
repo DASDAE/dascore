@@ -1600,8 +1600,8 @@ class CoordArray(BaseCoord):
             return self.empty(), out
         if np.all(out):
             return self, slice(None, None)
-        # Convert boolean to int indexes because these are supported for
-        # indexing pytables arrays but booleans are not.
+        # Convert boolean to int indexes; some consumers (eg lazy file
+        # readers) index with these where booleans are not supported.
         if len(self.shape) == 1:
             out = np.arange(len(out))[out]
         return self.new(values=values[out]), out

@@ -305,7 +305,7 @@ class TestDeterminism:
 
 
 class TestOracleParity:
-    """Sanity against ChunkManager (the dev-time oracle) where compatible."""
+    """Sanity: plans describe exactly what spool.chunk produces."""
 
     def test_merge_envelopes_match(self, random_flat):
         """Merge-mode output envelopes match spool.chunk(time=None)."""
