@@ -28,6 +28,23 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # Attrs handled structurally or intentionally excluded from the index.
 _SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
+# Suffixes of the per-coordinate envelope columns the flat relation
+# emits ({name}_min/{name}_max/{name}_step). An attr shaped like one of
+# these is reserved catalog-wide — not just against the ingesting
+# patch's own coords — so a flat-relation envelope column (e.g.
+# "event_time_min") can never collide with a same-named attr contributed
+# by a different patch, which would make one get_contents() column's
+# meaning depend on which other patches share the catalog. (units/dtype
+# do not become per-coord columns, so a real attr like "data_units"
+# stays queryable, matching Patch.update_attrs.)
+_ENVELOPE_SUFFIXES = ("min", "max", "step")
+
+
+def _is_envelope_shaped(name: str) -> bool:
+    """True if name looks like a ``{coord}_{min,max,step}`` envelope column."""
+    prefix, _, suffix = name.rpartition("_")
+    return bool(prefix) and suffix in _ENVELOPE_SUFFIXES
+
 
 @dataclass(frozen=True)
 class TypedValue:
@@ -202,18 +219,17 @@ def typed_value(value) -> TypedValue | None:
 def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
     """Get indexable typed attrs from a patch summary."""
     raw = summary.attrs.model_dump()
-    # Attrs shaped like this patch's own coordinate envelope columns
-    # (e.g. "time_min") would collide in the flat relation.
-    envelope_names = {
-        f"{coord}_{suffix}"
-        for coord in getattr(summary, "coords", {})
-        for suffix in ("min", "max", "step", "units")
-    }
     out = {}
     for name, value in raw.items():
         if name in _SKIPPED_ATTRS or name.startswith("_"):
             continue
-        if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS or name in envelope_names:
+        # Reserve structural columns and any coordinate-envelope-shaped
+        # name (catalog-wide, not just this patch's own coords) so the
+        # meaning of a flat-relation column never depends on which other
+        # patches share the catalog.
+        if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS or (
+            _is_envelope_shaped(name)
+        ):
             msg = (
                 f"Skipping reserved attr name {name!r}; it collides with a "
                 "structural index column. The attr stays on the patch but "

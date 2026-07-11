@@ -773,3 +773,33 @@ class TestReservedAttrNames:
         spool = dc.spool([patch])
         assert spool.get_contents()["experiment"].iloc[0] == "exp42"
         assert len(spool.select(experiment="exp42")) == 1
+
+    def test_cross_patch_envelope_attr_reserved(self):
+        """An envelope-shaped attr is reserved even against another patch's coord."""
+        import dascore as dc
+
+        base = dc.get_example_patch()
+        # construction-time attrs bypass the update_attrs coord-name guard.
+        p1 = dc.Patch(
+            data=base.data,
+            coords=base.coords,
+            dims=base.dims,
+            attrs=dict(base.attrs) | {"event_time_min": 123.0},
+        )
+        p2 = dc.get_example_patch().rename_coords(time="event_time")
+        with pytest.warns(UserWarning, match="reserved attr name 'event_time_min'"):
+            spool = dc.spool([p1, p2])
+            df = spool.get_contents()
+        backend = spool._get_catalog().backend
+        assert "event_time_min" not in backend.attr_names()
+        # the column is the coordinate envelope, not the stray attr value.
+        assert "event_time_min" in df.columns
+        assert 123.0 not in set(df["event_time_min"].dropna())
+
+    def test_data_units_attr_still_indexed(self):
+        """A real ``*_units`` attr is not an envelope column; stays queryable."""
+        import dascore as dc
+
+        patch = dc.get_example_patch().update_attrs(data_units="strain")
+        spool = dc.spool([patch])
+        assert "data_units" in spool._get_catalog().backend.attr_names()
