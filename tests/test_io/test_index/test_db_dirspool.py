@@ -106,3 +106,20 @@ class TestUpdateLifecycle:
         target.unlink()
         updated = spool.update(progress=None)
         assert len(updated) == 2
+
+    def test_no_change_update_uses_narrow_projection(self, fresh):
+        """A no-op update reads only the stat columns, not the wide table."""
+        path, spool = fresh
+        backend = spool.indexer._backend
+
+        def _boom(self):
+            raise AssertionError("wide get_sources() during no-change update")
+
+        # A no-change update must not fetch the full sources table.
+        original = type(backend).get_sources
+        type(backend).get_sources = _boom
+        try:
+            reupdated = spool.update(progress=None)
+        finally:
+            type(backend).get_sources = original
+        assert len(reupdated) == 3

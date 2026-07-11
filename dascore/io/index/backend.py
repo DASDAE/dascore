@@ -119,6 +119,10 @@ class AbstractIndexBackend(abc.ABC):
         """Return the sources table."""
 
     @abc.abstractmethod
+    def source_stats(self) -> pd.DataFrame:
+        """Return only (source_path, mtime_ns, size_bytes) for change checks."""
+
+    @abc.abstractmethod
     def get_metadata(self) -> dict:
         """Return index-level metadata."""
 
@@ -636,9 +640,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                 if not links.empty
                 else []
             )
-            defs = self._fetch_in(
-                "SELECT * FROM coord_defs", "coord_def_id", def_ids
-            )
+            defs = self._fetch_in("SELECT * FROM coord_defs", "coord_def_id", def_ids)
         return assemble_source_records(
             sources, patches, attrs, links, defs, self._attr_meta()
         )
@@ -844,6 +846,10 @@ class SQLIndexBackend(AbstractIndexBackend):
     def get_sources(self) -> pd.DataFrame:
         """Return the sources table."""
         return self._fetch_df("SELECT * FROM sources")
+
+    def source_stats(self) -> pd.DataFrame:
+        """Return only the columns incremental change detection needs."""
+        return self._fetch_df("SELECT source_path, mtime_ns, size_bytes FROM sources")
 
     def get_metadata(self) -> dict:
         """Return index-level metadata."""

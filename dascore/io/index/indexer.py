@@ -217,7 +217,7 @@ class DBDirectoryIndexer(AbstractIndexer):
                 if pd.isnull(row.mtime_ns)
                 else (int(row.mtime_ns), int(row.size_bytes))
             )
-            for row in self._backend.get_sources().itertuples()
+            for row in self._backend.source_stats().itertuples()
         }
         stale = [path for path in stored if path not in files]
         changed = [
@@ -240,14 +240,19 @@ class DBDirectoryIndexer(AbstractIndexer):
         if stale:
             self._backend.delete_sources(stale)
         if changed:
-            scan_paths = [files[rel][2] for rel in changed]
+            # Only changed paths are rescanned, so the stat maps handed to
+            # summaries_to_records need only cover them — not the whole
+            # archive (a large mostly-unchanged directory otherwise built
+            # full-archive mtime/size maps for a tiny update).
+            changed_stats = {rel: files[rel] for rel in changed}
+            scan_paths = [stat[2] for stat in changed_stats.values()]
             summaries = dc.scan(scan_paths, progress=progress)
             # scan reports absolute source paths; stat maps use them too
             records = summaries_to_records(
                 summaries,
                 relative_to=str(self.path),
-                mtimes_ns={str(p): m for _, (m, _, p) in files.items()},
-                sizes_bytes={str(p): s for _, (_, s, p) in files.items()},
+                mtimes_ns={str(p): m for (m, _, p) in changed_stats.values()},
+                sizes_bytes={str(p): s for (_, s, p) in changed_stats.values()},
             )
             # Every visited path gets a sources row, even when scanning
             # produced no patches (e.g. a non-fiber file). Otherwise such
