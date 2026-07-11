@@ -42,6 +42,7 @@ from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
     get_middle_value,
+    is_memory_uri,
     iterate,
     to_object_array,
     warn_or_raise,
@@ -452,18 +453,21 @@ def _get_merged_coord(
     """
     from dascore.core.coords import concat_coords
 
-    new_cm = merge_coord_managers(
-        coords, dim=merge_dim, drop_conflicting=drop_conflicting
-    )
     try:
         merged = concat_coords(*[cm.coord_map[merge_dim] for cm in coords])
     except CoordError:
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
-        # keep the raw value concatenation.
-        return new_cm
+        # fall back to raw value concatenation of the dim coord.
+        return merge_coord_managers(
+            coords, dim=merge_dim, drop_conflicting=drop_conflicting
+        )
     if snap_coords and (step := _middle_step(df, merge_dim)) is not None:
         merged = merged.simplify(tolerance * np.abs(step))
-    return new_cm.update(**{merge_dim: merged})
+    # Passing the pre-built dim coord avoids materializing the members'
+    # concatenated values only to discard them.
+    return merge_coord_managers(
+        coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
+    )
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
@@ -616,8 +620,7 @@ def get_patch_names(
     path_ser = df["path"].astype(str) if "path" in col_set else None
     if path_ser is not None:
         # synthetic in-memory identities are not real file names
-        # (memory:// and memorypatch:// schemes)
-        usable = path_ser.str.len().gt(0) & ~path_ser.str.startswith("memory")
+        usable = path_ser.str.len().gt(0) & ~path_ser.map(is_memory_uri)
         if usable.any():
             return _get_filename(df["path"], strip_extension)
     # Determine the requested fields; absent columns render as empty so

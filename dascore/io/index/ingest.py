@@ -406,8 +406,12 @@ def records_from_backend(backend, patch_ids=None) -> list[SourceRecord]:
     patches = backend._fetch_df("SELECT * FROM patches")
     if patch_ids is not None:
         patches = patches[patches["patch_id"].isin(set(patch_ids))]
+    kept_ids = set(int(x) for x in patches["patch_id"])
     attrs = backend._fetch_df("SELECT * FROM attrs")
     links = backend._fetch_df("SELECT * FROM patch_coords")
+    if patch_ids is not None:  # narrow dependent tables to kept patches.
+        attrs = attrs[attrs["patch_id"].isin(kept_ids)]
+        links = links[links["patch_id"].isin(kept_ids)]
     defs = backend._fetch_df("SELECT * FROM coord_defs")
     meta = backend._attr_meta()
     col_info = {
@@ -416,17 +420,22 @@ def records_from_backend(backend, patch_ids=None) -> list[SourceRecord]:
     }
     def_map = {int(row.coord_def_id): row for row in defs.itertuples()}
     attr_rows = (
-        {int(k): v for k, v in attrs.set_index("patch_id").iterrows()}
+        {int(k): v for k, v in attrs.set_index("patch_id").to_dict("index").items()}
         if not attrs.empty
         else {}
     )
     link_groups = (
         {int(k): v for k, v in links.groupby("patch_id")} if not links.empty else {}
     )
+    patches_by_source = (
+        {int(k): v for k, v in patches.groupby("source_id")}
+        if not patches.empty
+        else {}
+    )
     out = []
     for src in sources.itertuples():
-        sub = patches[patches["source_id"] == src.source_id]
-        if sub.empty:
+        sub = patches_by_source.get(int(src.source_id))
+        if sub is None:
             continue
         patch_records = []
         for patch in sub.itertuples():

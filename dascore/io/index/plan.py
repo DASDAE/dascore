@@ -95,6 +95,13 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
 
 
+def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach the positional identity fallback for plain dataframes."""
+    if "_patch_id" in df.columns:
+        return df
+    return df.assign(_patch_id=np.arange(len(df)))
+
+
 def _dim_def_key_columns(df: pd.DataFrame, name: str) -> list[str]:
     """Return def-key column names for every non-chunked dimension."""
     dim_names: set[str] = set()
@@ -131,14 +138,19 @@ def _continuity_group(start, stop, step, tolerance) -> pd.Series:
     return group[start.index]
 
 
-def _partition(df, name, group_attrs, tolerance, sampling_tolerance) -> pd.Series:
+def _partition(
+    df, name, group_attrs, tolerance, sampling_tolerance
+) -> tuple[pd.Series, bool]:
     """
-    Return partition labels: rows sharing a label may combine (spec 2).
+    Return (partition labels, forced_merge): rows sharing a label may
+    combine (spec 2).
 
     Components: group attrs, dims signature, structural def keys of
     non-chunked coords, sampling group, and continuity group. Continuity
     is evaluated *within* each other-component cell so unrelated patches
-    can never bridge a gap.
+    can never bridge a gap. `forced_merge` is True when a loosened
+    tolerance merged patches the default would have kept apart (#662);
+    the caller owns warning about it.
     """
     start, stop, step = get_interval_columns(df, name)
     cols = [x for x in group_attrs if x in df.columns]
@@ -162,20 +174,10 @@ def _partition(df, name, group_attrs, tolerance, sampling_tolerance) -> pd.Serie
         s, e, st = get_interval_columns(sub, name)
         labels = _continuity_group(s, e, st, tolerance).astype(np.int64)
         cont.loc[index] = labels
-        # See #662: warn when a loosened tolerance forces merges the
-        # default would not have produced.
         if tolerance > _DEFAULT_TOLERANCE and not forced_merge:
             default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
             forced_merge = default.nunique() > labels.nunique()
-    if forced_merge:
-        msg = (
-            f"There is a gap in the patch along dimension {name} but a "
-            f"merge tolerance of {tolerance} was used to force merging "
-            "the patches. As a result, some patches in the chunked spool "
-            "may be unevenly sampled, or have their sampling rate increased."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
-    return cell + "_" + cont.astype(str)
+    return cell + "_" + cont.astype(str), forced_merge
 
 
 def _user_stacklevel() -> int:
@@ -281,11 +283,19 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
     src2 = sub[max_name].values
     chu1 = outputs[min_name].values
     chu2 = outputs[max_name].values
+    out_ids = outputs["output_id"].to_numpy()
+    patch_ids = sub["_patch_id"].to_numpy()
+    orig_min = original[min_name].to_numpy()
+    orig_max = original[max_name].to_numpy()
+    modified_src = (
+        sub["_modified"].to_numpy()
+        if "_modified" in sub
+        else np.zeros(len(sub), dtype=bool)
+    )
     # Map each output onto the source rows it draws from.
     starts_ind = np.searchsorted(src1, chu1, side="right") - 1
     ends_ind = np.searchsorted(src2, chu2, side="left")
     rows = []
-    modified_src = sub["_modified"].values if "_modified" in sub else None
     for out_num, (a, b) in enumerate(zip(starts_ind, ends_ind)):
         a = max(int(a), 0)
         for src_num in range(a, int(b) + 1):
@@ -295,16 +305,15 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
             hi = min(src2[src_num], chu2[out_num])
             if lo > hi:
                 continue
-            row_mod = bool(modified_src[src_num]) if modified_src is not None else False
             unchanged = (
-                lo == original[min_name].iloc[src_num]
-                and hi == original[max_name].iloc[src_num]
-                and not row_mod
+                lo == orig_min[src_num]
+                and hi == orig_max[src_num]
+                and not modified_src[src_num]
             )
             rows.append(
                 {
-                    "output_id": outputs["output_id"].iloc[out_num],
-                    "_patch_id": sub["_patch_id"].iloc[src_num],
+                    "output_id": out_ids[out_num],
+                    "_patch_id": patch_ids[src_num],
                     min_name: lo,
                     max_name: hi,
                     step_name: steps[src_num],
@@ -377,9 +386,7 @@ def build_chunk_plan(
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
-    if "_patch_id" not in df.columns:
-        # Positional identity fallback for plain dataframes.
-        df = df.assign(_patch_id=np.arange(len(df)))
+    df = _ensure_patch_id(df)
     # Missing chunk-dim envelopes (spec 7 / D2).
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if null_rows.any():
@@ -396,19 +403,26 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
 
-    labels = _partition(
+    labels, forced_merge = _partition(
         df, name, params["group"], tolerance, params["sampling_group_tolerance"]
     )
+    if forced_merge:
+        msg = (
+            f"There is a gap in the patch along dimension {name} but a "
+            f"merge tolerance of {tolerance} was used to force merging "
+            "the patches. As a result, some patches in the chunked spool "
+            "may be unevenly sampled, or have their sampling rate increased."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)
     out_frames, member_frames = [], []
     next_id = 0
     # Deterministic partition order (spec 8): by (partition min, smallest
     # member patch id) — never by anything derived from input row order.
-    stats = df.groupby(labels, sort=False).agg(
-        _min=(min_name, "min"), _pid=("_patch_id", "min")
-    )
+    grouped = df.groupby(labels, sort=False)
+    stats = grouped.agg(_min=(min_name, "min"), _pid=("_patch_id", "min"))
     part_order = stats.sort_values(["_min", "_pid"], kind="stable").index
-    groups = df.groupby(labels, sort=False).groups
+    groups = grouped.groups
     for label in part_order:
         sub = df.loc[groups[label]]
         start, stop, step = get_interval_columns(sub, name)

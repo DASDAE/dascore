@@ -256,6 +256,22 @@ def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
     )
 
 
+def _resolve_read_spool(spool, source_patch_id: object = "") -> dc.Patch:
+    """
+    Resolve one patch from a read result by source identity.
+
+    Readers that consume source_patch_id may return the single matching
+    patch without preserving that reload metadata on it; only trust that
+    when the patch doesn't claim a different identity.
+    """
+    source_patch_id = str(source_patch_id or "")
+    if source_patch_id and len(spool) == 1:
+        found = str(spool[0].attrs.get("_source_patch_id", "") or "")
+        if found in ("", source_patch_id):
+            return spool[0]
+    return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
+
+
 def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
     """Select one loaded patch from a spool using source identity."""
     if len(spool) == 0:

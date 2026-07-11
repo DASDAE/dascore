@@ -187,30 +187,24 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             return NotImplemented
         from dascore.io.index.catalog import PatchCatalog
 
-        members = []
-        for spool_ in (self, other):
-            catalog = getattr(spool_, "_catalog", None)
-            patch_ids = None
-            if catalog is not None and not getattr(spool_, "_catalog_native", False):
-                # Dataframe-layer selections narrow rows without touching
-                # the catalog; carry that membership over. Restructured
-                # rows (e.g. chunked views) no longer map to sources and
-                # contribute their materialized patches instead.
-                df = spool_._df
-                if "_patch_id" in df.columns:
-                    patch_ids = df["_patch_id"].tolist()
-                else:
-                    catalog = None
-            if catalog is None:
-                # Spools without a usable catalog contribute their
-                # materialized patches.
-                catalog = PatchCatalog.from_patches(list(spool_))
-            members.append((catalog, patch_ids))
+        members = [self._as_catalog_member(), other._as_catalog_member()]
         union = PatchCatalog.union(members)
         new = MemorySpool()
         new._catalog = union
         new._catalog_native = True
         return new
+
+    def _as_catalog_member(self):
+        """
+        Return (catalog, patch_ids) describing this spool for a union.
+
+        `patch_ids` limits membership to the spool's current rows; None
+        means the whole catalog (or the catalog view itself carries the
+        selection). The base implementation materializes the patches.
+        """
+        from dascore.io.index.catalog import PatchCatalog
+
+        return PatchCatalog.from_patches(list(self)), None
 
     @abc.abstractmethod
     @compose_docstring(conflict_desc=attr_conflict_description)
@@ -773,28 +767,41 @@ class DataFrameSpool(BaseSpool):
 
     def _read_and_resolve_patch(self, final_kwargs) -> dc.Patch:
         """Read patches for one instruction row and resolve to one patch."""
-        from dascore.io.core import _select_patch_from_spool
+        from dascore.io.core import _resolve_read_spool
 
         source_patch_id = final_kwargs.get("source_patch_id", "")
         spool = dc.read(**final_kwargs)
-        # Some readers consume source_patch_id internally and return the one
-        # matching patch without preserving that reload metadata on the
-        # patch. Only trust that when it doesn't claim a different identity.
-        if source_patch_id and len(spool) == 1:
-            found = str(spool[0].attrs.get("_source_patch_id", "") or "")
-            if found in ("", str(source_patch_id)):
-                return spool[0]
-        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
+        return _resolve_read_spool(spool, source_patch_id)
+
+    def _as_catalog_member(self):
+        """
+        Return (catalog, patch_ids) describing this spool for a union.
+
+        Catalog-native spools contribute their catalog view directly.
+        Dataframe-layer selections narrow rows without touching the
+        catalog, so their membership carries over as patch ids.
+        Restructured rows (e.g. chunked views) no longer map to sources
+        and contribute their materialized patches instead.
+        """
+        catalog = getattr(self, "_catalog", None)
+        if catalog is None:
+            return super()._as_catalog_member()
+        if self._catalog_native:
+            return catalog, None
+        df = self._df
+        if "_patch_id" in df.columns:
+            return catalog, df["_patch_id"].tolist()
+        return super()._as_catalog_member()
 
     def _chunk_working_df(self) -> pd.DataFrame:
         """Return the source rows the chunk planner consumes."""
+        from dascore.io.index.plan import _ensure_patch_id
+
         source = self._source_df
         working = source.drop(columns=list(self._drop_columns), errors="ignore")
         if "_patch_id" in source.columns:
             working = working.assign(_patch_id=source["_patch_id"])
-        else:
-            working = working.assign(_patch_id=np.arange(len(source)))
-        return working
+        return _ensure_patch_id(working)
 
     def chunk_plan(
         self,
@@ -983,25 +990,9 @@ class DataFrameSpool(BaseSpool):
 
     def _relative_select_kwargs(self, kwargs: dict) -> dict:
         """Resolve relative bounds against the spool's global envelopes."""
-        df = self._df
-        out = {}
-        for name, value in kwargs.items():
-            lo_col, hi_col = f"{name}_min", f"{name}_max"
-            if lo_col not in df.columns:
-                msg = f"Cannot use relative select on {name!r}."
-                raise InvalidSpoolQueryError(msg)
-            if not (isinstance(value, tuple) and len(value) == 2):
-                msg = f"relative=True requires (start, stop) ranges, got {value!r}."
-                raise InvalidSpoolQueryError(msg)
-            gmin, gmax = df[lo_col].min(), df[hi_col].max()
-            lo, hi = value
-            from dascore.io.index.query import relative_offset
+        from dascore.io.index.query import relative_ranges_to_absolute
 
-            out[name] = (
-                relative_offset(gmin, gmax, lo),
-                relative_offset(gmin, gmax, hi),
-            )
-        return out
+        return relative_ranges_to_absolute(self._df, kwargs)
 
     @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(
@@ -1199,6 +1190,17 @@ class MemorySpool(DataFrameSpool):
             self._catalog = PatchCatalog.from_patches(self._patches)
         self._catalog_native = True
         return self._catalog
+
+    def _as_catalog_member(self):
+        """
+        Return (catalog, patch_ids) describing this spool for a union.
+
+        Patch-list spools contribute their own (lazily created) catalog,
+        reusing any summaries the patches already computed.
+        """
+        if self._catalog is None and self._patches is not None:
+            self._get_catalog()
+        return super()._as_catalog_member()
 
     def _get_source_df(self):
         """Build the source df (happens as part of building current df)."""

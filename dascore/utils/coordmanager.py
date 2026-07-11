@@ -19,6 +19,7 @@ def merge_coord_managers(
     dim: str,
     snap_tolerance: float | None = None,
     drop_conflicting: bool = False,
+    dim_coord=None,
 ) -> dc.CoordManager:
     """
     Merge coordinate managers along a specified dimension.
@@ -38,6 +39,11 @@ def merge_coord_managers(
     drop_conflicting
         If True, drop conflicting (non-dimensional) coordinates, otherwise
         raise an exception if they occur.
+    dim_coord
+        If provided, use this coordinate for `dim` instead of
+        concatenating the members' values (which materializes them);
+        callers which already built the merged dimension coordinate
+        (e.g. via `concat_coords`) pass it here to avoid that cost.
     """
 
     def _get_dims(managers):
@@ -112,6 +118,9 @@ def merge_coord_managers(
         """Get the merged coordinates."""
         out = {}
         for coord_name in coords_to_merge:
+            if dim_coord is not None and coord_name == dim:
+                out[coord_name] = (managers[0].dim_map[dim], dim_coord)
+                continue
             merge_coords = [x.coord_map[dim] for x in managers]
             axis = managers[0].dim_map[coord_name].index(dim)
             if len(units := {x.units for x in merge_coords}) != 1:

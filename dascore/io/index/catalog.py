@@ -31,8 +31,9 @@ from dascore.io.index.ingest import SourceRecord, patch_record
 from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
-    relative_offset,
+    relative_ranges_to_absolute,
 )
+from dascore.utils.misc import is_memory_uri
 from dascore.utils.pd import adjust_segments
 
 
@@ -59,6 +60,10 @@ class PatchResolver(abc.ABC):
         re-applied above, so ignoring them is slower, never wrong.
         """
 
+    def live_entries(self) -> Mapping[str, dc.Patch]:
+        """Return the live patches this resolver serves (path -> patch)."""
+        return {}
+
 
 class LiveResolver(PatchResolver):
     """
@@ -75,9 +80,9 @@ class LiveResolver(PatchResolver):
             _patch_path(patch): patch for patch in patches
         }
 
-    def register(self, path: str, patch: dc.Patch) -> None:
-        """Register a live patch under its synthetic source identity."""
-        self._registry[path] = patch
+    def live_entries(self) -> Mapping[str, dc.Patch]:
+        """Return the live patch registry."""
+        return self._registry
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Look the patch up; live patches ignore trim hints."""
@@ -127,7 +132,7 @@ class FileResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
-        from dascore.io.core import _select_patch_from_spool
+        from dascore.io.core import _resolve_read_spool
 
         path = row["path"]
         # relative paths resolve against the catalog root; URIs and
@@ -142,14 +147,7 @@ class FileResolver(PatchResolver):
             # one, so these rows read the whole source.
             trim = {}
         spool = self._read(path, row, trim, source_patch_id)
-        # Readers that consume source_patch_id return the one requested
-        # patch, sometimes without preserving reload metadata on it. Only
-        # trust that when the patch doesn't claim a different identity.
-        if source_patch_id and len(spool) == 1:
-            found = str(spool[0].attrs.get("_source_patch_id", "") or "")
-            if found in ("", source_patch_id):
-                return spool[0]
-        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
+        return _resolve_read_spool(spool, source_patch_id)
 
 
 class CompositeResolver(PatchResolver):
@@ -164,16 +162,17 @@ class CompositeResolver(PatchResolver):
         self.live = LiveResolver()
         self.file = FileResolver(root=None)
 
+    def live_entries(self) -> Mapping[str, dc.Patch]:
+        """Return the merged live patch registry."""
+        return self.live._registry
+
     def absorb(self, resolver: PatchResolver) -> None:
         """Take over the live registry entries of another resolver."""
-        if isinstance(resolver, LiveResolver):
-            self.live._registry.update(resolver._registry)
-        elif isinstance(resolver, CompositeResolver):
-            self.live._registry.update(resolver.live._registry)
+        self.live._registry.update(resolver.live_entries())
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Dispatch to the live registry or the file reader."""
-        if str(row.get("path", "")).startswith("memory"):
+        if is_memory_uri(row.get("path", "")):
             return self.live.resolve(row, **trim)
         return self.file.resolve(row, **trim)
 
@@ -427,23 +426,7 @@ class PatchCatalog:
 
     def _relative_to_absolute(self, kwargs: dict) -> dict:
         """Resolve relative bounds against the view's global envelopes."""
-        df = self.to_df()
-        out = {}
-        for name, value in kwargs.items():
-            lo_col, hi_col = f"{name}_min", f"{name}_max"
-            if lo_col not in df.columns or df.empty:
-                msg = f"Cannot use relative select on unknown coord {name!r}."
-                raise InvalidSpoolQueryError(msg)
-            gmin, gmax = df[lo_col].min(), df[hi_col].max()
-            if not (isinstance(value, tuple) and len(value) == 2):
-                msg = f"relative=True requires (start, stop) ranges, got {value!r}."
-                raise InvalidSpoolQueryError(msg)
-            lo, hi = value
-            out[name] = (
-                relative_offset(gmin, gmax, lo),
-                relative_offset(gmin, gmax, hi),
-            )
-        return out
+        return relative_ranges_to_absolute(self.to_df(), kwargs)
 
     # --- realization ------------------------------------------------------
 
