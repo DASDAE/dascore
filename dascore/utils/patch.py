@@ -339,6 +339,10 @@ def patches_to_df(
     # Handle spool case
     if hasattr(patches, "get_contents"):
         df = patches.get_contents()
+        # get_contents() carries only metadata; embed the patches so the
+        # flat-dump path can serve them (the "patch" column is the point).
+        if "patch" not in df.columns:
+            df = df.assign(patch=to_object_array(list(patches)))
     elif isinstance(patches, pd.DataFrame):
         df = patches
     else:

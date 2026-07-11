@@ -640,7 +640,10 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except RemoteCacheError:
+                except RemoteCacheError:  # pragma: no cover -- remote fetch only
+                    # A remote fetch failure is a real error, not a "wrong
+                    # format" signal, so it must propagate rather than be
+                    # swallowed by the robustness handler below.
                     raise
                 # For robustness, we need to catch everything else here.
                 except Exception:

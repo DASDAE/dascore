@@ -21,6 +21,7 @@ from dascore.core.spool import (
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
+    MissingPatchError,
     ParameterError,
 )
 from dascore.utils.downloader import fetch
@@ -934,3 +935,92 @@ class TestSpoolEquality:
 
         # This should return False at line 127
         assert spool1 != spool2
+
+
+class TestSpoolCoverageEdges:
+    """Cover remaining spool-machinery branches with real operations."""
+
+    @pytest.fixture(scope="class")
+    def many_contiguous(self):
+        """Twelve contiguous patches (for >10-row merge handling)."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        patch = dc.get_example_patch(time_min=t0)
+        step = patch.get_coord("time").step
+        out = [patch]
+        for _ in range(11):
+            nxt = dc.get_example_patch(time_min=out[-1].get_coord("time").max() + step)
+            out.append(nxt)
+        return out
+
+    def test_equality_and_repr(self):
+        """Spool equality strips synthetic identity; repr shows a time span."""
+        patch = dc.get_example_patch()
+        left, right = dc.spool([patch]), dc.spool([patch])
+        left.get_contents()  # realize so equality compares built frames
+        right.get_contents()
+        assert left == right
+        assert "Time Span" in left.__rich__().__str__()
+
+    def test_equality_of_empty_spools(self):
+        """Empty spools (None frames) compare equal via the None-strip path."""
+        assert MemorySpool() == MemorySpool()
+
+    def test_repr_without_time_coordinate(self):
+        """A spool whose patches have no time coord still renders a span line."""
+        data = np.random.default_rng().random((6, 4))
+        coords = {"distance": np.arange(6), "frequency": np.arange(4.0)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "frequency"))
+        rendered = dc.spool([patch]).__rich__().__str__()
+        assert "Time Span" in rendered
+
+    def test_large_merge_dedups(self, many_contiguous):
+        """Merging >10 sources into one patch exercises the de-dup branch."""
+        merged = dc.spool(many_contiguous).chunk(time=None)
+        assert len(merged) == 1
+        # 12 contiguous patches merge into one continuous coordinate.
+        assert merged[0].get_coord("time").size == sum(
+            p.get_coord("time").size for p in many_contiguous
+        )
+
+    def test_union_of_scanless_spool(self, tmp_path):
+        """A scanless (pickle) spool has no catalog; union falls back to
+        materializing its patches.
+        """
+        dc.get_example_patch().io.write(tmp_path / "a.pkl", "pickle")
+        pickle_spool = dc.spool(tmp_path / "a.pkl")
+        assert pickle_spool._catalog is None
+        combined = pickle_spool + dc.spool([dc.get_example_patch(tag="other")])
+        assert len(combined) == 2
+
+    def test_union_of_chunked_spool(self, many_contiguous):
+        """A chunked (restructured) spool's rows no longer map to sources."""
+        chunked = dc.spool(many_contiguous).chunk(time=None)
+        assert not chunked._catalog_native
+        assert "_patch_id" not in chunked._df.columns
+        combined = chunked + dc.spool([dc.get_example_patch(tag="other")])
+        assert len(combined) == 2
+
+    def test_iteration_skips_unresolvable_patch(self, monkeypatch):
+        """A patch that fails to resolve is skipped with a #583 warning."""
+        # a sorted spool is materialized, so iteration runs through the
+        # base __iter__ (memory spools have a fast patch-list iterator).
+        spool = dc.spool([dc.get_example_patch()]).sort("time")
+
+        def _raise(_ind):
+            raise MissingPatchError("trimmed to nothing")
+
+        monkeypatch.setattr(spool, "_get_patches_from_index", _raise)
+        with pytest.warns(UserWarning, match="Skipping patch"):
+            assert list(spool) == []
+
+    def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
+        """An under-estimated merge buffer is grown to fit (uneven sampling)."""
+        import dascore.core.spool as spool_mod
+
+        # Force the pre-merge sample estimate to be too small so the
+        # streaming buffer must grow mid-merge.
+        monkeypatch.setattr(spool_mod, "_estimate_merge_samples", lambda *a, **k: 1)
+        merged = dc.spool(many_contiguous).chunk(time=None)
+        assert merged[0].get_coord("time").size == sum(
+            p.get_coord("time").size for p in many_contiguous
+        )

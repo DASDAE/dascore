@@ -390,3 +390,34 @@ class TestUnderscoreDimNames:
         assert len(chunked) > 1
         for sub in chunked:
             assert "event_time" in sub.dims
+
+
+class TestChunkPlanCoverageEdges:
+    """Remaining chunk-planner branches."""
+
+    def test_partial_overlap_members(self):
+        """Overlapping sources drop the covered span (non-overlap skip)."""
+        import numpy as np
+
+        t0 = np.datetime64("2020-01-01", "ns")
+        p1 = dc.get_example_patch(time_min=t0)
+        step = p1.get_coord("time").step
+        # p2 overlaps p1's tail by 100 samples.
+        p2 = dc.get_example_patch(time_min=p1.get_coord("time").max() - 100 * step)
+        merged = dc.spool([p1, p2]).chunk(time=None)
+        # the overlap is removed, so the merge is shorter than the naive sum.
+        naive = p1.get_coord("time").size + p2.get_coord("time").size
+        assert merged[0].get_coord("time").size < naive
+
+    def test_user_stacklevel_fallback(self, monkeypatch):
+        """With no user frame in the stack, the stacklevel falls back to 1."""
+        import inspect as _inspect
+
+        import dascore.utils.chunk_plan as cp
+
+        # Every frame reports a dascore path, so no "user" frame is found.
+        class _Frame:
+            filename = cp.__file__
+
+        monkeypatch.setattr(_inspect, "stack", lambda: [_Frame()] * 3)
+        assert cp._user_stacklevel() == 1

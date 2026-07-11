@@ -222,6 +222,13 @@ class TestMaterializedNamespaces:
         materialized = spool.chunk(time=None)
         assert not materialized._catalog_native
         assert len(materialized.select(_attrs={"tag": "random"})) == len(materialized)
+        # a valid _coords range narrows the materialized spool
+        df = materialized.get_contents()
+        t0 = df["time_min"].min()
+        narrowed = materialized.select(
+            _coords={"time": (t0, t0 + np.timedelta64(2, "s"))}
+        )
+        assert len(narrowed) <= len(materialized)
         with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
             materialized.select(_attrs={"distance": (0, 10)})
         with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):

@@ -34,6 +34,226 @@ from dascore.io.index.query import InvalidSpoolQueryError, glob_match
 from dascore.units import get_quantity, m
 
 
+class TestIndexCoverageEdges:
+    """Remaining index branches covered with real backends/spools."""
+
+    def test_live_resolver_missing_patch(self):
+        """A row for a patch absent from the registry raises MissingPatchError."""
+        from dascore.exceptions import MissingPatchError
+        from dascore.io.index.catalog import LiveResolver
+
+        resolver = LiveResolver([dc.get_example_patch()])
+        with pytest.raises(MissingPatchError, match="not available"):
+            resolver.resolve({"path": "memorypatch://not-a-real-id"})
+
+    def test_mixed_compatible_unit_range(self):
+        """A coord range mixing compatible units resolves."""
+        from dascore.units import get_quantity
+
+        cm = get_quantity("cm")
+        out = dc.spool([dc.get_example_patch()]).select(distance=(1 * m, 200 * cm))
+        assert len(out.get_contents()) == 1
+
+    def test_backend_range_incompatible_units_raise(self, backend):
+        """A hand-built coord range mixing incompatible units is rejected.
+
+        The catalog canonicalizes units before the backend, so only a
+        direct Query reaches the multi-unit compatibility check.
+        """
+        from dascore.units import s
+
+        with pytest.raises(UnitError, match="Cannot convert"):
+            backend.query(Query(coords={"distance": (1 * m, 2 * s)}))
+
+    def test_export_skips_source_without_patches(self, tmp_path):
+        """A non-fiber file gets a sources row with no patches; export skips it."""
+        dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
+        (tmp_path / "junk.txt").write_text("not a fiber file")
+        spool = dc.spool(tmp_path).update(progress=None)
+        backend = spool._catalog.backend
+        assert len(backend.get_sources()) == 2  # the h5 and the junk file
+        records = backend.export_records()
+        assert sum(len(r.patches) for r in records) == 1  # only the real patch
+
+    def test_attr_meta_units_backfilled(self, tmp_path):
+        """An attr first seen unitless gets its unit backfilled by a later write."""
+        from dascore.core.summary import PatchSummary
+
+        def _summary(gain, path):
+            return PatchSummary(
+                attrs={"tag": "t", "gain": gain},
+                coords={
+                    "distance": {
+                        "dtype": "float64",
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 1.0,
+                        "units": "m",
+                        "dims": ("distance",),
+                        "len": 11,
+                    }
+                },
+                dims=("distance",),
+                shape=(11,),
+                dtype="float64",
+                source_path=path,
+                source_format="X",
+                source_version="1",
+            )
+
+        back = get_backend(tmp_path / "i.sqlite3")
+        try:
+            back.write_sources(s2r([_summary(5.0, "a.h5")]))  # unitless
+            meta = back._attr_meta()
+            assert list(meta.loc[meta["attr_name"] == "gain", "units"]) == [None]
+            back.write_sources(s2r([_summary(5.0 * m, "b.h5")]))  # units -> backfill
+            meta = back._attr_meta()
+            assert list(meta.loc[meta["attr_name"] == "gain", "units"]) == ["m"]
+        finally:
+            back.close()
+
+    def test_reopen_missing_meta_row(self, tmp_path):
+        """An index whose meta row was lost is rejected on reopen."""
+        import sqlite3
+
+        from dascore.exceptions import InvalidIndexError
+
+        path = tmp_path / "i.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM meta_data")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match="not a valid"):
+            get_backend(path)
+
+    def test_reopen_table_missing_column(self, tmp_path):
+        """An index whose table lost a column is rejected on reopen."""
+        import sqlite3
+
+        from dascore.exceptions import InvalidIndexError
+
+        path = tmp_path / "i.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("ALTER TABLE patches DROP COLUMN n_dims")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match="missing columns"):
+            get_backend(path)
+
+    def test_legacy_index_check_unopenable_path(self, tmp_path):
+        """A path that exists but cannot be opened as a file is not an index."""
+        idx = DBDirectoryIndexer(tmp_path)
+        # opening a directory raises IsADirectoryError (an OSError), which the
+        # header probe suppresses before concluding it is not a legacy index.
+        sub = tmp_path / "adir"
+        sub.mkdir()
+        assert idx._is_legacy_or_foreign_index(sub) is False
+
+    def test_schema_creation_rolls_back_on_failure(self, tmp_path):
+        """A failure while creating the schema rolls back and re-raises."""
+        from dascore.io.index.lite import SQLiteBackend
+
+        class _BoomBackend(SQLiteBackend):
+            def _execute(self, sql, params=()):
+                if "INSERT INTO meta_data" in sql:
+                    raise RuntimeError("boom during schema init")
+                return super()._execute(sql, params)
+
+        with pytest.raises(RuntimeError, match="boom during schema init"):
+            _BoomBackend(tmp_path / "i.sqlite3")
+
+    def test_reopen_missing_dynamic_attr_column(self, tmp_path):
+        """attr_meta referencing an absent attrs column is rejected on reopen."""
+        import sqlite3
+
+        from dascore.exceptions import InvalidIndexError
+
+        path = tmp_path / "i.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute(
+            "INSERT INTO attr_meta (attr_name, value_kind, column_name, units) "
+            "VALUES ('ghost', 'num', 'ghost__num', NULL)"
+        )
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match="missing dynamic columns"):
+            get_backend(path)
+
+
+class TestPureHelpers:
+    """Small pure helpers covered directly (least-contrived form)."""
+
+    def test_is_directory_format_on_file(self, tmp_path):
+        """A plain file is never a directory scan unit."""
+        from dascore.io.core import is_directory_format
+
+        f = tmp_path / "a.txt"
+        f.write_text("x")
+        assert is_directory_format(f) is False
+
+    def test_memory_backend_refuses_pickle(self):
+        """An in-memory backend cannot be pickled (owners serialize rows)."""
+        import pickle
+
+        from dascore.io.index.lite import SQLiteBackend
+
+        back = SQLiteBackend(":memory:")
+        try:
+            with pytest.raises(TypeError, match="cannot be pickled"):
+                pickle.dumps(back)
+        finally:
+            back.close()
+
+    def test_py_scalar_bool_and_int(self):
+        """_py_scalar unwraps numpy bool/int to plain python scalars."""
+        from dascore.io.index.ingest import _py_scalar
+
+        assert _py_scalar(np.bool_(True)) is True
+        assert _py_scalar(np.int64(5)) == 5
+        assert isinstance(_py_scalar(np.int64(5)), int)
+
+    def test_assemble_records_empty_sources(self):
+        """No sources yields no records."""
+        from dascore.io.index.ingest import assemble_source_records
+
+        empty = pd.DataFrame()
+        assert assemble_source_records(empty, empty, empty, empty, empty, empty) == []
+
+    def test_units_compatible(self):
+        """_units_compatible is True for same dimensionality, False otherwise."""
+        from dascore.io.index.backend import SQLIndexBackend
+
+        assert SQLIndexBackend._units_compatible("m", "ft") is True
+        assert SQLIndexBackend._units_compatible("m", "s") is False
+
+    def test_legacy_index_check_missing_path(self, tmp_path):
+        """A path that does not exist is not a legacy/foreign index."""
+        idx = DBDirectoryIndexer(tmp_path)
+        assert idx._is_legacy_or_foreign_index(tmp_path / "nope.h5") is False
+
+    def test_wrong_arity_coord_query_raises(self, backend):
+        """A hand-built coord range of the wrong length is rejected."""
+        from dascore.exceptions import ParameterError
+
+        with pytest.raises(ParameterError, match="length 2 sequence"):
+            backend.query(Query(coords={"distance": (1, 2, 3)}))
+
+    def test_to_target_unit_paths(self):
+        """Quantity on a unitless target raises; on a unit target it converts."""
+        from dascore.io.index.query import _to_target_unit
+        from dascore.units import get_quantity as _gq
+
+        typed = typed_value(5 * m)  # a numeric TypedValue carrying units
+        with pytest.raises(UnitError, match="unitless"):
+            _to_target_unit(typed, None, "distance")
+        # converting to a compatible unit returns a plain magnitude
+        out = _to_target_unit(typed, str(_gq("m").units), "distance")
+        assert out == pytest.approx(5.0)
+
+
 class TestNormalizeSourcePatchId:
     """The single source-patch-id normalizer handles every missing form."""
 

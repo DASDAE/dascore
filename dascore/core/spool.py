@@ -1330,16 +1330,15 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        if len(df):
-            t1 = df["time_min"].min() if "time_min" in df.columns else ""
-            t2 = df["time_min"].max() if "time_min" in df.columns else ""
-            tmin = get_nice_text(t1)
-            tmax = get_nice_text(t2)
-            if t1 != "" and t2 != "":
-                duration = get_nice_text(t2 - t1)
-            else:
-                duration = ""
-            base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
+        # time_min is always part of the flat relation, so a non-empty
+        # spool always has a renderable time span.
+        if len(df) and "time_min" in df.columns:
+            t1, t2 = df["time_min"].min(), df["time_min"].max()
+            duration = get_nice_text(t2 - t1)
+            base += Text(
+                f"\n    Time Span: <{duration}> "
+                f"{get_nice_text(t1)} to {get_nice_text(t2)}"
+            )
         return base
 
     def _load_patch(self, kwargs) -> Self:

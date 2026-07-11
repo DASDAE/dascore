@@ -396,10 +396,28 @@ class TestPatchesToDF:
     """Test for getting metadata from patch into a dataframe."""
 
     def test_spool_input(self, random_spool):
-        """A spool should return its contents."""
+        """A spool should return its contents with its patches embedded."""
         df = patches_to_df(random_spool)
         assert isinstance(df, pd.DataFrame)
         assert len(df) == len(random_spool)
+        # the "patch" column carries the actual patches, not None
+        assert "patch" in df.columns
+        assert all(isinstance(x, dc.Patch) for x in df["patch"])
+
+    def test_list_of_patches_input(self, random_spool):
+        """A plain sequence of patches is scanned and the patches embedded."""
+        patches = list(random_spool)
+        df = patches_to_df(patches)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(patches)
+        assert list(df["patch"]) == patches
+
+    def test_empty_list_input(self):
+        """An empty sequence produces an empty frame with the right columns."""
+        df = patches_to_df([])
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+        assert "patch" in df.columns
 
     def test_dataframe_input(self, random_spool):
         """The function should be idempotent."""

@@ -264,3 +264,30 @@ class TestExportPushdown:
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
         assert catalog.backend.export_records(patch_ids=[]) == []
+
+    def test_absolutize_record_passthrough(self):
+        """A record already carrying an absolute/URI path is returned as-is."""
+        from dascore.io.index.catalog import _absolutize_record
+        from dascore.io.index.ingest import SourceRecord
+
+        rec = SourceRecord(
+            source_path="/abs/a.h5", source_format="X", format_version="1"
+        )
+        assert _absolutize_record(rec, "/root") is rec
+        uri = SourceRecord(
+            source_path="s3://bucket/a.h5", source_format="X", format_version="1"
+        )
+        assert _absolutize_record(uri, "/root") is uri
+
+    def test_dir_union_absolutizes_relative_paths(self, tmp_path):
+        """A directory member's relative source path is absolutized on union."""
+        dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
+        dir_spool = dc.spool(tmp_path).update(progress=None)
+        combined = dir_spool + dc.spool([dc.get_example_patch(tag="mem")])
+        assert len(combined) == 2
+        # the file-backed member still loads (its path was made absolute)
+        contents = combined.get_contents()
+        file_row = contents[contents["path"].str.endswith("a.h5")]
+        assert len(file_row) == 1
+        loaded = [p for p in combined]
+        assert len(loaded) == 2

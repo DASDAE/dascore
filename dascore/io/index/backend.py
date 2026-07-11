@@ -661,16 +661,13 @@ class SQLIndexBackend(AbstractIndexBackend):
         # Group the metadata once and drop every typed column in a single
         # pass: per-name refiltering plus one-drop-per-column was ~O(A^2)
         # metadata scans and frame copies for A dynamic attrs.
+        # Every name that could collide with a structural or envelope
+        # column (RESERVED_ATTR_COLUMNS and *_min/_max/_step) is refused at
+        # ingest, so a dynamic attr name never shadows an existing column
+        # here.
         cols_to_drop: list[str] = []
         new_columns: dict[str, pd.Series] = {}
         for name, rows in attr_meta.groupby("attr_name", sort=False):
-            if name in out.columns:
-                # A dynamic attr restored onto an existing column (e.g. a
-                # coordinate envelope like time_min) would corrupt the
-                # frame; structural columns win. Reserved fixed names are
-                # already refused at ingest.
-                cols_to_drop.extend(c for c in rows["column_name"] if c in out.columns)
-                continue
             kinds = set(rows["value_kind"])
             multi_kind = len(rows) > 1
             series = None

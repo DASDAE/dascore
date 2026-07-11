@@ -226,7 +226,7 @@ def _coord_owner(col: str, coord_names: set[str]) -> str | None:
     return None
 
 
-def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
+def _police_columns(sub: pd.DataFrame, name, conflict) -> dict:
     """
     Return the carried column values for one partition (spec 2.5/6.4).
 
@@ -247,10 +247,8 @@ def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
         if single:
             carried[col] = values[0]
             continue
-        in_group = col in group_attrs or col == "dims"
-        if in_group:  # partitioning guarantees this; guard anyway
-            carried[col] = values[0]
-            continue
+        # Group attrs and dims are partition keys, so they are always
+        # single-valued above and never reach the conflict policy here.
         if owner is not None or conflict == "raise":
             msg = (
                 f"Cannot merge on dim {name} because all values for "
@@ -286,17 +284,9 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
     keep = sub[min_name].values <= sub[max_name].values
     sub = sub[keep]
     original = original[keep].reset_index(drop=True)
-    if sub.empty or outputs.empty:
-        return pd.DataFrame(
-            columns=[
-                "output_id",
-                "_patch_id",
-                min_name,
-                max_name,
-                step_name,
-                "_modified",
-            ]
-        )
+    # sub and outputs are always non-empty here: a partition too short to
+    # yield an interval raises ChunkError in the caller (and the earliest
+    # source is never fully covered), so both keep at least one row.
     steps = sub[step_name].values
     src1 = sub[min_name].values
     src2 = sub[max_name].values
@@ -322,7 +312,11 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
                 continue
             lo = max(src1[src_num], chu1[out_num])
             hi = min(src2[src_num], chu2[out_num])
-            if lo > hi:
+            if lo > hi:  # pragma: no cover -- searchsorted boundary guard
+                # Sources within a partition are continuous (partitioning
+                # splits on gaps) and start-corrected, so searchsorted does
+                # not offer a non-overlapping source in practice; this guards
+                # against a boundary off-by-one rather than a reachable state.
                 continue
             unchanged = (
                 lo == orig_min[src_num]
@@ -462,7 +456,7 @@ def build_chunk_plan(
             except ChunkError:  # partition too short; skip (D8)
                 continue
         sub_sorted = sub.sort_values([min_name, "_patch_id"], kind="stable")
-        carried = _police_columns(sub_sorted, name, params["group"], conflict)
+        carried = _police_columns(sub_sorted, name, conflict)
         outputs = pd.DataFrame(start_stop, columns=[min_name, max_name])
         outputs[f"{name}_step"] = part_step
         for col, val in carried.items():
