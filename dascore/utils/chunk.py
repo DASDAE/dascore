@@ -85,9 +85,10 @@ def get_intervals(
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
     step = length * 0 if pd.isnull(step) else step
-    # Check for errors
-    if overlap > length:
-        msg = "Cant chunk when overlap is greater than chunk size"
+    # Check for errors. Overlap equal to length would produce zero-stride
+    # segments, so it is also rejected.
+    if overlap >= length:
+        msg = "Cant chunk when overlap is greater than or equal to chunk size"
         raise ParameterError(msg)
     # If the step is known, we need to account for it in the total duration
     # See 474.

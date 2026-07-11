@@ -170,10 +170,13 @@ class TestChunk:
         assert spool1 == spool2
 
     def test_too_big_overlap_raises(self, diverse_spool):
-        """Overlap > chunk an error should raise."""
-        msg = "overlap is greater than chunk size"
+        """Overlap >= chunk size should raise a clear error."""
+        msg = "overlap is greater than or equal to chunk size"
         with pytest.raises(ParameterError, match=msg):
             diverse_spool.chunk(time=10, overlap=11)
+        # Equal overlap would mean zero-stride segments; also rejected.
+        with pytest.raises(ParameterError, match=msg):
+            diverse_spool.chunk(time=10, overlap=10)
 
     def test_issue_474(self, random_spool):
         """Ensure spools can be chunked with the duration reported by coord."""
