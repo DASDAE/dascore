@@ -457,49 +457,6 @@ def apply_residuals(
     return df
 
 
-def relative_offset(gmin, gmax, value):
-    """
-    Resolve one relative bound against a global [gmin, gmax] envelope.
-
-    Positive offsets measure from the start, negative from the end;
-    None/Ellipsis bounds stay open. Datetime envelopes take numeric
-    seconds offsets.
-    """
-    import dascore as dc
-
-    if value is None or value is Ellipsis:
-        return None
-    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
-        delta = dc.to_timedelta64(abs(float(value)))
-        return (gmin + delta) if value >= 0 else (gmax - delta)
-    return (gmin + value) if value >= 0 else (gmax + value)
-
-
 def glob_match(value, pattern: str) -> bool:
     """Reference glob semantics (used by pandas fallbacks and tests)."""
     return isinstance(value, str) and fnmatch.fnmatch(value, pattern)
-
-
-def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
-    """
-    Resolve relative (start, stop) ranges against a frame's global envelopes.
-
-    Shared by the dataframe and catalog select paths so the relative-select
-    contract has exactly one implementation.
-    """
-    out = {}
-    for name, value in kwargs.items():
-        lo_col, hi_col = f"{name}_min", f"{name}_max"
-        if lo_col not in df.columns or df.empty:
-            msg = f"Cannot use relative select on {name!r}."
-            raise InvalidSpoolQueryError(msg)
-        if not (isinstance(value, tuple) and len(value) == 2):
-            msg = f"relative=True requires (start, stop) ranges, got {value!r}."
-            raise InvalidSpoolQueryError(msg)
-        gmin, gmax = df[lo_col].min(), df[hi_col].max()
-        lo, hi = value
-        out[name] = (
-            relative_offset(gmin, gmax, lo),
-            relative_offset(gmin, gmax, hi),
-        )
-    return out

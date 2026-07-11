@@ -83,7 +83,9 @@ class TestCatalogPushdown:
         monkeypatch.setattr(backend, "query", wrapped)
         selected = spool.select(time=("2020-01-03", "2020-01-04"))
         assert calls == []
-        assert len(selected)
+        # realizing the relation (get_contents) runs the composed query;
+        # len() alone counts in SQL and never fetches rows.
+        selected.get_contents()
         queries = calls[0]
         assert isinstance(queries, list)
         assert queries[0].coords["time"] == ("2020-01-03", "2020-01-04")

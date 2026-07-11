@@ -32,10 +32,9 @@ from dascore.io.index.ingest import SourceRecord, patch_record
 from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
-    relative_ranges_to_absolute,
 )
 from dascore.utils.misc import is_memory_uri
-from dascore.utils.pd import adjust_segments
+from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
 
 class _CanonicalRange:

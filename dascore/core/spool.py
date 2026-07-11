@@ -1002,7 +1002,7 @@ class DataFrameSpool(BaseSpool):
 
     def _relative_select_kwargs(self, kwargs: dict) -> dict:
         """Resolve relative bounds against the spool's global envelopes."""
-        from dascore.io.index.query import relative_ranges_to_absolute
+        from dascore.utils.pd import relative_ranges_to_absolute
 
         return relative_ranges_to_absolute(self._df, kwargs)
 
