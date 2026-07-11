@@ -136,9 +136,7 @@ def _make_scan_payload(
         "dims": tuple(dims),
         "shape": tuple(shape),
         "dtype": str(dtype),
-        "source_patch_id": ""
-        if source_patch_id in (None, "")
-        else str(source_patch_id),
+        "source_patch_id": normalize_source_patch_id(source_patch_id),
     }
 
 
@@ -169,7 +167,10 @@ def _scan_payload_to_summary(
         source_path=source_path,
         source_format=source_format,
         source_version=source_version,
-        source_patch_id=source_patch_id or payload.get("source_patch_id") or "",
+        source_patch_id=(
+            normalize_source_patch_id(source_patch_id)
+            or normalize_source_patch_id(payload.get("source_patch_id"))
+        ),
     )
 
 
@@ -190,9 +191,7 @@ def _scan_result_to_summary(
     normalized_source_path = "" if source_path in (None, "") else source_path
     normalized_source_format = "" if source_format in (None, "") else source_format
     normalized_source_version = "" if source_version in (None, "") else source_version
-    summary_source_patch_id = (
-        "" if source_patch_id in (None, "") else str(source_patch_id)
-    )
+    summary_source_patch_id = normalize_source_patch_id(source_patch_id)
     if isinstance(patch_summary, Mapping):
         return _scan_payload_to_summary(
             patch_summary,

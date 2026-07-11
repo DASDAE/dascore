@@ -190,24 +190,20 @@ class FileResolver(PatchResolver):
         self._root = Path(root) if root is not None else None
 
     def _read(self, path, row: Mapping, trim: dict, source_patch_id: str):
-        """Use a known FiberIO directly, falling back to format detection."""
-        from dascore.core.spool import MemorySpool
+        """
+        Read one row's patch through dc.read.
 
-        file_format = row.get("file_format")
-        file_version = row.get("file_version")
+        The recorded format/version are forwarded so dc.read skips format
+        probing; it reads the file exactly once (an earlier fast path that
+        called the reader directly re-read the file whenever the reader
+        returned a non-MemorySpool).
+        """
         id_kwargs = {"source_patch_id": source_patch_id} if source_patch_id else {}
-        if file_format and file_version:
-            fiber_io = dc.io.FiberIO.manager.get_fiberio(
-                format=file_format, version=file_version
-            )
-            spool = fiber_io.read(path, **id_kwargs, **trim)
-            if isinstance(spool, MemorySpool):
-                return spool
         kwargs = {"path": path}
-        if file_format:
-            kwargs["file_format"] = file_format
-        if file_version:
-            kwargs["file_version"] = file_version
+        if row.get("file_format"):
+            kwargs["file_format"] = row["file_format"]
+        if row.get("file_version"):
+            kwargs["file_version"] = row["file_version"]
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:

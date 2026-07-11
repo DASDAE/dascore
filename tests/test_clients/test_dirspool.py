@@ -145,75 +145,54 @@ class TestMultiPatchFile:
 
 
 class TestLoadPatchFastPath:
-    """Tests for the direct FiberIO read path owned by FileResolver."""
+    """FileResolver reads each row's patch through a single dc.read call."""
 
-    def test_requires_concrete_format_and_version(
+    def test_forwards_recorded_format_and_version(
         self, one_directory_spool, monkeypatch
     ):
-        """
-        Without a concrete format and version the fast path must defer to
-        dc.read, which detects them from the file; get_fiberio with a None
-        version would return the newest reader, not the file's version.
-        """
+        """The recorded format/version are forwarded so dc.read skips probing."""
         resolver = one_directory_spool._catalog.resolver
-        sentinel = object()
-        monkeypatch.setattr(
-            "dascore.io.index.catalog.dc.read", lambda **kwargs: sentinel
-        )
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda **kwargs: pytest.fail("FiberIO fast path should not run"),
-        )
-        assert resolver._read("path", {"file_format": ""}, {}, "") is sentinel
-        assert resolver._read("path", {"file_format": "DASDAE"}, {}, "") is sentinel
-        assert resolver._read("path", {"file_version": "1"}, {}, "") is sentinel
+        calls = []
 
-    def test_unusual_fiberio_spool_defers_to_generic_read(
-        self, one_directory_spool, monkeypatch
-    ):
-        """Fast path should defer if the reader returns a non-memory spool."""
+        def _fake_read(**kwargs):
+            calls.append(kwargs)
+            return object()
 
-        class _Reader:
-            def read(self, *args, **kwargs):
-                return ()
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        resolver._read("path", {"file_format": "DASDAE", "file_version": "1"}, {}, "")
+        assert calls[-1]["file_format"] == "DASDAE"
+        assert calls[-1]["file_version"] == "1"
+        # empty format/version are simply omitted (dc.read detects them)
+        resolver._read("path", {"file_format": ""}, {}, "")
+        assert "file_format" not in calls[-1]
 
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda format, version: _Reader(),
-        )
-        row = {
-            "file_format": "DASDAE",
-            "file_version": "1",
-        }
+    def test_reads_file_once(self, one_directory_spool, monkeypatch):
+        """A row's patch is read exactly once regardless of the reader's return."""
+        calls = []
+
+        def _fake_read(**kwargs):
+            calls.append(kwargs)
+            return ()  # an unusual (empty) reader return
+
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        row = {"file_format": "DASDAE", "file_version": "1"}
         resolver = one_directory_spool._catalog.resolver
-        sentinel = object()
-        monkeypatch.setattr(
-            "dascore.io.index.catalog.dc.read", lambda **kwargs: sentinel
-        )
-        assert resolver._read("path", row, {}, "") is sentinel
+        resolver._read("path", row, {}, "")
+        assert len(calls) == 1
 
-    def test_multi_patch_resolves_identity_without_second_read(
+    def test_multi_patch_resolves_identity_with_single_read(
         self, one_directory_spool, random_patch, monkeypatch
     ):
-        """Multi-patch reads resolve source identity from the loaded spool."""
+        """Multi-patch reads resolve source identity from one dc.read call."""
+        patch_1 = random_patch.update_attrs(_source_patch_id="first")
+        patch_2 = random_patch.update_attrs(_source_patch_id="second")
+        reads = []
 
-        class _Reader:
-            def read(self, *args, **kwargs):
-                patch_1 = random_patch.update_attrs(_source_patch_id="first")
-                patch_2 = random_patch.update_attrs(_source_patch_id="second")
-                return dc.spool([patch_1, patch_2])
+        def _fake_read(**kwargs):
+            reads.append(kwargs)
+            return dc.spool([patch_1, patch_2])
 
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda format, version: _Reader(),
-        )
-        monkeypatch.setattr(
-            "dascore.io.index.catalog.dc.read",
-            lambda **kwargs: pytest.fail("must not re-read the file"),
-        )
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
         row = {
             "path": "path",
             "file_format": "DASDAE",
@@ -223,23 +202,19 @@ class TestLoadPatchFastPath:
         resolver = one_directory_spool._catalog.resolver
         patch = resolver.resolve(row)
         assert patch.attrs["_source_patch_id"] == "second"
+        assert len(reads) == 1  # the file is read exactly once
 
     def test_positional_id_reads_whole_source(
         self, one_directory_spool, random_patch, monkeypatch
     ):
         """Positional ids must ignore trim hints; a trimmed read would shift them."""
+        patch_2 = random_patch.update_attrs(tag="second")
 
-        class _Reader:
-            def read(self, *args, **kwargs):
-                assert "time" not in kwargs, "positional ids must read untrimmed"
-                patch_2 = random_patch.update_attrs(tag="second")
-                return dc.spool([random_patch, patch_2])
+        def _fake_read(**kwargs):
+            assert "time" not in kwargs, "positional ids must read untrimmed"
+            return dc.spool([random_patch, patch_2])
 
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda format, version: _Reader(),
-        )
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
         row = {
             "path": "path",
             "file_format": "DASDAE",
