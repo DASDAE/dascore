@@ -13,6 +13,7 @@ from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
     get_representative_io_test,
     skip_missing,
+    skip_on_timeout,
     skip_timeout,
 )
 from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
@@ -34,6 +35,12 @@ pytestmark = [
 
 REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
 REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
+
+# The localhost HTTP/fsspec/h5py streaming path can intermittently stall while
+# probing remote HDF5 metadata (see the TODO in test_remote_http.py). Bound each
+# remote operation below the 30s pytest-timeout so a stall skips with a useful
+# message instead of aborting the whole job as a hard timeout failure.
+REMOTE_OP_TIMEOUT = 15
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +98,7 @@ class TestRemoteGetFormat:
     def test_expected_version(self, remote_get_format_case):
         """Each IO should identify its own remote test fixture."""
         io, path = remote_get_format_case
-        with skip_missing():
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote get_format"):
             out = dc.get_format(path)
         assert out == (io.name, io.version)
 
@@ -102,7 +109,7 @@ class TestRemoteRead:
     def test_read_returns_spools(self, remote_read_case):
         """Each remotely supported file should read into a spool."""
         _io, path = remote_read_case
-        with skip_missing():
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote read"):
             out = dc.read(path)
         assert isinstance(out, dc.BaseSpool)
         assert len(out) > 0
@@ -115,7 +122,7 @@ class TestRemoteScan:
     def test_scan_has_source_metadata(self, remote_scan_case):
         """Public scans of remote files should retain source metadata."""
         io, path = remote_scan_case
-        with skip_missing():
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote scan"):
             summary_list = dc.scan(path)
         assert len(summary_list) > 0
         for summary in summary_list:
