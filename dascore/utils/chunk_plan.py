@@ -4,7 +4,7 @@ Chunk planning over the flat patch relation.
 Implements the "Chunking formalities" spec: the planner consumes the
 catalog's flat relation (one row per patch: `{dim}_min/max/step` envelopes,
 `_{dim}_def_key` structural identity, attr columns) and produces a
-[`ChunkPlan`](`dascore.io.index.plan.ChunkPlan`) — an outputs table (one row
+[`ChunkPlan`](`dascore.utils.chunk_plan.ChunkPlan`) — an outputs table (one row
 per output patch) plus a members table binding each output to trimmed
 slices of source patches. No patch data is touched; assembly happens later.
 

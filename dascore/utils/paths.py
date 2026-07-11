@@ -2,15 +2,46 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
 
+# Synthetic URI schemes for in-memory patch identities (see
+# dascore.io.index.catalog); such paths dispatch to in-memory registries
+# and are never treated as file names.
+_MEMORY_SCHEMES = ("memorypatch://", "memory://")
+
 
 def is_pathlike(resource) -> bool:
     """Return True if resource is supported path-like input."""
     return isinstance(resource, str | Path | UPath)
+
+
+def is_memory_uri(path) -> bool:
+    """
+    Return True if a path is a synthetic in-memory patch identity.
+
+    Matches the exact ``memorypatch://`` / ``memory://`` schemes rather
+    than any string beginning with "memory", so a real file or directory
+    named e.g. ``memory_notes.h5`` is not misclassified.
+    """
+    return str(path).startswith(_MEMORY_SCHEMES)
+
+
+def directory_writable(path) -> bool:
+    """Return True if the directory is writable else False."""
+    name = "._dascore_write_test_delete_me"
+    probe = Path(path) / name
+    probe.parent.mkdir(exist_ok=True, parents=True)
+    try:
+        open(probe, "w").close()
+    except (PermissionError, IsADirectoryError):
+        return False
+    else:
+        os.remove(probe)
+    return True
 
 
 def coerce_to_upath(resource) -> UPath:

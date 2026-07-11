@@ -33,7 +33,7 @@ from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
 )
-from dascore.utils.misc import is_memory_uri
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
 

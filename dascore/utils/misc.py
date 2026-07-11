@@ -1123,14 +1123,3 @@ def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
     q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
     lower_and_top = np.asarray([q_lower, q_upper])
     return lower_and_top
-
-
-def is_memory_uri(path) -> bool:
-    """
-    Return True if a path is a synthetic in-memory patch identity.
-
-    Live patches are identified by memory:// or memorypatch:// paths
-    (see `dascore.io.index.catalog`); such paths dispatch to in-memory
-    registries and are never treated as file names.
-    """
-    return str(path).startswith("memory")

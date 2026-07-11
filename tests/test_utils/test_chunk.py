@@ -10,8 +10,8 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ChunkError
-from dascore.io.index.plan import build_chunk_plan
 from dascore.utils.chunk import get_intervals
+from dascore.utils.chunk_plan import build_chunk_plan
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")

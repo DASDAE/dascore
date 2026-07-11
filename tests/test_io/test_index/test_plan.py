@@ -14,7 +14,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.plan import ChunkPlan, build_chunk_plan
+from dascore.utils.chunk_plan import ChunkPlan, build_chunk_plan
 from dascore.utils.time import to_timedelta64
 
 ONE_S = np.timedelta64(1, "s")

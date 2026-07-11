@@ -807,7 +807,7 @@ class DataFrameSpool(BaseSpool):
 
     def _chunk_working_df(self) -> pd.DataFrame:
         """Return the source rows the chunk planner consumes."""
-        from dascore.io.index.plan import _ensure_patch_id
+        from dascore.utils.chunk_plan import _ensure_patch_id
 
         source = self._source_df
         working = source.drop(columns=list(self._drop_columns), errors="ignore")
@@ -829,7 +829,7 @@ class DataFrameSpool(BaseSpool):
         """
         Return the plan `chunk` would execute, without touching any data.
 
-        The returned [`ChunkPlan`](`dascore.io.index.plan.ChunkPlan`) is a
+        The returned [`ChunkPlan`](`dascore.utils.chunk_plan.ChunkPlan`) is a
         read-only diagnostic: its `outputs` table describes each patch the
         chunked spool would contain (envelopes, step, carried attributes),
         its `members` table shows exactly which slice of which source patch
@@ -848,7 +848,7 @@ class DataFrameSpool(BaseSpool):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        from dascore.io.index.plan import build_chunk_plan
+        from dascore.utils.chunk_plan import build_chunk_plan
 
         return build_chunk_plan(
             self._chunk_working_df(),
@@ -875,7 +875,7 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
-        from dascore.io.index.plan import build_chunk_plan
+        from dascore.utils.chunk_plan import build_chunk_plan
 
         source = self._source_df
         working = self._chunk_working_df()

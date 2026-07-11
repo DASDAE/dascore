@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import abc
 import json
-import os
 from contextlib import suppress
 from functools import cache
 from pathlib import Path
@@ -51,20 +50,6 @@ def _update_index_map(updates, cache_path) -> dict:
     with open(cache_path, "w") as fi:
         json.dump(data, fi)
     return data
-
-
-def _directory_writable(path):
-    """Return True if the directory is writable else False."""
-    name = "._dascore_write_test_delete_me"
-    path = Path(path) / name
-    path.parent.mkdir(exist_ok=True, parents=True)
-    try:
-        open(path, "w").close()
-    except (PermissionError, IsADirectoryError):
-        return False
-    else:
-        os.remove(path)
-    return True
 
 
 class AbstractIndexer:

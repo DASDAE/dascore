@@ -23,12 +23,11 @@ from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, summaries_to_records
 from dascore.io.indexer import (
     AbstractIndexer,
-    _directory_writable,
     _get_index_map,
     _update_index_map,
 )
 from dascore.utils.misc import _iter_filesystem
-from dascore.utils.paths import requires_local_directory
+from dascore.utils.paths import directory_writable, requires_local_directory
 
 # Structural columns the spool machinery must not see: unique-per-patch
 # values block chunk merge-compatibility grouping, which compares all
@@ -115,7 +114,7 @@ class DBDirectoryIndexer(AbstractIndexer):
             # a fresh SQLite index is built in their place.
             if not self._is_legacy_or_foreign_index(mapped):
                 return mapped
-        if not _directory_writable(self.path):
+        if not directory_writable(self.path):
             name = f"_dascore_index_{abs(hash(self.path))}.sqlite3"
             index_path = self.index_map_path.parent / name
             _update_index_map(

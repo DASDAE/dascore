@@ -1,7 +1,7 @@
 """Utilities for chunking dataframes.
 
 The interval math here is consumed by the chunk planner
-(`dascore.io.index.plan`), which replaced the old ChunkManager.
+(`dascore.utils.chunk_plan`), which replaced the old ChunkManager.
 """
 
 from __future__ import annotations

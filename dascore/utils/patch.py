@@ -42,12 +42,12 @@ from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
     get_middle_value,
-    is_memory_uri,
     iterate,
     to_object_array,
     warn_or_raise,
     yield_sub_sequences,
 )
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
