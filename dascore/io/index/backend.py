@@ -111,6 +111,10 @@ class AbstractIndexBackend(abc.ABC):
         """Return how many patches match a query, without projecting rows."""
 
     @abc.abstractmethod
+    def export_records(self, patch_ids=None) -> list:
+        """Reconstruct source records (optionally for a subset of patches)."""
+
+    @abc.abstractmethod
     def get_sources(self) -> pd.DataFrame:
         """Return the sources table."""
 
@@ -595,6 +599,58 @@ class SQLIndexBackend(AbstractIndexBackend):
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
         return len(self.query(queries))
+
+    def _fetch_in(self, base_sql: str, column: str, ids: list) -> pd.DataFrame:
+        """Fetch ``{base_sql} WHERE {column} IN ids``, batching large sets."""
+        if not ids:
+            return self._fetch_df(f"{base_sql} WHERE 0")
+        frames = []
+        batch = self._in_clause_batch
+        for start in range(0, len(ids), batch):
+            chunk = ids[start : start + batch]
+            marks = ", ".join("?" for _ in chunk)
+            frames.append(
+                self._fetch_df(f"{base_sql} WHERE {column} IN ({marks})", chunk)
+            )
+        return pd.concat(frames, ignore_index=True)
+
+    def export_records(self, patch_ids=None) -> list:
+        """
+        Reconstruct source records, filtering by patch id in SQL.
+
+        With patch_ids given, only those patches (and the sources, attrs,
+        coordinate links, and coordinate definitions they reference) are
+        fetched — O(selected membership), not O(total archive). The frames
+        are assembled into the backend-independent transfer format.
+        """
+        from dascore.io.index.ingest import assemble_source_records
+
+        if patch_ids is None:
+            sources = self._fetch_df("SELECT * FROM sources")
+            patches = self._fetch_df("SELECT * FROM patches")
+            attrs = self._fetch_df("SELECT * FROM attrs")
+            links = self._fetch_df("SELECT * FROM patch_coords")
+            defs = self._fetch_df("SELECT * FROM coord_defs")
+        else:
+            ids = [int(x) for x in patch_ids]
+            patches = self._fetch_in("SELECT * FROM patches", "patch_id", ids)
+            if patches.empty:
+                return []
+            source_ids = [int(x) for x in patches["source_id"].unique()]
+            sources = self._fetch_in("SELECT * FROM sources", "source_id", source_ids)
+            attrs = self._fetch_in("SELECT * FROM attrs", "patch_id", ids)
+            links = self._fetch_in("SELECT * FROM patch_coords", "patch_id", ids)
+            def_ids = (
+                [int(x) for x in links["coord_def_id"].unique()]
+                if not links.empty
+                else []
+            )
+            defs = self._fetch_in(
+                "SELECT * FROM coord_defs", "coord_def_id", def_ids
+            )
+        return assemble_source_records(
+            sources, patches, attrs, links, defs, self._attr_meta()
+        )
 
     def _flatten(self, df: pd.DataFrame, attr_meta: pd.DataFrame) -> pd.DataFrame:
         """Post-process raw SQL output into the flat-relation contract."""

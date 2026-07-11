@@ -411,37 +411,26 @@ def _py_scalar(value):
     return value
 
 
-def records_from_backend(backend, patch_ids=None) -> list[SourceRecord]:
+def assemble_source_records(
+    sources: pd.DataFrame,
+    patches: pd.DataFrame,
+    attrs: pd.DataFrame,
+    links: pd.DataFrame,
+    defs: pd.DataFrame,
+    meta: pd.DataFrame,
+) -> list[SourceRecord]:
     """
-    Reconstruct source records from a backend's tables.
+    Assemble source records from already-fetched index frames.
 
     This is the transfer format for merging catalogs: feeding the result
     to another backend's `write_sources` re-ingests the metadata with
     fresh ids, coord-def deduplication (def keys are preserved), and
-    replace-semantics on (base_uri, source_path) identity.
-
-    Parameters
-    ----------
-    backend
-        The index backend to read.
-    patch_ids
-        If not None, only include these patches (and only sources which
-        still have at least one included patch).
+    replace-semantics on (base_uri, source_path) identity. The caller
+    (an index backend's export_records) is responsible for narrowing the
+    frames — filtering by patch id belongs in SQL, not here.
     """
-    sources = backend._fetch_df("SELECT * FROM sources")
     if sources.empty:
         return []
-    patches = backend._fetch_df("SELECT * FROM patches")
-    if patch_ids is not None:
-        patches = patches[patches["patch_id"].isin(set(patch_ids))]
-    kept_ids = set(int(x) for x in patches["patch_id"])
-    attrs = backend._fetch_df("SELECT * FROM attrs")
-    links = backend._fetch_df("SELECT * FROM patch_coords")
-    if patch_ids is not None:  # narrow dependent tables to kept patches.
-        attrs = attrs[attrs["patch_id"].isin(kept_ids)]
-        links = links[links["patch_id"].isin(kept_ids)]
-    defs = backend._fetch_df("SELECT * FROM coord_defs")
-    meta = backend._attr_meta()
     col_info = {
         row.column_name: (row.attr_name, row.value_kind, _py_scalar(row.units))
         for row in meta.itertuples()

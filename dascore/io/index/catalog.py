@@ -355,8 +355,6 @@ class PatchCatalog:
         note this respects row membership, not range trims; re-select
         on the result for exact envelopes.
         """
-        from dascore.io.index.ingest import records_from_backend
-
         resolver = CompositeResolver()
         out = cls(resolver=resolver)
         backend = out.backend
@@ -364,7 +362,7 @@ class PatchCatalog:
             catalog, patch_ids = member if isinstance(member, tuple) else (member, None)
             if patch_ids is None and catalog.is_view:
                 patch_ids = catalog.to_df()["_patch_id"].tolist()
-            records = records_from_backend(catalog.backend, patch_ids=patch_ids)
+            records = catalog.backend.export_records(patch_ids=patch_ids)
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
                 records = [_absolutize_record(x, root) for x in records]
@@ -424,8 +422,6 @@ class PatchCatalog:
         registry (the store for live patches) pickles with its patches.
         Directory catalogs rebuild from their index file instead.
         """
-        from dascore.io.index.ingest import records_from_backend
-
         state = dict(self.__dict__)
         state["_backend"] = None
         # Live catalogs rebuild from their registry without touching the
@@ -437,7 +433,7 @@ class PatchCatalog:
             and not isinstance(self.resolver, LiveResolver)
         )
         if needs_records:
-            state["_rebuild_records"] = tuple(records_from_backend(self._backend))
+            state["_rebuild_records"] = tuple(self._backend.export_records())
         return state
 
     def _view(self, queries, residuals) -> PatchCatalog:

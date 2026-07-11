@@ -207,3 +207,45 @@ class TestPatchIdentity:
         loaded.attr_names()  # bootstrap the backend
         loaded._invalidate()
         assert len(loaded.to_df()) == 0
+
+
+class TestExportPushdown:
+    """Selected-membership export must not scan the whole archive."""
+
+    def test_export_one_of_many_is_narrow(self):
+        """Exporting one patch fetches only its own rows, not all sources."""
+        patches = [dc.get_example_patch().update_attrs(tag=f"t{i}") for i in range(40)]
+        catalog = PatchCatalog.from_patches(patches)
+        catalog.to_df()  # bootstrap the backend
+        backend = catalog.backend
+        con = backend._con
+
+        fetched_patches = []
+
+        def _trace(sql):
+            # Count how many patch rows any SELECT against patches pulls.
+            if "from patches" in sql.lower() and sql.lower().lstrip().startswith(
+                "select"
+            ):
+                fetched_patches.append(sql)
+
+        target = int(catalog.to_df()["_patch_id"].iloc[0])
+        con.set_trace_callback(_trace)
+        try:
+            records = backend.export_records(patch_ids=[target])
+        finally:
+            con.set_trace_callback(None)
+
+        # exactly one source/patch comes back...
+        assert sum(len(r.patches) for r in records) == 1
+        # ...and every patches query was id-filtered (no full-table scan).
+        assert fetched_patches
+        assert all("patch_id in" in sql.lower() for sql in fetched_patches)
+
+    def test_export_all_matches_full(self):
+        """export_records() with no ids returns every source, unchanged."""
+        patches = [dc.get_example_patch().update_attrs(tag=f"t{i}") for i in range(5)]
+        catalog = PatchCatalog.from_patches(patches)
+        catalog.to_df()
+        records = catalog.backend.export_records()
+        assert sum(len(r.patches) for r in records) == 5
