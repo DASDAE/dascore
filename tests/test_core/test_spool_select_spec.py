@@ -175,7 +175,7 @@ class TestRelative:
 
     def test_requires_range(self, spool):
         """Scalars are rejected with a clear message."""
-        with pytest.raises(InvalidSpoolQueryError, match="requires"):
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             spool.select(time=5, relative=True)
 
     def test_namespaced_coord_with_attr(self, spool):
@@ -256,5 +256,58 @@ class TestUnitCanonicalSelection:
         dc.write(ft_patch, tmp_path / "ft.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         coord = spool.select(distance=(20 * m, 60 * m))[0].get_coord("distance")
+        assert float(coord.min()) >= 65
+        assert float(coord.max()) <= 197
+
+    def test_mixed_unitless_and_feet_bare(self, ft_patch):
+        """A bare range trims each patch in its own units (SI meaning)."""
+        plain = dc.get_example_patch()  # unitless distance 0..~300
+        plain = plain.update_coords(
+            distance=plain.get_coord("distance").set_units(None)
+        )
+        got = dc.spool([plain, ft_patch]).select(distance=(20, 60))
+        materialized = [p.get_coord("distance") for p in got]
+        assert len(materialized) == 2  # both overlap 20..60 m
+        by_units = {str(c.units): c for c in materialized}
+        # unitless patch: bare magnitudes applied directly
+        assert float(by_units["None"].min()) >= 20
+        assert float(by_units["None"].max()) <= 60
+        # feet patch: 20..60 m == 65.6..196.9 ft
+        assert float(by_units["1 ft"].min()) >= 65
+        assert float(by_units["1 ft"].max()) <= 197
+
+    def test_mixed_unitless_and_feet_quantity(self, ft_patch):
+        """A metre quantity range works across a mixed population."""
+        from dascore.units import m
+
+        plain = dc.get_example_patch()
+        plain = plain.update_coords(
+            distance=plain.get_coord("distance").set_units(None)
+        )
+        got = dc.spool([plain, ft_patch]).select(distance=(20 * m, 60 * m))
+        assert len(got.get_contents()) == 2  # no UnitError on the unitless row
+
+    def test_scalar_coord_rejected(self, ft_patch):
+        """A scalar coordinate selector is rejected eagerly, clearly."""
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
+            dc.spool([ft_patch]).select(distance=100)
+
+    def test_value_membership_rejected(self, ft_patch):
+        """A wrong-arity list is reported as a malformed range."""
+        from dascore.exceptions import ParameterError
+
+        with pytest.raises(ParameterError, match="length 2 sequence"):
+            dc.spool([ft_patch]).select(distance=[10, 20, 50])
+
+    def test_chained_views(self, ft_patch):
+        """Canonicalization holds across chained selections."""
+        from dascore.units import m
+
+        coord = (
+            dc.spool([ft_patch])
+            .select(distance=(0 * m, 90 * m))
+            .select(distance=(20, 60))[0]
+            .get_coord("distance")
+        )
         assert float(coord.min()) >= 65
         assert float(coord.max()) <= 197

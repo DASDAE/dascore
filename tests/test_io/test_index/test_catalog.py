@@ -175,7 +175,7 @@ class TestCatalogEdges:
 
     def test_relative_requires_range(self, live_catalog):
         """Relative selects take (start, stop) tuples only."""
-        with pytest.raises(InvalidSpoolQueryError, match="requires"):
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             live_catalog.select(time=5, relative=True)
 
     def test_add_on_file_catalog_not_implemented(self, tmp_path, patches):

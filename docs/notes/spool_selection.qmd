@@ -8,6 +8,8 @@ Bare selector names resolve to attributes first and then coordinates. `_attrs={.
 
 Attribute equality, membership, ranges, and glob predicates are evaluated by the index. Regular expressions use a SQL candidate predicate and an exact residual filter; chained regular expressions are combined with AND. Quantities are converted to the canonical unit recorded by the index, and dimensionally incompatible queries raise rather than silently returning incorrect matches. Values stored without units can never be proven incompatible, so they remain candidates for quantity selectors rather than being silently excluded.
 
+Coordinate predicates select by range — a `(start, stop)` tuple or slice, with `None`/`...` for an open end — or by a patch-local boolean mask; scalar and value-membership coordinate selectors have no exact patch-level meaning and are rejected. Numeric coordinate summaries are stored in canonical SI units, so bare numeric range bounds are interpreted as canonical SI regardless of a patch's native coordinate units, and quantities convert. The exact per-patch trim defers its representation until each patch is known, so a mixed archive of unit-bearing and unitless patches is handled correctly in one selection.
+
 Coordinate predicates first select patches whose summary envelopes can overlap the request. The loaded patch is then selected exactly. `samples=True` is always patch-local and therefore never excludes a patch at the index stage. `relative=True` resolves coordinate ranges against the current spool view's global envelope; attribute predicates in the same call remain unchanged.
 
 Operations that create a new row or instruction plan, including chunking, sorting, and slicing, switch that derived spool to dataframe planning. Exact selections already attached to the catalog still apply when source patches are resolved.
@@ -35,4 +37,15 @@ window = (t0, t0 + dc.to_timedelta64(1))
 for patch in spool.select(time=window):
     coord = patch.get_coord("time")
     assert coord.min() >= window[0] and coord.max() <= window[1]
+```
+
+Bare numeric coordinate bounds mean canonical SI even on a patch whose coordinate is in another unit, and scalar/membership coordinate selectors raise:
+
+```{python}
+ft_patch = dc.get_example_patch().convert_units(distance="ft")
+coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
+assert float(coord.min()) >= 65 and float(coord.max()) <= 197  # 20-60 m in ft
+
+with pytest.raises(InvalidSpoolQueryError):
+    dc.spool([ft_patch]).select(distance=100)  # scalar has no range meaning
 ```

@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 import dascore as dc
@@ -37,53 +38,87 @@ from dascore.utils.misc import is_memory_uri
 from dascore.utils.pd import adjust_segments
 
 
+class _CanonicalRange:
+    """
+    A numeric coordinate range resolved to canonical SI magnitudes.
+
+    The exact per-patch re-select defers its representation until the
+    target patch is known: unit-bearing coordinates get quantities in
+    the canonical unit (`Patch.select` converts them to native units),
+    unitless coordinates get the bare magnitudes. A single eager form
+    cannot serve both — raw numbers trim the wrong physical interval
+    on non-SI patches, quantities break unitless coordinates.
+    """
+
+    __slots__ = ("magnitudes",)
+
+    def __init__(self, magnitudes: tuple):
+        self.magnitudes = magnitudes
+
+    def __repr__(self) -> str:
+        return f"_CanonicalRange({self.magnitudes!r})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, _CanonicalRange) and other.magnitudes == self.magnitudes
+        )
+
+    def for_patch_coord(self, coord) -> tuple:
+        """Return the range in the representation this coord needs."""
+        from dascore.units import get_quantity
+
+        units = getattr(coord, "units", None)
+        if units is None:
+            return self.magnitudes
+        base = get_quantity(str(units)).to_base_units().units
+        return tuple(None if mag is None else mag * base for mag in self.magnitudes)
+
+
+def _canonical_range(value) -> _CanonicalRange | None:
+    """Return the canonical SI form of a numeric range, or None."""
+    if not (isinstance(value, tuple) and len(value) == 2):
+        return None
+    magnitudes = []
+    for bound in value:
+        if bound is None or bound is Ellipsis:
+            magnitudes.append(None)
+        elif hasattr(bound, "units"):  # pint quantity -> SI magnitude
+            magnitudes.append(float(bound.to_base_units().magnitude))
+        elif isinstance(bound, bool | np.bool_):
+            return None
+        elif isinstance(bound, int | float | np.integer | np.floating):
+            magnitudes.append(float(bound))
+        else:  # datetimes, strings: not a numeric range
+            return None
+    if all(mag is None for mag in magnitudes):
+        return None
+    return _CanonicalRange(tuple(magnitudes))
+
+
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     """
-    Split coordinate range selectors into canonical forms.
+    Split coordinate selectors into query-side and residual-side forms.
 
     Numeric coordinate summaries are stored in canonical SI units, so
-    range bounds resolve to SI magnitudes for the index/dataframe side.
-    The exact per-patch residual gets the same bounds as *quantities*
-    (in the canonical unit) so `Patch.select` converts them to each
-    patch's native coordinate units; re-applying raw numbers would trim
-    a different physical interval on non-SI patches. Bare numbers are
-    interpreted as canonical SI, matching the index contract.
+    numeric range bounds resolve to SI magnitudes for the index and
+    dataframe side: bare numbers are already canonical SI (the index
+    contract), quantities convert. The residual keeps the range as a
+    `_CanonicalRange` so each patch decides its own representation at
+    load time, which keeps mixed unitful/unitless populations correct.
 
-    Coordinates without a single recorded unit (unitless, time-like, or
-    heterogeneous) pass through unchanged.
+    Selectors on non-numeric coordinates (time ranges, string ranges)
+    and boolean masks pass through unchanged.
     """
-    from dascore.units import convert_units, get_quantity
-
     meta = backend._coord_meta(set(coords))
-    units_by_name: dict[str, set] = {}
-    for row in meta.itertuples():
-        units = getattr(row, "units", None)
-        if row.value_kind == "num" and units is not None and not pd.isnull(units):
-            units_by_name.setdefault(row.coord_name, set()).add(str(units))
+    numeric = set(meta.loc[meta["value_kind"] == "num", "coord_name"])
     si_coords, residual_coords = {}, {}
     for name, value in coords.items():
-        units = units_by_name.get(name)
-        unit = next(iter(units)) if units and len(units) == 1 else None
-        if unit is None or not isinstance(value, tuple):
+        canonical = _canonical_range(value) if name in numeric else None
+        if canonical is None:
             si_coords[name] = residual_coords[name] = value
-            continue
-        quant = get_quantity(unit)
-        si_bounds, residual_bounds = [], []
-        for bound in value:
-            if bound is None or bound is Ellipsis:
-                si_bounds.append(None)
-                residual_bounds.append(None)
-                continue
-            if hasattr(bound, "units"):  # pint quantity -> SI magnitude
-                magnitude = convert_units(
-                    bound.magnitude, to_units=unit, from_units=bound.units
-                )
-            else:  # bare numbers are canonical SI
-                magnitude = float(bound)
-            si_bounds.append(magnitude)
-            residual_bounds.append(magnitude * quant)
-        si_coords[name] = tuple(si_bounds)
-        residual_coords[name] = tuple(residual_bounds)
+        else:
+            si_coords[name] = canonical.magnitudes
+            residual_coords[name] = canonical
     return si_coords, residual_coords
 
 
@@ -547,9 +582,10 @@ class PatchCatalog:
         trim_hint = {}
         for coords, samples, _ in self._residuals:
             if not samples:
-                # Quantity bounds stay out of reader hints: readers take
-                # numbers in their native units, so a converted-narrower
-                # hint could drop data exactness cannot restore.
+                # Canonical-SI and quantity bounds stay out of reader
+                # hints: readers take numbers in their native units, so
+                # a converted-narrower hint could drop data exactness
+                # cannot restore.
                 trim_hint.update(
                     {
                         k: v
@@ -561,7 +597,16 @@ class PatchCatalog:
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
         for coords, samples, relative in self._residuals:
-            usable = {k: v for k, v in coords.items() if k in patch.coords.coord_map}
+            coord_map = patch.coords.coord_map
+            usable = {
+                k: (
+                    v.for_patch_coord(coord_map[k])
+                    if isinstance(v, _CanonicalRange)
+                    else v
+                )
+                for k, v in coords.items()
+                if k in coord_map
+            }
             if usable:
                 patch = patch.select(**usable, samples=samples, relative=relative)
         return patch

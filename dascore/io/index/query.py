@@ -304,30 +304,19 @@ def build_coord_clause(
     typed_values = []
     if _is_range(value):
         kind, lo, hi, typed_values = _range_bounds(value, kinds)
-    elif _is_collection(value):
-        raw_values = list(value)
-        if not raw_values:
-            raise InvalidSpoolQueryError("Coordinate membership cannot be empty.")
-        arr = np.asarray(raw_values)
-        if arr.dtype == bool:
-            # boolean masks are patch-local; no index predicate at all,
-            # but the coord must exist on the patch.
-            kind = lo = hi = None
-        else:
-            typed_values = [_coerce_scalar(x, kinds) for x in raw_values]
-            value_kinds = {x.kind for x in typed_values}
-            if len(value_kinds) != 1:
-                raise InvalidSpoolQueryError(
-                    f"Coordinate values for {name!r} have mixed kinds."
-                )
-            kind = typed_values[0].kind
-            values = [x.value for x in typed_values]
-            lo, hi = min(values), max(values)
+    elif _is_collection(value) and np.asarray(value).dtype == bool:
+        # boolean masks are patch-local; no index predicate at all,
+        # but the coord must exist on the patch.
+        kind = lo = hi = None
     else:
-        typed = _coerce_scalar(value, kinds)
-        typed_values = [typed]
-        kind = typed.kind
-        lo = hi = typed.value
+        # Scalars and value membership have no exact patch-level
+        # meaning; resolve_query rejects them before SQL composition,
+        # so only a hand-built Query can reach this.
+        msg = (
+            f"Coordinate {name!r} accepts range or boolean-mask "
+            f"selectors; got {value!r}."
+        )
+        raise InvalidSpoolQueryError(msg)
 
     compatible_units = _compatible_coord_units(rows, typed_values, name)
 

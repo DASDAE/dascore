@@ -18,7 +18,12 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError, UnitError
+from dascore.exceptions import (
+    InvalidIndexError,
+    InvalidIndexVersionError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import SourceRecord, attr_column_name
 from dascore.io.index.query import (
@@ -793,6 +798,41 @@ def resolve_query(
         """Bare None/... selectors are no-ops, matching Patch.select."""
         return {k: v for k, v in mapping.items() if v is not None and v is not Ellipsis}
 
+    def _shape_coord_selector(name: str, value):
+        """
+        Normalize one coordinate selector to the spec's accepted shapes.
+
+        Coordinates select by range — a (start, stop) tuple or slice
+        with None/... open ends (a 2-element list is the legacy range
+        form) — or by a patch-local boolean mask. Scalars and value
+        membership have no exact patch-level meaning and raise here,
+        eagerly, rather than failing when a patch is materialized.
+        """
+        if value is None or value is Ellipsis:
+            return value
+        if isinstance(value, np.ndarray):
+            if value.dtype == np.bool_:
+                return value
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(x, bool | np.bool_) for x in value)
+        ):
+            return np.asarray(value, dtype=bool)
+        elif isinstance(value, tuple | list):
+            # range-like: a (start, stop) pair (2-element list is the
+            # legacy range form). Wrong arity is a malformed range.
+            if len(value) != 2:
+                msg = f"Coordinate range for {name!r} must be a length 2 sequence."
+                raise ParameterError(msg)
+            return tuple(value)
+        msg = (
+            f"Coordinate {name!r} accepts range selectors (a (start, stop) "
+            "tuple or slice, None/... for open ends) or boolean masks; "
+            f"scalar and membership values are not supported. Got {value!r}."
+        )
+        raise InvalidSpoolQueryError(msg)
+
     # accept the same open/slice range forms patch-level select does
     attrs = {k: normalize_range_forms(v) for k, v in (_attrs or {}).items()}
     coords = {k: normalize_range_forms(v) for k, v in (_coords or {}).items()}
@@ -819,6 +859,7 @@ def resolve_query(
     for name in coords:
         if name not in known_coords:
             raise InvalidSpoolQueryError(f"{name!r} is not a coordinate of this spool.")
+    coords = {k: _shape_coord_selector(k, v) for k, v in coords.items()}
     return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))
 
 

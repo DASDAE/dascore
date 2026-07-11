@@ -290,16 +290,16 @@ class TestCoordPredicates:
         with pytest.raises(UnitError):
             backend.query(Query(coords={"distance": (1 * second, 2 * second)}))
 
-    def test_scalar_coord(self, backend):
-        """Scalar coord."""
-        df = backend.query(Query(coords={"frequency": 100}))
-        assert list(df["tag"]) == ["psd"]
+    def test_scalar_coord_rejected(self, backend):
+        """Scalar coord predicates have no exact patch meaning; rejected."""
+        with pytest.raises(InvalidSpoolQueryError, match="range or boolean"):
+            backend.query(Query(coords={"frequency": 100}))
 
-    def test_array_membership_envelope(self, backend):
-        """Array membership envelope."""
+    def test_array_membership_rejected(self, backend):
+        """Numeric value membership on a coord is rejected, not candidacy."""
         values = np.array([10.0, 20.0, 480.0])
-        df = backend.query(Query(coords={"distance": values}))
-        assert len(df) == 4  # candidacy: all patches overlap the envelope
+        with pytest.raises(InvalidSpoolQueryError, match="range or boolean"):
+            backend.query(Query(coords={"distance": values}))
 
     def test_coord_missing_excludes_patch(self, backend):
         """Coord missing excludes patch."""
