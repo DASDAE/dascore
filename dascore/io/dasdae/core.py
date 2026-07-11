@@ -77,9 +77,11 @@ class DASDAEV1(FiberIO):
         # write new patches to file, ensuring unique group names within this
         # batch so same-named patches (e.g. gap-split siblings that differ
         # only along a non-named dimension) don't overwrite each other.
+        # strict zip keeps streaming (no spool materialization) while failing
+        # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
         counts: dict[str, int] = {}
-        for patch, name in zip(patches, patch_names):
+        for patch, name in zip(patches, patch_names, strict=True):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"

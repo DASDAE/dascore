@@ -1311,7 +1311,10 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
         coords = (patch.get_coord(x) for x in patch.dims)
         return any(isinstance(x, CoordSegmented) for x in coords)
 
-    gapped = [_has_gaps(x) for x in spool]
+    # Materialize once (cheap; patches are in memory) so gap detection and
+    # splitting see the same patch sequence.
+    contents = list(spool)
+    gapped = [_has_gaps(x) for x in contents]
     if not any(gapped):
         return spool
     if not split:
@@ -1323,7 +1326,7 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
         )
         raise ParameterError(msg)
     patches = []
-    for patch, has_gaps in zip(spool, gapped):
+    for patch, has_gaps in zip(contents, gapped, strict=True):
         patches.extend(patch.split_gaps() if has_gaps else [patch])
     if len(patches) > 1 and not fiber_io.multi_patch_write:
         msg = (
