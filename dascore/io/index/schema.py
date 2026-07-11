@@ -179,14 +179,9 @@ TABLE_CONSTRAINTS = MappingProxyType(
 # Names which can never be dynamic attr columns.
 RESERVED_ATTR_COLUMNS = frozenset({"patch_id"})
 
-# Secondary indexes: without these, engines that use nested-loop plans
-# (SQLite) go quadratic on the correlated coords EXISTS subquery.
-INDEXES = (
-    ("idx_pcoords_patch", "patch_coords", "patch_id"),
-    ("idx_pcoords_name", "patch_coords", "coord_name"),
-    ("idx_pcoords_def", "patch_coords", "coord_def_id"),
-    ("idx_defs_key", "coord_defs", "def_key"),
-    ("idx_attrs_patch", "attrs", "patch_id"),
-    ("idx_patches_source", "patches", "source_id"),
-    ("idx_sources_path", "sources", "source_path"),
-)
+# Explicit secondary indexes. Every other access path is covered by a
+# PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
+# coord_name), sources(base_uri, source_path), patches(source_id,
+# source_patch_id), coord_defs(def_key) — and duplicating them measured
+# ~25% extra file size and slower writes for no query gain.
+INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
