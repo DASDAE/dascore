@@ -584,6 +584,18 @@ class SQLIndexBackend(AbstractIndexBackend):
                 out[col] = pd.to_numeric(out[col])
         # typed attr columns -> original names (coalesce multi-kind attrs)
         for name in attr_meta["attr_name"].unique():
+            if name in out.columns:
+                # A dynamic attr restored onto an existing column (e.g. a
+                # coordinate envelope like time_min) would corrupt the
+                # frame; structural columns win. Reserved fixed names are
+                # already refused at ingest.
+                sanitized = attr_meta.loc[
+                    attr_meta["attr_name"] == name, "column_name"
+                ]
+                out = out.drop(
+                    columns=[x for x in sanitized if x in out.columns]
+                )
+                continue
             rows = attr_meta[attr_meta["attr_name"] == name]
             kinds = set(rows["value_kind"])
             series = None

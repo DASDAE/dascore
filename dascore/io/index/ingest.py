@@ -202,12 +202,24 @@ def typed_value(value) -> TypedValue | None:
 def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
     """Get indexable typed attrs from a patch summary."""
     raw = summary.attrs.model_dump()
+    # Attrs shaped like this patch's own coordinate envelope columns
+    # (e.g. "time_min") would collide in the flat relation.
+    envelope_names = {
+        f"{coord}_{suffix}"
+        for coord in getattr(summary, "coords", {})
+        for suffix in ("min", "max", "step", "units")
+    }
     out = {}
     for name, value in raw.items():
         if name in _SKIPPED_ATTRS or name.startswith("_"):
             continue
-        if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS:
-            warnings.warn(f"Skipping reserved attr name {name!r}.", UserWarning)
+        if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS or name in envelope_names:
+            msg = (
+                f"Skipping reserved attr name {name!r}; it collides with a "
+                "structural index column. The attr stays on the patch but "
+                "is not queryable through the spool."
+            )
+            warnings.warn(msg, UserWarning)
             continue
         typed = typed_value(value)
         if typed is not None:

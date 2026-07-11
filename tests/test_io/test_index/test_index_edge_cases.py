@@ -719,3 +719,31 @@ class TestLegacyIndexMap:
             _update_index_map({str(data_dir): str(legacy)}, cache_path=str(map_path))
             spool = dc.spool(data_dir).update()
             assert len(spool) == 1
+
+
+class TestReservedAttrNames:
+    """Attrs colliding with structural columns are skipped with a warning."""
+
+    @pytest.mark.parametrize(
+        "name,value",
+        [("path", "user-path"), ("file_format", "attr-format"), ("source_id", 42)],
+    )
+    def test_reserved_attr_warns_and_skips(self, name, value):
+        """Reserved names warn at ingest and never corrupt the relation."""
+        import dascore as dc
+
+        patch = dc.get_example_patch().update_attrs(**{name: value})
+        with pytest.warns(UserWarning, match="reserved attr"):
+            df = dc.spool([patch]).get_contents()
+        assert not df.columns.duplicated().any()
+        # structural values win; the attr stays on the patch itself.
+        assert patch.attrs[name] == value
+
+    def test_non_reserved_attr_round_trips(self):
+        """Ordinary arbitrary attrs still index and select normally."""
+        import dascore as dc
+
+        patch = dc.get_example_patch().update_attrs(experiment="exp42")
+        spool = dc.spool([patch])
+        assert spool.get_contents()["experiment"].iloc[0] == "exp42"
+        assert len(spool.select(experiment="exp42")) == 1

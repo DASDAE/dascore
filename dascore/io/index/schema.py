@@ -176,8 +176,38 @@ TABLE_CONSTRAINTS = MappingProxyType(
     }
 )
 
-# Names which can never be dynamic attr columns.
-RESERVED_ATTR_COLUMNS = frozenset({"patch_id"})
+# Attr names which would collide with structural storage or flat-relation
+# columns. Attrs with these (sanitized) names stay on the patch but are
+# not indexed; ingest warns about them.
+RESERVED_ATTR_COLUMNS = frozenset(
+    {
+        # storage tables
+        "patch_id",
+        "source_id",
+        "source_patch_id",
+        "source_path",
+        "source_format",
+        "format_version",
+        "base_uri",
+        "mtime_ns",
+        "size_bytes",
+        "n_dims",
+        "dims",
+        "shape",
+        "sample_count_total",
+        "coord_def_id",
+        "def_key",
+        # flat-relation (spool-facing) names
+        "path",
+        "file_format",
+        "file_version",
+        # spool instruction machinery
+        "current_index",
+        "source_index",
+        "output_id",
+        "patch",
+    }
+)
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
