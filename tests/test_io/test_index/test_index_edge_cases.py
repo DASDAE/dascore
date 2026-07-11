@@ -9,6 +9,7 @@ full line coverage.
 from __future__ import annotations
 
 import re
+import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -691,6 +692,33 @@ class TestResourceCleanup:
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
         catalog.close()
+
+    def test_finalization_from_worker_thread(self):
+        """Dropping the last backend reference off-thread does not raise."""
+        import gc
+        import sys
+        import threading
+
+        from dascore.io.index.lite import SQLiteBackend
+
+        holder = [SQLiteBackend(":memory:")]
+        unraisable = []
+        original = sys.unraisablehook
+
+        def _drop():
+            holder.clear()
+            gc.collect()
+
+        sys.unraisablehook = unraisable.append
+        try:
+            worker = threading.Thread(target=_drop)
+            worker.start()
+            worker.join()
+            gc.collect()
+        finally:
+            sys.unraisablehook = original
+        errors = [u for u in unraisable if u.exc_type is sqlite3.ProgrammingError]
+        assert not errors
 
 
 class TestLegacyIndexMap:

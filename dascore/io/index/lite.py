@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import weakref
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,25 @@ import pandas as pd
 
 from dascore.io.index.backend import SQLIndexBackend, adapt_params
 from dascore.io.index.dialect import SQLiteDialect
+
+# A serialized SQLite build (threadsafety == 3) lets one connection be
+# used and closed from any thread, so cross-thread garbage collection of
+# a backend is safe. On rarer non-serialized builds the connection is
+# thread-bound and must stay check_same_thread.
+_SQLITE_SERIALIZED = sqlite3.threadsafety == 3
+
+
+def _safe_close(con: sqlite3.Connection) -> None:
+    """
+    Close a connection, tolerating cross-thread finalization.
+
+    On a serialized build closing works from any thread. On a
+    thread-bound build a finalizer firing on another thread would raise
+    ProgrammingError; suppress it (the underlying handle is freed at
+    interpreter teardown) rather than emit an unraisable exception.
+    """
+    with suppress(sqlite3.ProgrammingError):
+        con.close()
 
 
 def _adapt(params):
@@ -50,15 +70,20 @@ class SQLiteBackend(SQLIndexBackend):
 
     def __init__(self, path: str | Path):
         self._path = str(path)
-        self._con = sqlite3.connect(self._path)
+        # On a serialized build, drop the thread affinity so the shared
+        # backend can be used (and finalized) from worker threads, e.g.
+        # a thread-pool Spool.map over one catalog.
+        self._con = sqlite3.connect(
+            self._path, check_same_thread=not _SQLITE_SERIALIZED
+        )
         # autocommit off; we manage transactions explicitly.
         self._con.isolation_level = None
         self._con.execute("PRAGMA foreign_keys = ON")
         self._con.execute("PRAGMA busy_timeout = 30000")
         # Catalog views share this backend object, so tying connection
         # cleanup to *its* collection is safe (close() stays idempotent
-        # for explicit use).
-        self._finalizer = weakref.finalize(self, self._con.close)
+        # for explicit use). The finalizer tolerates cross-thread firing.
+        self._finalizer = weakref.finalize(self, _safe_close, self._con)
         try:
             super().__init__()
         except Exception:
@@ -126,4 +151,4 @@ class SQLiteBackend(SQLIndexBackend):
         """Close the database connection."""
         # detach the GC finalizer; closing twice is harmless but tidy.
         self._finalizer.detach()
-        self._con.close()
+        _safe_close(self._con)
