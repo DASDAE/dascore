@@ -610,6 +610,60 @@ class SQLIndexBackend(AbstractIndexBackend):
             out = out.drop(columns=["base_uri"])
         return out.drop(columns=["source_id"], errors="ignore")
 
+    @staticmethod
+    def _add_envelope_objects(coords: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add per-row envelope object columns (_env_min/_env_max/_env_step)
+        and the merge-identity _key column to the coord-link relation.
+
+        Conversions run on whole columns: per-row scalar pd.to_datetime
+        calls cost ~40us each and dominated large realizations.
+        """
+        kind = coords["value_kind"].to_numpy()
+        num_mask = kind == "num"
+        time_mask = kind == "time"
+        str_mask = ~(num_mask | time_mask)
+        # NULL means not relative; via to_numeric so object/float/int
+        # columns all coerce without pandas downcasting warnings.
+        relative = (
+            pd.to_numeric(coords["is_relative"], errors="coerce")
+            .to_numpy(dtype="float64", na_value=0.0)
+            .astype(bool)
+        )
+
+        def _time_objects(ns_series: pd.Series, flavor: str) -> np.ndarray:
+            """Exact int-ns -> Timestamp/Timedelta objects (None for null)."""
+            series = _ns_to_time(ns_series, flavor)
+            return series.astype(object).where(series.notna(), None).to_numpy()
+
+        fields = (
+            ("_env_min", "min_num", "min_ns", "min_str"),
+            ("_env_max", "max_num", "max_ns", "max_str"),
+            ("_env_step", "step_num", "step_ns", None),
+        )
+        for out_col, num_col, ns_col, str_col in fields:
+            values = np.empty(len(coords), dtype=object)
+            if num_mask.any():
+                values[num_mask] = coords[num_col].to_numpy(dtype=object)[num_mask]
+            if str_col is not None and str_mask.any():
+                values[str_mask] = coords[str_col].to_numpy(dtype=object)[str_mask]
+            # absolute times are datetimes, relative ones timedeltas; steps
+            # are timedeltas either way.
+            time_flavors = (
+                ((time_mask & ~relative), "datetime"),
+                ((time_mask & relative), "timedelta"),
+            )
+            if str_col is None:
+                time_flavors = ((time_mask, "timedelta"),)
+            for mask, flavor in time_flavors:
+                if mask.any():
+                    values[mask] = _time_objects(coords[ns_col][mask], flavor)
+            coords[out_col] = values
+        # Summary-only definitions are useful for indexing/dedup but cannot
+        # prove coordinate value identity for merge grouping.
+        coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
+        return coords
+
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
         """
         Add per-coord envelope columns to the flat relation.
@@ -625,54 +679,41 @@ class SQLIndexBackend(AbstractIndexBackend):
         if out.empty or "patch_id" not in out.columns:
             return out
         ids = out["patch_id"].tolist()
-        frames = []
-        batch = self._in_clause_batch
-        for start in range(0, len(ids), batch):
-            chunk = ids[start : start + batch]
-            marks = ", ".join("?" for _ in chunk)
-            frames.append(
-                self._fetch_df(
-                    "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-                    "cd.value_kind, cd.is_relative, cd.min_num, cd.max_num, "
-                    "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
-                    "cd.min_str, cd.max_str "
-                    "FROM patch_coords pc "
-                    "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-                    f"WHERE pc.patch_id IN ({marks})",
-                    chunk,
+        link_sql = (
+            "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
+            "cd.value_kind, cd.is_relative, cd.min_num, cd.max_num, "
+            "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
+            "cd.min_str, cd.max_str "
+            "FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+        )
+        n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
+        if len(ids) * 4 >= n_patches:
+            # Most patches selected: one scan plus a pandas filter beats
+            # many batched IN queries and their frame concatenation.
+            coords = self._fetch_df(link_sql)
+            coords = coords[coords["patch_id"].isin(set(ids))].reset_index(drop=True)
+        else:
+            frames = []
+            batch = self._in_clause_batch
+            for start in range(0, len(ids), batch):
+                chunk = ids[start : start + batch]
+                marks = ", ".join("?" for _ in chunk)
+                frames.append(
+                    self._fetch_df(f"{link_sql} WHERE pc.patch_id IN ({marks})", chunk)
                 )
-            )
-        coords = pd.concat(frames, ignore_index=True)
+            coords = pd.concat(frames, ignore_index=True)
         if coords.empty:
             return out
+        coords = self._add_envelope_objects(coords)
         for name, group in coords.groupby("coord_name"):
-            mins, maxs, steps, keys = {}, {}, {}, {}
-            for row in group.itertuples():
-                # Summary-only definitions are useful for indexing/dedup but
-                # cannot prove coordinate value identity for merge grouping.
-                keys[row.patch_id] = (
-                    row.def_key if pd.notnull(row.fingerprint) else None
-                )
-                if row.value_kind == "num":
-                    mn, mx = row.min_num, row.max_num
-                    st = row.step_num
-                elif row.value_kind == "time":
-                    conv = (
-                        pd.to_timedelta
-                        if pd.notnull(row.is_relative) and row.is_relative
-                        else pd.to_datetime
-                    )
-                    mn = conv(int(row.min_ns), unit="ns")
-                    mx = conv(int(row.max_ns), unit="ns")
-                    st = (
-                        pd.to_timedelta(int(row.step_ns), unit="ns")
-                        if pd.notnull(row.step_ns)
-                        else None
-                    )
-                else:
-                    mn, mx, st = row.min_str, row.max_str, None
-                mins[row.patch_id], maxs[row.patch_id] = mn, mx
-                steps[row.patch_id] = st
+            pids = group["patch_id"]
+            # last row wins for duplicate patch ids, like the mapping loop
+            # this replaces.
+            keys = dict(zip(pids, group["_key"]))
+            mins = dict(zip(pids, group["_env_min"]))
+            maxs = dict(zip(pids, group["_env_max"]))
+            steps = dict(zip(pids, group["_env_step"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
             kinds = set(group["value_kind"])
             # time/distance envelopes already live on patches...
