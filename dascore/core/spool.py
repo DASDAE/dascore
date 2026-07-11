@@ -554,6 +554,18 @@ class DataFrameSpool(BaseSpool):
         return out
 
     def __len__(self):
+        # A catalog-native view can count in SQL, skipping the full flat
+        # realization (query + attr expansion + coordinate pivot) a plain
+        # len(self._df) would force. Fall back to the realized frame once
+        # it is cached, on the dataframe path, or when constructor
+        # select_kwargs post-filter rows outside the catalog's queries.
+        if (
+            self._catalog_native
+            and not self._select_kwargs
+            and getattr(self, "_catalog", None) is not None
+            and "_df" not in self._cache
+        ):
+            return len(self._catalog)
         return len(self._df)
 
     def __iter__(self):

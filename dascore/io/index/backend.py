@@ -29,6 +29,7 @@ from dascore.io.index.ingest import SourceRecord, attr_column_name
 from dascore.io.index.query import (
     Query,
     apply_residuals,
+    build_count_sql,
     build_query_sql,
     normalize_range_forms,
 )
@@ -104,6 +105,10 @@ class AbstractIndexBackend(abc.ABC):
     @abc.abstractmethod
     def query(self, query: Query) -> pd.DataFrame:
         """Return the flat patch-row relation matching a query."""
+
+    @abc.abstractmethod
+    def count(self, query: Query) -> int:
+        """Return how many patches match a query, without projecting rows."""
 
     @abc.abstractmethod
     def get_sources(self) -> pd.DataFrame:
@@ -574,6 +579,22 @@ class SQLIndexBackend(AbstractIndexBackend):
         if residuals:
             df = apply_residuals(df, residuals)
         return df.reset_index(drop=True)
+
+    def count(self, query=None) -> int:
+        """Count matching patches without projecting or pivoting rows."""
+        query = query if query is not None else Query()
+        queries = [query] if isinstance(query, Query) else list(query)
+        attr_meta = self._attr_meta()
+        coord_names = {name for q in queries for name in q.coords}
+        coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
+        sql, params, residuals = build_count_sql(
+            queries, self.dialect, attr_meta, coord_meta
+        )
+        if not residuals:
+            return int(self._fetch_df(sql, params)["n"].iloc[0])
+        # A regex residual must inspect string values, so a database count
+        # cannot resolve it; the full relation already applies the residual.
+        return len(self.query(queries))
 
     def _flatten(self, df: pd.DataFrame, attr_meta: pd.DataFrame) -> pd.DataFrame:
         """Post-process raw SQL output into the flat-relation contract."""

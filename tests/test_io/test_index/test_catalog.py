@@ -195,6 +195,50 @@ class TestCatalogEdges:
         catalog.remove([target])
         assert len(catalog) == len(patches) - 1
 
+
+class TestCount:
+    """len(catalog) counts in SQL and agrees with the realized relation."""
+
+    @pytest.fixture()
+    def diverse_catalog(self):
+        """A catalog with heterogeneous attrs and coords."""
+        return PatchCatalog.from_patches(list(dc.get_example_spool("diverse_das")))
+
+    def _selections(self, catalog):
+        """Views spanning attr, coord range, regex, and chained forms."""
+        import re
+
+        df = catalog.to_df()
+        t0 = df["time_min"].min()
+        window = (t0, t0 + dc.to_timedelta64(1))
+        return [
+            catalog,
+            catalog.select(tag="random"),
+            catalog.select(time=window),
+            catalog.select(distance=(0, 50)),
+            catalog.select(tag=re.compile("rand.*")),  # regex residual path
+            catalog.select(tag="random").select(time=window),
+        ]
+
+    def test_count_matches_realization(self, diverse_catalog):
+        """Every view's len equals len(to_df()) (fresh, uncached)."""
+        for view in self._selections(diverse_catalog):
+            # a fresh view has no cached relation, so len() counts in SQL
+            expected = len(view.to_df())
+            fresh = view._view(view._queries, view._residuals)
+            assert len(fresh) == expected
+
+    def test_len_does_not_realize(self, diverse_catalog, monkeypatch):
+        """A cold len() must not pivot coordinates or fetch the relation."""
+        catalog = diverse_catalog.select(network="das2")
+        fresh = catalog._view(catalog._queries, catalog._residuals)
+
+        def _boom(self):
+            raise AssertionError("flat relation realized during len()")
+
+        monkeypatch.setattr(type(fresh), "to_df", _boom)
+        assert isinstance(len(fresh), int)
+
     def test_introspection(self, live_catalog):
         """Names, sources, and metadata pass through."""
         assert "time" in live_catalog.coord_names()

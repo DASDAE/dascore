@@ -364,6 +364,25 @@ def build_coord_clause(
     )
 
 
+def _build_where(
+    queries: list[Query],
+    dialect: BaseDialect,
+    attr_meta: pd.DataFrame,
+    coord_meta: pd.DataFrame,
+) -> tuple[_Where, list[tuple[str, re.Pattern]]]:
+    """Compose the shared WHERE clause and any regex residuals."""
+    where = _Where()
+    residuals: list[tuple[str, re.Pattern]] = []
+    for one in queries:
+        for name, value in one.attrs.items():
+            residual = build_attr_clause(where, dialect, attr_meta, name, value)
+            if residual is not None:
+                residuals.append((name, residual))
+        for name, value in one.coords.items():
+            build_coord_clause(where, dialect, coord_meta, name, value)
+    return where, residuals
+
+
 def build_query_sql(
     query: Query | Sequence[Query],
     dialect: BaseDialect,
@@ -379,15 +398,7 @@ def build_query_sql(
     re-applied to the resulting dataframe.
     """
     queries = [query] if isinstance(query, Query) else list(query)
-    where = _Where()
-    residuals: list[tuple[str, re.Pattern]] = []
-    for one in queries:
-        for name, value in one.attrs.items():
-            residual = build_attr_clause(where, dialect, attr_meta, name, value)
-            if residual is not None:
-                residuals.append((name, residual))
-        for name, value in one.coords.items():
-            build_coord_clause(where, dialect, coord_meta, name, value)
+    where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
     attr_cols = "".join(
@@ -401,6 +412,34 @@ def build_query_sql(
         "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
         f"WHERE {where.sql} "
         "ORDER BY p.time_min NULLS LAST, p.patch_id"
+    )
+    return sql, where.params, residuals
+
+
+def build_count_sql(
+    query: Query | Sequence[Query],
+    dialect: BaseDialect,
+    attr_meta: pd.DataFrame,
+    coord_meta: pd.DataFrame,
+) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
+    """
+    Build a COUNT for one or more AND-composed queries.
+
+    Same WHERE as build_query_sql but no flat projection, coordinate
+    pivot, or ordering. Returns (sql, params, residuals); a non-empty
+    residual means the count is not SQL-resolvable (regex must inspect
+    rows) and the caller must fall back to a projected count.
+    """
+    queries = [query] if isinstance(query, Query) else list(query)
+    where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
+    # the attrs join can stay: it is 1:1 (one attrs row per patch), and a
+    # WHERE may reference a.<column>. COUNT(p.patch_id) counts patches.
+    sql = (
+        "SELECT COUNT(p.patch_id) AS n "
+        "FROM patches p "
+        "JOIN sources s ON s.source_id = p.source_id "
+        "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
+        f"WHERE {where.sql}"
     )
     return sql, where.params, residuals
 

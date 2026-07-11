@@ -564,7 +564,16 @@ class PatchCatalog:
         return self._df_cache
 
     def __len__(self) -> int:
-        return len(self.to_df())
+        # Count in SQL when the relation is not already realized: coord
+        # range residuals only drop patches the SQL candidacy already
+        # excludes and samples/relative residuals never drop patches, so
+        # the count matches len(to_df()) without projecting or pivoting.
+        if (
+            self._df_cache is not None
+            and self._df_cache_revision == self._revision.value
+        ):
+            return len(self._df_cache)
+        return self.backend.count(list(self._queries) or None)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
