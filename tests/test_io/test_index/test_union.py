@@ -265,19 +265,22 @@ class TestExportPushdown:
         catalog.to_df()
         assert catalog.backend.export_records(patch_ids=[]) == []
 
-    def test_absolutize_record_passthrough(self):
+    def test_absolutize_record_passthrough(self, tmp_path):
         """A record already carrying an absolute/URI path is returned as-is."""
+        from pathlib import Path
+
         from dascore.io.index.catalog import _absolutize_record
         from dascore.io.index.ingest import SourceRecord
 
-        rec = SourceRecord(
-            source_path="/abs/a.h5", source_format="X", format_version="1"
-        )
-        assert _absolutize_record(rec, "/root") is rec
+        # an OS-native absolute path (drive-qualified on Windows)
+        abs_path = str((tmp_path / "a.h5").resolve())
+        assert Path(abs_path).is_absolute()
+        rec = SourceRecord(source_path=abs_path, source_format="X", format_version="1")
+        assert _absolutize_record(rec, str(tmp_path)) is rec
         uri = SourceRecord(
             source_path="s3://bucket/a.h5", source_format="X", format_version="1"
         )
-        assert _absolutize_record(uri, "/root") is uri
+        assert _absolutize_record(uri, str(tmp_path)) is uri
 
     def test_dir_union_absolutizes_relative_paths(self, tmp_path):
         """A directory member's relative source path is absolutized on union."""

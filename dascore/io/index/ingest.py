@@ -386,8 +386,10 @@ def summaries_to_records(
         store_path = path
         root = base_uri or relative_to
         if root and path.startswith(root):
-            # "." (not "") when the source IS the root (directory units)
-            store_path = path[len(root) :].lstrip("/") or "."
+            # Store a POSIX-relative path: strip the root prefix, then drop
+            # either separator (Windows uses "\") and normalize to "/". "."
+            # (not "") marks a source that IS the root (directory units).
+            store_path = path[len(root) :].lstrip("/\\").replace("\\", "/") or "."
         out.append(
             SourceRecord(
                 source_path=store_path,
