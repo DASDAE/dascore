@@ -51,6 +51,24 @@ class DascoreConfig(BaseModel):
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
     )
+    groupby_attrs: tuple[str, ...] = Field(
+        default=(
+            "network",
+            "station",
+            "data_type",
+            "data_category",
+            "tag",
+            "instrument_id",
+            "acquisition_id",
+        ),
+        description=(
+            "Attributes which partition patches into separate groups for "
+            "chunk/merge operations. Patches whose values differ on any of "
+            "these are never combined (no error); the per-call `group` "
+            "argument overrides this default. Names missing from a spool "
+            "are ignored."
+        ),
+    )
 
     # Local cache and index locations.
     downloader_cache_dir: Path = Field(
