@@ -1322,6 +1322,24 @@ def get_format(
     return out
 
 
+def is_directory_format(path) -> bool:
+    """
+    Return True if a directory is itself one FiberIO scan unit.
+
+    A directory-format source (e.g. XMLBinary) is read as a whole rather
+    than by traversing its members. This is the single definition of that
+    condition; dc.scan's traversal skips such a directory's contents and
+    the directory indexer treats it as one stat unit.
+    """
+    if not Path(path).is_dir():
+        return False
+    try:
+        get_format(path)
+    except Exception:
+        return False
+    return True
+
+
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
     from dascore.core.coords import CoordSegmented

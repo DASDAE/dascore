@@ -151,11 +151,9 @@ class DBDirectoryIndexer(AbstractIndexer):
 
     def _directory_format(self, path: Path) -> bool:
         """Return True when a directory is itself one FiberIO scan unit."""
-        try:
-            dc.get_format(path)
-        except Exception:
-            return False
-        return True
+        from dascore.io.core import is_directory_format
+
+        return is_directory_format(path)
 
     def _walk(self) -> dict[str, tuple[int, int, Path]]:
         """
