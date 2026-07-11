@@ -89,6 +89,50 @@ class TestCatalogPushdown:
         assert queries[0].coords["time"] == ("2020-01-03", "2020-01-04")
 
 
+class TestLazySelection:
+    """Selection construction never realizes the flat relation (review P1).
+
+    Cold spools must compose the selected view without an unfiltered
+    backend query; realization happens on first content access. The
+    module-scoped ``spool`` fixture is warm by then, so these tests
+    build their own fresh spools.
+    """
+
+    @pytest.fixture()
+    def forbid_realization(self, monkeypatch):
+        """Return a callable that makes flat realization fail loudly."""
+        from dascore.io.index.catalog import PatchCatalog
+
+        def _boom(self):
+            msg = "flat relation realized during selection construction"
+            raise AssertionError(msg)
+
+        def _arm():
+            monkeypatch.setattr(PatchCatalog, "to_df", _boom)
+
+        return _arm
+
+    def test_cold_directory_select(self, tmp_path_factory, forbid_realization):
+        """A cold directory spool selects without touching the relation."""
+        path = dc.examples.spool_to_directory(
+            dc.get_example_spool("random_das"),
+            path=tmp_path_factory.mktemp("lazy_select_dir"),
+        )
+        dc.spool(path).update(progress=None)  # build the index
+        fresh = dc.spool(path)
+        forbid_realization()
+        selected = fresh.select(time=("2020-01-03", "2020-01-04"))
+        assert selected._catalog_native
+
+    def test_cold_memory_select(self, forbid_realization):
+        """A fresh patch-list spool selects via the catalog, lazily."""
+        patches = list(dc.get_example_spool("random_das"))
+        forbid_realization()
+        fresh = dc.spool(patches)
+        selected = fresh.select(tag="random")
+        assert selected._catalog_native
+
+
 class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
 

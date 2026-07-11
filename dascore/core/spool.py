@@ -994,6 +994,16 @@ class DataFrameSpool(BaseSpool):
 
         return relative_ranges_to_absolute(self._df, kwargs)
 
+    def _ensure_catalog(self) -> None:
+        """
+        Switch to catalog-native mode if this spool supports it.
+
+        Must not realize the flat relation: it exists so selection can
+        route through the catalog on cold spools while staying lazy.
+        Dataframe-backed spools (post chunk/sort/slice) stay put.
+        """
+        return
+
     @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(
         self,
@@ -1005,10 +1015,10 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        # Realize contents first: fresh patch-list spools only become
-        # catalog-native on realization, and the catalog path owns the
-        # full selector semantics (e.g. unit canonicalization).
-        _ = self._df
+        # The catalog path owns the full selector semantics (e.g. unit
+        # canonicalization); adopt it where possible without realizing
+        # the flat relation (selection must stay lazy on cold spools).
+        self._ensure_catalog()
         if self._catalog_native:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -1194,6 +1204,11 @@ class MemorySpool(DataFrameSpool):
             self._catalog = PatchCatalog.from_patches(self._patches)
         self._catalog_native = True
         return self._catalog
+
+    def _ensure_catalog(self) -> None:
+        """Patch-list spools ingest into a catalog; no flat realization."""
+        if self._patches is not None and not self._catalog_native:
+            self._get_catalog()
 
     def _as_catalog_member(self):
         """
