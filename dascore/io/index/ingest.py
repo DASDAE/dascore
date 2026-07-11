@@ -250,12 +250,16 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         # A range summary contains its complete representation, so recover the
         # same exact identity a loaded CoordRange would have produced.
         fingerprint = summary.to_coord().fingerprint()
+    # str() on a pint Quantity is comparatively expensive; do it once and
+    # reuse it below (a Quantity-keyed cache is unsafe — 1 m == 100 cm with
+    # equal hashes but different strings).
+    units_str = str(summary.units) if summary.units is not None else None
     common = dict(
         coord_name=name,
         dtype=summary.dtype,
         coord_dims=",".join(summary.dims),
         length=summary.len,
-        units=str(summary.units) if summary.units is not None else None,
+        units=units_str,
         coord_hash=fingerprint,
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
@@ -281,8 +285,8 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         )
     if dtype is not None and np.issubdtype(dtype, np.number):
         factor = 1.0
-        if summary.units is not None:
-            factor, base = _base_unit_info(str(summary.units))
+        if units_str is not None:
+            factor, base = _base_unit_info(units_str)
             common["units"] = base
         step = summary.step
         return CoordRecord(
