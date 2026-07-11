@@ -44,12 +44,29 @@ required = {"_patch_id", "_time_def_key", "dims", "time_min", "time_max", "time_
 assert required.issubset(df.columns)
 ```
 
-## Patch identity
+## Patch identity and spool set semantics
 
-Every in-memory patch has a lazily minted instance identity (shared by copies — patches are immutable — while every patch operation creates a new instance with its own). The identity is the patch's synthetic source path in the index, so identity, deduplication, and resolution all agree:
+A spool of in-memory patches has **set semantics by patch identity**: constructing a spool from a sequence keeps one entry per distinct patch instance, and `spool + spool` unions membership. Each patch carries an instance identity minted eagerly at construction; because patches are immutable, copies (including deep copies and unpickled patches) share that identity, while every patch operation produces a new instance with its own. The identity is the patch's synthetic `memorypatch://` source path in the index, so identity, deduplication, and resolution all agree:
 
 ```{python}
+import copy
+
 patch = dc.get_example_patch()
+
+# a sequence with the same instance twice is one spool entry
+assert len(dc.spool([patch, patch])) == 1
+
+# copies share identity regardless of when they are made — identity is
+# eager, so there is no access-order dependence
+clone = copy.deepcopy(patch)
+assert clone._instance_id == patch._instance_id
+assert len(dc.spool([patch, clone])) == 1
+
+# any operation mints a new, distinct identity
+assert len(dc.spool([patch, patch.new()])) == 2
+
+# the identity is the row's synthetic path, and it resolves back to the
+# very same object
 cat = PatchCatalog.from_patches([patch, patch])  # one entry, not two
 row = cat.to_df().iloc[0]
 assert len(cat.to_df()) == 1
