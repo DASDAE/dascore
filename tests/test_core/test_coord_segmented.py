@@ -1017,6 +1017,14 @@ class TestSplitGapsAndWrite:
         path = dc.write(patch, tmp_path / "normal.h5", "dasdae", split=True)
         assert path.exists()
 
+    def test_write_file_backed_spool_unaffected(self, tmp_path):
+        """Non-memory spools skip the gap inspection (never gapped)."""
+        path1 = dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
+        file_spool = dc.spool(path1)
+        assert not isinstance(file_spool, dc.core.spool.MemorySpool)
+        path2 = dc.write(file_spool, tmp_path / "b.h5", "dasdae")
+        assert path2.exists()
+
 
 class TestFromArray:
     """Tests for CoordSegmented.from_array."""
