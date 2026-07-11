@@ -664,18 +664,22 @@ class SQLIndexBackend(AbstractIndexBackend):
         for col in ("distance_min", "distance_max", "distance_step"):
             if col in out:
                 out[col] = pd.to_numeric(out[col])
-        # typed attr columns -> original names (coalesce multi-kind attrs)
-        for name in attr_meta["attr_name"].unique():
+        # typed attr columns -> original names (coalesce multi-kind attrs).
+        # Group the metadata once and drop every typed column in a single
+        # pass: per-name refiltering plus one-drop-per-column was ~O(A^2)
+        # metadata scans and frame copies for A dynamic attrs.
+        cols_to_drop: list[str] = []
+        new_columns: dict[str, pd.Series] = {}
+        for name, rows in attr_meta.groupby("attr_name", sort=False):
             if name in out.columns:
                 # A dynamic attr restored onto an existing column (e.g. a
                 # coordinate envelope like time_min) would corrupt the
                 # frame; structural columns win. Reserved fixed names are
                 # already refused at ingest.
-                sanitized = attr_meta.loc[attr_meta["attr_name"] == name, "column_name"]
-                out = out.drop(columns=[x for x in sanitized if x in out.columns])
+                cols_to_drop.extend(c for c in rows["column_name"] if c in out.columns)
                 continue
-            rows = attr_meta[attr_meta["attr_name"] == name]
             kinds = set(rows["value_kind"])
+            multi_kind = len(rows) > 1
             series = None
             for row in rows.itertuples():
                 if row.column_name not in out:
@@ -687,17 +691,21 @@ class SQLIndexBackend(AbstractIndexBackend):
                     col = _ns_to_time(col, "timedelta")
                 elif row.value_kind == "bool":
                     col = col.astype("boolean")
-                if len(rows) > 1:
+                if multi_kind:
                     # multi-kind attrs coalesce in object space; typed
                     # extension arrays refuse cross-dtype fills
                     col = col.astype(object).where(col.notna(), np.nan)
                 series = col if series is None else series.where(series.notna(), col)
-                out = out.drop(columns=[row.column_name])
+                cols_to_drop.append(row.column_name)
             if series is not None:
                 if kinds == {"str"}:
                     # flat-contract convention: missing strings are ""
                     series = series.fillna("")
-                out[name] = series
+                new_columns[name] = series
+        if cols_to_drop:
+            out = out.drop(columns=cols_to_drop)
+        for name, series in new_columns.items():
+            out[name] = series
         # flat-contract names for source columns
         renames = {
             "source_path": "path",
