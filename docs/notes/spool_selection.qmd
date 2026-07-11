@@ -13,3 +13,26 @@ Coordinate predicates first select patches whose summary envelopes can overlap t
 Operations that create a new row or instruction plan, including chunking, sorting, and slicing, switch that derived spool to dataframe planning. Exact selections already attached to the catalog still apply when source patches are resolved.
 
 Catalog views share their source state. Adding, removing, or rescanning sources invalidates realized metadata so existing views observe the updated catalog under their composed predicates.
+
+The core contract, executed here so drift fails the doc build: names resolve attributes-first then coordinates, unknown names raise, and coordinate ranges are exact on the loaded patches (candidacy by envelope at the index, exactness at load):
+
+```{python}
+import pytest
+
+import dascore as dc
+from dascore.exceptions import InvalidSpoolQueryError
+
+spool = dc.get_example_spool("diverse_das")
+with pytest.raises(InvalidSpoolQueryError):
+    spool.select(not_a_name="anything")
+
+selected = spool.select(network="das2")
+assert all(p.attrs.network == "das2" for p in selected)
+
+df = spool.get_contents()
+t0 = df["time_min"].min()
+window = (t0, t0 + dc.to_timedelta64(1))
+for patch in spool.select(time=window):
+    coord = patch.get_coord("time")
+    assert coord.min() >= window[0] and coord.max() <= window[1]
+```

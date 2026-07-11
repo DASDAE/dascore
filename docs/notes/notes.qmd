@@ -11,3 +11,4 @@ This section of the documentation provides understanding-oriented explanation fo
 - [Velocity to Strain Rate](velocity_to_strain_rate.qmd)
 - [Spool Index](spool_index.qmd)
 - [Spool Selection](spool_selection.qmd)
+- [Spool Chunking](spool_chunking.qmd)

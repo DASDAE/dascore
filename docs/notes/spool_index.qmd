@@ -30,6 +30,46 @@ The current schema version is validated before any mutation. An unrelated, incom
 
 SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
 
+## The flat relation
+
+Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{dim}_def_key` coordinate identities), the `dims` signature, and one column per attribute. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
+
+```{python}
+import dascore as dc
+from dascore.io.index.catalog import PatchCatalog
+
+catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
+df = catalog.to_df()
+required = {"_patch_id", "_time_def_key", "dims", "time_min", "time_max", "time_step"}
+assert required.issubset(df.columns)
+```
+
+## Patch identity
+
+Every in-memory patch has a lazily minted instance identity (shared by copies — patches are immutable — while every patch operation creates a new instance with its own). The identity is the patch's synthetic source path in the index, so identity, deduplication, and resolution all agree:
+
+```{python}
+patch = dc.get_example_patch()
+cat = PatchCatalog.from_patches([patch, patch])  # one entry, not two
+row = cat.to_df().iloc[0]
+assert len(cat.to_df()) == 1
+assert row["path"].startswith("memorypatch://")
+assert cat.resolve_row(row.to_dict()) is patch
+```
+
+File-backed patches are identified by `(base_uri, source_path, source_patch_id)` instead; their rows resolve through readers rather than the registry.
+
+## Federation
+
+`spool + spool` merges catalogs table-to-table: source records are reconstructed from the member backends and re-ingested, so coordinate definitions deduplicate by definition key, the same source appearing in several members keeps a single entry, and file paths are absolutized so members with different roots coexist. A composite resolver routes in-memory rows to the shared registry and everything else through file readers.
+
+```{python}
+other = dc.get_example_patch().new()
+union = dc.spool([patch]) + dc.spool([other])
+assert len(union) == 2
+assert len(dc.spool([patch]) + dc.spool([patch])) == 1  # same patch dedups
+```
+
 ## Scope
 
-The index answers metadata selection and identifies candidate patches. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Chunk planning, cross-catalog federation, missing-dimension policy, and materialized derived data remain future work.
+The index answers metadata selection, identifies candidate patches, and plans chunk operations — all without touching patch data. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Materialized derived data (persisting chunked results) remains future work.

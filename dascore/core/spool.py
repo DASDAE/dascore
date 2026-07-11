@@ -856,8 +856,12 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
+        from dascore.io.index.plan import build_chunk_plan
+
         source = self._source_df
-        plan = self.chunk_plan(
+        working = self._chunk_working_df()
+        plan = build_chunk_plan(
+            working,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -877,8 +881,7 @@ class DataFrameSpool(BaseSpool):
             return self.new_from_df(empty, merge_kwargs=merge_kwargs)
         out_df = plan.outputs.drop(columns=["output_id"]).reset_index(drop=True)
         # Instructions bind plan members back to source rows by patch id.
-        working_ids = self._chunk_working_df()["_patch_id"]
-        pid_to_index = pd.Series(source.index.values, index=working_ids.values)
+        pid_to_index = pd.Series(source.index.values, index=working["_patch_id"].values)
         names = [f"{plan.dim}_min", f"{plan.dim}_max", f"{plan.dim}_step"]
         instructions = (
             plan.members.assign(

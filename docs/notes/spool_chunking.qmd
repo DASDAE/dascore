@@ -1,0 +1,110 @@
+---
+title: Spool Chunking
+---
+
+`Spool.chunk` runs in two stages: a **planner** decides everything from metadata alone, and **assembly** loads, trims, and combines patch data only when a patch is requested. The code cells below execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
+
+## Plans
+
+The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments.
+
+```{python}
+import dascore as dc
+
+spool = dc.get_example_spool("random_das")
+plan = spool.chunk_plan(time=3)
+assert len(plan.outputs) == len(spool.chunk(time=3))
+assert {"output_id", "_patch_id", "_modified"}.issubset(plan.members.columns)
+# Resolved parameters are recorded on the plan, never left in config.
+assert isinstance(plan.params["group"], tuple)
+assert plan.params["sampling_group_tolerance"] == dc.get_config().sampling_group_tolerance
+```
+
+Plans are deterministic: the same spool produces the same plan regardless of metadata row order, and members with `_modified=False` load whole (no per-patch selection cost).
+
+## Partitioning
+
+Patches may only combine when they agree on all of:
+
+1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: network, station, data type/category, tag, instrument and acquisition ids), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
+2. **Structure** — the dimensions tuple and the coordinate identity of every non-chunked dimension.
+3. **Sampling** — steps within the relative tolerance `config.sampling_group_tolerance` (default 5%).
+4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
+
+```{python}
+import numpy as np
+
+t0 = np.datetime64("2020-01-01", "ns")
+p1 = dc.get_example_patch(time_min=t0)
+time = p1.get_coord("time")
+p2 = dc.get_example_patch(time_min=time.max() + time.step)
+p3, p4 = p1.update_attrs(station="XX2"), p2.update_attrs(station="XX2")
+
+# Two stations, each with two contiguous patches: two outputs, no error.
+merged = dc.spool([p1, p2, p3, p4]).chunk(time=None)
+assert len(merged) == 2
+```
+
+Remaining (non-group, non-dimensional) attributes must be single-valued within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`.
+
+Patches lacking the chunked dimension raise by default; `missing_dim="drop"` excludes them instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
+
+```{python}
+import pytest
+from dascore.exceptions import ChunkError
+
+no_time = [dc.get_example_patch().mean("time") for _ in range(2)]
+with pytest.raises(ChunkError, match="missing_dim"):
+    dc.spool(no_time).chunk(time=None)
+assert len(dc.spool(no_time).chunk(time=None, missing_dim="drop")) == 0
+```
+
+## Merged coordinates
+
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.
+
+```{python}
+from dascore.core.coords import CoordRange, CoordSegmented
+
+# Contiguous members: exact fuse to a range.
+patch = dc.spool([p1, p2]).chunk(time=None)[0]
+assert isinstance(patch.get_coord("time"), CoordRange)
+
+# A gap forced together by a loose tolerance warns, and with
+# snap_coords=False the output keeps the exact segmented coordinate.
+gap_start = time.max() + 3 * time.step
+p_gap = dc.get_example_patch(time_min=gap_start)
+with pytest.warns(UserWarning, match="force merging"):
+    forced = dc.spool([p1, p_gap]).chunk(
+        time=None, tolerance=5, snap_coords=False
+    )[0]
+coord = forced.get_coord("time")
+assert isinstance(coord, CoordSegmented)
+assert len(coord.get_discontinuities("gaps")) == 1
+
+# The default simplifies the same merge to a range with bounded error:
+# every value within tolerance * step of its exact position.
+with pytest.warns(UserWarning, match="force merging"):
+    snapped = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
+snapped_coord = snapped.get_coord("time")
+assert isinstance(snapped_coord, CoordRange)
+deviation = abs(snapped_coord.values - coord.values).max()
+assert deviation <= 5 * time.step
+```
+
+Segmented coordinates are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
+
+## Union spools
+
+`spool + spool` produces a lazy spool over the union of both spools' metadata; chunking works across the seam, so contiguous patches from different spools (even file-backed and in-memory mixed) merge into one.
+
+```{python}
+combined = dc.spool([p1]) + dc.spool([p2])
+assert len(combined.chunk(time=None)) == 1
+
+# Spools have set semantics by patch instance: the same patch (or a copy
+# of it) appears once; operations mint distinct instances.
+assert len(dc.spool([p1, p1])) == 1
+assert len(dc.spool([p1, p1.new()])) == 2
+assert len(dc.spool([p1]) + dc.spool([p1])) == 1
+```
