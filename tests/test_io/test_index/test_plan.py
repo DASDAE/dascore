@@ -364,3 +364,29 @@ class TestChunkPlanAccessor:
         spool = dc.spool(tmp_path).update()
         plan = spool.chunk_plan(time=None)
         assert len(plan.outputs) == 1
+
+
+class TestUnderscoreDimNames:
+    """Dims with underscores must not confuse column ownership."""
+
+    def test_chunk_event_time(self):
+        """Adjacent patches along an underscore dim merge cleanly."""
+        patch = dc.get_example_patch().rename_coords(time="event_time")
+        coord = patch.get_coord("event_time")
+        middle = coord.values[len(coord) // 2]
+        p1 = patch.select(event_time=(None, middle))
+        p2 = patch.select(event_time=(middle + coord.step, None))
+        merged = dc.spool([p1, p2]).chunk(event_time=None)
+        assert len(merged) == 1
+        out = merged[0].get_coord("event_time")
+        assert out.min() == coord.min()
+        assert out.max() == coord.max()
+
+    def test_segment_event_time(self):
+        """Segmenting along an underscore dim works too."""
+        patch = dc.get_example_patch().rename_coords(time="event_time")
+        spool = dc.spool([patch])
+        chunked = spool.chunk(event_time=2)
+        assert len(chunked) > 1
+        for sub in chunked:
+            assert "event_time" in sub.dims

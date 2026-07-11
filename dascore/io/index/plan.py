@@ -208,6 +208,22 @@ def _coerce_length_overlap(value, overlap, start_dtype):
     return value, overlap
 
 
+def _coord_owner(col: str, coord_names: set[str]) -> str | None:
+    """
+    Return the coordinate owning an envelope column, if any.
+
+    Ownership is decided by matching the full name against known
+    coordinates with an interval suffix; splitting on the first
+    underscore would mis-assign columns of dims like `event_time`.
+    """
+    for suffix in ("_min", "_max", "_step", "_units"):
+        if col.endswith(suffix):
+            base = col[: -len(suffix)]
+            if base in coord_names:
+                return base
+    return None
+
+
 def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
     """
     Return the carried column values for one partition (spec 2.5/6.4).
@@ -216,12 +232,13 @@ def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
     Remaining public attrs must be single-valued, policed by `conflict`.
     """
     dims = set(str(sub.iloc[0].get("dims", "")).split(","))
+    coord_names = dims | {name}
     carried: dict[str, Any] = {}
     for col in sub.columns:
         if col.startswith("_") or col in _SOURCE_COLUMNS:
             continue
-        prefix = col.split("_")[0]
-        if prefix == name:  # chunk-dim envelope columns are rebuilt
+        owner = _coord_owner(col, coord_names)
+        if owner == name:  # chunk-dim envelope columns are rebuilt
             continue
         values = sub[col].unique()
         single = len(values) == 1 or (len(values) and pd.isnull(values).all())
@@ -232,7 +249,7 @@ def _police_columns(sub: pd.DataFrame, name, group_attrs, conflict) -> dict:
         if in_group:  # partitioning guarantees this; guard anyway
             carried[col] = values[0]
             continue
-        if prefix in dims or conflict == "raise":
+        if owner is not None or conflict == "raise":
             msg = (
                 f"Cannot merge on dim {name} because all values for "
                 f"{col} are not equal. Consider using the `conflict` "
