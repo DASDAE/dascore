@@ -17,7 +17,6 @@ Selection composes Query predicates without running SQL; realization
 from __future__ import annotations
 
 import abc
-import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +25,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
+from dascore.exceptions import MissingPatchError
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, patch_record
 from dascore.io.index.query import (
@@ -34,8 +34,6 @@ from dascore.io.index.query import (
     relative_offset,
 )
 from dascore.utils.pd import adjust_segments
-
-_counter = itertools.count()
 
 
 def _row_source_patch_id(row: Mapping) -> str:
@@ -63,19 +61,41 @@ class PatchResolver(abc.ABC):
 
 
 class LiveResolver(PatchResolver):
-    """Serve patches from an in-memory registry."""
+    """
+    Serve patches from an in-memory registry.
 
-    def __init__(self):
-        self._registry: dict[tuple[str, str], dc.Patch] = {}
+    The registry *is* the store for live catalogs: a dict from each
+    patch's synthetic path (`memorypatch://<instance_id>`) to the patch
+    itself. Dict construction deduplicates identical patch instances
+    (set semantics by lineage), and merging catalogs unions the dicts.
+    """
 
-    def register(self, path: str, source_patch_id: str, patch: dc.Patch) -> None:
+    def __init__(self, patches: Sequence[dc.Patch] = ()):
+        self._registry: dict[str, dc.Patch] = {
+            _patch_path(patch): patch for patch in patches
+        }
+
+    def register(self, path: str, patch: dc.Patch) -> None:
         """Register a live patch under its synthetic source identity."""
-        self._registry[(path, source_patch_id)] = patch
+        self._registry[path] = patch
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Look the patch up; live patches ignore trim hints."""
-        key = (row["path"], _row_source_patch_id(row))
-        return self._registry[key]
+        path = str(row["path"])
+        try:
+            return self._registry[path]
+        except KeyError:
+            msg = (
+                f"The in-memory patch for {path} is not available in this "
+                "session (e.g. the row came from a reopened index). "
+                "In-memory patches only persist by writing them to files."
+            )
+            raise MissingPatchError(msg) from None
+
+
+def _patch_path(patch: dc.Patch) -> str:
+    """Return the synthetic source path identifying a live patch."""
+    return f"memorypatch://{patch._instance_id}"
 
 
 class FileResolver(PatchResolver):
@@ -158,16 +178,13 @@ class CompositeResolver(PatchResolver):
         return self.file.resolve(row, **trim)
 
 
-def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
-    """Build source records for live patches with synthetic identities."""
-    token = next(_counter)
+def _live_records(registry: Mapping[str, dc.Patch]):
+    """Build source records for live patches keyed by their identity."""
     records = []
-    for num, patch in enumerate(patches):
+    for path, patch in registry.items():
         # patch.summary is a cached_property: reuse fingerprints and
         # summaries the patch already computed instead of rebuilding.
-        summary = patch.summary
-        path = f"memory://catalog_{token}/{num}"
-        record = patch_record(summary)
+        record = patch_record(patch.summary)
         records.append(
             SourceRecord(
                 source_path=path,
@@ -176,7 +193,6 @@ def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
                 patches=(record,),
             )
         )
-        resolver.register(path, record.source_patch_id, patch)
     return records
 
 
@@ -213,7 +229,6 @@ class PatchCatalog:
         backend=None,
         resolver: PatchResolver | None = None,
         syncer=None,
-        pending: tuple = (),
         queries: tuple[Query, ...] = (),
         residuals: tuple[tuple[dict, bool, bool], ...] = (),
         revision: _CatalogRevision | None = None,
@@ -221,14 +236,14 @@ class PatchCatalog:
         self._backend = backend
         self.resolver = resolver
         self._syncer = syncer
-        # live patches not yet ingested; kept (not a closure) so catalogs
-        # pickle and can rebuild their backend after unpickling.
-        self._pending = tuple(pending)
         self._queries = tuple(queries)
         self._residuals = tuple(residuals)
         self._revision = revision or _CatalogRevision()
         self._df_cache: pd.DataFrame | None = None
         self._df_cache_revision = -1
+        # Source records for rebuilding an in-memory backend (set by
+        # __getstate__ so pickled catalogs survive losing the connection).
+        self._rebuild_records: tuple = ()
 
     # --- construction -------------------------------------------------
 
@@ -237,8 +252,11 @@ class PatchCatalog:
         """
         Catalog over live patches. No backend work happens until the
         first metadata operation.
+
+        The resolver's registry is the store; identical patch instances
+        collapse to a single entry (set semantics by lineage).
         """
-        return cls(resolver=LiveResolver(), pending=tuple(patches))
+        return cls(resolver=LiveResolver(patches))
 
     @classmethod
     def union(cls, catalogs: Sequence[PatchCatalog]) -> PatchCatalog:
@@ -299,8 +317,11 @@ class PatchCatalog:
         """
         if self._backend is None:
             self._backend = get_backend(":memory:")
-            if self._pending:
-                self._backend.write_sources(_live_records(self._pending, self.resolver))
+            if self._rebuild_records:
+                self._backend.write_sources(list(self._rebuild_records))
+                self._rebuild_records = ()
+            elif registry := getattr(self.resolver, "_registry", None):
+                self._backend.write_sources(_live_records(registry))
         if self._syncer is not None and self._syncer.ensure_updated():
             self._invalidate()
         return self._backend
@@ -309,16 +330,25 @@ class PatchCatalog:
         """
         Pickle without the live DB connection.
 
-        Live catalogs rebuild their backend from pending patches on next
-        use; the resolver registry (which pickled rows reference) rides
-        along unchanged, so already-realized views keep resolving.
+        In-memory backends (live and union catalogs) ride along as
+        source records and are re-ingested on next use; the resolver
+        registry (the store for live patches) pickles with its patches.
+        Directory catalogs rebuild from their index file instead.
         """
+        from dascore.io.index.ingest import records_from_backend
+
         state = dict(self.__dict__)
         state["_backend"] = None
-        if isinstance(self.resolver, LiveResolver) and not state["_pending"]:
-            # allow rebuilding the backend from the registered patches
-            registry = self.resolver._registry
-            state["_pending"] = tuple(registry.values())
+        # Live catalogs rebuild from their registry without touching the
+        # connection (which may belong to another thread during pickling);
+        # other in-memory catalogs (e.g. unions) capture their rows.
+        needs_records = (
+            self._backend is not None
+            and self._syncer is None
+            and not isinstance(self.resolver, LiveResolver)
+        )
+        if needs_records:
+            state["_rebuild_records"] = tuple(records_from_backend(self._backend))
         return state
 
     def _view(self, queries, residuals) -> PatchCatalog:
@@ -497,7 +527,11 @@ class PatchCatalog:
             msg = "add() currently supports in-memory catalogs only."
             raise NotImplementedError(msg)
         patches = [patches] if isinstance(patches, dc.Patch) else list(patches)
-        self.backend.write_sources(_live_records(patches, self.resolver))
+        additions = {_patch_path(x): x for x in patches}
+        self.resolver._registry.update(additions)
+        # Re-adding a patch replaces its row (same identity), so this
+        # stays idempotent.
+        self.backend.write_sources(_live_records(additions))
         self._invalidate()
         return self
 

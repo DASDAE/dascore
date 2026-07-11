@@ -616,7 +616,8 @@ def get_patch_names(
     path_ser = df["path"].astype(str) if "path" in col_set else None
     if path_ser is not None:
         # synthetic in-memory identities are not real file names
-        usable = path_ser.str.len().gt(0) & ~path_ser.str.startswith("memory://")
+        # (memory:// and memorypatch:// schemes)
+        usable = path_ser.str.len().gt(0) & ~path_ser.str.startswith("memory")
         if usable.any():
             return _get_filename(df["path"], strip_extension)
     # Determine the requested fields; absent columns render as empty so
@@ -1288,8 +1289,9 @@ def concatenate_patches(
     >>> spool_concat = spool.concatenate(wave_rank=None)
     >>> assert "wave_rank" in spool_concat[0].dims
     >>>
-    >>> # Concatenate patches in groups of 3.
-    >>> big_spool = dc.spool([patch] * 12)
+    >>> # Concatenate patches in groups of 3. Note: spools keep one
+    >>> # entry per patch instance, so distinct copies are needed.
+    >>> big_spool = dc.spool([patch.new() for _ in range(12)])
     >>> spool_concat = big_spool.concatenate(time=3)
     >>> assert len(spool_concat) == 4
 

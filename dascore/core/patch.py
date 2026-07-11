@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import cached_property
 from typing import Final
+from uuid import uuid4
 
 import numpy as np
 from rich.text import Text
@@ -261,6 +262,19 @@ class Patch(NamespaceOwner):
         Return a metadata-only summary of the patch.
         """
         return PatchSummary.from_patch(self)
+
+    @cached_property
+    def _instance_id(self) -> str:
+        """
+        A stable identity for this patch instance.
+
+        Minted lazily; once computed it rides along with copies and
+        pickles (patches are immutable, so identical copies sharing an
+        identity is correct). Patch operations produce new instances
+        with new identities. Never stored in attrs, so it cannot affect
+        equality or survive into saved files.
+        """
+        return uuid4().hex
 
     @property
     def coords(self) -> CoordManager:

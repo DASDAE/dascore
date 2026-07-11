@@ -137,3 +137,54 @@ class TestCompositeResolver:
         assert len(second.to_df()) == 2
         patches = [second.resolve_row(x) for _, x in second.to_df().iterrows()]
         assert {id(x) for x in patches} == {id(p1), id(p2)}
+
+
+class TestPatchIdentity:
+    """Set semantics by patch instance identity (lineage)."""
+
+    def test_duplicate_instances_collapse(self):
+        """The same patch instance twice is one spool entry."""
+        patch = dc.get_example_patch()
+        assert len(dc.spool([patch, patch])) == 1
+
+    def test_deepcopy_shares_identity(self):
+        """Copies of an immutable patch share its identity."""
+        import copy
+
+        patch = dc.get_example_patch()
+        _ = patch._instance_id  # mint before copying
+        clone = copy.deepcopy(patch)
+        assert clone._instance_id == patch._instance_id
+        assert len(dc.spool([patch, clone])) == 1
+
+    def test_new_instance_distinct(self):
+        """patch.new() (and any patch op) mints a distinct identity."""
+        patch = dc.get_example_patch()
+        assert len(dc.spool([patch, patch.new()])) == 2
+
+    def test_ops_mint_new_identity(self):
+        """Operations produce instances with their own identity."""
+        patch = dc.get_example_patch()
+        other = patch.update_attrs(tag="x")
+        assert patch._instance_id != other._instance_id
+
+    def test_pickle_round_trip_preserves_content(self):
+        """Spools of live patches pickle and rebuild their backend."""
+        import pickle
+
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+        _ = len(spool)  # realize the catalog
+        loaded = pickle.loads(pickle.dumps(spool))
+        assert len(loaded) == 1
+        assert loaded[0] == patch
+
+    def test_union_pickles(self):
+        """Union spools survive pickling (rows ride along as records)."""
+        import pickle
+
+        p1 = dc.get_example_patch()
+        p2 = p1.new()
+        combined = dc.spool([p1]) + dc.spool([p2])
+        loaded = pickle.loads(pickle.dumps(combined))
+        assert len(loaded) == 2

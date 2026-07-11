@@ -274,6 +274,13 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         -----
         [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) performs a
         similar operation but disregards the coordinate values.
+
+        To inspect what a chunk call will do before running it — which
+        output patches it produces and which slice of which source patch
+        feeds each one — use
+        [`Spool.chunk_plan`](`dascore.core.spool.DataFrameSpool.chunk_plan`),
+        which takes the same arguments and returns the plan without
+        touching any data.
         """
 
     @abc.abstractmethod
@@ -779,6 +786,63 @@ class DataFrameSpool(BaseSpool):
                 return spool[0]
         return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 
+    def _chunk_working_df(self) -> pd.DataFrame:
+        """Return the source rows the chunk planner consumes."""
+        source = self._source_df
+        working = source.drop(columns=list(self._drop_columns), errors="ignore")
+        if "_patch_id" in source.columns:
+            working = working.assign(_patch_id=source["_patch_id"])
+        else:
+            working = working.assign(_patch_id=np.arange(len(source)))
+        return working
+
+    def chunk_plan(
+        self,
+        overlap: numeric_types | timeable_types | None = None,
+        keep_partial: bool = False,
+        snap_coords: bool = True,
+        tolerance: float = 1.5,
+        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "raise",
+        **kwargs,
+    ):
+        """
+        Return the plan `chunk` would execute, without touching any data.
+
+        The returned [`ChunkPlan`](`dascore.io.index.plan.ChunkPlan`) is a
+        read-only diagnostic: its `outputs` table describes each patch the
+        chunked spool would contain (envelopes, step, carried attributes),
+        its `members` table shows exactly which slice of which source patch
+        feeds each output, and `params` records every resolved parameter
+        (including the group attributes and sampling tolerance in effect).
+        Accepts the same arguments as
+        [`chunk`](`dascore.BaseSpool.chunk`).
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das")
+        >>> plan = spool.chunk_plan(time=3)
+        >>> assert len(plan.outputs) == len(spool.chunk(time=3))
+        >>> # See which sources contribute to the first output patch.
+        >>> members = plan.members
+        >>> first = members[members["output_id"] == 0]
+        """
+        from dascore.io.index.plan import build_chunk_plan
+
+        return build_chunk_plan(
+            self._chunk_working_df(),
+            overlap=overlap,
+            keep_partial=keep_partial,
+            snap_coords=snap_coords,
+            tolerance=tolerance,
+            conflict=conflict,
+            group=group,
+            missing_dim=missing_dim,
+            **kwargs,
+        )
+
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(
         self,
@@ -792,16 +856,8 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
-        from dascore.io.index.plan import build_chunk_plan
-
         source = self._source_df
-        working = source.drop(columns=list(self._drop_columns), errors="ignore")
-        if "_patch_id" in source.columns:
-            working = working.assign(_patch_id=source["_patch_id"])
-        else:
-            working = working.assign(_patch_id=np.arange(len(source)))
-        plan = build_chunk_plan(
-            working,
+        plan = self.chunk_plan(
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -821,7 +877,8 @@ class DataFrameSpool(BaseSpool):
             return self.new_from_df(empty, merge_kwargs=merge_kwargs)
         out_df = plan.outputs.drop(columns=["output_id"]).reset_index(drop=True)
         # Instructions bind plan members back to source rows by patch id.
-        pid_to_index = pd.Series(source.index.values, index=working["_patch_id"].values)
+        working_ids = self._chunk_working_df()["_patch_id"]
+        pid_to_index = pd.Series(source.index.values, index=working_ids.values)
         names = [f"{plan.dim}_min", f"{plan.dim}_max", f"{plan.dim}_step"]
         instructions = (
             plan.members.assign(
@@ -1101,7 +1158,11 @@ class MemorySpool(DataFrameSpool):
             elif isinstance(data, Sequence) and all(
                 isinstance(x, dc.Patch) for x in data
             ):
-                self._patches = tuple(data)
+                # The same patch instance (by lineage: copies share an
+                # identity) appears once; spools have set semantics for
+                # identical in-memory patches.
+                unique = {x._instance_id: x for x in data}
+                self._patches = tuple(unique.values())
             else:  # eg a spool or dataframe; needs the dataframe machinery.
                 self._data = data
 

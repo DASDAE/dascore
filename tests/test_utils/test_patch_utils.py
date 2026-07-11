@@ -30,8 +30,8 @@ from dascore.utils.patch import (
     get_patch_names,
     get_patch_window_size,
     get_window_axis_step,
-    merge_patches,
     merge_compatible_coords_attrs,
+    merge_patches,
     patches_to_df,
     stack_patches,
     swap_kwargs_dim_to_axis,
@@ -568,8 +568,13 @@ class TestConcatenate:
             concatenate_patches([p1, p2], time=None)
 
     def test_duplicate_patches_existing_dim(self, random_patch):
-        """Ensure duplicate patches are concatenated together."""
-        spool = dc.spool([random_patch, random_patch])
+        """Ensure equal (but distinct) patches are concatenated together.
+
+        Note: the same patch *instance* twice would collapse to one entry
+        (spools have set semantics by patch identity); patch.new() mints
+        a distinct instance with equal contents.
+        """
+        spool = dc.spool([random_patch, random_patch.new()])
         out = concatenate_patches(spool, time=None)
         assert len(out) == 1
         patch = out[0]
@@ -614,7 +619,8 @@ class TestConcatenate:
         """Ensure the new dimension can be chunked by an int value."""
         # When new_dim = 1 it should only add a new dimension to each patch
         # and not change the original shape.
-        spool = dc.spool([random_patch] * 6)
+        # Distinct instances: identical instances would dedup to one.
+        spool = dc.spool([random_patch] + [random_patch.new() for _ in range(5)])
         # Test for single values along new dimension
         new = spool.concatenate(new_dim=1)
         assert len(new) == len(spool)
