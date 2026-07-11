@@ -4,7 +4,7 @@ Randomized heterogeneity stress test for the spool index.
 Generates hundreds of patch summaries with randomized dimension names,
 coord dtypes/units, attr names/kinds (including hostile names that
 collide after sanitization), and verifies ingest, counts, and the
-no-false-negative query contract on every backend.
+no-false-negative query contract on SQLite.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from dascore.core.summary import PatchSummary
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.units import get_quantity
 
-BACKENDS = ("duckdb", "sqlite", "parquet")
 N_PATCHES = 300
 
 _DIM_POOL = (
@@ -119,6 +118,8 @@ def _random_attrs(rng) -> dict:
                 int(rng.integers(0, 10**6)), "s"
             )
         else:
+            # "s" is dimensionally incompatible with "m"/"ft": ingest keeps
+            # the first-seen dimension and skips the rest with a warning.
             out[name] = float(rng.uniform(0, 100)) * get_quantity(
                 str(rng.choice(["m", "ft", "s"]))
             )
@@ -155,11 +156,11 @@ def summaries():
     return make_random_summaries(N_PATCHES, seed=42)
 
 
-@pytest.fixture(params=BACKENDS)
-def backend(request, tmp_path_factory, summaries):
-    """Each backend ingesting the random population."""
-    path = tmp_path_factory.mktemp("stress") / f"idx_{request.param}"
-    back = get_backend(path, kind=request.param)
+@pytest.fixture()
+def backend(tmp_path_factory, summaries):
+    """A SQLite backend ingesting the random population."""
+    path = tmp_path_factory.mktemp("stress") / "index.sqlite3"
+    back = get_backend(path)
     back.write_sources(summaries_to_records(summaries))
     yield back
     back.close()

@@ -13,12 +13,10 @@ import pandas as pd
 from rich.text import Text
 from typing_extensions import Self
 
-import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS
-from dascore.core.spool import BaseSpool, DataFrameSpool, MemorySpool
-from dascore.exceptions import MissingPatchError
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.core.spool import BaseSpool, DataFrameSpool
+from dascore.io.index.catalog import FileResolver, PatchCatalog
 from dascore.io.indexer import AbstractIndexer
 from dascore.utils.docs import compose_docstring
 from dascore.utils.pd import adjust_segments
@@ -43,10 +41,6 @@ class DirectorySpool(DataFrameSpool):
         will save time in indexing.
     select_kwargs
         Dict of keyword arguments to restrict output contents.
-    index_engine
-        The database backend for the index: "sqlite" (default, no extra
-        dependencies), "duckdb", or "parquet" (both require duckdb). See
-        the spool index design discussion (#648).
     """
 
     _drop_columns = ("file_format", "file_version", "path", "source_patch_id")
@@ -59,7 +53,6 @@ class DirectorySpool(DataFrameSpool):
         preferred_format: str | None = None,
         select_kwargs: dict | None = None,
         merge_kwargs: dict | None = None,
-        index_engine: str = "sqlite",
     ):
         super().__init__(select_kwargs=select_kwargs, merge_kwargs=merge_kwargs)
         # Init file spool from another file spool
@@ -69,11 +62,18 @@ class DirectorySpool(DataFrameSpool):
         # Init file spool from indexer
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
-        elif isinstance(base_path, Path | str | UPath):
-            self.indexer = DBDirectoryIndexer(
-                base_path, engine=index_engine, index_path=index_path
+            self._catalog = PatchCatalog(
+                backend=self.indexer._backend,
+                resolver=FileResolver(root=self.indexer.path),
+                syncer=self.indexer,
             )
+        elif isinstance(base_path, Path | str | UPath):
+            self._catalog = PatchCatalog.from_directory(
+                base_path, index_path=index_path
+            )
+            self.indexer = self._catalog._syncer
         assert hasattr(self, "indexer"), "indexer not set."
+        self._catalog_native = True
         self._preferred_format = preferred_format
 
     def __rich__(self):
@@ -87,10 +87,12 @@ class DirectorySpool(DataFrameSpool):
 
     def _get_df(self):
         """Get the dataframe of current contents."""
-        out = adjust_segments(
+        if not self._select_kwargs:
+            return self._source_df
+        # constructor select_kwargs restrict contents (docstring contract)
+        return adjust_segments(
             self._source_df, ignore_bad_kwargs=True, **self._select_kwargs
         )
-        return out
 
     def _get_instruction_df(self):
         """Return instruction df on how to get from source_df to df."""
@@ -99,7 +101,7 @@ class DirectorySpool(DataFrameSpool):
 
     def _get_source_df(self):
         """Return a dataframe of sources in spool."""
-        return self.indexer(**self._select_kwargs).reset_index(drop=True)
+        return self._catalog.to_df().reset_index(drop=True)
 
     @property
     def spool_path(self):
@@ -114,12 +116,8 @@ class DirectorySpool(DataFrameSpool):
     @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
         """{doc}."""
-        out = self.__class__(
-            base_path=self.indexer.update(progress=progress),
-            preferred_format=self._preferred_format,
-            select_kwargs=self._select_kwargs,
-        )
-        return out
+        self._catalog.update(progress=progress)
+        return self._new_from_catalog(self._catalog)
 
     def _df_to_dict_list(self, df):
         """
@@ -134,51 +132,15 @@ class DirectorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        final_kwargs = dict(kwargs)
-        final_kwargs.update(self._select_kwargs)
-        patches = self._read_patches(final_kwargs)
-        if patches is None:  # fast path doesn't apply, use generic read.
-            return self._read_and_resolve_patch(final_kwargs)
-        if not patches:
-            # Iteration skips these with a warning, see #583.
-            msg = (
-                f"No patch in {final_kwargs.get('path')} matches the "
-                f"requested range; it may have been trimmed to nothing."
-            )
-            raise MissingPatchError(msg)
-        return patches[0]
-
-    def _read_patches(self, kwargs) -> list[dc.Patch] | None:
-        """
-        Read patches directly through the file's FiberIO.
-
-        This skips the format detection of dc.read and the spool indexing
-        machinery applied to its output, which add up when loading many
-        files. Returns None when the fast path can't be safely used.
-        """
-        fmt, version = kwargs.get("file_format"), kwargs.get("file_version")
-        if not fmt or not version:
-            # Without a concrete version get_fiberio would return the newest
-            # reader; let dc.read detect the file's actual version instead.
-            return None
-        fiber_io = dc.io.FiberIO.manager.get_fiberio(format=fmt, version=version)
-        # Only apply select kwargs when the source patch is trimmed by the
-        # instruction df or the spool itself; otherwise the whole file is
-        # wanted and selection is wasted work.
+        # Push trims into the reader only when the instruction row narrows
+        # the source (chunk/select) or constructor select_kwargs restrict
+        # it; otherwise the whole file is wanted and selection is wasted.
+        trim = {}
         if kwargs.get("_modified") or self._select_kwargs:
-            select = {
+            merged = {**kwargs, **self._select_kwargs}
+            trim = {
                 k: v
-                for k, v in kwargs.items()
+                for k, v in merged.items()
                 if k not in self._drop_columns and not k.startswith("_")
             }
-        else:
-            select = {}
-        spool = fiber_io.read(kwargs["path"], **select)
-        if not isinstance(spool, MemorySpool):
-            return None
-        patches = list(spool)
-        # A multi-patch file is ambiguous: the row refers to one specific
-        # patch. Let the generic path resolve source_patch_id.
-        if len(patches) > 1:
-            return None
-        return patches
+        return self._catalog.resolve_row(kwargs, extra_trim=trim)

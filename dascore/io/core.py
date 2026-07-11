@@ -38,6 +38,7 @@ from dascore.exceptions import (
     InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
+    MissingPatchError,
     ParameterError,
     PatchAttributeError,
     RemoteCacheError,
@@ -257,23 +258,31 @@ def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
 
 def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
     """Select one loaded patch from a spool using source identity."""
-
-    def _matches_patch_name(patch: dc.Patch, source_id: str) -> bool:
-        """Return True when a generated patch name matches the source id."""
-        return patch.get_patch_name() == source_id
-
     if len(spool) == 0:
-        msg = "index of [0] is out of bounds for spool."
-        raise IndexError(msg)
+        # Iteration skips these with a warning, see #583.
+        msg = (
+            "No patch remained after applying load filters; the requested "
+            "range may have trimmed it to nothing."
+        )
+        raise MissingPatchError(msg)
     if source_patch_id not in (None, ""):
         source_patch_id = str(source_patch_id)
+        # Native source ids are preserved on patch attrs by their readers.
+        matches = [
+            patch
+            for patch in spool
+            if str(patch.attrs.get("_source_patch_id", "") or "") == source_patch_id
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        # Synthesized ids are positional within the full source read.
         try:
             index = int(source_patch_id)
         except (TypeError, ValueError):
             index = None
         if index is not None and 0 <= index < len(spool):
             return spool[index]
-        if len(spool) == 1 and _matches_patch_name(spool[0], source_patch_id):
+        if len(spool) == 1 and spool[0].get_patch_name() == source_patch_id:
             return spool[0]
         msg = "Patch could not be uniquely resolved after applying load filters."
         raise PatchAttributeError(msg)

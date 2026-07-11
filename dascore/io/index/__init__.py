@@ -1,10 +1,9 @@
 """
-Backend-agnostic spool index package.
+SQLite spool index package.
 
 Provides a normalized, summary-only index of patch metadata (sources,
-patches, attrs, coords) with interchangeable storage backends. See
-`.scratch/spool_index_design.md` on the spool-index-backend branch and
-GitHub discussion #648 for the design.
+patches, attrs, and coordinates. PatchCatalog is the spool-facing metadata
+engine; the remaining exports support its internal index implementation.
 """
 
 from __future__ import annotations

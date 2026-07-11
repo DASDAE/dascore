@@ -1,0 +1,35 @@
+---
+title: Spool Index
+---
+
+Directory and in-memory spools use the same metadata model. The persisted directory index is one SQLite file named `.dascore_index.sqlite3`; in-memory spools use the same schema in an in-memory SQLite database. The index stores summaries and source identities, not patch data.
+
+## Why seven tables?
+
+The schema separates records with different lifetimes and cardinalities. This avoids repeating source and coordinate metadata on every patch and gives SQLite enforceable ownership boundaries.
+
+| Table | One row per | Purpose |
+|---|---|---|
+| `meta_data` | index | Identifies the file and its schema version |
+| `sources` | file or directory-format source | Tracks the source path, format, size, and modification time |
+| `patches` | patch within a source | Stores patch identity and common time/distance envelopes |
+| `attrs` | patch | Stores typed attribute values in dynamically added columns |
+| `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
+| `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
+| `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions |
+
+The last two tables are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive an exact semantic fingerprint, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides an exact fingerprint. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
+
+`attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
+
+## Lifecycle and validation
+
+The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse.
+
+The current schema version is validated before any mutation. An unrelated, incomplete, or older prototype database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it.
+
+SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
+
+## Scope
+
+The index answers metadata selection and identifies candidate patches. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Chunk planning, cross-catalog federation, missing-dimension policy, and materialized derived data remain future work.

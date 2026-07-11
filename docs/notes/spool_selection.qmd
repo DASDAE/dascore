@@ -1,0 +1,15 @@
+---
+title: Spool Selection
+---
+
+`Spool.select` uses one selector model for memory and directory spools. Patch-list and directory spools compose selections in a `PatchCatalog`; ordinary metadata predicates are pushed into SQLite and remain lazy until contents, length, indexing, or iteration requires rows.
+
+Bare selector names resolve to attributes first and then coordinates. `_attrs={...}` and `_coords={...}` provide explicit namespaces when needed. Unknown names raise immediately instead of being ignored.
+
+Attribute equality, membership, ranges, and glob predicates are evaluated by the index. Regular expressions use a SQL candidate predicate and an exact residual filter; chained regular expressions are combined with AND. Quantities are converted to the canonical unit recorded by the index, and dimensionally incompatible queries raise rather than silently returning incorrect matches. Values stored without units can never be proven incompatible, so they remain candidates for quantity selectors rather than being silently excluded.
+
+Coordinate predicates first select patches whose summary envelopes can overlap the request. The loaded patch is then selected exactly. `samples=True` is always patch-local and therefore never excludes a patch at the index stage. `relative=True` resolves coordinate ranges against the current spool view's global envelope; attribute predicates in the same call remain unchanged.
+
+Operations that create a new row or instruction plan, including chunking, sorting, and slicing, switch that derived spool to dataframe planning. Exact selections already attached to the catalog still apply when source patches are resolved.
+
+Catalog views share their source state. Adding, removing, or rescanning sources invalidates realized metadata so existing views observe the updated catalog under their composed predicates.

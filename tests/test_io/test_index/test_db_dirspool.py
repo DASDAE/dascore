@@ -2,7 +2,7 @@
 Integration tests: DirectorySpool running on the database index.
 
 Exercises the full path — directory walk, scan, ingest, query, patch
-loading, chunk — against real files for every backend.
+loading, and chunk against real files.
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ import dascore as dc
 from dascore.clients.dirspool import DirectorySpool
 from dascore.examples import spool_to_directory
 
-BACKENDS = ("duckdb", "sqlite", "parquet")
-
 
 @pytest.fixture(scope="class")
 def spool_directory(tmp_path_factory):
@@ -24,10 +22,10 @@ def spool_directory(tmp_path_factory):
     return spool_to_directory(spool, path=tmp_path_factory.mktemp("db_spool"))
 
 
-@pytest.fixture(params=BACKENDS)
-def db_spool(request, spool_directory):
-    """A DirectorySpool using each database index engine."""
-    spool = DirectorySpool(spool_directory, index_engine=request.param)
+@pytest.fixture()
+def db_spool(spool_directory):
+    """A DirectorySpool using its SQLite index."""
+    spool = DirectorySpool(spool_directory)
     out = spool.update(progress=None)
     yield out
     out.indexer.close()
@@ -84,18 +82,18 @@ class TestDBDirectorySpool:
 class TestUpdateLifecycle:
     """New, modified, and deleted files are tracked per source."""
 
-    @pytest.fixture(params=BACKENDS)
-    def fresh(self, request, tmp_path):
-        """A modifiable spool directory + db spool of each engine."""
+    @pytest.fixture()
+    def fresh(self, tmp_path):
+        """A modifiable spool directory and database spool."""
         spool = dc.get_example_spool("random_das")
         path = spool_to_directory(spool, path=tmp_path / "data")
-        out = DirectorySpool(path, index_engine=request.param).update(progress=None)
-        yield path, out, request.param
+        out = DirectorySpool(path).update(progress=None)
+        yield path, out
         out.indexer.close()
 
     def test_new_file_found(self, fresh):
         """A file added after indexing appears on the next update."""
-        path, spool, _engine = fresh
+        path, spool = fresh
         patch = dc.get_example_patch()
         patch.io.write(path / "new_file.hdf5", "dasdae")
         updated = spool.update(progress=None)
@@ -103,7 +101,7 @@ class TestUpdateLifecycle:
 
     def test_deleted_file_removed(self, fresh):
         """A deleted file's rows are dropped on the next update."""
-        path, spool, _engine = fresh
+        path, spool = fresh
         target = next(iter(path.glob("*.hdf5")))
         target.unlink()
         updated = spool.update(progress=None)

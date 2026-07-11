@@ -4,9 +4,8 @@ Query model and SQL generation for the spool index.
 Implements the selector semantics spec (see
 `.scratch/selector_semantics_spec.md`): the index only produces
 candidates — predicates the summary cannot evaluate exactly are the
-caller's responsibility at patch-load time. SQL generation is shared by
-all backends; anything a dialect cannot push down is applied as a pandas
-residual filter with identical semantics.
+caller's responsibility at patch-load time. Predicates SQLite cannot evaluate
+exactly are applied as pandas residual filters.
 """
 
 from __future__ import annotations
@@ -19,11 +18,14 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from dascore.exceptions import InvalidSpoolQueryError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import typed_value
+from dascore.units import convert_units
+from dascore.utils.misc import sanitize_range_param
 
 _GLOB_CHARS = frozenset("*?[")
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,19 @@ def _is_range(value) -> bool:
     return isinstance(value, tuple) and len(value) == 2
 
 
+def normalize_range_forms(value):
+    """
+    Normalize the patch-level slice range form to a 2-tuple.
+
+    Only slices are converted: bare None/Ellipsis keep their own errors,
+    and a fully-open range is rejected downstream as having no usable
+    bounds (per the selector spec).
+    """
+    if isinstance(value, slice):
+        return sanitize_range_param(value)
+    return value
+
+
 def _coerce_scalar(value, target_kinds: set[str]):
     """
     Coerce a query scalar to (kind, storable value).
@@ -68,26 +83,59 @@ def _coerce_scalar(value, target_kinds: set[str]):
     if typed.kind == "str" and "time" in target_kinds:
         try:
             retyped = typed_value(np.datetime64(pd.Timestamp(value), "ns"))
-            return retyped.kind, retyped.value
+            return retyped
         except (ValueError, TypeError):
             pass
-    return typed.kind, typed.value
+    return typed
 
 
-def _range_bounds(value, target_kinds: set[str]):
-    """Return (kind, lo, hi) from a range tuple, handling open bounds."""
+def _normalize_unit(value) -> str | None:
+    """Return a nullable unit string from a dataframe value."""
+    return None if value is None or pd.isnull(value) else str(value)
+
+
+def _to_target_unit(typed, target_units: str | None, name: str):
+    """Validate/convert a numeric query value for one stored unit."""
+    if typed.kind != "num" or typed.units is None:
+        return typed.value
+    if target_units is None:
+        msg = f"Cannot query unitless {name!r} with units {typed.units!r}."
+        raise UnitError(msg)
+    return convert_units(typed.value, to_units=target_units, from_units=typed.units)
+
+
+def _range_bounds(
+    value,
+    target_kinds: set[str],
+    target_units: str | None | object = _UNSET,
+    name: str = "value",
+):
+    """
+    Return (kind, lo, hi, typed_values) from a range tuple.
+
+    Open bounds (None/Ellipsis) are skipped; typed_values carries the
+    coerced usable bounds so callers don't coerce twice.
+    """
     lo_raw, hi_raw = value
     lo = hi = None
     kind = None
-    for raw, name in ((lo_raw, "lo"), (hi_raw, "hi")):
+    typed_values = []
+    for raw, side in ((lo_raw, "lo"), (hi_raw, "hi")):
         if raw is None or raw is Ellipsis:
             continue
-        knd, val = _coerce_scalar(raw, target_kinds)
+        typed = _coerce_scalar(raw, target_kinds)
+        typed_values.append(typed)
+        knd = typed.kind
+        val = (
+            typed.value
+            if target_units is _UNSET
+            else _to_target_unit(typed, target_units, name)
+        )
         if kind is not None and knd != kind:
             msg = f"Range bounds {value!r} have mixed kinds ({kind}, {knd})."
             raise InvalidSpoolQueryError(msg)
         kind = knd
-        if name == "lo":
+        if side == "lo":
             lo = val
         else:
             hi = val
@@ -97,7 +145,40 @@ def _range_bounds(value, target_kinds: set[str]):
     if lo is not None and hi is not None and lo > hi:
         msg = f"Range {value!r} has lo > hi after coercion."
         raise InvalidSpoolQueryError(msg)
-    return kind, lo, hi
+    return kind, lo, hi, typed_values
+
+
+def _compatible_coord_units(
+    rows: pd.DataFrame, typed_values: list, name: str
+) -> set[str] | None:
+    """
+    Return stored units compatible with quantity-valued coord selectors.
+
+    None means the query carries no units (no unit constraint at all); a
+    set constrains matching to those units plus NULL-unit definitions
+    (which can never be proven incompatible, so they stay candidates).
+    Raises UnitError only when every stored definition has units and none
+    are compatible.
+    """
+    query_units = {
+        x.units for x in typed_values if x is not None and x.units is not None
+    }
+    if not query_units:
+        return None
+    first = next(iter(query_units))
+    for other in query_units - {first}:
+        convert_units(1.0, to_units=first, from_units=other)
+    stored = {_normalize_unit(x) for x in rows.get("units", ())}
+    compatible = set()
+    for unit in stored - {None}:
+        try:
+            convert_units(1.0, to_units=unit, from_units=first)
+        except UnitError:
+            continue
+        compatible.add(unit)
+    if not compatible and None not in stored:
+        raise UnitError(f"Coordinate {name!r} has no units compatible with {first!r}.")
+    return compatible
 
 
 @dataclass
@@ -133,6 +214,7 @@ def build_attr_clause(
         raise InvalidSpoolQueryError(msg)
     kinds = set(rows["value_kind"])
     columns = dict(zip(rows["value_kind"], rows["column_name"]))
+    units = {row.value_kind: _normalize_unit(row.units) for row in rows.itertuples()}
 
     def col(kind):
         return f"a.{dialect.quote(columns[kind])}"
@@ -146,7 +228,17 @@ def build_attr_clause(
         where.add(f"{col('str')} IS NOT NULL")
         return value
     if _is_range(value):
-        kind, lo, hi = _range_bounds(value, kinds)
+        # Attr metadata has one canonical unit per typed column.
+        probe = next(
+            (
+                _coerce_scalar(x, kinds)
+                for x in value
+                if x is not None and x is not Ellipsis
+            ),
+            None,
+        )
+        target_units = units.get(probe.kind) if probe is not None else None
+        kind, lo, hi, _ = _range_bounds(value, kinds, target_units, name)
         if kind not in kinds:
             where.add("FALSE")
             return None
@@ -158,8 +250,9 @@ def build_attr_clause(
     if _is_collection(value):
         coerced = [_coerce_scalar(v, kinds) for v in value]
         by_kind: dict[str, list] = {}
-        for kind, val in coerced:
-            by_kind.setdefault(kind, []).append(val)
+        for typed in coerced:
+            val = _to_target_unit(typed, units.get(typed.kind), name)
+            by_kind.setdefault(typed.kind, []).append(val)
         subclauses = []
         params = []
         for kind, vals in by_kind.items():
@@ -179,7 +272,9 @@ def build_attr_clause(
             return None
         where.add(dialect.glob(col("str")), value)
         return None
-    kind, val = _coerce_scalar(value, kinds)
+    typed = _coerce_scalar(value, kinds)
+    kind = typed.kind
+    val = _to_target_unit(typed, units.get(kind), name)
     if kind not in kinds:
         where.add("FALSE")
         return None
@@ -190,6 +285,7 @@ def build_attr_clause(
 def build_coord_clause(
     where: _Where,
     dialect: BaseDialect,
+    coord_meta: pd.DataFrame,
     name: str,
     value,
 ) -> None:
@@ -200,20 +296,40 @@ def build_coord_clause(
     Candidacy only: envelope overlap, never false negatives. Exact
     membership/boolean masks are applied at patch load, above this layer.
     """
+    rows = coord_meta[coord_meta["coord_name"] == name]
+    if isinstance(value, tuple) and len(value) != 2:
+        msg = f"Coordinate range for {name!r} must be a length 2 sequence."
+        raise ParameterError(msg)
+    kinds = set(rows["value_kind"]) or {"time", "num", "str"}
+    typed_values = []
     if _is_range(value):
-        kind, lo, hi = _range_bounds(value, {"time", "num", "str"})
+        kind, lo, hi, typed_values = _range_bounds(value, kinds)
     elif _is_collection(value):
-        arr = np.asarray(list(value) if isinstance(value, set) else value)
+        raw_values = list(value)
+        if not raw_values:
+            raise InvalidSpoolQueryError("Coordinate membership cannot be empty.")
+        arr = np.asarray(raw_values)
         if arr.dtype == bool:
             # boolean masks are patch-local; no index predicate at all,
             # but the coord must exist on the patch.
             kind = lo = hi = None
         else:
-            kind, lo = _coerce_scalar(arr.min(), {"time", "num", "str"})
-            _, hi = _coerce_scalar(arr.max(), {"time", "num", "str"})
+            typed_values = [_coerce_scalar(x, kinds) for x in raw_values]
+            value_kinds = {x.kind for x in typed_values}
+            if len(value_kinds) != 1:
+                raise InvalidSpoolQueryError(
+                    f"Coordinate values for {name!r} have mixed kinds."
+                )
+            kind = typed_values[0].kind
+            values = [x.value for x in typed_values]
+            lo, hi = min(values), max(values)
     else:
-        kind, val = _coerce_scalar(value, {"time", "num", "str"})
-        lo = hi = val
+        typed = _coerce_scalar(value, kinds)
+        typed_values = [typed]
+        kind = typed.kind
+        lo = hi = typed.value
+
+    compatible_units = _compatible_coord_units(rows, typed_values, name)
 
     min_col, max_col = {
         "time": ("min_ns", "max_ns"),
@@ -234,6 +350,15 @@ def build_coord_clause(
             kind_match = kind
         conditions.append("cd.value_kind = ?")
         params.append(kind_match)
+        if compatible_units is not None:
+            # NULL-unit defs stay candidates: IN () never matches NULL and
+            # unitless values cannot be proven dimensionally incompatible.
+            if compatible_units:
+                marks = ", ".join("?" for _ in compatible_units)
+                conditions.append(f"(cd.units IN ({marks}) OR cd.units IS NULL)")
+                params.extend(sorted(compatible_units))
+            else:
+                conditions.append("cd.units IS NULL")
         if lo is not None:
             conditions.append(f"cd.{max_col} >= ?")
             params.append(lo)
@@ -252,23 +377,26 @@ def build_query_sql(
     query: Query | Sequence[Query],
     dialect: BaseDialect,
     attr_meta: pd.DataFrame,
-) -> tuple[str, list, dict[str, re.Pattern]]:
+    coord_meta: pd.DataFrame,
+) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
     Build the flat-relation SELECT for one or more AND-composed queries.
 
-    Returns (sql, params, residuals) where residuals maps attr names to
-    regex patterns that must be re-applied to the resulting dataframe.
+    coord_meta must cover every coordinate the queries reference (it may
+    be empty for attr-only queries). Returns (sql, params, residuals)
+    where residuals maps attr names to regex patterns that must be
+    re-applied to the resulting dataframe.
     """
     queries = [query] if isinstance(query, Query) else list(query)
     where = _Where()
-    residuals: dict[str, re.Pattern] = {}
+    residuals: list[tuple[str, re.Pattern]] = []
     for one in queries:
         for name, value in one.attrs.items():
             residual = build_attr_clause(where, dialect, attr_meta, name, value)
             if residual is not None:
-                residuals[name] = residual
+                residuals.append((name, residual))
         for name, value in one.coords.items():
-            build_coord_clause(where, dialect, name, value)
+            build_coord_clause(where, dialect, coord_meta, name, value)
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
     attr_cols = "".join(
@@ -286,9 +414,11 @@ def build_query_sql(
     return sql, where.params, residuals
 
 
-def apply_residuals(df: pd.DataFrame, residuals: dict[str, re.Pattern]) -> pd.DataFrame:
+def apply_residuals(
+    df: pd.DataFrame, residuals: list[tuple[str, re.Pattern]]
+) -> pd.DataFrame:
     """Apply regex residual filters to the flat relation."""
-    for name, pattern in residuals.items():
+    for name, pattern in residuals:
         col = df[name]
         keep = col.map(
             lambda x: bool(pattern.search(x)) if isinstance(x, str) else False

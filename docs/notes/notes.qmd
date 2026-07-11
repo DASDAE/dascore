@@ -9,3 +9,5 @@ This section of the documentation provides understanding-oriented explanation fo
 - [Documentation Strategy](doc_strategy.qmd)
 - [Fourier Transforms](dft_notes.qmd)
 - [Velocity to Strain Rate](velocity_to_strain_rate.qmd)
+- [Spool Index](spool_index.qmd)
+- [Spool Selection](spool_selection.qmd)

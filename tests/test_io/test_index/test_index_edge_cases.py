@@ -17,6 +17,7 @@ from test_index_contract import make_summaries
 
 import dascore as dc
 from dascore.core.summary import PatchSummary
+from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.io.index.backend import adapt_params, resolve_query
 from dascore.io.index.indexer import DBDirectoryIndexer
@@ -30,12 +31,10 @@ from dascore.io.index.ingest import (
 from dascore.io.index.query import InvalidSpoolQueryError, glob_match
 from dascore.units import get_quantity
 
-BACKENDS = ("duckdb", "sqlite", "parquet")
-
 
 @pytest.fixture(scope="module")
 def backend(tmp_path_factory):
-    """One duckdb backend with the contract summaries plus extras."""
+    """One SQLite backend with the contract summaries plus extras."""
     extra = PatchSummary(
         attrs={
             "tag": "extra",
@@ -58,8 +57,8 @@ def backend(tmp_path_factory):
         source_format="DASDAE",
         source_version="1",
     )
-    path = tmp_path_factory.mktemp("edge") / "idx.duckdb"
-    back = get_backend(path, kind="duckdb")
+    path = tmp_path_factory.mktemp("edge") / "index.sqlite3"
+    back = get_backend(path)
     back.write_sources(summaries_to_records([*make_summaries(), extra]))
     yield back
     back.close()
@@ -72,15 +71,9 @@ class TestAdaptAndBackendBasics:
         """NaN floats bind as NULL."""
         assert adapt_params([float("nan"), 1])[0] is None
 
-    def test_unknown_backend_kind_raises(self, tmp_path):
-        """Asking for a nonexistent engine errors clearly."""
-        with pytest.raises(ValueError, match="Unknown index backend"):
-            get_backend(tmp_path / "x", kind="mongodb")
-
-    @pytest.mark.parametrize("kind", BACKENDS)
-    def test_bulk_insert_empty_rows_noop(self, tmp_path, kind):
-        """Empty bulk inserts are no-ops on every backend."""
-        back = get_backend(tmp_path / f"i_{kind}", kind=kind)
+    def test_bulk_insert_empty_rows_noop(self, tmp_path):
+        """Empty bulk inserts are no-ops."""
+        back = get_backend(tmp_path / "insert.sqlite3")
         back._bulk_insert("attr_meta", ("attr_name",), [])
         back._executemany(
             "INSERT INTO attr_meta VALUES (?, ?, ?, ?)",
@@ -89,10 +82,9 @@ class TestAdaptAndBackendBasics:
         assert len(back._attr_meta()) == 1
         back.close()
 
-    @pytest.mark.parametrize("kind", BACKENDS)
-    def test_write_failure_rolls_back(self, tmp_path, kind):
+    def test_write_failure_rolls_back(self, tmp_path):
         """A failing write leaves the index unchanged."""
-        back = get_backend(tmp_path / f"r_{kind}", kind=kind)
+        back = get_backend(tmp_path / "rollback.sqlite3")
         records = summaries_to_records(make_summaries())
         back.write_sources(records[:1])
         before = len(back.query())
@@ -107,10 +99,9 @@ class TestAdaptAndBackendBasics:
         assert len(back.query()) == before
         back.close()
 
-    @pytest.mark.parametrize("kind", BACKENDS)
-    def test_delete_failure_rolls_back(self, tmp_path, kind):
+    def test_delete_failure_rolls_back(self, tmp_path):
         """A failing delete leaves the index unchanged."""
-        back = get_backend(tmp_path / f"d_{kind}", kind=kind)
+        back = get_backend(tmp_path / "delete.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
         before = len(back.query())
 
@@ -148,12 +139,12 @@ class TestResolveQueryErrors:
 
     def test_unknown_attr_in_explicit_namespace(self, backend):
         """Unknown key in _attrs raises."""
-        with pytest.raises(InvalidSpoolQueryError, match="Unknown attribute"):
+        with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
             resolve_query(backend, _attrs={"nope": 1})
 
     def test_unknown_coord_in_explicit_namespace(self, backend):
         """Unknown key in _coords raises."""
-        with pytest.raises(InvalidSpoolQueryError, match="Unknown coordinate"):
+        with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):
             resolve_query(backend, _coords={"nope": (1, 2)})
 
 
@@ -226,6 +217,93 @@ class TestQueryValueEdges:
         assert glob_match("STA1", "STA*")
         assert not glob_match(5, "STA*")
 
+    def test_slice_range_form(self, backend):
+        """Slices resolve to the same range tuples patch selects accept."""
+        lo = np.datetime64("2024-06-01T00:00:00", "ns")
+        query = resolve_query(backend, time=slice(lo, None))
+        assert query.coords["time"] == (lo, None)
+        df = backend.query(query)
+        assert list(df["tag"]) == ["extra"]
+
+
+class TestUnitHeterogeneity:
+    """Mixed unit populations across sources."""
+
+    @staticmethod
+    def _summary(path, attrs=None, coord_units=None):
+        """One summary with a 100-200 distance coord."""
+        coord = {
+            "dtype": "float64",
+            "min": 100.0,
+            "max": 200.0,
+            "dims": ("distance",),
+            "len": 10,
+        }
+        if coord_units is not None:
+            coord["units"] = coord_units
+        return PatchSummary(
+            attrs=attrs or {"tag": "units"},
+            coords={"distance": coord},
+            dims=("distance",),
+            shape=(10,),
+            dtype="float32",
+            source_path=path,
+            source_format="DASDAE",
+            source_version="1",
+        )
+
+    def test_null_unit_coord_defs_stay_candidates(self, tmp_path):
+        """Quantity queries must not drop unitless coord defs (candidacy)."""
+        back = get_backend(tmp_path / "units.sqlite3")
+        back.write_sources(
+            summaries_to_records(
+                [
+                    self._summary("with_units.h5", coord_units="m"),
+                    self._summary("no_units.h5"),
+                ]
+            )
+        )
+        meters = get_quantity("m")
+        df = back.query(Query(coords={"distance": (150 * meters, 300 * meters)}))
+        assert set(df["path"]) == {"with_units.h5", "no_units.h5"}
+        back.close()
+
+    def test_all_unitless_quantity_query_keeps_candidates(self, tmp_path):
+        """Unitless defs cannot be proven incompatible; they stay candidates."""
+        back = get_backend(tmp_path / "unitless.sqlite3")
+        back.write_sources(summaries_to_records([self._summary("no_units.h5")]))
+        meters = get_quantity("m")
+        df = back.query(Query(coords={"distance": (150 * meters, 300 * meters)}))
+        assert list(df["path"]) == ["no_units.h5"]
+        back.close()
+
+    def test_incompatible_units_only_raises(self, tmp_path):
+        """When every def carries units and none are compatible, raise."""
+        back = get_backend(tmp_path / "incompat.sqlite3")
+        back.write_sources(
+            summaries_to_records([self._summary("s.h5", coord_units="s")])
+        )
+        meters = get_quantity("m")
+        with pytest.raises(UnitError, match="no units compatible"):
+            back.query(Query(coords={"distance": (150 * meters, 300 * meters)}))
+        back.close()
+
+    def test_incompatible_attr_units_warn_not_fail(self, tmp_path):
+        """One rogue attr dimension must not abort the whole index update."""
+        summaries = [
+            self._summary("a.h5", attrs={"resolution": 1.0 * get_quantity("m")}),
+            self._summary("b.h5", attrs={"resolution": 1.0 * get_quantity("s")}),
+        ]
+        back = get_backend(tmp_path / "attr_units.sqlite3")
+        with pytest.warns(UserWarning, match="incompatible"):
+            back.write_sources(summaries_to_records(summaries))
+        # both patches indexed; only the incompatible value is skipped
+        df = back.query()
+        assert set(df["path"]) == {"a.h5", "b.h5"}
+        got = back.query(Query(attrs={"resolution": (0.5, 2.0)}))
+        assert list(got["path"]) == ["a.h5"]
+        back.close()
+
 
 class TestIngestEdges:
     """typed_value and record-building edge cases."""
@@ -297,6 +375,14 @@ class TestIndexerEdges:
         indexer = DBDirectoryIndexer(tmp_path)
         assert len(indexer()) == 1  # no explicit update() call
 
+    def test_empty_index_file_updates_on_first_query(self, tmp_path, random_patch):
+        """A pre-created empty SQLite path is still a new index."""
+        random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
+        index_path = tmp_path / "empty.sqlite3"
+        index_path.touch()
+        indexer = DBDirectoryIndexer(tmp_path, index_path=index_path)
+        assert len(indexer()) == 1
+
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
         import sys
@@ -336,7 +422,7 @@ class TestDirSpoolPassthrough:
         from dascore.clients.dirspool import DirectorySpool
 
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
-        indexer = DBDirectoryIndexer(tmp_path, engine="duckdb")
+        indexer = DBDirectoryIndexer(tmp_path)
         spool = DirectorySpool(indexer).update(progress=None)
         assert len(spool) == 1
 
@@ -359,29 +445,13 @@ class TestFinalCoverage:
 
         assert typed_value(_Odd()) is None
 
-    def test_parquet_cleanup_failure_tolerated(self, tmp_path, monkeypatch):
-        """A failed unlink of superseded parquet files is not an error."""
-        import pathlib
-
-        back = get_backend(tmp_path / "pq", kind="parquet")
-        back.write_sources(summaries_to_records(make_summaries()[:1]))
-
-        def bad_unlink(self, missing_ok=False):
-            raise OSError("simulated busy file")
-
-        monkeypatch.setattr(pathlib.Path, "unlink", bad_unlink)
-        back.write_sources(summaries_to_records(make_summaries()[1:2]))
-        monkeypatch.undo()
-        assert len(back.query()) == 2
-        back.close()
-
 
 class TestCoordDeduplication:
     """Coord summaries are stored once per unique definition."""
 
     def test_shared_coord_stored_once(self, tmp_path):
         """Identical distance coords across patches share one def row."""
-        back = get_backend(tmp_path / "dedup", kind="duckdb")
+        back = get_backend(tmp_path / "dedup.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
         links = back._fetch_df("SELECT * FROM patch_coords")
         defs = back._fetch_df("SELECT * FROM coord_defs")
@@ -394,7 +464,7 @@ class TestCoordDeduplication:
 
     def test_defs_reused_across_writes(self, tmp_path):
         """A second write with known coords creates no new defs."""
-        back = get_backend(tmp_path / "reuse", kind="duckdb")
+        back = get_backend(tmp_path / "reuse.sqlite3")
         summaries = make_summaries()
         back.write_sources(summaries_to_records(summaries[:1]))
         n_defs = len(back._fetch_df("SELECT * FROM coord_defs"))
@@ -415,16 +485,28 @@ class TestCoordDeduplication:
                 "source_version": "1",
             }
         )
-        back = get_backend(tmp_path / "fp", kind="duckdb")
+        back = get_backend(tmp_path / "fp.sqlite3")
         back.write_sources(summaries_to_records([PatchSummary(**structured)]))
         defs = back._fetch_df("SELECT def_key, fingerprint FROM coord_defs")
         assert defs["fingerprint"].notna().all()
         assert defs["def_key"].str.startswith("fp:").all()
         back.close()
 
+    def test_irregular_coord_hashes_values(self):
+        """A non-range coordinate carries the hash of its complete array."""
+        patch = dc.get_example_patch()
+        old = patch.get_coord("distance")
+        values = np.arange(len(old), dtype=float)
+        values[2:] += 0.5
+        patch = patch.update_coords(distance=values)
+        summary = PatchSummary.from_patch(patch)
+        record = _coord_record("distance", summary.coords["distance"])
+        assert record.coord_hash == patch.get_coord("distance").fingerprint()
+        assert record.def_key.startswith("fp:")
+
     def test_orphan_defs_tolerated(self, tmp_path):
         """Deleting sources leaves defs behind without breaking queries."""
-        back = get_backend(tmp_path / "orphan", kind="duckdb")
+        back = get_backend(tmp_path / "orphan.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
         n_defs = len(back._fetch_df("SELECT * FROM coord_defs"))
         back.delete_sources(["das/file_1.h5", "das/file_2.h5"])
@@ -448,7 +530,7 @@ class TestPivotEdge:
             source_format="DASDAE",
             source_version="1",
         )
-        back = get_backend(tmp_path / "bare", kind="duckdb")
+        back = get_backend(tmp_path / "bare.sqlite3")
         back.write_sources(summaries_to_records([summary]))
         df = back.query()
         assert len(df) == 1
@@ -471,7 +553,7 @@ class TestCompositeSourceIdentity:
         records_b = [
             type(r)(**{**r.__dict__, "base_uri": "s3://bucket-b"}) for r in records_a
         ]
-        back = get_backend(tmp_path / "multi", kind="duckdb")
+        back = get_backend(tmp_path / "multi.sqlite3")
         back.write_sources(records_a)
         back.write_sources(records_b)
         df = back.query()
@@ -492,7 +574,7 @@ class TestCompositeSourceIdentity:
         rec = summaries_to_records([one])[0]
         rec_a = type(rec)(**{**rec.__dict__, "base_uri": "s3://a"})
         rec_b = type(rec)(**{**rec.__dict__, "base_uri": "s3://b"})
-        back = get_backend(tmp_path / "scoped", kind="duckdb")
+        back = get_backend(tmp_path / "scoped.sqlite3")
         back.write_sources([rec_a, rec_b])
         assert len(back.query()) == 2
         back.write_sources([rec_a])  # replace only the s3://a copy

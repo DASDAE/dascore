@@ -217,13 +217,18 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
     """Convert one CoordSummary into a CoordRecord."""
+    fingerprint = getattr(summary, "fingerprint", None)
+    if fingerprint is None and getattr(summary, "is_range_like", False):
+        # A range summary contains its complete representation, so recover the
+        # same exact identity a loaded CoordRange would have produced.
+        fingerprint = summary.to_coord().fingerprint()
     common = dict(
         coord_name=name,
         dtype=summary.dtype,
         coord_dims=",".join(summary.dims),
         length=summary.len,
         units=str(summary.units) if summary.units is not None else None,
-        coord_hash=getattr(summary, "fingerprint", None),
+        coord_hash=fingerprint,
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is not None and np.issubdtype(dtype, np.datetime64):

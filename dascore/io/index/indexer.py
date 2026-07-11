@@ -44,8 +44,6 @@ class DBDirectoryIndexer(AbstractIndexer):
     ----------
     path
         The directory to index.
-    engine
-        The backend kind: "duckdb", "sqlite", or "parquet".
     index_path
         Where to keep the index; defaults to a hidden entry at the top of
         the data directory.
@@ -58,22 +56,22 @@ class DBDirectoryIndexer(AbstractIndexer):
     def __init__(
         self,
         path: str | Path,
-        engine: str = "sqlite",
         index_path: str | Path | None = None,
     ):
         path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)
         requires_local_directory(path, label="DBDirectoryIndexer")
         self.path = Path(path).absolute()
-        self.engine = engine
         self.index_path = Path(self._find_index_path(index_path))
         # A brand-new index triggers one automatic update on first query,
         # matching the historic auto-index-on-first-access behavior.
-        self._initial_update_done = self.index_path.exists()
-        self._backend = get_backend(self.index_path, kind=engine)
+        self._initial_update_done = (
+            self.index_path.exists() and self.index_path.stat().st_size > 0
+        )
+        self._backend = get_backend(self.index_path)
 
     @property
     def _index_name(self) -> str:
-        return f".dascore_index_{self.engine}"
+        return ".dascore_index.sqlite3"
 
     def _find_index_path(self, index_path=None) -> Path:
         """
@@ -83,7 +81,7 @@ class DBDirectoryIndexer(AbstractIndexer):
         default; when the data directory is read-only the index lives in
         the dascore cache and its location is recorded in the index map.
         """
-        map_key = f"{self.path}::{self.engine}"
+        map_key = str(self.path)
         if index_path:
             update = {map_key: str(Path(index_path).absolute())}
             _update_index_map(update, cache_path=str(self.index_map_path))
@@ -96,7 +94,7 @@ class DBDirectoryIndexer(AbstractIndexer):
         if out := path_map.get(map_key):
             return Path(out)
         if not _directory_writable(self.path):
-            name = f"_dascore_index_{abs(hash(self.path))}_{self.engine}"
+            name = f"_dascore_index_{abs(hash(self.path))}.sqlite3"
             index_path = self.index_map_path.parent / name
             _update_index_map(
                 {map_key: str(index_path.absolute())},
@@ -105,8 +103,15 @@ class DBDirectoryIndexer(AbstractIndexer):
             return index_path
         return expected
 
+    def ensure_updated(self) -> bool:
+        """Run the initial update if the index was never populated."""
+        if self._initial_update_done:
+            return False
+        self.update(progress=None)
+        return True
+
     def __str__(self) -> str:
-        return f"{self.__class__.__name__} ({self.engine}) managing: {self.path}"
+        return f"{self.__class__.__name__} managing: {self.path}"
 
     __repr__ = __str__
 
@@ -249,8 +254,7 @@ class DBDirectoryIndexer(AbstractIndexer):
         Bare kwargs resolve attrs-first then coords; `_attrs`/`_coords`
         disambiguate explicitly (see the selector semantics spec).
         """
-        if not self._initial_update_done:
-            self.update(progress=None)
+        self.ensure_updated()
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
         df = df.drop(columns=list(_SPOOL_HIDDEN_COLUMNS), errors="ignore")

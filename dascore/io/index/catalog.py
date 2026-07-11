@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import itertools
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -32,8 +33,8 @@ from dascore.io.index.query import (
     Query,
     relative_offset,
 )
+from dascore.utils.pd import adjust_segments
 
-_MEMORY_ENGINES = frozenset({"sqlite", "duckdb"})
 _counter = itertools.count()
 
 
@@ -73,20 +74,52 @@ class FileResolver(PatchResolver):
     def __init__(self, root: Path | str | None = None):
         self._root = Path(root) if root is not None else None
 
+    def _read(self, path, row: Mapping, trim: dict, source_patch_id: str):
+        """Use a known FiberIO directly, falling back to format detection."""
+        from dascore.core.spool import MemorySpool
+
+        file_format = row.get("file_format")
+        file_version = row.get("file_version")
+        id_kwargs = {"source_patch_id": source_patch_id} if source_patch_id else {}
+        if file_format and file_version:
+            fiber_io = dc.io.FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
+            )
+            spool = fiber_io.read(path, **id_kwargs, **trim)
+            if isinstance(spool, MemorySpool):
+                return spool
+        kwargs = {"path": path}
+        if file_format:
+            kwargs["file_format"] = file_format
+        if file_version:
+            kwargs["file_version"] = file_version
+        return dc.read(**kwargs, **id_kwargs, **trim)
+
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
+        from dascore.io.core import _select_patch_from_spool
+
         path = row["path"]
         # relative paths resolve against the catalog root; URIs and
         # absolute paths pass through untouched.
         if self._root is not None and "://" not in str(path):
             if not Path(path).is_absolute():
                 path = self._root / path
-        kwargs = {"path": path}
-        if row.get("file_format"):
-            kwargs["file_format"] = row["file_format"]
-        if row.get("file_version"):
-            kwargs["file_version"] = row["file_version"]
-        return dc.read(**kwargs, **trim)[0]
+        source_patch_id = row.get("source_patch_id") or ""
+        if source_patch_id.isdigit():
+            # Positional (synthesized) ids index the full source read; a
+            # trimmed read would shift or drop patches and bind the wrong
+            # one, so these rows read the whole source.
+            trim = {}
+        spool = self._read(path, row, trim, source_patch_id)
+        # Readers that consume source_patch_id return the one requested
+        # patch, sometimes without preserving reload metadata on it. Only
+        # trust that when the patch doesn't claim a different identity.
+        if source_patch_id and len(spool) == 1:
+            found = str(spool[0].attrs.get("_source_patch_id", "") or "")
+            if found in ("", source_patch_id):
+                return spool[0]
+        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 
 
 def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
@@ -111,6 +144,13 @@ def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
     return records
 
 
+@dataclass
+class _CatalogRevision:
+    """Shared mutation revision for live catalog views."""
+
+    value: int = 0
+
+
 class PatchCatalog:
     """
     Query-composable metadata catalog over the spool index tables.
@@ -127,9 +167,9 @@ class PatchCatalog:
         resolver: PatchResolver | None = None,
         syncer=None,
         pending: tuple = (),
-        engine: str = "sqlite",
         queries: tuple[Query, ...] = (),
         residuals: tuple[tuple[dict, bool, bool], ...] = (),
+        revision: _CatalogRevision | None = None,
     ):
         self._backend = backend
         self.resolver = resolver
@@ -137,37 +177,32 @@ class PatchCatalog:
         # live patches not yet ingested; kept (not a closure) so catalogs
         # pickle and can rebuild their backend after unpickling.
         self._pending = tuple(pending)
-        self._engine = engine
         self._queries = tuple(queries)
         self._residuals = tuple(residuals)
+        self._revision = revision or _CatalogRevision()
         self._df_cache: pd.DataFrame | None = None
+        self._df_cache_revision = -1
 
     # --- construction -------------------------------------------------
 
     @classmethod
-    def from_patches(
-        cls, patches: Sequence[dc.Patch] = (), engine: str = "sqlite"
-    ) -> PatchCatalog:
+    def from_patches(cls, patches: Sequence[dc.Patch] = ()) -> PatchCatalog:
         """
         Catalog over live patches. No backend work happens until the
         first metadata operation.
         """
-        if engine not in _MEMORY_ENGINES:
-            msg = f"In-memory catalogs support {sorted(_MEMORY_ENGINES)}, not {engine}."
-            raise ValueError(msg)
-        return cls(resolver=LiveResolver(), pending=tuple(patches), engine=engine)
+        return cls(resolver=LiveResolver(), pending=tuple(patches))
 
     @classmethod
     def from_directory(
         cls,
         path: str | Path,
-        engine: str = "sqlite",
         index_path: str | Path | None = None,
     ) -> PatchCatalog:
         """Catalog over a directory of fiber files."""
         from dascore.io.index.indexer import DBDirectoryIndexer
 
-        syncer = DBDirectoryIndexer(path, engine=engine, index_path=index_path)
+        syncer = DBDirectoryIndexer(path, index_path=index_path)
         return cls(
             backend=syncer._backend,
             resolver=FileResolver(root=syncer.path),
@@ -178,11 +213,18 @@ class PatchCatalog:
 
     @property
     def backend(self):
-        """The index backend, bootstrapping lazily on first use."""
+        """
+        The index backend, bootstrapping lazily on first use.
+
+        Every metadata operation funnels through here, so this is also
+        where a brand-new directory index gets its one automatic update.
+        """
         if self._backend is None:
-            self._backend = get_backend(":memory:", kind=self._engine)
+            self._backend = get_backend(":memory:")
             if self._pending:
                 self._backend.write_sources(_live_records(self._pending, self.resolver))
+        if self._syncer is not None and self._syncer.ensure_updated():
+            self._invalidate()
         return self._backend
 
     def __getstate__(self) -> dict:
@@ -208,11 +250,14 @@ class PatchCatalog:
             syncer=self._syncer,
             queries=queries,
             residuals=residuals,
+            revision=self._revision,
         )
         return out
 
     def _invalidate(self) -> None:
+        self._revision.value += 1
         self._df_cache = None
+        self._df_cache_revision = -1
 
     def __deepcopy__(self, memo) -> PatchCatalog:
         """
@@ -251,20 +296,21 @@ class PatchCatalog:
         relative=True bounds resolve against the current view's global
         envelope, then behave as absolute ranges.
         """
+        query = resolve_query(self.backend, _attrs=_attrs, _coords=_coords, **kwargs)
         if samples:
-            # names must be coords; validated against the index
-            unknown = set(kwargs) - self.coord_names()
-            if unknown or _attrs or _coords:
+            if query.attrs:
                 msg = (
-                    f"samples=True selections are coordinate-only; "
-                    f"unknown coordinates: {sorted(unknown)}"
+                    "samples=True selections are coordinate-only; got attrs "
+                    f"{sorted(query.attrs)}."
                 )
                 raise InvalidSpoolQueryError(msg)
-            residual = (dict(kwargs), True, False)
+            residual = (dict(query.coords), True, False)
             return self._view(self._queries, (*self._residuals, residual))
-        if relative:
-            kwargs = self._relative_to_absolute(kwargs)
-        query = resolve_query(self.backend, _attrs=_attrs, _coords=_coords, **kwargs)
+        if relative and query.coords:
+            query = Query(
+                attrs=query.attrs,
+                coords=self._relative_to_absolute(query.coords),
+            )
         # coord range predicates are re-applied exactly at patch load
         residuals = self._residuals
         if query.coords:
@@ -301,12 +347,33 @@ class PatchCatalog:
         hidden or renamed private so chunk merge-compatibility (which
         compares all non-private columns) is not spuriously blocked.
         """
-        if self._df_cache is None:
+        if self._df_cache is None or self._df_cache_revision != self._revision.value:
             df = self.backend.query(list(self._queries) or None)
             df = df.drop(
                 columns=["n_dims", "sample_count_total", "shape"], errors="ignore"
             ).rename(columns={"patch_id": "_patch_id"})
+            # SQL identifies overlapping source patches. Expose the selected
+            # envelopes, matching spool.get_contents() and the exact trim
+            # applied when each patch is materialized. Each pass copies the
+            # frame, so disjoint-name range sets collapse into one pass.
+            range_dicts = [
+                ranges
+                for query in self._queries
+                if (
+                    ranges := {
+                        name: value
+                        for name, value in query.coords.items()
+                        if isinstance(value, tuple) and len(value) == 2
+                    }
+                )
+            ]
+            names = [name for ranges in range_dicts for name in ranges]
+            if range_dicts and len(set(names)) == len(names):
+                range_dicts = [{k: v for d in range_dicts for k, v in d.items()}]
+            for ranges in range_dicts:
+                df = adjust_segments(df, ignore_bad_kwargs=True, **ranges)
             self._df_cache = df
+            self._df_cache_revision = self._revision.value
         return self._df_cache
 
     def __len__(self) -> int:
@@ -315,12 +382,23 @@ class PatchCatalog:
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
         row = self.to_df().iloc[index].to_dict()
+        return self.resolve_row(row)
+
+    def resolve_row(self, row: Mapping, extra_trim: Mapping | None = None) -> dc.Patch:
+        """
+        Resolve one flat-relation row and apply exact residual selects.
+
+        extra_trim carries caller-side read hints (e.g. chunk instruction
+        ranges) merged over the view's own residual ranges; like all trim
+        hints they only reduce reading, exactness is re-applied above.
+        """
         trim_hint = {}
         for coords, samples, _ in self._residuals:
             if not samples:
                 trim_hint.update(
                     {k: v for k, v in coords.items() if isinstance(v, tuple)}
                 )
+        trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
         for coords, samples, relative in self._residuals:
             usable = {k: v for k, v in coords.items() if k in patch.coords.coord_map}
@@ -347,7 +425,6 @@ class PatchCatalog:
 
     def update(self, progress: PROGRESS_LEVELS = "standard") -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
-        self._require_root("update")
         if self._syncer is not None:
             self._syncer.update(progress=progress)
         self._invalidate()

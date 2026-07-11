@@ -435,6 +435,9 @@ class DataFrameSpool(BaseSpool):
     _drop_columns = ("patch",)
     # patch-local selections (samples=True) applied as patches load
     _post_selects: tuple = ()
+    # True while rows directly represent a PatchCatalog query. Operations
+    # which restructure/order rows switch back to the dataframe machinery.
+    _catalog_native = False
 
     def _get_df(self):
         """Function to get the current df."""
@@ -575,14 +578,14 @@ class DataFrameSpool(BaseSpool):
         # If the limits of the source patch were not modified, we can just
         # use the select kwargs. This is important for missing coordinates
         # (NaN values) to not get trimmed out.
-        if kwargs.get("_modified"):
-            select_kwargs = {
-                i: v
-                for i, v in kwargs.items()
-                if i in patch.dims or i in patch.coords.coord_map
-            }
-        else:
-            select_kwargs = self._select_kwargs
+        source_kwargs = kwargs if kwargs.get("_modified") else self._select_kwargs
+        # attr-style entries (e.g. constructor select_kwargs) filter rows
+        # above; only coordinate entries are valid patch selections.
+        select_kwargs = {
+            i: v
+            for i, v in source_kwargs.items()
+            if i in patch.dims or i in patch.coords.coord_map
+        }
         if select_kwargs:
             patch = patch.select(**select_kwargs)
         # patch-local selections (samples=True) recorded by spool.select
@@ -707,9 +710,12 @@ class DataFrameSpool(BaseSpool):
         source_patch_id = final_kwargs.get("source_patch_id", "")
         spool = dc.read(**final_kwargs)
         # Some readers consume source_patch_id internally and return the one
-        # matching patch without preserving that reload metadata on the patch.
+        # matching patch without preserving that reload metadata on the
+        # patch. Only trust that when it doesn't claim a different identity.
         if source_patch_id and len(spool) == 1:
-            return spool[0]
+            found = str(spool[0].attrs.get("_source_patch_id", "") or "")
+            if found in ("", str(source_patch_id)):
+                return spool[0]
         return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
@@ -769,6 +775,9 @@ class DataFrameSpool(BaseSpool):
         new._merge_kwargs = dict(self._merge_kwargs)
         new._merge_kwargs.update(merge_kwargs or {})
         new._post_selects = self._post_selects
+        # Dataframe-producing operations (chunk, sort, slice) define their
+        # own row/instruction plan and must not bypass it through the catalog.
+        new._catalog_native = False
         return new
 
     def _select_namespaces(self) -> tuple[set[str], set[str]]:
@@ -856,6 +865,15 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
+        if self._catalog_native:
+            catalog = self._catalog.select(
+                _attrs=_attrs,
+                _coords=_coords,
+                samples=samples,
+                relative=relative,
+                **kwargs,
+            )
+            return self._new_from_catalog(catalog)
         kwargs = self._resolve_select_kwargs(_attrs, _coords, kwargs)
         if samples:
             # sample indices are patch-local: never filter the spool,
@@ -876,7 +894,14 @@ class DataFrameSpool(BaseSpool):
             new._post_selects = (*self._post_selects, (kwargs, True))
             return new
         if relative:
-            kwargs = self._relative_select_kwargs(kwargs)
+            _, coords = self._select_namespaces()
+            coord_kwargs = {
+                key: value for key, value in kwargs.items() if key in coords
+            }
+            attr_kwargs = {
+                key: value for key, value in kwargs.items() if key not in coords
+            }
+            kwargs = {**attr_kwargs, **self._relative_select_kwargs(coord_kwargs)}
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,
@@ -893,6 +918,18 @@ class DataFrameSpool(BaseSpool):
             instruction_df=inst,
         )
         return out
+
+    def _new_from_catalog(self, catalog) -> Self:
+        """Create a lazy catalog-native view of this spool."""
+        new = self.__class__(self)
+        new._catalog = catalog
+        new._catalog_native = True
+        new._cache = {}
+        # selection composed into the catalog is dropped, but constructor
+        # select_kwargs (DirectorySpool contract) persist across views.
+        new._select_kwargs = dict(self._select_kwargs)
+        new._post_selects = ()
+        return new
 
     @compose_docstring(doc=BaseSpool.sort.__doc__)
     def sort(self, attribute) -> Self:
@@ -981,6 +1018,12 @@ class MemorySpool(DataFrameSpool):
 
     def _get_df(self):
         """Build the managing dataframes from the input patches."""
+        if self._catalog is not None and self._catalog_native:
+            current = self._catalog.to_df()
+            df, source, instruction = self._get_dummy_dataframes(current)
+            self._source_df = source
+            self._instruction_df = instruction
+            return df
         data = self._patches if self._patches is not None else self._data
         if data is None:
             return None
@@ -1001,6 +1044,7 @@ class MemorySpool(DataFrameSpool):
 
         if self._catalog is None:
             self._catalog = PatchCatalog.from_patches(self._patches)
+        self._catalog_native = True
         return self._catalog
 
     def _get_source_df(self):
@@ -1076,6 +1120,7 @@ class MemorySpool(DataFrameSpool):
         out.pop("_patches", None)
         out.pop("_data", None)
         out.pop("_catalog", None)
+        out.pop("_catalog_native", None)
         return out
 
     def __rich__(self):
@@ -1097,7 +1142,14 @@ class MemorySpool(DataFrameSpool):
         """Load the patch into memory."""
         if (patch := kwargs.get("patch")) is not None:
             return patch
-        return self._catalog.resolver.resolve(kwargs)
+        return self._catalog.resolve_row(kwargs)
+
+    def _new_from_catalog(self, catalog) -> Self:
+        """Create a lazy memory-spool view backed by a catalog query."""
+        new = self.__class__()
+        new._catalog = catalog
+        new._catalog_native = True
+        return new
 
     @compose_docstring(doc=DataFrameSpool.new_from_df.__doc__)
     def new_from_df(self, *args, **kwargs):
@@ -1109,6 +1161,7 @@ class MemorySpool(DataFrameSpool):
         new._patches = None
         # derived spools resolve patches through the shared catalog
         new._catalog = self._catalog
+        new._catalog_native = False
         return new
 
     # Add specific implementation of concatenate patches.

@@ -96,13 +96,6 @@ class TestFindIndex:
         assert first.index_path == second.index_path
         assert first.index_path.exists()
 
-    def test_engines_get_separate_indices(self, tmp_path_factory):
-        """Different engines on one directory must not share an index."""
-        path = tmp_path_factory.mktemp("multi_engine_test")
-        sqlite = DBDirectoryIndexer(path, engine="sqlite")
-        duckdb = DBDirectoryIndexer(path, engine="duckdb")
-        assert sqlite.index_path != duckdb.index_path
-
     def test_corrupt_cache(self, directory_indexer_bad_cache, tmp_path_factory):
         """Ensure a corrupted cache doesn't crash indexing. See #508."""
         path = tmp_path_factory.mktemp("corrupt_cache_test")

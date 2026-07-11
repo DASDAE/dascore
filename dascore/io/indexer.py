@@ -83,3 +83,13 @@ class AbstractIndexer:
 
         Resets any previous selection.
         """
+
+    def ensure_updated(self) -> bool:
+        """
+        Run the initial update if the index was never populated.
+
+        Return True when an update actually ran. Indexers which track
+        their initial-population state override this; by default nothing
+        happens.
+        """
+        return False

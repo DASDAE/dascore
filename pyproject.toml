@@ -61,12 +61,7 @@ dependencies = [
 
 [project.optional-dependencies]
 
-duckdb = [
-    "duckdb",
-]
-
 extras = [
-    "duckdb",
     "xarray",
     "netCDF4",
     "h5netcdf",

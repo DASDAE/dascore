@@ -1,10 +1,9 @@
 """
 Logical schema for the spool index.
 
-The schema is defined in backend-neutral terms; only four primitive
-storage types are used (int64, float64, str, bool) so any SQL-ish backend
-can represent it. Times and durations are always epoch/plain nanoseconds
-stored as int64 — never engine-native timestamp types.
+The schema uses four primitive storage types (int64, float64, str, bool).
+Times and durations are always epoch/plain nanoseconds stored as int64,
+never engine-native timestamp types.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -85,10 +84,10 @@ ATTR_META = MappingProxyType(
     }
 )
 
-# Unique coordinate summaries, deduplicated across patches. The def_key
-# is the CoordSummary fingerprint when the scan provides one (semantic
-# value identity) or a hash of the stored summary fields otherwise
-# (lossless for the index; too weak for value-identity claims).
+# Unique coordinate summaries, deduplicated across patches. Range coordinates
+# use a semantic fingerprint supplied by the scan or reconstructed exactly
+# from the range summary. Non-range coordinates without a fingerprint use a
+# summary hash for storage deduplication, but it is not exposed as value identity.
 COORD_DEFS = MappingProxyType(
     {
         "coord_def_id": "int64",
@@ -131,6 +130,49 @@ TABLES = MappingProxyType(
         "attr_meta": ATTR_META,
         "coord_defs": COORD_DEFS,
         "patch_coords": PATCH_COORDS,
+    }
+)
+
+# Keeping constraints beside the logical columns makes the stored contract
+# explicit and keeps dynamic attr-column DDL separate from table identity.
+TABLE_CONSTRAINTS = MappingProxyType(
+    {
+        "meta_data": (
+            "PRIMARY KEY (what_is_this)",
+            f"CHECK (what_is_this = '{WHAT_IS_THIS}')",
+        ),
+        "sources": (
+            "PRIMARY KEY (source_id)",
+            "UNIQUE (base_uri, source_path)",
+            "CHECK (base_uri IS NOT NULL)",
+            "CHECK (source_path IS NOT NULL)",
+        ),
+        "patches": (
+            "PRIMARY KEY (patch_id)",
+            "UNIQUE (source_id, source_patch_id)",
+            "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
+        ),
+        "attrs": (
+            "PRIMARY KEY (patch_id)",
+            "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
+        ),
+        "attr_meta": (
+            "PRIMARY KEY (attr_name, value_kind)",
+            "UNIQUE (column_name)",
+            "CHECK (value_kind IN ('num', 'str', 'bool', 'time', 'dur'))",
+        ),
+        "coord_defs": (
+            "PRIMARY KEY (coord_def_id)",
+            "UNIQUE (def_key)",
+            "CHECK (value_kind IN ('num', 'time', 'str'))",
+            "CHECK (is_monotonic IS NULL OR is_monotonic IN (0, 1))",
+            "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
+        ),
+        "patch_coords": (
+            "PRIMARY KEY (patch_id, coord_name)",
+            "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
+            "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
+        ),
     }
 )
 

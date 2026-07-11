@@ -66,6 +66,29 @@ class TestNamespaces:
         assert len(out) == 1
 
 
+class TestCatalogPushdown:
+    """Public spool selection composes a lazy SQLite query."""
+
+    def test_coord_predicate_reaches_backend(self, spool, monkeypatch):
+        """Selection does not query all rows before applying its predicate."""
+        catalog = spool._catalog or spool._get_catalog()
+        backend = catalog.backend
+        calls = []
+        original = backend.query
+
+        def wrapped(query=None):
+            calls.append(query)
+            return original(query)
+
+        monkeypatch.setattr(backend, "query", wrapped)
+        selected = spool.select(time=("2020-01-03", "2020-01-04"))
+        assert calls == []
+        assert len(selected)
+        queries = calls[0]
+        assert isinstance(queries, list)
+        assert queries[0].coords["time"] == ("2020-01-03", "2020-01-04")
+
+
 class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
 
@@ -110,6 +133,12 @@ class TestRelative:
         """Scalars are rejected with a clear message."""
         with pytest.raises(InvalidSpoolQueryError, match="requires"):
             spool.select(time=5, relative=True)
+
+    def test_namespaced_coord_with_attr(self, spool):
+        """Only the coordinate range is converted to relative offsets."""
+        out = spool.select(_coords={"time": (1, -1)}, tag="random", relative=True)
+        assert len(out)
+        assert set(out.get_contents()["tag"]) == {"random"}
 
 
 class TestExistingBehaviorKept:

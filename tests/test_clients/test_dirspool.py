@@ -145,18 +145,29 @@ class TestMultiPatchFile:
 
 
 class TestLoadPatchFastPath:
-    """Tests for the direct FiberIO read path used by _load_patch."""
+    """Tests for the direct FiberIO read path owned by FileResolver."""
 
-    def test_requires_concrete_format_and_version(self, one_directory_spool):
+    def test_requires_concrete_format_and_version(
+        self, one_directory_spool, monkeypatch
+    ):
         """
         Without a concrete format and version the fast path must defer to
         dc.read, which detects them from the file; get_fiberio with a None
         version would return the newest reader, not the file's version.
         """
-        spool = one_directory_spool
-        assert spool._read_patches({"file_format": "", "file_version": ""}) is None
-        assert spool._read_patches({"file_format": "DASDAE"}) is None
-        assert spool._read_patches({"file_version": "1"}) is None
+        resolver = one_directory_spool._catalog.resolver
+        sentinel = object()
+        monkeypatch.setattr(
+            "dascore.io.index.catalog.dc.read", lambda **kwargs: sentinel
+        )
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda **kwargs: pytest.fail("FiberIO fast path should not run"),
+        )
+        assert resolver._read("path", {"file_format": ""}, {}, "") is sentinel
+        assert resolver._read("path", {"file_format": "DASDAE"}, {}, "") is sentinel
+        assert resolver._read("path", {"file_version": "1"}, {}, "") is sentinel
 
     def test_unusual_fiberio_spool_defers_to_generic_read(
         self, one_directory_spool, monkeypatch
@@ -172,20 +183,55 @@ class TestLoadPatchFastPath:
             "get_fiberio",
             lambda format, version: _Reader(),
         )
-        kwargs = {
-            "path": one_directory_spool.get_contents()["path"].iloc[0],
+        row = {
             "file_format": "DASDAE",
             "file_version": "1",
         }
-        assert one_directory_spool._read_patches(kwargs) is None
+        resolver = one_directory_spool._catalog.resolver
+        sentinel = object()
+        monkeypatch.setattr(
+            "dascore.io.index.catalog.dc.read", lambda **kwargs: sentinel
+        )
+        assert resolver._read("path", row, {}, "") is sentinel
 
-    def test_multi_patch_selection_defers_to_generic_read(
+    def test_multi_patch_resolves_identity_without_second_read(
         self, one_directory_spool, random_patch, monkeypatch
     ):
-        """Fast path should not choose the first patch from multi-patch reads."""
+        """Multi-patch reads resolve source identity from the loaded spool."""
 
         class _Reader:
             def read(self, *args, **kwargs):
+                patch_1 = random_patch.update_attrs(_source_patch_id="first")
+                patch_2 = random_patch.update_attrs(_source_patch_id="second")
+                return dc.spool([patch_1, patch_2])
+
+        monkeypatch.setattr(
+            dc.io.FiberIO.manager,
+            "get_fiberio",
+            lambda format, version: _Reader(),
+        )
+        monkeypatch.setattr(
+            "dascore.io.index.catalog.dc.read",
+            lambda **kwargs: pytest.fail("must not re-read the file"),
+        )
+        row = {
+            "path": "path",
+            "file_format": "DASDAE",
+            "file_version": "1",
+            "source_patch_id": "second",
+        }
+        resolver = one_directory_spool._catalog.resolver
+        patch = resolver.resolve(row)
+        assert patch.attrs["_source_patch_id"] == "second"
+
+    def test_positional_id_reads_whole_source(
+        self, one_directory_spool, random_patch, monkeypatch
+    ):
+        """Positional ids must ignore trim hints; a trimmed read would shift them."""
+
+        class _Reader:
+            def read(self, *args, **kwargs):
+                assert "time" not in kwargs, "positional ids must read untrimmed"
                 patch_2 = random_patch.update_attrs(tag="second")
                 return dc.spool([random_patch, patch_2])
 
@@ -194,17 +240,69 @@ class TestLoadPatchFastPath:
             "get_fiberio",
             lambda format, version: _Reader(),
         )
-        path = one_directory_spool.get_contents()["path"].iloc[0]
-        monkeypatch.setattr(one_directory_spool, "_select_kwargs", {"tag": "second"})
-        kwargs = {
-            "path": path,
+        row = {
+            "path": "path",
             "file_format": "DASDAE",
             "file_version": "1",
-            "_modified": True,
-            "tag": "second",
+            "source_patch_id": "1",
         }
+        resolver = one_directory_spool._catalog.resolver
+        patch = resolver.resolve(row, time=(None, None))
+        assert patch.attrs["tag"] == "second"
 
-        assert one_directory_spool._read_patches(kwargs) is None
+
+class TestSelectKwargs:
+    """The select_kwargs constructor parameter restricts contents."""
+
+    @pytest.fixture(scope="class")
+    def spool_dir(self, random_spool, tmp_path_factory):
+        """A directory holding the random spool, one file per patch."""
+        path = tmp_path_factory.mktemp("select_kwargs_dir")
+        for num, patch in enumerate(random_spool):
+            patch.io.write(path / f"patch_{num}.h5", "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def first_patch_range(self, random_spool):
+        """The time range of the chronologically first patch."""
+        patch = sorted(random_spool, key=lambda x: x.get_coord("time").min())[0]
+        time = patch.get_coord("time")
+        return (time.min(), time.max())
+
+    def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
+        """Rows outside the requested range must not appear (regression)."""
+        spool = DirectorySpool(
+            spool_dir, select_kwargs={"time": first_patch_range}
+        ).update()
+        assert 1 <= len(spool) < len(random_spool)
+        contents = spool.get_contents()
+        assert (contents["time_min"] <= first_patch_range[1]).all()
+        assert (contents["time_max"] >= first_patch_range[0]).all()
+        for patch in spool:
+            time = patch.get_coord("time")
+            assert time.min() >= first_patch_range[0]
+            assert time.max() <= first_patch_range[1]
+
+    def test_restriction_survives_select_and_update(
+        self, spool_dir, random_spool, first_patch_range
+    ):
+        """Derived spools keep the constructor restriction."""
+        spool = DirectorySpool(
+            spool_dir, select_kwargs={"time": first_patch_range}
+        ).update()
+        expected = len(spool)
+        assert len(spool.update()) == expected
+        distance = random_spool[0].get_coord("distance")
+        sub = spool.select(distance=(distance.min(), distance.max()))
+        assert len(sub) == expected
+
+    def test_attr_select_kwargs(self, spool_dir, random_spool):
+        """Attr-valued select_kwargs filter rows and load cleanly."""
+        spool = DirectorySpool(spool_dir, select_kwargs={"tag": "random"}).update()
+        assert len(spool) == len(random_spool)
+        assert isinstance(spool[0], dc.Patch)
+        empty = DirectorySpool(spool_dir, select_kwargs={"tag": "no_such"}).update()
+        assert len(empty) == 0
 
 
 class TestDirectoryIndex:

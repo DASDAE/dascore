@@ -115,8 +115,13 @@ class TestResidualSelects:
 
     def test_samples_unknown_coord_raises(self, live_catalog):
         """Samples selections validate coord names."""
-        with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             live_catalog.select(wavelength=(0, 10), samples=True)
+
+    def test_samples_attr_raises(self, live_catalog):
+        """Samples selections reject attribute names."""
+        with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
+            live_catalog.select(tag="test", samples=True)
 
     def test_relative_select(self, live_catalog):
         """Relative bounds resolve against the global envelope (#362)."""
@@ -160,21 +165,12 @@ class TestDirectoryCatalog:
         catalog.close()
 
 
-class TestEngineGuard:
-    """Only in-memory-capable engines for live catalogs."""
-
-    def test_parquet_rejected(self):
-        """Parquet has no :memory: form."""
-        with pytest.raises(ValueError, match="In-memory catalogs support"):
-            PatchCatalog.from_patches((), engine="parquet")
-
-
 class TestCatalogEdges:
     """Remaining branches: errors, passthroughs, offsets."""
 
     def test_relative_on_unknown_coord_raises(self, live_catalog):
         """Relative select against an absent coord errors clearly."""
-        with pytest.raises(InvalidSpoolQueryError, match="unknown coord"):
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             live_catalog.select(wavelength=(1, -1), relative=True)
 
     def test_relative_requires_range(self, live_catalog):

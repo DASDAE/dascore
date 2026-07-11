@@ -25,7 +25,13 @@ class SQLiteBackend(SQLIndexBackend):
         self._con = sqlite3.connect(str(path))
         # autocommit off; we manage transactions explicitly.
         self._con.isolation_level = None
-        super().__init__()
+        self._con.execute("PRAGMA foreign_keys = ON")
+        self._con.execute("PRAGMA busy_timeout = 30000")
+        try:
+            super().__init__()
+        except Exception:
+            self._con.close()
+            raise
 
     def _execute(self, sql: str, params=()) -> None:
         self._con.execute(sql, _adapt(params))
@@ -37,13 +43,24 @@ class SQLiteBackend(SQLIndexBackend):
         return pd.read_sql_query(sql, self._con, params=_adapt(params))
 
     def _begin(self) -> None:
-        self._con.execute("BEGIN")
+        self._con.execute("BEGIN IMMEDIATE")
 
     def _commit(self) -> None:
         self._con.execute("COMMIT")
 
     def _rollback(self) -> None:
         self._con.execute("ROLLBACK")
+
+    def _existing_tables(self) -> set[str]:
+        rows = self._con.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def _table_columns(self, table: str) -> set[str]:
+        sql = f"PRAGMA table_info({self.dialect.quote(table)})"
+        return {row[1] for row in self._con.execute(sql).fetchall()}
 
     def close(self) -> None:
         """Close the database connection."""

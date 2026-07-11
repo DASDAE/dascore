@@ -220,6 +220,12 @@ website:
         - text: Velocity to Strain Rate
           href: notes/velocity_to_strain_rate.qmd
 
+        - text: Spool Index
+          href: notes/spool_index.qmd
+
+        - text: Spool Selection
+          href: notes/spool_selection.qmd
+
     - id: API
       title: "API"
       href: api/dascore.qmd

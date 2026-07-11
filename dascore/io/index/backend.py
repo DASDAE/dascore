@@ -1,16 +1,16 @@
 """
-Abstract index backend and the shared SQL implementation.
+Index backend interface and SQLite SQL implementation.
 
-Backends persist the six-table schema and answer flat-relation queries.
-All engine differences live in `dialect.py` plus a handful of hooks; the
-write/query logic here is shared so the contract test suite exercises
-identical semantics on every backend.
+The backend persists the seven-table schema and answers flat-relation queries.
+Storage hooks remain separate from the write/query logic so the index contract
+has a clear boundary.
 """
 
 from __future__ import annotations
 
 import abc
 import time
+import warnings
 from contextlib import suppress
 from pathlib import Path
 
@@ -18,9 +18,15 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError, UnitError
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import SourceRecord, attr_column_name
-from dascore.io.index.query import Query, apply_residuals, build_query_sql
+from dascore.io.index.query import (
+    Query,
+    apply_residuals,
+    build_query_sql,
+    normalize_range_forms,
+)
 from dascore.io.index.schema import (
     COORD_DEFS,
     INDEX_VERSION,
@@ -29,9 +35,11 @@ from dascore.io.index.schema import (
     PATCH_COORDS,
     PATCHES,
     SOURCES,
+    TABLE_CONSTRAINTS,
     TABLES,
     WHAT_IS_THIS,
 )
+from dascore.units import convert_units
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -138,52 +146,182 @@ class SQLIndexBackend(AbstractIndexBackend):
     def _rollback(self) -> None:
         """Roll back the open transaction."""
 
+    @abc.abstractmethod
+    def _existing_tables(self) -> set[str]:
+        """Return persisted user table names."""
+
+    @abc.abstractmethod
+    def _table_columns(self, table: str) -> set[str]:
+        """Return persisted columns for one table."""
+
     # --- schema ------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        for name, columns in TABLES.items():
-            self._execute(self.dialect.create_table(name, columns))
-        for index_name, table, column in INDEXES:
-            self._execute(
-                f"CREATE INDEX IF NOT EXISTS {index_name} " f"ON {table} ({column})"
-            )
-        meta = self._fetch_df("SELECT * FROM meta_data")
-        if meta.empty:
+        tables = self._existing_tables()
+        if tables:
+            self._validate_schema(tables)
+            return
+        self._begin()
+        try:
+            # Another connection may have initialized the file while this
+            # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
+            tables = self._existing_tables()
+            if tables:
+                self._validate_schema(tables)
+                self._commit()
+                return
+            for name, columns in TABLES.items():
+                self._execute(
+                    self.dialect.create_table(
+                        name, columns, TABLE_CONSTRAINTS.get(name, ())
+                    )
+                )
+            for index_name, table, column in INDEXES:
+                self._execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} " f"ON {table} ({column})"
+                )
             self._execute(
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
                 (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, time.time_ns()),
             )
+        except Exception:
+            with suppress(Exception):
+                self._rollback()
+            raise
+        self._commit()
+
+    def _validate_schema(self, tables: set[str]) -> None:
+        """Validate an existing index before issuing any DDL or mutation."""
+        required = set(TABLES)
+        missing = required - tables
+        if missing:
+            msg = (
+                "Existing spool index is incomplete; missing tables "
+                f"{sorted(missing)}. Delete it and rebuild the index."
+            )
+            raise InvalidIndexError(msg)
+        meta = self._fetch_df("SELECT * FROM meta_data")
+        if len(meta) != 1 or meta["what_is_this"].iloc[0] != WHAT_IS_THIS:
+            msg = "File is not a valid DASCore spool index; delete it and rebuild."
+            raise InvalidIndexError(msg)
+        version = int(meta["index_version"].iloc[0])
+        if version != INDEX_VERSION:
+            msg = (
+                f"Spool index version {version} is incompatible with supported "
+                f"version {INDEX_VERSION}; delete it and rebuild."
+            )
+            raise InvalidIndexVersionError(msg)
+        for table, expected in TABLES.items():
+            actual = self._table_columns(table)
+            if not set(expected) <= actual:
+                absent = sorted(set(expected) - actual)
+                msg = (
+                    f"Spool index table {table!r} is missing columns {absent}; "
+                    "delete it and rebuild."
+                )
+                raise InvalidIndexError(msg)
+        attr_columns = self._table_columns("attrs")
+        meta_columns = set(self._attr_meta().get("column_name", ()))
+        if not meta_columns <= attr_columns:
+            absent = sorted(meta_columns - attr_columns)
+            msg = (
+                f"Spool index attrs table is missing dynamic columns {absent}; "
+                "delete it and rebuild."
+            )
+            raise InvalidIndexError(msg)
 
     def _attr_meta(self) -> pd.DataFrame:
         return self._fetch_df("SELECT * FROM attr_meta")
+
+    def _coord_meta(self, names=None) -> pd.DataFrame:
+        """
+        Return distinct coordinate names, kinds, and canonical units,
+        optionally restricted to the given coord names.
+        """
+        sql = (
+            "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, "
+            "cd.is_relative FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+        )
+        params: list = []
+        if names is not None:
+            params = sorted(names)
+            marks = ", ".join("?" for _ in params)
+            sql += f" WHERE pc.coord_name IN ({marks})"
+        return self._fetch_df(sql, params)
 
     def _next_id(self, table: str, column: str) -> int:
         df = self._fetch_df(f"SELECT max({column}) AS m FROM {table}")
         value = df["m"].iloc[0]
         return 1 if pd.isnull(value) else int(value) + 1
 
+    @staticmethod
+    def _units_compatible(to_units: str, from_units: str) -> bool:
+        """True when one unit converts to the other (same dimensionality)."""
+        try:
+            convert_units(1.0, to_units=to_units, from_units=from_units)
+        except UnitError:
+            return False
+        return True
+
     def _ensure_attr_columns(
         self, records: list[SourceRecord]
-    ) -> dict[tuple[str, str], str]:
+    ) -> tuple[dict[tuple[str, str], str], set[tuple[str, str, str]]]:
         """
-        Lazily add typed attr columns; return the (name, kind) -> column map.
+        Lazily add typed attr columns; return the (name, kind) -> column
+        map and a set of (name, kind, units) values to skip.
 
         attr_meta is the single source of truth for column names: distinct
         attr names can sanitize to the same identifier ("Shot Number" vs
         "shot_number"), so collisions get a deterministic numeric suffix.
+
+        One attr name occasionally carries dimensionally incompatible
+        units across files (e.g. a "resolution" in meters here, seconds
+        there). A single canonical unit cannot describe both, so the
+        incompatible values are skipped (with a warning) rather than
+        failing the whole index update.
         """
+        meta = self._attr_meta()
         mapping = {
             (row.attr_name, row.value_kind): row.column_name
-            for row in self._attr_meta().itertuples()
+            for row in meta.itertuples()
+        }
+        stored_units = {
+            (row.attr_name, row.value_kind): (
+                None if pd.isnull(row.units) else row.units
+            )
+            for row in meta.itertuples()
         }
         taken = set(mapping.values())
-        needed: dict[tuple[str, str], str | None] = {}
+        observed: dict[tuple[str, str], set[str | None]] = {}
         for record in records:
             for patch in record.patches:
                 for name, typed in patch.attrs.items():
                     key = (name, typed.kind)
-                    if key not in mapping and key not in needed:
-                        needed[key] = typed.units
+                    observed.setdefault(key, set()).add(typed.units)
+        needed: dict[tuple[str, str], str | None] = {}
+        skip_units: set[tuple[str, str, str]] = set()
+        for key, units_seen in observed.items():
+            canonical = stored_units.get(key) if key in mapping else None
+            for unit in sorted(x for x in units_seen if x is not None):
+                if canonical is None:
+                    canonical = unit
+                elif not self._units_compatible(canonical, unit):
+                    skip_units.add((*key, unit))
+                    msg = (
+                        f"Attr {key[0]!r} has units {unit!r} incompatible "
+                        f"with the indexed units {canonical!r}; skipping "
+                        "these values in the index."
+                    )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+            if key not in mapping:
+                needed[key] = canonical
+            elif stored_units.get(key) is None and canonical is not None:
+                self._execute(
+                    "UPDATE attr_meta SET units = ? "
+                    "WHERE attr_name = ? AND value_kind = ?",
+                    (canonical, *key),
+                )
         for (name, kind), units in needed.items():
             column = base = attr_column_name(name, kind)
             suffix = 2
@@ -197,7 +335,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                 (name, kind, column, units),
             )
             mapping[(name, kind)] = column
-        return mapping
+        return mapping, skip_units
 
     def _ensure_coord_defs(self, defs_needed: dict) -> dict[str, int]:
         """
@@ -205,8 +343,8 @@ class SQLIndexBackend(AbstractIndexBackend):
 
         Coord summaries are deduplicated across patches: identical values
         (by fingerprint, or by summary content when no fingerprint is
-        available) share one coord_defs row. This is what will later let
-        chunk/merge recognize shared coordinates by id equality.
+        available) share one coord_defs row. Only fingerprint-backed rows
+        are exposed as exact coordinate identity to merge planning.
         """
         keys = list(defs_needed)
         mapping: dict[str, int] = {}
@@ -278,7 +416,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                 by_base.setdefault(record.base_uri or "", []).append(record.source_path)
             for base_uri, paths in by_base.items():
                 self._delete_by_paths(paths, base_uri=base_uri)
-            column_map = self._ensure_attr_columns(records)
+            column_map, skip_units = self._ensure_attr_columns(records)
             source_id = self._next_id("sources", "source_id")
             patch_id = self._next_id("patches", "patch_id")
             now = time.time_ns()
@@ -316,11 +454,18 @@ class SQLIndexBackend(AbstractIndexBackend):
                             patch.distance_step,
                         )
                     )
+                    attrs = patch.attrs
+                    if skip_units:
+                        attrs = {
+                            name: tv
+                            for name, tv in attrs.items()
+                            if (name, tv.kind, tv.units) not in skip_units
+                        }
                     columns = tuple(
-                        column_map[(name, tv.kind)] for name, tv in patch.attrs.items()
+                        column_map[(name, tv.kind)] for name, tv in attrs.items()
                     )
                     attr_groups.setdefault(columns, []).append(
-                        [patch_id, *(tv.value for tv in patch.attrs.values())]
+                        [patch_id, *(tv.value for tv in attrs.values())]
                     )
                     for c in patch.coords:
                         key = c.def_key
@@ -394,8 +539,15 @@ class SQLIndexBackend(AbstractIndexBackend):
     def query(self, query=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
         query = query if query is not None else Query()
+        queries = [query] if isinstance(query, Query) else list(query)
         attr_meta = self._attr_meta()
-        sql, params, residuals = build_query_sql(query, self.dialect, attr_meta)
+        # coord metadata is only consulted for coord predicates; skip the
+        # (whole-relation DISTINCT) scan for attr-only/empty queries.
+        coord_names = {name for q in queries for name in q.coords}
+        coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
+        sql, params, residuals = build_query_sql(
+            queries, self.dialect, attr_meta, coord_meta
+        )
         df = self._fetch_df(sql, params)
         df = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
@@ -480,7 +632,7 @@ class SQLIndexBackend(AbstractIndexBackend):
             marks = ", ".join("?" for _ in chunk)
             frames.append(
                 self._fetch_df(
-                    "SELECT pc.patch_id, pc.coord_name, cd.def_key, "
+                    "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
                     "cd.value_kind, cd.is_relative, cd.min_num, cd.max_num, "
                     "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
                     "cd.min_str, cd.max_str "
@@ -496,7 +648,11 @@ class SQLIndexBackend(AbstractIndexBackend):
         for name, group in coords.groupby("coord_name"):
             mins, maxs, steps, keys = {}, {}, {}, {}
             for row in group.itertuples():
-                keys[row.patch_id] = row.def_key
+                # Summary-only definitions are useful for indexing/dedup but
+                # cannot prove coordinate value identity for merge grouping.
+                keys[row.patch_id] = (
+                    row.def_key if pd.notnull(row.fingerprint) else None
+                )
                 if row.value_kind == "num":
                     mn, mx = row.min_num, row.max_num
                     st = row.step_num
@@ -569,14 +725,16 @@ def resolve_query(
     """
     from dascore.io.index.query import InvalidSpoolQueryError
 
-    attrs = dict(_attrs or {})
-    coords = dict(_coords or {})
+    # accept the same open/slice range forms patch-level select does
+    attrs = {k: normalize_range_forms(v) for k, v in (_attrs or {}).items()}
+    coords = {k: normalize_range_forms(v) for k, v in (_coords or {}).items()}
     known_attrs = backend.attr_names()
     known_coords = backend.coord_names()
     for name, value in kwargs.items():
         if name in attrs or name in coords:
             msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
             raise InvalidSpoolQueryError(msg)
+        value = normalize_range_forms(value)
         if name in known_attrs:
             attrs[name] = value
         elif name in known_coords:
@@ -589,26 +747,15 @@ def resolve_query(
             raise InvalidSpoolQueryError(msg)
     for name in attrs:
         if name not in known_attrs:
-            raise InvalidSpoolQueryError(f"Unknown attribute {name!r}.")
+            raise InvalidSpoolQueryError(f"{name!r} is not an attribute of this spool.")
     for name in coords:
         if name not in known_coords:
-            raise InvalidSpoolQueryError(f"Unknown coordinate {name!r}.")
+            raise InvalidSpoolQueryError(f"{name!r} is not a coordinate of this spool.")
     return Query(attrs=attrs, coords=coords)
 
 
-def get_backend(path: str | Path, kind: str = "duckdb") -> AbstractIndexBackend:
-    """Create an index backend of the given kind at path."""
-    if kind == "duckdb":
-        from dascore.io.index.duck import DuckDBBackend
+def get_backend(path: str | Path) -> AbstractIndexBackend:
+    """Create the SQLite spool-index backend at path."""
+    from dascore.io.index.lite import SQLiteBackend
 
-        return DuckDBBackend(path)
-    if kind == "sqlite":
-        from dascore.io.index.lite import SQLiteBackend
-
-        return SQLiteBackend(path)
-    if kind == "parquet":
-        from dascore.io.index.parq import ParquetBackend
-
-        return ParquetBackend(path)
-    msg = f"Unknown index backend {kind!r}."
-    raise ValueError(msg)
+    return SQLiteBackend(path)

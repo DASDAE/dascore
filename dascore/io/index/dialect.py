@@ -9,29 +9,29 @@ logical types and parametrized SQL with `?` placeholders.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import ClassVar
 
 
 class BaseDialect:
     """Shared SQL generation for engines close to the standard."""
 
-    # logical type -> engine type
-    type_map: Mapping[str, str] = {
-        "int64": "BIGINT",
-        "float64": "DOUBLE",
-        "str": "VARCHAR",
-        "bool": "BOOLEAN",
-    }
-    strict_suffix = ""
+    # logical type -> engine type; concrete dialects define the values.
+    type_map: ClassVar[Mapping[str, str]]
+    strict_suffix: ClassVar[str]
 
     def quote(self, identifier: str) -> str:
         """Quote an identifier."""
         return '"' + identifier.replace('"', '""') + '"'
 
-    def create_table(self, name: str, columns: Mapping[str, str]) -> str:
+    def create_table(
+        self, name: str, columns: Mapping[str, str], constraints: tuple[str, ...] = ()
+    ) -> str:
         """Return DDL for one table from logical column types."""
-        cols = ", ".join(
+        definitions = [
             f"{self.quote(col)} {self.type_map[typ]}" for col, typ in columns.items()
-        )
+        ]
+        definitions.extend(constraints)
+        cols = ", ".join(definitions)
         quoted = self.quote(name)
         return f"CREATE TABLE IF NOT EXISTS {quoted} ({cols}){self.strict_suffix}"
 
@@ -47,18 +47,14 @@ class BaseDialect:
         return f"{column_sql} GLOB ?"
 
 
-class DuckDBDialect(BaseDialect):
-    """Dialect for DuckDB."""
-
-
 class SQLiteDialect(BaseDialect):
     """Dialect for SQLite; STRICT tables enforce the type contract."""
 
     # SQLite STRICT tables accept INTEGER/REAL/TEXT (and INT for bool).
-    type_map = {
+    type_map: ClassVar[Mapping[str, str]] = {
         "int64": "INTEGER",
         "float64": "REAL",
         "str": "TEXT",
         "bool": "INTEGER",
     }
-    strict_suffix = " STRICT"
+    strict_suffix: ClassVar[str] = " STRICT"

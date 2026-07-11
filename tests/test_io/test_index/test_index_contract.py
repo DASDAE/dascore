@@ -1,7 +1,7 @@
 """
-Contract tests for spool index backends.
+Contract tests for the spool index backend.
 
-Every backend must pass this suite unchanged; it encodes the selector
+The SQLite backend must pass this suite; it encodes the selector
 semantics spec and the summary-only/no-false-negatives contract from the
 index design doc (see discussion #648).
 """
@@ -15,11 +15,11 @@ import pandas as pd
 import pytest
 
 from dascore.core.summary import PatchSummary
+from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.io.index.backend import resolve_query
 from dascore.io.index.query import InvalidSpoolQueryError
-
-BACKENDS = ("duckdb", "sqlite", "parquet")
+from dascore.units import get_quantity
 
 
 def _time_coord(t0: str, seconds: float, step_s: float = 0.004):
@@ -135,11 +135,12 @@ def make_summaries() -> list[PatchSummary]:
     return [das1, das2, correlogram, psd]
 
 
-@pytest.fixture(scope="function", params=BACKENDS)
-def backend(request, tmp_path):
-    """An index backend of each kind, freshly ingested."""
-    path = tmp_path / f"index_{request.param}"
-    back = get_backend(path, kind=request.param)
+@pytest.fixture(scope="function")
+def backend(tmp_path):
+    """A freshly ingested SQLite index backend."""
+    path = tmp_path / "index.sqlite3"
+    back = get_backend(path)
+    back._test_path = path
     back.write_sources(summaries_to_records(make_summaries()))
     yield back
     back.close()
@@ -277,6 +278,18 @@ class TestCoordPredicates:
         df = backend.query(Query(coords={"distance": (900, 950)}))
         assert "psd" in set(df["tag"])
 
+    def test_quantity_coord_converts_units(self, backend):
+        """Quantity selectors convert to the coordinate's canonical units."""
+        meter = get_quantity("m")
+        df = backend.query(Query(coords={"distance": (900 * meter, 950 * meter)}))
+        assert "psd" in set(df["tag"])
+
+    def test_incompatible_quantity_coord_raises(self, backend):
+        """A time quantity cannot query a length coordinate."""
+        second = get_quantity("s")
+        with pytest.raises(UnitError):
+            backend.query(Query(coords={"distance": (1 * second, 2 * second)}))
+
     def test_scalar_coord(self, backend):
         """Scalar coord."""
         df = backend.query(Query(coords={"frequency": 100}))
@@ -389,20 +402,15 @@ class TestSourceLifecycle:
 
     def test_reopen_persists(self, backend, tmp_path):
         """Reopen persists."""
-        kind = type(backend).__name__.replace("Backend", "").lower()
-        path_map = {
-            "duckdb": tmp_path / "index_duckdb",
-            "sqlite": tmp_path / "index_sqlite",
-            "parquet": tmp_path / "index_parquet",
-        }
+        path = backend._test_path
         backend.close()
-        reopened = get_backend(path_map[kind], kind=kind)
+        reopened = get_backend(path)
         try:
             assert len(reopened.query()) == 4
         finally:
             reopened.close()
         # reopen once more so fixture teardown close() has a live handle
-        reopened_again = get_backend(path_map[kind], kind=kind)
+        reopened_again = get_backend(path)
         backend.__dict__.update(reopened_again.__dict__)
 
 
@@ -413,7 +421,7 @@ class TestMetadata:
         """Metadata."""
         meta = backend.get_metadata()
         assert meta["what_is_this"] == "dascore_spool_index"
-        assert meta["index_version"] == 1
+        assert meta["index_version"] == 2
 
     def test_names(self, backend):
         """Names."""
