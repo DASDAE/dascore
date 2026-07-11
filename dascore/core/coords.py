@@ -2021,9 +2021,14 @@ class CoordSegmented(BaseCoord):
         out = np.concatenate([x.values for x in self.segments])
         return array(out.astype(self.dtype, copy=False))
 
-    @cached_method
     def _as_monotonic(self) -> CoordMonotonicArray:
-        """Return an equivalent (materialized) monotonic array coord."""
+        """
+        Return an equivalent (materialized) monotonic array coord.
+
+        Deliberately not cached: transient materialization for rare
+        operations (snap, get_next_index) must not permanently defeat the
+        O(segments) memory model.
+        """
         return CoordMonotonicArray(values=self.values, units=self.units)
 
     def _min(self):
@@ -2129,14 +2134,35 @@ class CoordSegmented(BaseCoord):
             return self._select_by_array(args, relative=relative, samples=samples)
         if samples:
             return self._select_by_samples(args)
-        # Index math is delegated to an equivalent monotonic array (the values
-        # are identical by construction); the resulting slice is re-applied
-        # segment-wise so structure is preserved. Array args were handled
-        # above, so monotonic select always returns a slice here.
-        _, indexer = self._as_monotonic().select(args, relative=relative)
-        assert isinstance(indexer, slice)
-        start_i, stop_i, _ = indexer.indices(len(self))
-        return self._slice_segments(start_i, stop_i), indexer
+        # Delegate to each segment and compose the global slice from segment
+        # offsets. The window over a monotonic coordinate keeps a contiguous
+        # run of samples, and range segments answer in O(1), so selection
+        # stays O(segments) and never materializes the concatenated values.
+        v1, v2 = self.get_slice_tuple(args, relative=relative)
+        kept, lo, hi = [], None, None
+        for seg, off in zip(self.segments, self._segment_offsets()):
+            seg_min, seg_max = seg.min(), seg.max()
+            if (v2 is not None and seg_min > v2) or (v1 is not None and seg_max < v1):
+                continue  # entirely outside the window
+            inside_lo = v1 is None or v1 <= seg_min
+            inside_hi = v2 is None or v2 >= seg_max
+            if inside_lo and inside_hi:  # entirely inside; keep untouched
+                sub, seg_lo, seg_hi = seg, 0, len(seg)
+            else:  # boundary segment; delegate the exact trim
+                sub, indexer = seg.select((v1, v2))
+                seg_lo, seg_hi, _ = indexer.indices(len(seg))
+                if seg_hi <= seg_lo:
+                    continue
+            if lo is None:
+                lo = int(off) + seg_lo
+            hi = int(off) + seg_hi
+            kept.append(sub)
+        if not kept:
+            return self.empty(), slice(0, 0)
+        new = self._rebuild(kept)
+        start = None if lo == 0 else lo
+        stop = None if hi >= len(self) else hi
+        return new, slice(start, stop)
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""

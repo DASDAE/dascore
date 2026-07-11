@@ -312,7 +312,9 @@ class TestEquivalenceWithMonotonic:
             c1, i1 = seg.select(args)
             c2, i2 = mono.select(args)
             assert np.array_equal(np.atleast_1d(c1.values), np.atleast_1d(c2.values))
-            assert i1 == i2
+            # Slices must resolve identically (literal form may differ, e.g.
+            # slice(None, None) vs slice(None, len)).
+            assert i1.indices(len(seg)) == i2.indices(len(mono))
 
     def test_getitem_parity(self, coord_pair):
         """Integer and slice indexing agree with the materialized coord."""
@@ -382,6 +384,15 @@ class TestSelect:
         """Value-array selection keeps only matching values."""
         out, _ = float_gap_coord.select(np.array([1.0, 15.0, 99.0]))
         assert np.array_equal(out.values, np.array([1.0, 15.0]))
+
+    def test_select_between_samples_of_segment(self):
+        """A window inside a segment's envelope but between samples is empty."""
+        coarse = CoordMonotonicArray(values=np.array([0.0, 10.0]))
+        fine = get_coord(start=20.0, stop=25.0, step=1.0)
+        coord = concat_coords(coarse, fine)
+        out, indexer = coord.select((3.0, 7.0))
+        assert len(out) == 0
+        assert indexer == slice(0, 0)
 
     def test_select_none_returns_all(self, float_gap_coord):
         """A null select keeps everything."""
@@ -879,6 +890,32 @@ class TestReviewFindings:
         """Dimensionality mismatches raise."""
         with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
             time_gap_coord.simplify(get_quantity("1 m"))
+
+    def test_select_never_materializes(self, monkeypatch):
+        """Value selection must stay O(segments): no full-array pass.
+
+        Locks in the second-review performance finding: range selects on a
+        20M-sample segmented coord must not touch the concatenated values.
+        """
+        c1 = get_coord(start=0.0, stop=1e7, step=1.0)
+        c2 = get_coord(start=2e7, stop=3e7, step=1.0)
+        coord = concat_coords(c1, c2)
+
+        def _boom(self):
+            msg = "select must not materialize concatenated values"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(CoordSegmented, "values", property(_boom))
+        out, indexer = coord.select((5.0, 2.5e7))
+        assert isinstance(indexer, slice)
+        assert out.min() == 5.0 and out.max() == 2.5e7
+        # empty, full, and relative selects also stay off the values path.
+        empty, _ = coord.select((1.2e7, 1.8e7))
+        assert len(empty) == 0
+        full, _ = coord.select(None)
+        assert len(full) == len(coord)
+        sub, _ = coord.select((10.0, -10.0), relative=True)
+        assert len(sub)
 
     def test_patch_round_trip(self, float_gap_coord):
         """Segmented coords survive attachment to a Patch (CoordManager)."""
