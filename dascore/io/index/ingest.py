@@ -368,3 +368,126 @@ def summaries_to_records(
             )
         )
     return out
+
+
+def _py_scalar(value):
+    """Convert a fetched cell to the plain python scalar records use."""
+    if value is None or pd.isnull(value):
+        return None
+    if isinstance(value, np.bool_ | bool):
+        return bool(value)
+    if isinstance(value, np.integer | int):
+        return int(value)
+    if isinstance(value, np.floating | float):
+        return float(value)
+    return value
+
+
+def records_from_backend(backend, patch_ids=None) -> list[SourceRecord]:
+    """
+    Reconstruct source records from a backend's tables.
+
+    This is the transfer format for merging catalogs: feeding the result
+    to another backend's `write_sources` re-ingests the metadata with
+    fresh ids, coord-def deduplication (def keys are preserved), and
+    replace-semantics on (base_uri, source_path) identity.
+
+    Parameters
+    ----------
+    backend
+        The index backend to read.
+    patch_ids
+        If not None, only include these patches (and only sources which
+        still have at least one included patch).
+    """
+    sources = backend._fetch_df("SELECT * FROM sources")
+    if sources.empty:
+        return []
+    patches = backend._fetch_df("SELECT * FROM patches")
+    if patch_ids is not None:
+        patches = patches[patches["patch_id"].isin(set(patch_ids))]
+    attrs = backend._fetch_df("SELECT * FROM attrs")
+    links = backend._fetch_df("SELECT * FROM patch_coords")
+    defs = backend._fetch_df("SELECT * FROM coord_defs")
+    meta = backend._attr_meta()
+    col_info = {
+        row.column_name: (row.attr_name, row.value_kind, _py_scalar(row.units))
+        for row in meta.itertuples()
+    }
+    def_map = {int(row.coord_def_id): row for row in defs.itertuples()}
+    attr_rows = (
+        {int(k): v for k, v in attrs.set_index("patch_id").iterrows()}
+        if not attrs.empty
+        else {}
+    )
+    link_groups = (
+        {int(k): v for k, v in links.groupby("patch_id")} if not links.empty else {}
+    )
+    out = []
+    for src in sources.itertuples():
+        sub = patches[patches["source_id"] == src.source_id]
+        if sub.empty:
+            continue
+        patch_records = []
+        for patch in sub.itertuples():
+            pid = int(patch.patch_id)
+            typed = {}
+            for col, value in attr_rows.get(pid, {}).items():
+                if col in col_info and not pd.isnull(value):
+                    name, kind, units = col_info[col]
+                    typed[name] = TypedValue(
+                        kind=kind, value=_py_scalar(value), units=units
+                    )
+            coords = []
+            for link in link_groups.get(pid, pd.DataFrame()).itertuples():
+                cdef = def_map[int(link.coord_def_id)]
+                coords.append(
+                    CoordRecord(
+                        coord_name=link.coord_name,
+                        coord_dims=link.coord_dims,
+                        value_kind=cdef.value_kind,
+                        dtype=_py_scalar(cdef.dtype),
+                        length=_py_scalar(cdef.length),
+                        units=_py_scalar(cdef.units),
+                        min_num=_py_scalar(cdef.min_num),
+                        max_num=_py_scalar(cdef.max_num),
+                        step_num=_py_scalar(cdef.step_num),
+                        min_ns=_py_scalar(cdef.min_ns),
+                        max_ns=_py_scalar(cdef.max_ns),
+                        step_ns=_py_scalar(cdef.step_ns),
+                        min_str=_py_scalar(cdef.min_str),
+                        max_str=_py_scalar(cdef.max_str),
+                        is_monotonic=_py_scalar(cdef.is_monotonic),
+                        is_relative=_py_scalar(cdef.is_relative),
+                        coord_hash=_py_scalar(cdef.fingerprint),
+                    )
+                )
+            patch_records.append(
+                PatchRecord(
+                    source_patch_id=_py_scalar(patch.source_patch_id) or "",
+                    dims=_py_scalar(patch.dims) or "",
+                    shape=_py_scalar(patch.shape) or "",
+                    n_dims=_py_scalar(patch.n_dims),
+                    sample_count_total=_py_scalar(patch.sample_count_total),
+                    time_min=_py_scalar(patch.time_min),
+                    time_max=_py_scalar(patch.time_max),
+                    time_step=_py_scalar(patch.time_step),
+                    distance_min=_py_scalar(patch.distance_min),
+                    distance_max=_py_scalar(patch.distance_max),
+                    distance_step=_py_scalar(patch.distance_step),
+                    attrs=typed,
+                    coords=tuple(coords),
+                )
+            )
+        out.append(
+            SourceRecord(
+                source_path=_py_scalar(src.source_path) or "",
+                base_uri=_py_scalar(src.base_uri) or None,
+                source_format=_py_scalar(src.source_format) or "",
+                format_version=_py_scalar(src.format_version) or "",
+                mtime_ns=_py_scalar(src.mtime_ns),
+                size_bytes=_py_scalar(src.size_bytes),
+                patches=tuple(patch_records),
+            )
+        )
+    return out

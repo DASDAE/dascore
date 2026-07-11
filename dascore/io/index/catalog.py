@@ -132,6 +132,32 @@ class FileResolver(PatchResolver):
         return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 
 
+class CompositeResolver(PatchResolver):
+    """
+    Route rows to a live registry or the filesystem by path scheme.
+
+    Union catalogs mix file-backed rows (absolute paths) with in-memory
+    rows (memory:// paths); this resolver dispatches accordingly.
+    """
+
+    def __init__(self):
+        self.live = LiveResolver()
+        self.file = FileResolver(root=None)
+
+    def absorb(self, resolver: PatchResolver) -> None:
+        """Take over the live registry entries of another resolver."""
+        if isinstance(resolver, LiveResolver):
+            self.live._registry.update(resolver._registry)
+        elif isinstance(resolver, CompositeResolver):
+            self.live._registry.update(resolver.live._registry)
+
+    def resolve(self, row: Mapping, **trim) -> dc.Patch:
+        """Dispatch to the live registry or the file reader."""
+        if str(row.get("path", "")).startswith("memory"):
+            return self.live.resolve(row, **trim)
+        return self.file.resolve(row, **trim)
+
+
 def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
     """Build source records for live patches with synthetic identities."""
     token = next(_counter)
@@ -152,6 +178,17 @@ def _live_records(patches: Sequence[dc.Patch], resolver: LiveResolver):
         )
         resolver.register(path, record.source_patch_id, patch)
     return records
+
+
+def _absolutize_record(record, root):
+    """Return a source record whose relative path is resolved against root."""
+    from dataclasses import replace
+
+    path = record.source_path
+    if "://" in path or Path(path).is_absolute():
+        return record
+    resolved = str(Path(root) / (path if path != "." else ""))
+    return replace(record, source_path=resolved, base_uri=None)
 
 
 @dataclass
@@ -202,6 +239,37 @@ class PatchCatalog:
         first metadata operation.
         """
         return cls(resolver=LiveResolver(), pending=tuple(patches))
+
+    @classmethod
+    def union(cls, catalogs: Sequence[PatchCatalog]) -> PatchCatalog:
+        """
+        Materialize several catalogs into one in-memory catalog.
+
+        Metadata rows are merged table-to-table (coord definitions
+        deduplicate by def key); file-backed rows get absolute paths so
+        members with different roots coexist, and the same source
+        appearing in several members keeps a single entry (last one
+        wins). For catalog views, only the selected patches transfer —
+        note this respects row membership, not range trims; re-select
+        on the result for exact envelopes.
+        """
+        from dascore.io.index.ingest import records_from_backend
+
+        resolver = CompositeResolver()
+        out = cls(resolver=resolver)
+        backend = out.backend
+        for member in catalogs:
+            catalog, patch_ids = member if isinstance(member, tuple) else (member, None)
+            if patch_ids is None and catalog.is_view:
+                patch_ids = catalog.to_df()["_patch_id"].tolist()
+            records = records_from_backend(catalog.backend, patch_ids=patch_ids)
+            root = getattr(catalog.resolver, "_root", None)
+            if root is not None:
+                records = [_absolutize_record(x, root) for x in records]
+            backend.write_sources(records)
+            resolver.absorb(catalog.resolver)
+        out._invalidate()
+        return out
 
     @classmethod
     def from_directory(

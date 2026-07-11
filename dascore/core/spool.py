@@ -165,6 +165,53 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         other_dict = getattr(other, "__dict__", {})
         return deep_equality_check(my_dict, other_dict)
 
+    def __add__(self, other) -> BaseSpool:
+        """
+        Combine two spools into one containing the patches of both.
+
+        The result is a lazy spool over the union of both spools'
+        metadata: file-backed patches stay unloaded, in-memory patches
+        are shared (not copied), and the same source appearing in both
+        spools keeps a single entry. Selections on the inputs carry over
+        by row membership.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> sp1 = dc.get_example_spool("random_das")
+        >>> sp2 = dc.get_example_spool("diverse_das")
+        >>> combined = sp1 + sp2
+        >>> assert len(combined) == len(sp1) + len(sp2)
+        """
+        if not isinstance(other, BaseSpool):
+            return NotImplemented
+        from dascore.io.index.catalog import PatchCatalog
+
+        members = []
+        for spool_ in (self, other):
+            catalog = getattr(spool_, "_catalog", None)
+            patch_ids = None
+            if catalog is not None and not getattr(spool_, "_catalog_native", False):
+                # Dataframe-layer selections narrow rows without touching
+                # the catalog; carry that membership over. Restructured
+                # rows (e.g. chunked views) no longer map to sources and
+                # contribute their materialized patches instead.
+                df = spool_._df
+                if "_patch_id" in df.columns:
+                    patch_ids = df["_patch_id"].tolist()
+                else:
+                    catalog = None
+            if catalog is None:
+                # Spools without a usable catalog contribute their
+                # materialized patches.
+                catalog = PatchCatalog.from_patches(list(spool_))
+            members.append((catalog, patch_ids))
+        union = PatchCatalog.union(members)
+        new = MemorySpool()
+        new._catalog = union
+        new._catalog_native = True
+        return new
+
     @abc.abstractmethod
     @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(
