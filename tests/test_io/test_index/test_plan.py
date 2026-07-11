@@ -327,3 +327,40 @@ class TestOracleParity:
         assert len(outs) == len(contents)
         assert np.array_equal(outs["time_min"].values, contents["time_min"].values)
         assert np.array_equal(outs["time_max"].values, contents["time_max"].values)
+
+
+class TestChunkPlanAccessor:
+    """Tests for the public spool.chunk_plan diagnostic."""
+
+    def test_matches_chunk(self):
+        """The plan describes exactly what chunk produces."""
+        spool = dc.get_example_spool("random_das")
+        plan = spool.chunk_plan(time=3)
+        chunked = spool.chunk(time=3)
+        assert len(plan.outputs) == len(chunked)
+        contents = chunked.get_contents().sort_values("time_min")
+        outs = plan.outputs.sort_values("time_min")
+        assert np.array_equal(outs["time_min"].values, contents["time_min"].values)
+
+    def test_records_params(self):
+        """Plans record the resolved parameters."""
+        spool = dc.get_example_spool("random_das")
+        plan = spool.chunk_plan(time=None, tolerance=2.0)
+        assert plan.params["tolerance"] == 2.0
+        assert isinstance(plan.params["group"], tuple)
+        assert plan.merge_mode
+
+    def test_members_reference_sources(self):
+        """Members bind outputs to source patches without loading data."""
+        spool = dc.get_example_spool("diverse_das")
+        plan = spool.chunk_plan(time=None)
+        assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
+        assert len(plan.members) == len(spool)
+
+    def test_directory_spool(self, tmp_path):
+        """chunk_plan works on file-backed spools."""
+        patch = dc.get_example_patch()
+        dc.write(patch, tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        plan = spool.chunk_plan(time=None)
+        assert len(plan.outputs) == 1

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -173,8 +174,27 @@ def _partition(df, name, group_attrs, tolerance, sampling_tolerance) -> pd.Serie
             "the patches. As a result, some patches in the chunked spool "
             "may be unevenly sampled, or have their sampling rate increased."
         )
-        warnings.warn(msg, UserWarning, stacklevel=4)
+        warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     return cell + "_" + cont.astype(str)
+
+
+def _user_stacklevel() -> int:
+    """Return the warn stacklevel pointing at the first non-dascore frame.
+
+    Plans are built at several call depths (spool.chunk, spool.chunk_plan,
+    build_chunk_plan directly), so a fixed stacklevel would blame library
+    frames for some entries.
+    """
+    import inspect
+
+    package_dir = str(Path(__file__).resolve().parents[2])
+    # Frames after this helper's own align exactly with warn's numbering:
+    # level 1 is the frame calling warn.
+    for level, frame_info in enumerate(inspect.stack()[1:], start=1):
+        filename = str(Path(frame_info.filename).resolve())
+        if not filename.startswith(package_dir):
+            return level
+    return 1
 
 
 def _coerce_length_overlap(value, overlap, start_dtype):
