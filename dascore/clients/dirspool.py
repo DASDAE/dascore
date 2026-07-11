@@ -123,11 +123,11 @@ class DirectorySpool(DataFrameSpool):
         """
         Convert the dataframe to a list of dicts for iteration.
 
-        This is significantly faster than iterating rows.
+        Stored (relative) paths pass through unchanged; the catalog's
+        FileResolver owns resolving them against the spool root, so path
+        resolution lives in exactly one place.
         """
         df = df.copy(deep=False).replace("", None)
-        # note: need to add extra / here since we no longer store it in db.
-        df["path"] = (str(self.spool_path) + "/") + df["path"]
         return super()._df_to_dict_list(df)
 
     def _load_patch(self, kwargs) -> Self:
