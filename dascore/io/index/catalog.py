@@ -38,6 +38,16 @@ from dascore.utils.pd import adjust_segments
 _counter = itertools.count()
 
 
+def _row_source_patch_id(row: Mapping) -> str:
+    """Return the row's source_patch_id as a string ("" when missing).
+
+    Rows fetched through pandas represent missing text values as NaN,
+    which is truthy, so a plain `or ""` does not normalize them.
+    """
+    value = row.get("source_patch_id")
+    return "" if value is None or pd.isnull(value) else str(value)
+
+
 class PatchResolver(abc.ABC):
     """Turn one flat-relation row into a Patch."""
 
@@ -64,7 +74,7 @@ class LiveResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Look the patch up; live patches ignore trim hints."""
-        key = (row["path"], row.get("source_patch_id") or "")
+        key = (row["path"], _row_source_patch_id(row))
         return self._registry[key]
 
 
@@ -105,7 +115,7 @@ class FileResolver(PatchResolver):
         if self._root is not None and "://" not in str(path):
             if not Path(path).is_absolute():
                 path = self._root / path
-        source_patch_id = row.get("source_patch_id") or ""
+        source_patch_id = _row_source_patch_id(row)
         if source_patch_id.isdigit():
             # Positional (synthesized) ids index the full source read; a
             # trimmed read would shift or drop patches and bind the wrong
