@@ -3,7 +3,7 @@
 # Script to run tests to account for wonkiness of periodic mac failures.
 args=(tests -m "not network" -s --cov dascore --cov-append --cov-report=xml)
 if [[ "$1" == "network" ]]; then
-  args=(tests -m network -s)
+  args=(tests -m network -s --cov dascore --cov-append --cov-report=xml)
 fi
 if [[ "$1" == "doctest" ]]; then
   args=(dascore --doctest-modules)

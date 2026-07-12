@@ -143,6 +143,7 @@ jobs:
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
+          persist-credentials: false
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
@@ -153,6 +154,14 @@ jobs:
       - name: run network tests
         shell: bash -el {0}
         run: ./.github/test_code.sh network
+
+      - uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false
+          files: ./coverage.xml
+          flags: network
+          name: PR_network_tests_${{ matrix.os }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: summarize non-gating failure
         if: failure()
