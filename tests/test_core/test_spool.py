@@ -966,12 +966,17 @@ class TestSpoolCoverageEdges:
         assert MemorySpool() == MemorySpool()
 
     def test_repr_without_time_coordinate(self):
-        """A spool whose patches have no time coord still renders a span line."""
+        """A spool whose patches have no time coord omits the time-span line."""
         data = np.random.default_rng().random((6, 4))
         coords = {"distance": np.arange(6), "frequency": np.arange(4.0)}
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "frequency"))
         rendered = dc.spool([patch]).__rich__().__str__()
-        assert "Time Span" in rendered
+        assert "Spool" in rendered
+        assert "Time Span" not in rendered  # no time coordinate to summarize
+
+    def test_repr_with_time_coordinate(self):
+        """A normal spool renders its time span."""
+        assert "Time Span" in dc.spool([dc.get_example_patch()]).__rich__().__str__()
 
     def test_large_merge_dedups(self, many_contiguous):
         """Merging >10 sources into one patch exercises the de-dup branch."""

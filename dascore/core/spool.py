@@ -1338,16 +1338,17 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        # An empty MemorySpool() has no dataframe; otherwise time_min is
-        # always part of the flat relation, so a non-empty spool has a
-        # renderable time span.
+        # An empty MemorySpool() has no dataframe, and patches without a
+        # time coordinate have a null time_min; only render a time span
+        # when the spool actually carries one.
         if df is not None and len(df) and "time_min" in df.columns:
             t1, t2 = df["time_min"].min(), df["time_min"].max()
-            duration = get_nice_text(t2 - t1)
-            base += Text(
-                f"\n    Time Span: <{duration}> "
-                f"{get_nice_text(t1)} to {get_nice_text(t2)}"
-            )
+            if pd.notna(t1) and pd.notna(t2):
+                duration = get_nice_text(t2 - t1)
+                base += Text(
+                    f"\n    Time Span: <{duration}> "
+                    f"{get_nice_text(t1)} to {get_nice_text(t2)}"
+                )
         return base
 
     def _load_patch(self, kwargs) -> Self:

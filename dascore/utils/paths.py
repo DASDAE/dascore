@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
 
 from dascore.compat import UPath
@@ -41,7 +42,10 @@ def directory_writable(path) -> bool:
         open(probe, "w").close()
     except OSError:
         return False
-    os.remove(probe)
+    # the directory is writable; a transient failure to remove the probe
+    # (e.g. Windows AV/file-locking) must not flip the result.
+    with suppress(OSError):
+        os.remove(probe)
     return True
 
 

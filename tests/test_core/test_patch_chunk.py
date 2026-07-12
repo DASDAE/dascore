@@ -315,6 +315,13 @@ class TestChunkMerge:
         out = distance_adjacent.chunk(time=...)
         assert len(out) == len(distance_adjacent)
 
+        # the differing distance envelopes are preserved, not merged/duplicated
+        def _distance_envelopes(spool):
+            df = spool.get_contents()
+            return sorted(zip(df["distance_min"], df["distance_max"]))
+
+        assert _distance_envelopes(out) == _distance_envelopes(distance_adjacent)
+
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
         len_1 = len(adjacent_spool_no_overlap)
