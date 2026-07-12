@@ -464,3 +464,25 @@ class TestGetIntervalColumns:
         msg = "Cannot chunk spool or dataframe"
         with pytest.raises(ParameterError, match=msg):
             get_interval_columns(example_df_2, "money")
+
+
+class TestRelativeRangesToAbsolute:
+    """Relative range resolution validates its envelope columns."""
+
+    def test_missing_max_column_raises_spool_error(self):
+        """A frame with the min but not the max column raises the doc'd error."""
+        from dascore.exceptions import InvalidSpoolQueryError
+        from dascore.utils.pd import relative_ranges_to_absolute
+
+        df = pd.DataFrame({"time_min": [0.0]})  # no time_max
+        with pytest.raises(InvalidSpoolQueryError, match="relative select"):
+            relative_ranges_to_absolute(df, {"time": (1, -1)})
+
+    def test_non_tuple_value_raises(self):
+        """A non-(start, stop) relative value raises rather than mis-resolving."""
+        from dascore.exceptions import InvalidSpoolQueryError
+        from dascore.utils.pd import relative_ranges_to_absolute
+
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
+        with pytest.raises(InvalidSpoolQueryError, match="requires"):
+            relative_ranges_to_absolute(df, {"time": 5})

@@ -857,6 +857,14 @@ class TestGetPatchName:
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
 
+    def test_multiple_coord_fields(self, random_spool):
+        """Naming on more than one coordinate flattens the min/max fields."""
+        # drop path so the coordinate-based naming branch is exercised
+        df = random_spool.get_contents().drop(columns=["path"], errors="ignore")
+        names = get_patch_names(df, coords=("time", "distance"))
+        assert len(names) == len(df)
+        assert names.str.len().gt(0).all()
+
 
 class TestSwapKwargsDimToAxis:
     """Tests for swap_kwargs_dim_to_axis function."""

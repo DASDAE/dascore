@@ -118,6 +118,19 @@ class TestFileUnion:
         combined = dir_spool + dir_spool
         assert len(combined) == len(dir_spool)
 
+    def test_constructor_select_kwargs_restrict_union(self, tmp_path):
+        """A select_kwargs-restricted directory spool unions only its rows."""
+        base = dc.get_example_spool("random_das")
+        dc.examples.spool_to_directory(base, path=tmp_path)
+        full = dc.spool(tmp_path).update()
+        df = full.get_contents().sort_values("time_min")
+        window = (df["time_min"].iloc[0], df["time_max"].iloc[0])  # first patch
+        restricted = dc.spool(tmp_path, select_kwargs={"time": window})
+        assert 0 < len(restricted) < len(full)
+        combined = restricted + dc.spool([dc.get_example_patch(tag="mem")])
+        # the union must not reintroduce the rows the constructor excluded
+        assert len(combined) == len(restricted) + 1
+
     def test_union_preserves_def_keys(self, dir_spool, contiguous_patches):
         """Coord definitions deduplicate by def key across members."""
         _, p2 = contiguous_patches

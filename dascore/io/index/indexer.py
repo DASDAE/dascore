@@ -99,9 +99,10 @@ class DBDirectoryIndexer(AbstractIndexer):
         """
         map_key = str(self.path)
         if index_path:
-            update = {map_key: str(Path(index_path).absolute())}
+            index_path = Path(index_path).absolute()
+            update = {map_key: str(index_path)}
             _update_index_map(update, cache_path=str(self.index_map_path))
-            return Path(index_path)
+            return index_path
         expected = self.path / self._index_name
         with suppress(PermissionError):
             if expected.exists():

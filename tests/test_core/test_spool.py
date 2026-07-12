@@ -1024,3 +1024,10 @@ class TestSpoolCoverageEdges:
         assert merged[0].get_coord("time").size == sum(
             p.get_coord("time").size for p in many_contiguous
         )
+
+    def test_empty_memory_spool_len_iter_repr(self):
+        """A bare MemorySpool() (no dataframe) is a valid empty spool."""
+        empty = MemorySpool()
+        assert len(empty) == 0
+        assert list(empty) == []
+        assert "Spool" in str(empty)

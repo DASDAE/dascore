@@ -585,9 +585,13 @@ class DataFrameSpool(BaseSpool):
             and "_df" not in self._cache
         ):
             return len(self._catalog)
-        return len(self._df)
+        df = self._df
+        # An empty spool with no patches, data, or catalog has no frame.
+        return 0 if df is None else len(df)
 
     def __iter__(self):
+        if self._df is None:  # an empty spool has nothing to yield
+            return
         for ind in range(len(self._df)):
             try:
                 yield self._unbox_patch(self._get_patches_from_index(ind))
@@ -816,7 +820,11 @@ class DataFrameSpool(BaseSpool):
         """
         if self._catalog is None:
             return super()._as_catalog_member()
-        if self._catalog_native:
+        # A catalog-native spool is the whole catalog only when nothing
+        # narrows it; constructor select_kwargs (DirectorySpool) restrict
+        # the visible rows without touching the catalog, so carry only the
+        # surviving patch ids rather than the entire catalog.
+        if self._catalog_native and not self._select_kwargs:
             return self._catalog, None
         df = self._df
         if "_patch_id" in df.columns:
@@ -1330,9 +1338,10 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        # time_min is always part of the flat relation, so a non-empty
-        # spool always has a renderable time span.
-        if len(df) and "time_min" in df.columns:
+        # An empty MemorySpool() has no dataframe; otherwise time_min is
+        # always part of the flat relation, so a non-empty spool has a
+        # renderable time span.
+        if df is not None and len(df) and "time_min" in df.columns:
             t1, t2 = df["time_min"].min(), df["time_min"].max()
             duration = get_nice_text(t2 - t1)
             base += Text(

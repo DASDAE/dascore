@@ -54,7 +54,7 @@ def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
     out = {}
     for name, value in kwargs.items():
         lo_col, hi_col = f"{name}_min", f"{name}_max"
-        if lo_col not in df.columns or df.empty:
+        if lo_col not in df.columns or hi_col not in df.columns or df.empty:
             msg = f"Cannot use relative select on {name!r}."
             raise InvalidSpoolQueryError(msg)
         if not (isinstance(value, tuple) and len(value) == 2):

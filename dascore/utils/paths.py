@@ -34,13 +34,14 @@ def directory_writable(path) -> bool:
     """Return True if the directory is writable else False."""
     name = "._dascore_write_test_delete_me"
     probe = Path(path) / name
-    probe.parent.mkdir(exist_ok=True, parents=True)
     try:
+        # a read-only mount raises OSError (e.g. EROFS) from mkdir/open;
+        # the whole probe must be guarded, not just the write.
+        probe.parent.mkdir(exist_ok=True, parents=True)
         open(probe, "w").close()
-    except (PermissionError, IsADirectoryError):
+    except OSError:
         return False
-    else:
-        os.remove(probe)
+    os.remove(probe)
     return True
 
 
