@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
+      python-default: ${{ steps.load-vars.outputs.python-default }}
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
       os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
@@ -120,3 +121,40 @@ jobs:
         if: steps.generate_qmd_tests.outcome == 'failure' || steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
         shell: bash
         run: exit 1
+
+  network_tests:
+    needs: setup
+    timeout-minutes: 60
+    continue-on-error: true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    # Keep remote-IO coverage visible without blocking unrelated changes.
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    env:
+      env_file: 'environment.yml'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      - uses: ./.github/actions/mamba-install-dascore
+        with:
+          python-version: ${{ needs.setup.outputs.python-default }}
+          cache-number: ${{ env.CACHE_NUMBER }}
+          prepare-test-data: "true"
+
+      - name: run network tests
+        shell: bash -el {0}
+        run: ./.github/test_code.sh network
+
+      - name: summarize non-gating failure
+        if: failure()
+        shell: bash
+        run: echo "Network tests failed, but this report-only job does not block the workflow." >> "$GITHUB_STEP_SUMMARY"
