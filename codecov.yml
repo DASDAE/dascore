@@ -1,10 +1,9 @@
 codecov:
   notify:
-    after_n_builds: 8
-    wait_for_ci: true
+    after_n_builds: 7
 
 comment:
-  after_n_builds: 8
+  after_n_builds: 7
 
 flags:
   unittests:
