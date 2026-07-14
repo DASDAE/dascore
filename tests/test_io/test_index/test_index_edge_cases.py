@@ -850,11 +850,11 @@ class TestIngestEdges:
             records = s2r([summary])
         assert "patch_id" not in records[0].patches[0].attrs
 
-    def test_unsupported_coord_dtype_skipped(self):
-        """A coord with no usable dtype produces no record."""
+    @pytest.mark.parametrize("dtype", ["", np.dtype(bool)])
+    def test_unsupported_coord_dtype_skipped(self, dtype):
+        """A coord with a missing or unsupported dtype produces no record."""
 
         class _Stub:
-            dtype = ""
             dims = ("x",)
             len = 2
             units = None
@@ -863,7 +863,11 @@ class TestIngestEdges:
             max = 1
             step = None
 
-        assert _coord_record("x", _Stub()) is None
+        # "" exercises the missing-dtype guard; a bool dtype is a real
+        # dtype that none of the value-kind branches handle.
+        stub = _Stub()
+        stub.dtype = dtype
+        assert _coord_record("x", stub) is None
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_ids."""
