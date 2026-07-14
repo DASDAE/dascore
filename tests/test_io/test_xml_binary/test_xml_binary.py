@@ -191,6 +191,14 @@ class TestScanContents:
         scan3 = dc.scan(binary_xml_directory, timestamp=mtime - 50)
         assert len(scan3) == 2
 
+    def test_direct_scan_filters_all_by_mtime(self, binary_xml_directory):
+        """The FiberIO scan contract returns empty after filtering every file."""
+        fiber = XMLBinaryV1()
+        newest = max(
+            path.stat().st_mtime for path in binary_xml_directory.glob("*.raw")
+        )
+        assert fiber.scan(binary_xml_directory, timestamp=newest + 1) == []
+
     def test_remote_directory(self, remote_binary_xml_directory):
         """Remote XMLBinary directories should be scannable."""
         fiber = XMLBinaryV1()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fnmatch
-import os
 from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from functools import cache
@@ -66,18 +65,6 @@ def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
             relative_offset(gmin, gmax, lo),
             relative_offset(gmin, gmax, hi),
         )
-    return out
-
-
-def _remove_base_path(series: pd.Series, base="") -> pd.Series:
-    """
-    Ensure paths stored in column name use unix style paths and have base
-    path removed.
-    """
-    assert not series.empty, "Series must be non-empty"
-    unix_paths = series.str.replace(os.sep, "/")
-    unix_base_path = (str(base) + "/").replace(os.sep, "/")
-    out = unix_paths.str.replace(unix_base_path, "", regex=False)
     return out
 
 
@@ -233,7 +220,7 @@ def _convert_times(df, some_dict):
     return some_dict
 
 
-def get_interval_columns(df, name, arrays=False):
+def get_interval_columns(df, name):
     """
     Return a series of start, stop, step for columns.
 
@@ -243,8 +230,6 @@ def get_interval_columns(df, name, arrays=False):
         The input dataframe.
     name
         The name of the coordinate (eg time).
-    arrays
-        If True, return output as numpy arrays, else pandas series.
     """
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
@@ -256,10 +241,7 @@ def get_interval_columns(df, name, arrays=False):
         )
         raise ParameterError(msg)
     start, stop, step = df[names[0]], df[names[1]], df[names[2]]
-    if not arrays:
-        return start, stop, step
-    else:
-        return start.values, stop.values, step.values
+    return start, stop, step
 
 
 def yield_range_tuple_from_kwargs(df, kwargs) -> tuple[str, slice]:
@@ -527,26 +509,6 @@ def _column_or_value(df, col, value):
         return df[col].values
     out = np.broadcast_to(np.array(value), len(df))
     return out
-
-
-def _instructions_modified(instruct_df, sub_source):
-    """
-    Determine if the instruction df columns are the same as the source.
-
-    This is useful for determining which patches need select arguments.
-    """
-    # Get the source and desired output dfs broadcast together.
-    names = set(sub_source.columns) & set(instruct_df.columns)
-    source = sub_source.loc[instruct_df["source_index"].values]
-    # not_modified = np.ones(len(instruct_df), dtype=bool)
-    not_modified = ~_column_or_value(source, "_modified", False)
-    for name in names:
-        val1, val2 = source[name].values, instruct_df[name].values
-        eq = val1 == val2
-        null = pd.isnull(val1) & pd.isnull(val2)
-        not_modified &= eq | null
-    modified = ~not_modified
-    return modified
 
 
 def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:

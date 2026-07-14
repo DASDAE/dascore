@@ -18,32 +18,6 @@ FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
 DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
 
 
-def _get_root_attrs(h5):
-    """Return a mapping-like object for root attrs for either HDF5 backend."""
-    if hasattr(h5, "root"):
-        return h5.root._v_attrs
-    return h5.attrs
-
-
-def _iter_root_arrays(h5):
-    """Yield ``(name, node)`` pairs for array-like nodes at the HDF5 root."""
-    if hasattr(h5, "list_nodes"):
-        for node in h5.list_nodes("/"):
-            if hasattr(node, "shape"):
-                yield node.name, node
-        return
-    for name, node in h5.items():
-        if hasattr(node, "shape"):
-            yield name, node
-
-
-def _get_attr_names(attrs):
-    """Return the set of attribute names from either backend."""
-    if hasattr(attrs, "_v_attrnames"):
-        return set(attrs._v_attrnames)
-    return set(attrs)
-
-
 def _maybe_trim_data(cm, data, kwargs):
     """Maybe use kwargs to trim data array."""
     new_cm, new_data = cm.select(array=data, **kwargs)
@@ -52,12 +26,9 @@ def _maybe_trim_data(cm, data, kwargs):
 
 def _get_attrs_coords_and_data(h5, snap, fiber_io):
     """Return attrs, coordinate manager, and data node."""
-    attrs = _get_root_attrs(h5)
-    attr_names = _get_attr_names(attrs) - DEFAULT_ATTRS
-    attr_dict = {
-        x: unbyte(attrs[x] if not hasattr(attrs, "_v_attrnames") else getattr(attrs, x))
-        for x in attr_names
-    }
+    attrs = h5.attrs
+    attr_names = set(attrs) - DEFAULT_ATTRS
+    attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
     attr_dict["file_version"] = fiber_io.version
     attr_dict["file_format"] = fiber_io.name
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
@@ -124,7 +95,7 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
 
 def _get_cm_and_data(h5, snap=False, dims=None):
     """Extract coordinate manager and data node."""
-    root_nodes = dict(_iter_root_arrays(h5))
+    root_nodes = {name: node for name, node in h5.items() if hasattr(node, "shape")}
     array_names = set(root_nodes)
     data_node_name = array_names & DATA_ARRAY_NAMES
     time_node_name = array_names & TIME_ARRAY_NAMES

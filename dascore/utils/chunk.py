@@ -50,13 +50,6 @@ def get_intervals(
     -------
     A 2D array where first column is start and second column is end.
     """
-    # when length is null just use entire length
-    if pd.isnull(length):
-        out = np.asarray([start, stop])
-        if is_datetime64(start):
-            out = to_datetime64(out)
-        return np.atleast_2d(out)
-
     if is_datetime64(start):
         # need to ensure we have numpy datetimes, not pandas
         start, stop = to_datetime64(start), to_datetime64(stop)
