@@ -415,6 +415,34 @@ class TestChunkMerge:
         assert old_df["distance_min"].min() == new_df["distance_min"].min()
         assert old_df["distance_max"].max() == new_df["distance_max"].max()
 
+    def test_non_si_merge_tolerance_uses_coord_units(self, random_patch):
+        """Canonical index steps are not interpreted in native coord units."""
+        from dascore.utils.patch import _get_merged_coord
+
+        size = len(random_patch.get_coord("distance"))
+        first = dc.get_coord(data=np.arange(size, dtype=float), units="km")
+        second = dc.get_coord(
+            data=np.arange(size, dtype=float) + size + 8,
+            units="km",
+        )
+        patches = [
+            random_patch.update_coords(distance=first),
+            random_patch.update_coords(distance=second),
+        ]
+        # Index summaries store numeric dimension steps in canonical SI.
+        summaries = pd.DataFrame({"distance_step": [1000.0, 1000.0]})
+        manager = _get_merged_coord(
+            summaries,
+            "distance",
+            [patch.coords for patch in patches],
+            tolerance=1.5,
+        )
+        merged = manager.coord_map["distance"]
+        assert not merged.evenly_sampled
+        assert np.array_equal(
+            merged.values, np.concatenate([first.values, second.values])
+        )
+
     def test_merge_distance_no_order(self, distance_adjacent_no_order):
         """Ensure distance can be merged with unsorted coords."""
         sp = distance_adjacent_no_order.chunk(distance=...)

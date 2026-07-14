@@ -858,9 +858,9 @@ class TestIndexerEdges:
     """DBDirectoryIndexer edge behavior."""
 
     def test_failed_initial_update_can_retry(self, tmp_path, monkeypatch):
-        """A failed first walk does not mark automatic updating complete."""
+        """A new process retries when the first automatic update failed."""
         indexer = DBDirectoryIndexer(tmp_path)
-        original_walk = indexer._walk
+        index_path = indexer.index_path
 
         def fail_walk():
             raise OSError("simulated walk failure")
@@ -869,10 +869,17 @@ class TestIndexerEdges:
         with pytest.raises(OSError, match="walk failure"):
             indexer.ensure_updated()
         assert not indexer._initial_update_done
-        monkeypatch.setattr(indexer, "_walk", original_walk)
-        assert indexer.ensure_updated()
-        assert indexer._initial_update_done
         indexer.close()
+
+        retry = DBDirectoryIndexer(tmp_path, index_path=index_path)
+        assert not retry._initial_update_done
+        assert retry.ensure_updated()
+        assert retry._initial_update_done
+        retry.close()
+
+        reopened = DBDirectoryIndexer(tmp_path, index_path=index_path)
+        assert reopened._initial_update_done
+        reopened.close()
 
     def test_directory_manifest_detects_equal_stat_name_swap(
         self, tmp_path, monkeypatch

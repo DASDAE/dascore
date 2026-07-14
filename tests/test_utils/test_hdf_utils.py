@@ -45,6 +45,13 @@ class TestH5Readers:
         with closing(H5Reader.get_handle(path)) as handle:
             assert "waveforms" in handle
 
+    def test_missing_reader_does_not_create_parent(self, tmp_path):
+        """Opening a missing file for reading does not mutate the filesystem."""
+        path = tmp_path / "missing_parent" / "missing.h5"
+        with pytest.raises(OSError):
+            H5Reader.get_handle(path)
+        assert not path.parent.exists()
+
 
 class TestGetH5pyFile:
     """Tests for unwrapping managed h5py handles."""

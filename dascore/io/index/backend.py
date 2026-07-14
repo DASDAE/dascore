@@ -127,6 +127,10 @@ class AbstractIndexBackend(abc.ABC):
         """Return index-level metadata."""
 
     @abc.abstractmethod
+    def mark_initial_update_done(self) -> None:
+        """Persist that the directory index completed its first update."""
+
+    @abc.abstractmethod
     def attr_names(self) -> set[str]:
         """Return original attr names known to the index."""
 
@@ -215,7 +219,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                 )
             self._execute(
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
-                (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, time.time_ns()),
+                (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0),
             )
             self._commit()
         except Exception:
@@ -434,6 +438,20 @@ class SQLIndexBackend(AbstractIndexBackend):
         self._executemany(sql, rows)
 
     # --- writes ------------------------------------------------------
+
+    def mark_initial_update_done(self) -> None:
+        """Persist successful completion of a directory index's first update."""
+        self._begin()
+        try:
+            self._execute(
+                "UPDATE meta_data SET last_indexed_ns = ?",
+                (time.time_ns(),),
+            )
+            self._commit()
+        except Exception:
+            with suppress(Exception):
+                self._rollback()
+            raise
 
     def write_sources(self, records: list[SourceRecord]) -> None:
         """

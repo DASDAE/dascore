@@ -62,12 +62,12 @@ class DBDirectoryIndexer(AbstractIndexer):
         requires_local_directory(path, label="DBDirectoryIndexer")
         self.path = Path(path).absolute()
         self.index_path = Path(self._find_index_path(index_path))
-        # A brand-new index triggers one automatic update on first query,
-        # matching the historic auto-index-on-first-access behavior.
-        self._initial_update_done = (
-            self.index_path.exists() and self.index_path.stat().st_size > 0
-        )
         self._backend = get_backend(self.index_path)
+        # Schema creation alone is not a successful directory scan. Read the
+        # transactional marker so a new process retries an interrupted first
+        # update instead of trusting a merely nonempty SQLite file.
+        metadata = self._backend.get_metadata()
+        self._initial_update_done = bool(metadata["last_indexed_ns"])
 
     @property
     def _index_name(self) -> str:
@@ -290,7 +290,9 @@ class DBDirectoryIndexer(AbstractIndexer):
                 )
             if records:
                 self._backend.write_sources(records)
-        self._initial_update_done = True
+        if not self._initial_update_done:
+            self._backend.mark_initial_update_done()
+            self._initial_update_done = True
         return self
 
     def get_contents(self, _attrs=None, _coords=None, **kwargs) -> pd.DataFrame:

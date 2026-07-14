@@ -117,32 +117,39 @@ def _range_bounds(
     coerced usable bounds so callers don't coerce twice.
     """
     lo_raw, hi_raw = value
-    lo = hi = None
     kind = None
     typed_values = []
+    typed_bounds = []
     for raw, side in ((lo_raw, "lo"), (hi_raw, "hi")):
         if raw is None or raw is Ellipsis:
             continue
         typed = _coerce_scalar(raw, target_kinds)
         typed_values.append(typed)
         knd = typed.kind
-        val = (
-            typed.value
-            if target_units is _UNSET
-            else _to_target_unit(typed, target_units, name)
-        )
         if kind is not None and knd != kind:
             msg = f"Range bounds {value!r} have mixed kinds ({kind}, {knd})."
             raise InvalidSpoolQueryError(msg)
         kind = knd
+        typed_bounds.append((side, typed))
+    if kind is None:
+        msg = f"Range {value!r} has no usable bounds."
+        raise InvalidSpoolQueryError(msg)
+
+    # Validate all bound kinds before attempting unit conversion. An
+    # unsupported but internally consistent kind is a valid no-match query;
+    # mixed kinds remain an invalid range.
+    lo = hi = None
+    for side, typed in typed_bounds:
+        val = (
+            typed.value
+            if target_units is _UNSET or kind not in target_kinds
+            else _to_target_unit(typed, target_units, name)
+        )
         if side == "lo":
             lo = val
         else:
             hi = val
-    if kind is None:
-        msg = f"Range {value!r} has no usable bounds."
-        raise InvalidSpoolQueryError(msg)
-    if lo is not None and hi is not None and lo > hi:
+    if kind in target_kinds and lo is not None and hi is not None and lo > hi:
         msg = f"Range {value!r} has lo > hi after coercion."
         raise InvalidSpoolQueryError(msg)
     return kind, lo, hi, typed_values
@@ -251,6 +258,8 @@ def build_attr_clause(
         coerced = [_coerce_scalar(v, kinds) for v in value]
         by_kind: dict[str, list] = {}
         for typed in coerced:
+            if typed.kind not in kinds:
+                continue
             val = _to_target_unit(typed, units.get(typed.kind), name)
             by_kind.setdefault(typed.kind, []).append(val)
         subclauses = []
@@ -274,10 +283,10 @@ def build_attr_clause(
         return None
     typed = _coerce_scalar(value, kinds)
     kind = typed.kind
-    val = _to_target_unit(typed, units.get(kind), name)
     if kind not in kinds:
         where.add("FALSE")
         return None
+    val = _to_target_unit(typed, units.get(kind), name)
     where.add(f"{col(kind)} = ?", val)
     return None
 

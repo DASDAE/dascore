@@ -44,7 +44,9 @@ def diverse_df(diverse_indexer):
 def empty_index(tmp_path_factory):
     """Create an index around an empty directory."""
     path = tmp_path_factory.mktemp("index_created_test")
-    return DBDirectoryIndexer(path).update(progress=None)
+    indexer = DBDirectoryIndexer(path).update(progress=None)
+    yield indexer
+    indexer.close()
 
 
 class TestFindIndex:

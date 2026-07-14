@@ -167,7 +167,8 @@ def open_h5_resource(
             handle.close()
             raise
     try:
-        _maybe_make_parent_directory(resource)
+        if mode != "r":
+            _maybe_make_parent_directory(resource)
         return _ManagedH5pyFile(constructor(resource, mode=mode))
     except TypeError:
         msg = f"Couldn't get handle from {resource} using h5py"

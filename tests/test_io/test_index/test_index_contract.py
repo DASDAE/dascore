@@ -19,6 +19,7 @@ from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.io.index.backend import resolve_query
 from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.io.index.schema import INDEX_VERSION
 from dascore.units import get_quantity
 
 
@@ -236,6 +237,19 @@ class TestAttrPredicates:
         df = backend.query(Query(attrs={"station": 5}))
         assert df.empty
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            get_quantity("1 m"),
+            [get_quantity("1 m"), get_quantity("2 m")],
+            (get_quantity("900 m"), get_quantity("1 km")),
+        ],
+    )
+    def test_quantity_kind_mismatch_matches_nothing(self, backend, value):
+        """Quantity forms do not convert against a string-only attribute."""
+        df = backend.query(Query(attrs={"station": value}))
+        assert df.empty
+
     def test_mixed_kind_attr(self, backend):
         """Mixed kind attr."""
         # shot_number exists as num (42) and str ("unknown")
@@ -434,7 +448,7 @@ class TestMetadata:
         """Metadata."""
         meta = backend.get_metadata()
         assert meta["what_is_this"] == "dascore_spool_index"
-        assert meta["index_version"] == 2
+        assert meta["index_version"] == INDEX_VERSION
 
     def test_names(self, backend):
         """Names."""

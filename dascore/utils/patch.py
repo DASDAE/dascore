@@ -32,7 +32,7 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchCoordinateError,
 )
-from dascore.units import get_quantity, is_percent
+from dascore.units import convert_units, get_quantity, is_percent
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
@@ -423,13 +423,20 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _middle_step(df, dim):
-    """Return the middle value of non-null member steps, or None."""
-    col = df[f"{dim}_step"].values
-    valid = col[~pd.isnull(col)]
-    if not len(valid):
+def _middle_step(coords, dim, target_units):
+    """Return the middle member step expressed in the merged coord's units."""
+    steps = []
+    for manager in coords:
+        coord = manager.coord_map[dim]
+        step = coord.step
+        if pd.isnull(step):
+            continue
+        if target_units is not None and coord.units is not None:
+            step = convert_units(step, to_units=target_units, from_units=coord.units)
+        steps.append(step)
+    if not steps:
         return None
-    return get_middle_value(valid)
+    return get_middle_value(np.asarray(steps))
 
 
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
@@ -465,7 +472,8 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    if snap_coords and (step := _middle_step(df, merge_dim)) is not None:
+    step = _middle_step(coords, merge_dim, merged.units)
+    if snap_coords and step is not None:
         merged = merged.simplify(tolerance * np.abs(step))
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
