@@ -22,6 +22,7 @@ from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, summaries_to_records
+from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
 from dascore.io.indexer import (
     AbstractIndexer,
     _get_index_map,
@@ -29,11 +30,6 @@ from dascore.io.indexer import (
 )
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
-
-# Structural columns the spool machinery must not see: unique-per-patch
-# values block chunk merge-compatibility grouping, which compares all
-# non-private columns.
-_SPOOL_HIDDEN_COLUMNS = ("n_dims", "sample_count_total", "shape")
 
 
 class DBDirectoryIndexer(AbstractIndexer):
@@ -305,7 +301,7 @@ class DBDirectoryIndexer(AbstractIndexer):
         self.ensure_updated()
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
-        df = df.drop(columns=list(_SPOOL_HIDDEN_COLUMNS), errors="ignore")
+        df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
         return df.rename(columns={"patch_id": "_patch_id"})
 
     __call__ = get_contents

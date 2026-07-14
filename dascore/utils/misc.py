@@ -766,6 +766,11 @@ def _dict_list_diffs(dict_list):
     return sorted(out)
 
 
+def is_range(value) -> bool:
+    """True for a 2-tuple range (a ``(start, stop)`` selector)."""
+    return isinstance(value, tuple) and len(value) == 2
+
+
 def sanitize_range_param(select) -> tuple:
     """Given a slice or tuple, check and return slice or tuple."""
     # convert ellipses or ellipses values

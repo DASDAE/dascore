@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
-from dascore.utils.misc import order_range_tuple, sanitize_range_param
+from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -56,7 +56,7 @@ def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
         if lo_col not in df.columns or hi_col not in df.columns or df.empty:
             msg = f"Cannot use relative select on {name!r}."
             raise InvalidSpoolQueryError(msg)
-        if not (isinstance(value, tuple) and len(value) == 2):
+        if not is_range(value):
             msg = f"relative=True requires (start, stop) ranges, got {value!r}."
             raise InvalidSpoolQueryError(msg)
         gmin, gmax = df[lo_col].min(), df[hi_col].max()

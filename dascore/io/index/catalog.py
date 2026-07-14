@@ -34,6 +34,8 @@ from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
 )
+from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
+from dascore.utils.misc import is_range
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
@@ -68,7 +70,7 @@ class _CanonicalRange:
 
 def _canonical_range(value) -> _CanonicalRange | None:
     """Return the canonical SI form of a numeric range, or None."""
-    if not (isinstance(value, tuple) and len(value) == 2):
+    if not is_range(value):
         return None
     magnitudes = []
     for bound in value:
@@ -515,9 +517,9 @@ class PatchCatalog:
         """
         if self._df_cache is None or self._df_cache_revision != self._revision.value:
             df = self.backend.query(list(self._queries) or None)
-            df = df.drop(
-                columns=["n_dims", "sample_count_total", "shape"], errors="ignore"
-            ).rename(columns={"patch_id": "_patch_id"})
+            df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore").rename(
+                columns={"patch_id": "_patch_id"}
+            )
             # SQL identifies overlapping source patches. Expose the selected
             # envelopes, matching spool.get_contents() and the exact trim
             # applied when each patch is materialized. Each pass copies the
@@ -529,7 +531,7 @@ class PatchCatalog:
                     ranges := {
                         name: value
                         for name, value in query.coords.items()
-                        if isinstance(value, tuple) and len(value) == 2
+                        if is_range(value)
                     }
                 )
             ]

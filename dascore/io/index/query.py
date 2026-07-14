@@ -22,7 +22,7 @@ from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import typed_value
 from dascore.units import convert_units
-from dascore.utils.misc import sanitize_range_param
+from dascore.utils.misc import is_range, sanitize_range_param
 
 _GLOB_CHARS = frozenset("*?[")
 _UNSET = object()
@@ -49,11 +49,6 @@ def _is_collection(value) -> bool:
     if isinstance(value, np.ndarray):
         return True
     return isinstance(value, list | tuple | set | frozenset)
-
-
-def _is_range(value) -> bool:
-    """True for a 2-tuple range (possibly with open bounds)."""
-    return isinstance(value, tuple) and len(value) == 2
 
 
 # Shared join skeleton for the patch relation. The attrs join is 1:1 (one
@@ -248,7 +243,7 @@ def build_attr_clause(
             return None
         where.add(f"{col('str')} IS NOT NULL")
         return value
-    if _is_range(value):
+    if is_range(value):
         # Attr metadata has one canonical unit per typed column.
         probe = next(
             (
@@ -263,10 +258,9 @@ def build_attr_clause(
         if kind not in kinds:
             where.add("FALSE")
             return None
-        if lo is not None:
-            where.add(f"{col(kind)} >= ?", lo)
-        if hi is not None:
-            where.add(f"{col(kind)} <= ?", hi)
+        for bound, op in ((lo, ">="), (hi, "<=")):
+            if bound is not None:
+                where.add(f"{col(kind)} {op} ?", bound)
         return None
     if _is_collection(value):
         coerced = [_coerce_scalar(v, kinds) for v in value]
@@ -323,7 +317,7 @@ def build_coord_clause(
         raise ParameterError(msg)
     kinds = set(rows["value_kind"]) or {"time", "num", "str"}
     typed_values = []
-    if _is_range(value):
+    if is_range(value):
         kind, lo, hi, typed_values = _range_bounds(value, kinds)
     elif _is_collection(value) and np.asarray(value).dtype == bool:
         # boolean masks are patch-local; no index predicate at all,
@@ -369,18 +363,15 @@ def build_coord_clause(
                 params.extend(sorted(compatible_units))
             else:
                 conditions.append("cd.units IS NULL")
-        if lo is not None:
-            clause = f"cd.{max_col} >= ?"
+        # lo bounds the coord max (overlap), hi bounds the coord min.
+        for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
+            if bound is None:
+                continue
+            clause = f"cd.{bound_col} {op} ?"
             if compatible_units is not None:
                 clause = f"(cd.units IS NULL OR {clause})"
             conditions.append(clause)
-            params.append(lo)
-        if hi is not None:
-            clause = f"cd.{min_col} <= ?"
-            if compatible_units is not None:
-                clause = f"(cd.units IS NULL OR {clause})"
-            conditions.append(clause)
-            params.append(hi)
+            params.append(bound)
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(

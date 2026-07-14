@@ -209,6 +209,11 @@ RESERVED_ATTR_COLUMNS = frozenset(
     }
 )
 
+# Structural columns the spool machinery must not see: unique-per-patch
+# values block chunk merge-compatibility grouping, which compares all
+# non-private columns.
+SPOOL_HIDDEN_COLUMNS = ("n_dims", "sample_count_total", "shape")
+
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
 # coord_name), sources(base_uri, source_path), patches(source_id,

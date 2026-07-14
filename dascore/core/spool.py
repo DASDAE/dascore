@@ -110,6 +110,15 @@ def _estimate_merge_samples(df, dim) -> int | None:
     return int(counts.sum())
 
 
+def _coord_only_kwargs(patch, kwargs) -> dict:
+    """Keep only the kwargs naming a dim or coordinate of patch."""
+    return {
+        k: v
+        for k, v in kwargs.items()
+        if k in patch.dims or k in patch.coords.coord_map
+    }
+
+
 class BaseSpool(NamespaceOwner, abc.ABC):
     """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
@@ -675,21 +684,11 @@ class DataFrameSpool(BaseSpool):
         source_kwargs = kwargs if kwargs.get("_modified") else self._select_kwargs
         # attr-style entries (e.g. constructor select_kwargs) filter rows
         # above; only coordinate entries are valid patch selections.
-        select_kwargs = {
-            i: v
-            for i, v in source_kwargs.items()
-            if i in patch.dims or i in patch.coords.coord_map
-        }
-        if select_kwargs:
+        if select_kwargs := _coord_only_kwargs(patch, source_kwargs):
             patch = patch.select(**select_kwargs)
         # patch-local selections (samples=True) recorded by spool.select
         for post_kwargs, samples in self._post_selects:
-            usable = {
-                k: v
-                for k, v in post_kwargs.items()
-                if k in patch.dims or k in patch.coords.coord_map
-            }
-            if usable:
+            if usable := _coord_only_kwargs(patch, post_kwargs):
                 patch = patch.select(**usable, samples=samples)
         return patch
 
@@ -902,12 +901,9 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
-        from dascore.utils.chunk_plan import build_chunk_plan
-
         source = self._source_df
         working = self._chunk_working_df()
-        plan = build_chunk_plan(
-            working,
+        plan = self.chunk_plan(
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -1003,16 +999,17 @@ class DataFrameSpool(BaseSpool):
         """
         attrs, coords = self._select_namespaces()
         out = {}
-        for name, value in (_attrs or {}).items():
-            if name not in attrs:
-                msg = f"{name!r} is not an attribute of this spool."
-                raise InvalidSpoolQueryError(msg)
-            out[name] = value
-        for name, value in (_coords or {}).items():
-            if name not in coords:
-                msg = f"{name!r} is not a coordinate of this spool."
-                raise InvalidSpoolQueryError(msg)
-            out[name] = value
+
+        def _add(items, allowed, noun):
+            for name, value in (items or {}).items():
+                if name not in allowed:
+                    raise InvalidSpoolQueryError(
+                        f"{name!r} is not {noun} of this spool."
+                    )
+                out[name] = value
+
+        _add(_attrs, attrs, "an attribute")
+        _add(_coords, coords, "a coordinate")
         for name, value in kwargs.items():
             if name in out:
                 msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
@@ -1217,19 +1214,16 @@ class MemorySpool(DataFrameSpool):
         """Build the managing dataframes from the input patches."""
         if self._is_catalog_backed():
             current = self._catalog.to_df()
-            df, source, instruction = self._get_dummy_dataframes(current)
-            self._source_df = source
-            self._instruction_df = instruction
-            return df
-        data = self._patches if self._patches is not None else self._data
-        if data is None:
-            return None
-        if self._patches is not None:
-            # patch-list spools run on the index catalog: one metadata
-            # engine (and one select semantics) for every spool type.
-            current = self._get_catalog().to_df()
-        else:  # spools/dataframes: legacy flat-dump path (patch column)
-            current = patches_to_df(data)
+        else:
+            data = self._patches if self._patches is not None else self._data
+            if data is None:
+                return None
+            if self._patches is not None:
+                # patch-list spools run on the index catalog: one metadata
+                # engine (and one select semantics) for every spool type.
+                current = self._get_catalog().to_df()
+            else:  # spools/dataframes: legacy flat-dump path (patch column)
+                current = patches_to_df(data)
         df, source, instruction = self._get_dummy_dataframes(current)
         self._source_df = source
         self._instruction_df = instruction
