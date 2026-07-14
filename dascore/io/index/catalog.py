@@ -297,7 +297,7 @@ class PatchCatalog:
         resolver: PatchResolver | None = None,
         syncer=None,
         queries: tuple[Query, ...] = (),
-        residuals: tuple[tuple[dict, bool, bool], ...] = (),
+        residuals: tuple[tuple[dict, bool], ...] = (),
         revision: _CatalogRevision | None = None,
     ):
         self._backend = backend
@@ -480,7 +480,7 @@ class PatchCatalog:
                     f"{sorted(query.attrs)}."
                 )
                 raise InvalidSpoolQueryError(msg)
-            residual = (dict(query.coords), True, False)
+            residual = (dict(query.coords), True)
             return self._view(self._queries, (*self._residuals, residual))
         if relative and query.coords:
             query = Query(
@@ -496,7 +496,7 @@ class PatchCatalog:
                 self.backend, query.coords
             )
             query = Query(attrs=query.attrs, coords=si_coords)
-            residuals = (*residuals, (residual_coords, False, False))
+            residuals = (*residuals, (residual_coords, False))
         return self._view((*self._queries, query), residuals)
 
     def _relative_to_absolute(self, kwargs: dict) -> dict:
@@ -568,7 +568,7 @@ class PatchCatalog:
         hints they only reduce reading, exactness is re-applied above.
         """
         trim_hint = {}
-        for coords, samples, _ in self._residuals:
+        for coords, samples in self._residuals:
             if not samples:
                 # Canonical-SI and quantity bounds stay out of reader
                 # hints: readers take numbers in their native units, so
@@ -584,7 +584,7 @@ class PatchCatalog:
                 )
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
-        for coords, samples, relative in self._residuals:
+        for coords, samples in self._residuals:
             coord_map = patch.coords.coord_map
             usable = {
                 k: (
@@ -596,7 +596,9 @@ class PatchCatalog:
                 if k in coord_map
             }
             if usable:
-                patch = patch.select(**usable, samples=samples, relative=relative)
+                # residual bounds are already absolute (relative queries
+                # resolve to absolute before the residual is recorded).
+                patch = patch.select(**usable, samples=samples, relative=False)
         return patch
 
     def __iter__(self):

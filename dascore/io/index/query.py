@@ -56,6 +56,20 @@ def _is_range(value) -> bool:
     return isinstance(value, tuple) and len(value) == 2
 
 
+# Shared join skeleton for the patch relation. The attrs join is 1:1 (one
+# attrs row per patch), so it is safe for both the projection and the count.
+_FROM = (
+    "FROM patches p "
+    "JOIN sources s ON s.source_id = p.source_id "
+    "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
+)
+
+
+def _as_query_list(query: Query | Sequence[Query]) -> list[Query]:
+    """Normalize a single Query or a sequence of them to a list."""
+    return [query] if isinstance(query, Query) else list(query)
+
+
 def normalize_range_forms(value):
     """
     Normalize the patch-level slice range form to a 2-tuple.
@@ -410,7 +424,7 @@ def build_query_sql(
     where residuals maps attr names to regex patterns that must be
     re-applied to the resulting dataframe.
     """
-    queries = [query] if isinstance(query, Query) else list(query)
+    queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
@@ -420,9 +434,7 @@ def build_query_sql(
     sql = (
         "SELECT s.source_path, s.base_uri, s.source_format, s.format_version, "
         f"p.*{attr_cols} "
-        "FROM patches p "
-        "JOIN sources s ON s.source_id = p.source_id "
-        "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
+        f"{_FROM}"
         f"WHERE {where.sql} "
         "ORDER BY p.time_min NULLS LAST, p.patch_id"
     )
@@ -443,17 +455,10 @@ def build_count_sql(
     residual means the count is not SQL-resolvable (regex must inspect
     rows) and the caller must fall back to a projected count.
     """
-    queries = [query] if isinstance(query, Query) else list(query)
+    queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
-    # the attrs join can stay: it is 1:1 (one attrs row per patch), and a
-    # WHERE may reference a.<column>. COUNT(p.patch_id) counts patches.
-    sql = (
-        "SELECT COUNT(p.patch_id) AS n "
-        "FROM patches p "
-        "JOIN sources s ON s.source_id = p.source_id "
-        "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
-        f"WHERE {where.sql}"
-    )
+    # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
+    sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
     return sql, where.params, residuals
 
 

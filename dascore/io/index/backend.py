@@ -11,7 +11,7 @@ from __future__ import annotations
 import abc
 import time
 import warnings
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import numpy as np
@@ -191,6 +191,23 @@ class SQLIndexBackend(AbstractIndexBackend):
     def _table_columns(self, table: str) -> set[str]:
         """Return persisted columns for one table."""
 
+    @contextmanager
+    def _transaction(self):
+        """
+        Run the wrapped body inside one transaction.
+
+        Commits on normal (or early-return) exit; on any error rolls back
+        without letting a failed rollback mask the original exception.
+        """
+        self._begin()
+        try:
+            yield
+            self._commit()
+        except Exception:
+            with suppress(Exception):
+                self._rollback()
+            raise
+
     # --- schema ------------------------------------------------------
 
     def _ensure_schema(self) -> None:
@@ -198,14 +215,12 @@ class SQLIndexBackend(AbstractIndexBackend):
         if tables:
             self._validate_schema(tables)
             return
-        self._begin()
-        try:
+        with self._transaction():
             # Another connection may have initialized the file while this
             # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
             tables = self._existing_tables()
             if tables:
                 self._validate_schema(tables)
-                self._commit()
                 return
             for name, columns in TABLES.items():
                 self._execute(
@@ -221,11 +236,6 @@ class SQLIndexBackend(AbstractIndexBackend):
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
                 (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0),
             )
-            self._commit()
-        except Exception:
-            with suppress(Exception):
-                self._rollback()
-            raise
 
     def _validate_schema(self, tables: set[str]) -> None:
         """Validate an existing index before issuing any DDL or mutation."""
@@ -283,8 +293,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         params: list = []
         if names is not None:
             params = sorted(names)
-            marks = ", ".join("?" for _ in params)
-            sql += f" WHERE pc.coord_name IN ({marks})"
+            sql += f" WHERE pc.coord_name IN ({self._placeholders(len(params))})"
         return self._fetch_df(sql, params)
 
     def _next_id(self, table: str, column: str) -> int:
@@ -385,10 +394,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         """
         keys = list(defs_needed)
         mapping: dict[str, int] = {}
-        batch = self._in_clause_batch
-        for start in range(0, len(keys), batch):
-            chunk = keys[start : start + batch]
-            marks = ", ".join("?" for _ in chunk)
+        for chunk, marks in self._iter_in_batches(keys):
             found = self._fetch_df(
                 f"SELECT def_key, coord_def_id FROM coord_defs "
                 f"WHERE def_key IN ({marks})",
@@ -433,7 +439,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         if not rows:
             return
         quoted = ", ".join(self.dialect.quote(c) for c in columns)
-        marks = ", ".join("?" for _ in columns)
+        marks = self._placeholders(len(columns))
         sql = f"INSERT INTO {self.dialect.quote(table)} ({quoted}) VALUES ({marks})"
         self._executemany(sql, rows)
 
@@ -441,17 +447,11 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     def mark_initial_update_done(self) -> None:
         """Persist successful completion of a directory index's first update."""
-        self._begin()
-        try:
+        with self._transaction():
             self._execute(
                 "UPDATE meta_data SET last_indexed_ns = ?",
                 (time.time_ns(),),
             )
-            self._commit()
-        except Exception:
-            with suppress(Exception):
-                self._rollback()
-            raise
 
     def write_sources(self, records: list[SourceRecord]) -> None:
         """
@@ -460,8 +460,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         Rows are batched per table (attrs grouped by column signature) so
         columnar engines aren't punished by row-at-a-time inserts.
         """
-        self._begin()
-        try:
+        with self._transaction():
             by_base: dict[str, list[str]] = {}
             for record in records:
                 by_base.setdefault(record.base_uri or "", []).append(record.source_path)
@@ -535,16 +534,28 @@ class SQLIndexBackend(AbstractIndexBackend):
                 [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
             )
             self._execute("UPDATE meta_data SET last_indexed_ns = ?", (now,))
-            self._commit()
-        except Exception:
-            # A failed rollback must not mask the original error.
-            with suppress(Exception):
-                self._rollback()
-            raise
 
     # Batch size for IN (...) parameter lists; SQLite caps bound
     # variables (32766 by default) so large replacements must chunk.
     _in_clause_batch = 5000
+
+    @staticmethod
+    def _placeholders(count: int) -> str:
+        """Return a comma-separated run of ``count`` ``?`` bind markers."""
+        return ", ".join("?" for _ in range(count))
+
+    def _iter_in_batches(self, items):
+        """
+        Yield ``(chunk, marks)`` for an ``IN (...)`` list.
+
+        Splitting on ``_in_clause_batch`` keeps each statement under
+        SQLite's bound-variable cap; ``marks`` is the placeholder run for
+        the chunk.
+        """
+        batch = self._in_clause_batch
+        for start in range(0, len(items), batch):
+            chunk = items[start : start + batch]
+            yield chunk, self._placeholders(len(chunk))
 
     def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:
         """
@@ -557,10 +568,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         """
         if not source_paths:
             return
-        batch = self._in_clause_batch
-        for start in range(0, len(source_paths), batch):
-            chunk = source_paths[start : start + batch]
-            marks = ", ".join("?" for _ in chunk)
+        for chunk, marks in self._iter_in_batches(source_paths):
             self._execute(
                 f"DELETE FROM sources WHERE source_path IN ({marks}) AND base_uri = ?",
                 [*chunk, base_uri],
@@ -568,26 +576,29 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
         """Remove sources (identified by base_uri + path) and dependents."""
-        self._begin()
-        try:
+        with self._transaction():
             self._delete_by_paths(source_paths, base_uri=base_uri)
-            self._commit()
-        except Exception:
-            with suppress(Exception):
-                self._rollback()
-            raise
 
     # --- queries -----------------------------------------------------
 
-    def query(self, query=None) -> pd.DataFrame:
-        """Return the flat patch-row relation for a query (or several)."""
+    def _query_context(self, query):
+        """
+        Normalize a query (or several) and fetch the metadata SQL needs.
+
+        Returns ``(queries, attr_meta, coord_meta)``; coord metadata is
+        only consulted for coord predicates, so the (whole-relation
+        DISTINCT) scan is skipped for attr-only/empty queries.
+        """
         query = query if query is not None else Query()
         queries = [query] if isinstance(query, Query) else list(query)
         attr_meta = self._attr_meta()
-        # coord metadata is only consulted for coord predicates; skip the
-        # (whole-relation DISTINCT) scan for attr-only/empty queries.
         coord_names = {name for q in queries for name in q.coords}
         coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
+        return queries, attr_meta, coord_meta
+
+    def query(self, query=None) -> pd.DataFrame:
+        """Return the flat patch-row relation for a query (or several)."""
+        queries, attr_meta, coord_meta = self._query_context(query)
         sql, params, residuals = build_query_sql(
             queries, self.dialect, attr_meta, coord_meta
         )
@@ -600,11 +611,7 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     def count(self, query=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
-        query = query if query is not None else Query()
-        queries = [query] if isinstance(query, Query) else list(query)
-        attr_meta = self._attr_meta()
-        coord_names = {name for q in queries for name in q.coords}
-        coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
+        queries, attr_meta, coord_meta = self._query_context(query)
         sql, params, residuals = build_count_sql(
             queries, self.dialect, attr_meta, coord_meta
         )
@@ -619,10 +626,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         if not ids:
             return self._fetch_df(f"{base_sql} WHERE 0")
         frames = []
-        batch = self._in_clause_batch
-        for start in range(0, len(ids), batch):
-            chunk = ids[start : start + batch]
-            marks = ", ".join("?" for _ in chunk)
+        for chunk, marks in self._iter_in_batches(ids):
             frames.append(
                 self._fetch_df(f"{base_sql} WHERE {column} IN ({marks})", chunk)
             )
@@ -816,15 +820,7 @@ class SQLIndexBackend(AbstractIndexBackend):
             coords = self._fetch_df(link_sql)
             coords = coords[coords["patch_id"].isin(set(ids))].reset_index(drop=True)
         else:
-            frames = []
-            batch = self._in_clause_batch
-            for start in range(0, len(ids), batch):
-                chunk = ids[start : start + batch]
-                marks = ", ".join("?" for _ in chunk)
-                frames.append(
-                    self._fetch_df(f"{link_sql} WHERE pc.patch_id IN ({marks})", chunk)
-                )
-            coords = pd.concat(frames, ignore_index=True)
+            coords = self._fetch_in(link_sql, "pc.patch_id", ids)
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)

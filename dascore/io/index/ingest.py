@@ -262,27 +262,21 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         coord_hash=fingerprint,
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
-    if dtype is not None and np.issubdtype(dtype, np.datetime64):
+    if dtype is None:
+        return None  # unsupported coord representation: skip, per design
+    if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
+        is_datetime = dtype.kind == "M"
+        convert = to_datetime64 if is_datetime else to_timedelta64
         step = summary.step
         return CoordRecord(
             value_kind="time",
-            is_relative=False,
-            min_ns=to_int(to_datetime64(summary.min)),
-            max_ns=to_int(to_datetime64(summary.max)),
+            is_relative=not is_datetime,
+            min_ns=to_int(convert(summary.min)),
+            max_ns=to_int(convert(summary.max)),
             step_ns=None if pd.isnull(step) else to_int(to_timedelta64(step)),
             **common,
         )
-    if dtype is not None and np.issubdtype(dtype, np.timedelta64):
-        step = summary.step
-        return CoordRecord(
-            value_kind="time",
-            is_relative=True,
-            min_ns=to_int(to_timedelta64(summary.min)),
-            max_ns=to_int(to_timedelta64(summary.max)),
-            step_ns=None if pd.isnull(step) else to_int(to_timedelta64(step)),
-            **common,
-        )
-    if dtype is not None and np.issubdtype(dtype, np.number):
+    if np.issubdtype(dtype, np.number):
         min_num = float(summary.min)
         max_num = float(summary.max)
         step = summary.step
@@ -301,7 +295,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             step_num=step_num,
             **common,
         )
-    if dtype is not None and (dtype.kind in "US" or dtype == object):
+    if dtype.kind in "US" or dtype == object:
         return CoordRecord(
             value_kind="str",
             min_str=str(summary.min),

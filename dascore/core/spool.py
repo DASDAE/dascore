@@ -835,10 +835,11 @@ class DataFrameSpool(BaseSpool):
         """Return the source rows the chunk planner consumes."""
         from dascore.utils.chunk_plan import _ensure_patch_id
 
-        source = self._source_df
-        working = source.drop(columns=list(self._drop_columns), errors="ignore")
-        if "_patch_id" in source.columns:
-            working = working.assign(_patch_id=source["_patch_id"])
+        # _patch_id is never in _drop_columns, so it survives the drop when
+        # present; _ensure_patch_id supplies a positional fallback otherwise.
+        working = self._source_df.drop(
+            columns=list(self._drop_columns), errors="ignore"
+        )
         return _ensure_patch_id(working)
 
     def chunk_plan(
