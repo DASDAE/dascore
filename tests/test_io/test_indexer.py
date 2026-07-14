@@ -241,12 +241,28 @@ class TestUpdate:
 
     def test_update_with_specific_paths(self, basic_indexer):
         """Updating with specific paths restricts the rescan."""
-        files = list(basic_indexer.path.rglob("*.hdf5"))
-        assert len(files) > 0
-        updated = basic_indexer.update(paths=[files[0].name], progress=None)
-        assert len(updated()) >= 1
-        updated2 = basic_indexer.update(paths=[str(files[0])], progress=None)
-        assert len(updated2()) >= 1
+        files = sorted(basic_indexer.path.rglob("*.hdf5"))
+        assert len(files) >= 2
+
+        def _indexed_times():
+            sources = basic_indexer._backend.get_sources().set_index("source_path")
+            return sources["last_indexed_ns"].to_dict()
+
+        before = _indexed_times()
+        for path in files[:2]:
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+        first, second = (basic_indexer._rel(path) for path in files[:2])
+        basic_indexer.update(paths=[files[0].name], progress=None)
+        after_relative = _indexed_times()
+        assert after_relative[first] > before[first]
+        assert after_relative[second] == before[second]
+
+        basic_indexer.update(paths=[str(files[1])], progress=None)
+        after_absolute = _indexed_times()
+        assert after_absolute[first] == after_relative[first]
+        assert after_absolute[second] > after_relative[second]
 
 
 class TestNameResolution:
