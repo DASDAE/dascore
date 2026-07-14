@@ -318,7 +318,7 @@ class TestChunkMerge:
         # the differing distance envelopes are preserved, not merged/duplicated
         def _distance_envelopes(spool):
             df = spool.get_contents()
-            return sorted(zip(df["distance_min"], df["distance_max"]))
+            return sorted(zip(df["distance_min"], df["distance_max"], strict=True))
 
         assert _distance_envelopes(out) == _distance_envelopes(distance_adjacent)
 

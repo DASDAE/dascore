@@ -349,10 +349,16 @@ def build_coord_clause(
             else:
                 conditions.append("cd.units IS NULL")
         if lo is not None:
-            conditions.append(f"cd.{max_col} >= ?")
+            clause = f"cd.{max_col} >= ?"
+            if compatible_units is not None:
+                clause = f"(cd.units IS NULL OR {clause})"
+            conditions.append(clause)
             params.append(lo)
         if hi is not None:
-            conditions.append(f"cd.{min_col} <= ?")
+            clause = f"cd.{min_col} <= ?"
+            if compatible_units is not None:
+                clause = f"(cd.units IS NULL OR {clause})"
+            conditions.append(clause)
             params.append(hi)
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).

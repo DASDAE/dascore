@@ -13,7 +13,6 @@ import hashlib
 import re
 import warnings
 from dataclasses import dataclass, field, replace
-from functools import cache
 
 import numpy as np
 import pandas as pd
@@ -160,10 +159,10 @@ def attr_column_name(name: str, kind: str) -> str:
     return f"{sanitize_attr_name(name)}__{kind}"
 
 
-@cache
-def _base_unit_info(unit_str: str) -> tuple[float, str]:
-    """Return (scale factor to SI base, canonical base unit string)."""
-    quant = get_quantity(unit_str).to_base_units()
+def _base_unit_info(value, unit_str: str | None = None) -> tuple[float, str]:
+    """Return a value's base-unit magnitude and canonical unit string."""
+    quant = value if unit_str is None else value * get_quantity(unit_str)
+    quant = get_quantity(quant).to_base_units()
     return float(quant.magnitude), str(quant.units)
 
 
@@ -202,8 +201,8 @@ def typed_value(value) -> TypedValue | None:
         magnitude = getattr(value, "magnitude", 1)
         if isinstance(magnitude, np.ndarray):
             return None  # array quantities are not scalar attrs
-        factor, base = _base_unit_info(str(value.units))
-        return TypedValue("num", float(magnitude) * factor, units=base)
+        magnitude, base = _base_unit_info(value)
+        return TypedValue("num", magnitude, units=base)
     if isinstance(value, int | np.integer | float | np.floating):
         return TypedValue("num", float(value))
     if isinstance(value, str):
@@ -284,16 +283,22 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             **common,
         )
     if dtype is not None and np.issubdtype(dtype, np.number):
-        factor = 1.0
-        if units_str is not None:
-            factor, base = _base_unit_info(units_str)
-            common["units"] = base
+        min_num = float(summary.min)
+        max_num = float(summary.max)
         step = summary.step
+        step_num = None if pd.isnull(step) else float(step)
+        if units_str is not None:
+            min_num, base = _base_unit_info(summary.min, units_str)
+            max_num, _ = _base_unit_info(summary.max, units_str)
+            if step_num is not None:
+                step_end, _ = _base_unit_info(summary.min + summary.step, units_str)
+                step_num = step_end - min_num
+            common["units"] = base
         return CoordRecord(
             value_kind="num",
-            min_num=float(summary.min) * factor,
-            max_num=float(summary.max) * factor,
-            step_num=None if pd.isnull(step) else float(step) * factor,
+            min_num=min_num,
+            max_num=max_num,
+            step_num=step_num,
             **common,
         )
     if dtype is not None and (dtype.kind in "US" or dtype == object):
@@ -379,6 +384,7 @@ def summaries_to_records(
         by_source.setdefault(str(summary.source_path), []).append(summary)
     root = base_uri or relative_to
     root_posix = str(root).replace("\\", "/") if root else None
+    root_prefix = root_posix.rstrip("/") if root_posix else None
     out = []
     for path, group in by_source.items():
         first = group[0]
@@ -391,9 +397,11 @@ def summaries_to_records(
             patches.append(record)
         posix_path = path.replace("\\", "/")
         store_path = posix_path
-        if root_posix and posix_path.startswith(root_posix):
+        if root_prefix is not None and (
+            posix_path == root_prefix or posix_path.startswith(f"{root_prefix}/")
+        ):
             # "." (not "") marks a source that IS the root (directory units)
-            store_path = posix_path[len(root_posix) :].lstrip("/") or "."
+            store_path = posix_path[len(root_prefix) :].lstrip("/") or "."
         out.append(
             SourceRecord(
                 source_path=store_path,

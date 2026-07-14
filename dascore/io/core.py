@@ -266,7 +266,7 @@ def _resolve_read_spool(spool, source_patch_id: object = "") -> dc.Patch:
     source_patch_id = normalize_source_patch_id(source_patch_id)
     if source_patch_id and len(spool) == 1:
         found = normalize_source_patch_id(spool[0].attrs.get("_source_patch_id", ""))
-        if found in ("", source_patch_id):
+        if found == source_patch_id or (not found and not source_patch_id.isdigit()):
             return spool[0]
     return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 

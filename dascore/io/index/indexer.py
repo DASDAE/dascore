@@ -9,6 +9,7 @@ queries from the index backend.
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import suppress
 from pathlib import Path
 
@@ -156,16 +157,42 @@ class DBDirectoryIndexer(AbstractIndexer):
 
         return is_directory_format(path)
 
+    @staticmethod
+    def _directory_signature(path: Path) -> tuple[int, int]:
+        """Return a stable 128-bit manifest signature as two SQLite ints."""
+        members = sorted(
+            (
+                sub
+                for sub in path.rglob("*")
+                if sub.is_file() and not sub.name.startswith(".")
+            ),
+            key=lambda sub: sub.relative_to(path).as_posix(),
+        )
+        digest = hashlib.sha256()
+        for member in members:
+            stat = member.stat()
+            relative = member.relative_to(path).as_posix().encode()
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(stat.st_mtime_ns.to_bytes(8, "big", signed=True))
+            digest.update(stat.st_size.to_bytes(8, "big"))
+        fingerprint = digest.digest()
+        return (
+            int.from_bytes(fingerprint[:8], "big", signed=True),
+            int.from_bytes(fingerprint[8:16], "big", signed=True),
+        )
+
     def _walk(self) -> dict[str, tuple[int, int, Path]]:
         """
         Walk the spool directory, honoring directory-format scan units.
 
         Maps relative path -> (mtime_ns, size, abs path) for every scan
         unit. A directory-format unit (e.g. XMLBinary) appears as one
-        entry keyed by the directory, with aggregate stats — max member
-        mtime and summed member size — so member modification, addition,
-        and removal all register as a change. Mirrors the skip protocol
-        dc.scan uses so members are not offered individually.
+        entry keyed by the directory, with a 128-bit manifest fingerprint
+        split across the two integer stat fields. The fingerprint covers
+        every member's relative path, mtime, and size, so member changes
+        cannot cancel each other out. Mirrors the skip protocol dc.scan
+        uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}
         gen = _iter_filesystem(self.path, ext=self.ext, include_directories=True)
@@ -183,14 +210,8 @@ class DBDirectoryIndexer(AbstractIndexer):
             if path.is_dir():
                 if self._directory_format(path):
                     signal = "skip"
-                    max_mtime, total_size = 0, 0
-                    for sub in path.rglob("*"):
-                        if not sub.is_file() or sub.name.startswith("."):
-                            continue
-                        stat = sub.stat()
-                        max_mtime = max(max_mtime, stat.st_mtime_ns)
-                        total_size += stat.st_size
-                    files[self._rel(path)] = (max_mtime, total_size, path)
+                    signature = self._directory_signature(path)
+                    files[self._rel(path)] = (*signature, path)
                 continue
             stat = path.stat()
             files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
@@ -207,7 +228,6 @@ class DBDirectoryIndexer(AbstractIndexer):
         units (e.g. XMLBinary) are rescanned whole when any member file
         changes.
         """
-        self._initial_update_done = True
         files = self._walk()
         stored = {
             row.source_path: (
@@ -270,6 +290,7 @@ class DBDirectoryIndexer(AbstractIndexer):
                 )
             if records:
                 self._backend.write_sources(records)
+        self._initial_update_done = True
         return self
 
     def get_contents(self, _attrs=None, _coords=None, **kwargs) -> pd.DataFrame:

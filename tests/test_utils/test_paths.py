@@ -33,6 +33,13 @@ class TestDirectoryWritable:
         a_file.write_text("x")
         assert directory_writable(a_file / "sub") is False
 
+    def test_existing_legacy_probe_is_preserved(self, tmp_path):
+        """The writability probe never truncates a predictable old sentinel."""
+        sentinel = tmp_path / "._dascore_write_test_delete_me"
+        sentinel.write_text("keep me")
+        assert directory_writable(tmp_path) is True
+        assert sentinel.read_text() == "keep me"
+
 
 class TestIsPathlike:
     """Tests for ``is_pathlike``."""

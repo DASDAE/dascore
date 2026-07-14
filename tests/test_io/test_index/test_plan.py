@@ -249,6 +249,11 @@ class TestConflict:
         plan = build_chunk_plan(_flat(conflicted_patches), time=None, conflict="drop")
         assert "data_units" not in plan.outputs.columns
 
+    def test_unknown_policy_raises(self, conflicted_patches):
+        """A misspelled conflict policy cannot silently behave like drop."""
+        with pytest.raises(ParameterError, match="conflict must be"):
+            build_chunk_plan(_flat(conflicted_patches), time=None, conflict="keep_fist")
+
 
 class TestGroupParameter:
     """Group attrs partition instead of raising."""

@@ -933,6 +933,15 @@ class TestGetSupportedIOTable:
 class TestIOCoreCoverageEdges:
     """Remaining io.core resolution/robustness branches."""
 
+    def test_numeric_singleton_without_identity_not_trusted(self):
+        """A positional ID cannot resolve an anonymous trimmed singleton."""
+        from dascore.exceptions import PatchAttributeError
+        from dascore.io.core import _resolve_read_spool
+
+        spool = dc.spool([dc.get_example_patch()])
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _resolve_read_spool(spool, source_patch_id="1")
+
     def test_non_unique_patch_resolution_raises(self):
         """An unresolvable source id in a multi-patch read raises clearly."""
         from dascore.exceptions import PatchAttributeError

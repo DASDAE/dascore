@@ -8,6 +8,7 @@ full line coverage.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 
@@ -163,6 +164,24 @@ class TestIndexCoverageEdges:
 
         with pytest.raises(RuntimeError, match="boom during schema init"):
             _BoomBackend(tmp_path / "i.sqlite3")
+
+    def test_schema_commit_failure_rolls_back(self, tmp_path):
+        """A schema commit failure follows the protected rollback path."""
+        from dascore.io.index.lite import SQLiteBackend
+
+        class _CommitBoomBackend(SQLiteBackend):
+            rolled_back = False
+
+            def _commit(self):
+                raise RuntimeError("boom during schema commit")
+
+            def _rollback(self):
+                type(self).rolled_back = True
+                return super()._rollback()
+
+        with pytest.raises(RuntimeError, match="schema commit"):
+            _CommitBoomBackend(tmp_path / "commit.sqlite3")
+        assert _CommitBoomBackend.rolled_back
 
     def test_reopen_missing_dynamic_attr_column(self, tmp_path):
         """attr_meta referencing an absent attrs column is rejected on reopen."""
@@ -390,6 +409,35 @@ class TestAdaptAndBackendBasics:
         assert len(back.query()) == before
         back.close()
 
+    @pytest.mark.parametrize("operation", ["write", "delete"])
+    def test_commit_failure_rolls_back(self, tmp_path, monkeypatch, operation):
+        """Write and delete commit failures both release their transaction."""
+        back = get_backend(tmp_path / f"{operation}.sqlite3")
+        records = summaries_to_records(make_summaries())
+        initial = records[:1] if operation == "write" else records
+        back.write_sources(initial)
+        before = len(back.query())
+        original_rollback = back._rollback
+        rolled_back = []
+
+        def rollback():
+            rolled_back.append(True)
+            original_rollback()
+
+        def commit_failure():
+            raise RuntimeError("simulated commit failure")
+
+        monkeypatch.setattr(back, "_rollback", rollback)
+        monkeypatch.setattr(back, "_commit", commit_failure)
+        with pytest.raises(RuntimeError, match="commit failure"):
+            if operation == "write":
+                back.write_sources(records[1:2])
+            else:
+                back.delete_sources([records[0].source_path])
+        assert rolled_back
+        assert len(back.query()) == before
+        back.close()
+
     def test_delete_failure_rolls_back(self, tmp_path):
         """A failing delete leaves the index unchanged."""
         back = get_backend(tmp_path / "delete.sqlite3")
@@ -427,6 +475,15 @@ class TestAdaptAndBackendBasics:
 
 class TestResolveQueryErrors:
     """Explicit-namespace validation."""
+
+    def test_duplicate_explicit_namespace_raises(self, backend):
+        """A name cannot be supplied in both explicit namespaces."""
+        with pytest.raises(InvalidSpoolQueryError, match="both _attrs and _coords"):
+            resolve_query(
+                backend,
+                _attrs={"distance": (0, 1)},
+                _coords={"distance": (0, 1)},
+            )
 
     def test_unknown_attr_in_explicit_namespace(self, backend):
         """Unknown key in _attrs raises."""
@@ -559,6 +616,22 @@ class TestUnitHeterogeneity:
         assert set(df["path"]) == {"with_units.h5", "no_units.h5"}
         back.close()
 
+    def test_nonoverlapping_unitless_coord_stays_candidate(self, tmp_path):
+        """Numeric envelopes cannot exclude a unitless quantity candidate."""
+        back = get_backend(tmp_path / "nonoverlap-unitless.sqlite3")
+        back.write_sources(
+            summaries_to_records(
+                [
+                    self._summary("with_units.h5", coord_units="m"),
+                    self._summary("no_units.h5"),
+                ]
+            )
+        )
+        meters = get_quantity("m")
+        df = back.query(Query(coords={"distance": (250 * meters, 300 * meters)}))
+        assert list(df["path"]) == ["no_units.h5"]
+        back.close()
+
     def test_all_unitless_quantity_query_keeps_candidates(self, tmp_path):
         """Unitless defs cannot be proven incompatible; they stay candidates."""
         back = get_backend(tmp_path / "unitless.sqlite3")
@@ -680,6 +753,49 @@ class TestExactNsFetch:
 class TestIngestEdges:
     """typed_value and record-building edge cases."""
 
+    def test_offset_quantity_attr_uses_full_conversion(self):
+        """Affine quantity attrs are converted with their offset."""
+        out = typed_value(get_quantity("0 degC"))
+        assert out is not None
+        assert out.value == pytest.approx(273.15)
+        assert out.units == "K"
+
+    def test_offset_coord_uses_full_conversion(self):
+        """Affine coord bounds use offsets while steps remain deltas."""
+        summary = PatchSummary(
+            attrs={"tag": "temperature"},
+            coords={
+                "temperature": {
+                    "dtype": "float64",
+                    "min": 0.0,
+                    "max": 100.0,
+                    "step": 1.0,
+                    "units": "degC",
+                    "dims": ("temperature",),
+                    "len": 101,
+                }
+            },
+            dims=("temperature",),
+            shape=(101,),
+            dtype="float32",
+            source_path="temperature.h5",
+            source_format="DASDAE",
+            source_version="1",
+        )
+        out = _coord_record("temperature", summary.coords["temperature"])
+        assert out is not None
+        assert out.min_num == pytest.approx(273.15)
+        assert out.max_num == pytest.approx(373.15)
+        assert out.step_num == pytest.approx(1.0)
+        assert out.units == "K"
+
+    def test_relative_root_requires_path_boundary(self):
+        """A similarly prefixed path is not made relative to the root."""
+        data = make_summaries()[0].dump_structured()
+        data["source_path"] = "/data/foobar/file.h5"
+        record = s2r([PatchSummary(**data)], relative_to="/data/foo")[0]
+        assert record.source_path == "/data/foobar/file.h5"
+
     def test_plain_array_skipped(self):
         """Arrays are complex attrs; skipped."""
         assert typed_value(np.array([1, 2])) is None
@@ -740,6 +856,52 @@ class TestIngestEdges:
 
 class TestIndexerEdges:
     """DBDirectoryIndexer edge behavior."""
+
+    def test_failed_initial_update_can_retry(self, tmp_path, monkeypatch):
+        """A failed first walk does not mark automatic updating complete."""
+        indexer = DBDirectoryIndexer(tmp_path)
+        original_walk = indexer._walk
+
+        def fail_walk():
+            raise OSError("simulated walk failure")
+
+        monkeypatch.setattr(indexer, "_walk", fail_walk)
+        with pytest.raises(OSError, match="walk failure"):
+            indexer.ensure_updated()
+        assert not indexer._initial_update_done
+        monkeypatch.setattr(indexer, "_walk", original_walk)
+        assert indexer.ensure_updated()
+        assert indexer._initial_update_done
+        indexer.close()
+
+    def test_directory_manifest_detects_equal_stat_name_swap(
+        self, tmp_path, monkeypatch
+    ):
+        """Equal-size, equal-mtime member replacement changes the signature."""
+        unit = tmp_path / "unit"
+        unit.mkdir()
+        old = unit / "old.raw"
+        old.write_bytes(b"same-size")
+        stamp = 1_700_000_000_000_000_000
+        os.utime(old, ns=(stamp, stamp))
+        indexer = DBDirectoryIndexer(tmp_path)
+        monkeypatch.setattr(indexer, "_directory_format", lambda path: path == unit)
+        monkeypatch.setattr(dc, "scan", lambda *_args, **_kwargs: [])
+        indexer.update(progress=None)
+        before = tuple(
+            indexer._backend.source_stats().loc[0, ["mtime_ns", "size_bytes"]]
+        )
+
+        old.unlink()
+        new = unit / "new.raw"
+        new.write_bytes(b"same-size")
+        os.utime(new, ns=(stamp, stamp))
+        indexer.update(progress=None)
+        after = tuple(
+            indexer._backend.source_stats().loc[0, ["mtime_ns", "size_bytes"]]
+        )
+        assert before != after
+        indexer.close()
 
     def test_auto_update_on_first_query(self, tmp_path, random_patch):
         """A brand-new index triggers one update on first query."""

@@ -857,6 +857,14 @@ class TestGetPatchName:
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
 
+    def test_mixed_path_sources_use_metadata(self, random_spool):
+        """Mixed real and memory paths consistently use metadata names."""
+        df = random_spool.get_contents().iloc[:2].copy()
+        df["path"] = ["/tmp/real_file.h5", "memory://registry/patch"]
+        names = get_patch_names(df)
+        assert names.iloc[0] != "real_file"
+        assert names.iloc[1] != "patch"
+
     def test_multiple_coord_fields(self, random_spool):
         """Naming on more than one coordinate flattens the min/max fields."""
         # drop path so the coordinate-based naming branch is exercised

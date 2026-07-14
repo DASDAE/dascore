@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import os
-from contextlib import suppress
+import tempfile
 from pathlib import Path
 
 from dascore.compat import UPath
@@ -33,19 +32,13 @@ def is_memory_uri(path) -> bool:
 
 def directory_writable(path) -> bool:
     """Return True if the directory is writable else False."""
-    name = "._dascore_write_test_delete_me"
-    probe = Path(path) / name
+    directory = Path(path)
     try:
-        # a read-only mount raises OSError (e.g. EROFS) from mkdir/open;
-        # the whole probe must be guarded, not just the write.
-        probe.parent.mkdir(exist_ok=True, parents=True)
-        open(probe, "w").close()
+        directory.mkdir(exist_ok=True, parents=True)
+        with tempfile.NamedTemporaryFile(prefix="._dascore_write_test_", dir=directory):
+            pass
     except OSError:
         return False
-    # the directory is writable; a transient failure to remove the probe
-    # (e.g. Windows AV/file-locking) must not flip the result.
-    with suppress(OSError):
-        os.remove(probe)
     return True
 
 

@@ -21,13 +21,17 @@ from dascore.utils.patch import get_patch_names
 @pytest.fixture(scope="class")
 def basic_indexer(two_patch_directory):
     """Return an indexer on the basic spool directory."""
-    return DBDirectoryIndexer(two_patch_directory).update(progress=None)
+    indexer = DBDirectoryIndexer(two_patch_directory).update(progress=None)
+    yield indexer
+    indexer.close()
 
 
 @pytest.fixture(scope="class")
 def diverse_indexer(diverse_spool_directory):
     """Return an indexer on the diverse spool directory."""
-    return DBDirectoryIndexer(diverse_spool_directory).update(progress=None)
+    indexer = DBDirectoryIndexer(diverse_spool_directory).update(progress=None)
+    yield indexer
+    indexer.close()
 
 
 @pytest.fixture(scope="class")

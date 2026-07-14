@@ -217,11 +217,11 @@ class SQLIndexBackend(AbstractIndexBackend):
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
                 (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, time.time_ns()),
             )
+            self._commit()
         except Exception:
             with suppress(Exception):
                 self._rollback()
             raise
-        self._commit()
 
     def _validate_schema(self, tables: set[str]) -> None:
         """Validate an existing index before issuing any DDL or mutation."""
@@ -517,12 +517,12 @@ class SQLIndexBackend(AbstractIndexBackend):
                 [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
             )
             self._execute("UPDATE meta_data SET last_indexed_ns = ?", (now,))
+            self._commit()
         except Exception:
             # A failed rollback must not mask the original error.
             with suppress(Exception):
                 self._rollback()
             raise
-        self._commit()
 
     # Batch size for IN (...) parameter lists; SQLite caps bound
     # variables (32766 by default) so large replacements must chunk.
@@ -553,10 +553,11 @@ class SQLIndexBackend(AbstractIndexBackend):
         self._begin()
         try:
             self._delete_by_paths(source_paths, base_uri=base_uri)
+            self._commit()
         except Exception:
-            self._rollback()
+            with suppress(Exception):
+                self._rollback()
             raise
-        self._commit()
 
     # --- queries -----------------------------------------------------
 
@@ -915,6 +916,10 @@ def resolve_query(
     # accept the same open/slice range forms patch-level select does
     attrs = {k: normalize_range_forms(v) for k, v in (_attrs or {}).items()}
     coords = {k: normalize_range_forms(v) for k, v in (_coords or {}).items()}
+    duplicates = set(attrs) & set(coords)
+    if duplicates:
+        names = ", ".join(repr(x) for x in sorted(duplicates))
+        raise InvalidSpoolQueryError(f"{names} given in both _attrs and _coords.")
     known_attrs = backend.attr_names()
     known_coords = backend.coord_names()
     for name, value in kwargs.items():

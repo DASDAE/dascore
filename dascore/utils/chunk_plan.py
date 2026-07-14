@@ -378,6 +378,9 @@ def build_chunk_plan(
     if missing_dim not in ("raise", "drop"):
         msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
         raise ParameterError(msg)
+    if conflict not in ("drop", "raise", "keep_first"):
+        msg = "conflict must be 'drop', 'raise', or 'keep_first', " f"got {conflict!r}"
+        raise ParameterError(msg)
 
     min_name, max_name = f"{name}_min", f"{name}_max"
     if min_name not in df.columns and not df.empty:

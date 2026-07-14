@@ -625,7 +625,7 @@ def get_patch_names(
     if path_ser is not None:
         # synthetic in-memory identities are not real file names
         usable = path_ser.str.len().gt(0) & ~path_ser.map(is_memory_uri)
-        if usable.any():
+        if usable.all():
             return _get_filename(df["path"], strip_extension)
     # Determine the requested fields; absent columns render as empty so
     # names don't depend on which metadata engine produced the dataframe.
