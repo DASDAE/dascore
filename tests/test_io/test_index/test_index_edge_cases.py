@@ -438,6 +438,28 @@ class TestAdaptAndBackendBasics:
         assert len(back.query()) == before
         back.close()
 
+    def test_marker_commit_failure_rolls_back(self, tmp_path, monkeypatch):
+        """A marker commit failure restores the initial metadata value."""
+        back = get_backend(tmp_path / "marker.sqlite3")
+        before = back.get_metadata()["last_indexed_ns"]
+        original_rollback = back._rollback
+        rolled_back = []
+
+        def rollback():
+            rolled_back.append(True)
+            original_rollback()
+
+        def commit_failure():
+            raise RuntimeError("simulated commit failure")
+
+        monkeypatch.setattr(back, "_rollback", rollback)
+        monkeypatch.setattr(back, "_commit", commit_failure)
+        with pytest.raises(RuntimeError, match="commit failure"):
+            back.mark_initial_update_done()
+        assert rolled_back
+        assert back.get_metadata()["last_indexed_ns"] == before
+        back.close()
+
     def test_delete_failure_rolls_back(self, tmp_path):
         """A failing delete leaves the index unchanged."""
         back = get_backend(tmp_path / "delete.sqlite3")

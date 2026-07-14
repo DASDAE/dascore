@@ -265,8 +265,6 @@ def build_attr_clause(
         subclauses = []
         params = []
         for kind, vals in by_kind.items():
-            if kind not in kinds:
-                continue
             marks = ", ".join("?" for _ in vals)
             subclauses.append(f"{col(kind)} IN ({marks})")
             params.extend(vals)
