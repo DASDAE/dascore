@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import matplotlib as mpl
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -28,7 +29,14 @@ def _validate_scale_type(scale_type):
     """Validate that scale_type is either 'relative' or 'absolute'."""
     valid_types = {"absolute", "relative"}
     if scale_type not in valid_types:
-        msg = f"scale_type must be one of {valid_types}, " f"but got '{scale_type}'"
+        msg = f"scale_type must be one of {valid_types}, but got '{scale_type}'"
+        raise ParameterError(msg)
+
+
+def _validate_gap_factor(gap_factor):
+    """Validate the factor used to identify coordinate gaps."""
+    if not np.isfinite(gap_factor) or gap_factor <= 1:
+        msg = "gap_factor must be a finite number greater than 1"
         raise ParameterError(msg)
 
 
@@ -157,6 +165,111 @@ def _get_waterfall_colormap(patch, cmap=None):
     return _get_cmap(cmap)
 
 
+def _get_plot_coord(coord):
+    """Return coordinate values in units understood by matplotlib meshes."""
+    values = np.asarray(coord)
+    if np.issubdtype(values.dtype, np.datetime64):
+        return mdates.date2num(values)
+    if np.issubdtype(values.dtype, np.timedelta64):
+        return values / np.timedelta64(1, "s")
+    return values
+
+
+def _get_gap_edges(values, gap_factor):
+    """Return cell edges and locations of gaps in monotonic center values."""
+    values = np.asarray(values)
+    if len(values) == 1:
+        return np.asarray([values[0] - 0.5, values[0] + 0.5]), np.array([])
+    diffs = np.diff(values)
+    abs_diffs = np.abs(diffs)
+    representative_step = np.median(abs_diffs)
+    gap_mask = abs_diffs > (representative_step * gap_factor)
+    signed_step = np.sign(diffs[0]) * representative_step
+
+    first_step = signed_step if gap_mask[0] else diffs[0]
+    last_step = signed_step if gap_mask[-1] else diffs[-1]
+    edges = [values[0] - first_step / 2]
+    for index, diff in enumerate(diffs):
+        if gap_mask[index]:
+            edges.extend(
+                [
+                    values[index] + signed_step / 2,
+                    values[index + 1] - signed_step / 2,
+                ]
+            )
+        else:
+            edges.append(values[index] + diff / 2)
+    edges.append(values[-1] + last_step / 2)
+    return np.asarray(edges), gap_mask
+
+
+def _insert_gap_bands(data, gap_mask, axis):
+    """Insert masked bands into an array at each coordinate gap."""
+    if not np.any(gap_mask):
+        return data
+    old_size = data.shape[axis]
+    new_size = old_size + np.count_nonzero(gap_mask)
+    new_shape = list(data.shape)
+    new_shape[axis] = new_size
+    out = np.ma.masked_all(new_shape, dtype=data.dtype)
+    new_indices = np.arange(old_size) + np.cumsum(
+        np.concatenate(([0], gap_mask.astype(int)))
+    )
+    indexer = [slice(None)] * data.ndim
+    indexer[axis] = new_indices
+    out[tuple(indexer)] = data
+    return out
+
+
+def _coordinates_support_mesh(coords):
+    """Return True when coordinates define finite monotonic mesh centers."""
+    for values in coords.values():
+        values = _get_plot_coord(values)
+        if not np.all(np.isfinite(values)):
+            return False
+        diffs = np.diff(values)
+        if len(diffs) and not (np.all(diffs > 0) or np.all(diffs < 0)):
+            return False
+    return True
+
+
+def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
+    """Plot irregularly sampled data using a quadrilateral mesh."""
+    mesh_data = np.ma.asarray(data)
+    edges = {}
+    for axis, dim in enumerate(dims):
+        values = _get_plot_coord(coords[dim])
+        dim_edges, gap_mask = _get_gap_edges(values, gap_factor)
+        if gap_color is None:
+            dim_edges = (
+                np.concatenate(
+                    (
+                        [values[0] - (values[1] - values[0]) / 2],
+                        values[:-1] + np.diff(values) / 2,
+                        [values[-1] + (values[-1] - values[-2]) / 2],
+                    )
+                )
+                if len(values) > 1
+                else dim_edges
+            )
+        else:
+            mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
+        edges[dim] = dim_edges
+
+    if gap_color is not None:
+        cmap = cmap.with_extremes(bad=gap_color)
+    return ax.pcolormesh(
+        edges[dims[1]],
+        edges[dims[0]],
+        mesh_data,
+        cmap=cmap,
+        shading="flat",
+        edgecolors="none",
+        linewidth=0,
+        antialiased=False,
+    )
+
+
 @patch_function()
 def waterfall(
     patch: PatchType,
@@ -166,12 +279,20 @@ def waterfall(
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
     interpolation_stage: str = "auto",
+    gap_color: str | Sequence[float] | None = None,
+    gap_factor: float = 1.5,
     log: bool = False,
     cbar: bool = True,
     show: bool = False,
 ) -> plt.Axes:
     """
     Create a waterfall plot of the Patch data.
+
+    Evenly sampled dimension coordinates are rendered with ``imshow`` for
+    efficient display and image interpolation. Finite, monotonic irregular
+    coordinates are rendered with ``pcolormesh`` so cell geometry follows the
+    coordinate values. Incomplete or nonmonotonic coordinates fall back to
+    ``imshow`` with index-based or minimum/maximum extents.
 
     Parameters
     ----------
@@ -199,12 +320,26 @@ def waterfall(
         which is relevant for DAS. Usually, "antialiased" works well, but if the
         data look smeared disabling interpolation with None might help. Other
         options are available, see matplotlib's documentation for more details.
+        This option does not apply when irregular coordinates select the
+        ``pcolormesh`` renderer.
     interpolation_stage
         If 'data', interpolation is carried out on the data provided by the user.
         If 'rgba', the interpolation is carried out after the colormapping has
         been applied (visual interpolation).
         'auto' (default) selects a suitable interpolation stage automatically.
-        See matplotlib's imshow documentation for more details.
+        See matplotlib's imshow documentation for more details. This option
+        does not apply when ``pcolormesh`` is used.
+    gap_color
+        Matplotlib color used to display gaps in irregular dimension
+        coordinates. When a color is provided, a masked row or column is
+        inserted for each detected gap and displayed with this color. The
+        default of None bridges gaps by extending adjacent cells across them
+        without expanding the data matrix. This option only applies when
+        ``pcolormesh`` is used. Existing masked or NaN data receive the same
+        color as coordinate gaps.
+    gap_factor
+        Coordinate intervals larger than this factor times the median interval
+        are treated as gaps. Must be greater than 1.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
@@ -272,6 +407,7 @@ def waterfall(
     """
     # Validate inputs
     patch = _validate_patch_dims(patch)
+    _validate_gap_factor(gap_factor)
     # Setup axes and data
     ax = _get_ax(ax)
     if log:
@@ -280,20 +416,32 @@ def waterfall(
         data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    coords = {dim: patch.coords.get_array(dim) for dim in dims}
-    # Plot using imshow and set colorbar limits
-    extents = _get_extents(dims_r, coords)
+    dim_coords = {dim: patch.get_coord(dim) for dim in dims}
+    coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
-    with mpl.rc_context({"image.resample": True}):
-        im = ax.imshow(
+    use_image = all(coord.evenly_sampled for coord in dim_coords.values())
+    if use_image or not _coordinates_support_mesh(coords):
+        extents = _get_extents(dims_r, coords)
+        with mpl.rc_context({"image.resample": True}):
+            im = ax.imshow(
+                data,
+                extent=extents,
+                aspect="auto",
+                cmap=cmap,
+                origin="lower",
+                interpolation=interpolation,
+                interpolation_stage=interpolation_stage,
+            )
+    else:
+        im = _plot_with_mesh(
+            ax,
             data,
-            extent=extents,
-            aspect="auto",
-            cmap=cmap,
-            origin="lower",
-            interpolation=interpolation,
-            interpolation_stage=interpolation_stage,
+            dims,
+            coords,
+            cmap,
+            gap_color=gap_color,
+            gap_factor=gap_factor,
         )
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
