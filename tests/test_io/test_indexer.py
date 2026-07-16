@@ -14,24 +14,8 @@ from upath import UPath
 
 from dascore.config import set_config
 from dascore.exceptions import InvalidSpoolError
-from dascore.io.index.backend import resolve_query
 from dascore.io.index.indexer import DBDirectoryIndexer
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
 from dascore.utils.patch import get_patch_names
-
-
-def index_contents(indexer, **kwargs) -> pd.DataFrame:
-    """
-    Return an indexer's flat relation, the way a catalog queries it.
-
-    Bare kwargs resolve attrs-first then coords, per the selector
-    semantics spec.
-    """
-    indexer.ensure_updated()
-    query = resolve_query(indexer._backend, **kwargs)
-    df = indexer._backend.query(query)
-    df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
-    return df.rename(columns={"patch_id": "_patch_id"})
 
 
 @pytest.fixture(scope="class")
@@ -53,7 +37,7 @@ def diverse_indexer(diverse_spool_directory):
 @pytest.fixture(scope="class")
 def diverse_df(diverse_indexer):
     """Return the contents of the diverse indexer."""
-    return index_contents(diverse_indexer)
+    return diverse_indexer()
 
 
 @pytest.fixture()
@@ -167,7 +151,7 @@ class TestGetContents:
 
     def test_get_contents(self, basic_indexer, two_patch_directory):
         """Ensure contents are returned."""
-        out = index_contents(basic_indexer)
+        out = basic_indexer()
         files = list(Path(two_patch_directory).rglob("*.hdf5"))
         assert isinstance(out, pd.DataFrame)
         assert len(out) == len(files)
@@ -179,33 +163,33 @@ class TestGetContents:
         """Half-open time range keeps every file overlapping it."""
         max_starttime = diverse_df["time_min"].max()
         expected = diverse_df[diverse_df["time_max"] >= max_starttime]
-        out = index_contents(diverse_indexer, time=(max_starttime, None))
+        out = diverse_indexer(time=(max_starttime, None))
         assert len(out) == len(expected)
 
     def test_filter_time_before(self, diverse_df, diverse_indexer):
         """Half-open time range keeps every file overlapping it."""
         min_endtime = diverse_df["time_max"].min()
         expected = diverse_df[diverse_df["time_min"] <= min_endtime]
-        out = index_contents(diverse_indexer, time=(None, min_endtime))
+        out = diverse_indexer(time=(None, min_endtime))
         assert len(out) == len(expected)
 
     def test_filter_station_exact(self, diverse_df, diverse_indexer):
         """Ensure contents can be filtered on an attr."""
         exact_name = diverse_df["station"].unique()[0]
-        new_df = index_contents(diverse_indexer, station=exact_name)
+        new_df = diverse_indexer(station=exact_name)
         assert (new_df["station"] == exact_name).all()
 
     def test_filter_isin(self, diverse_df, diverse_indexer):
         """Ensure contents can be filtered with a collection."""
         # empty strings mean "attr missing" and are not queryable (spec).
         stations = [x for x in diverse_df["station"].unique() if x]
-        new_df = index_contents(diverse_indexer, station=stations[:2])
+        new_df = diverse_indexer(station=stations[:2])
         assert set(new_df["station"]) <= set(stations[:2])
         assert len(new_df)
 
     def test_empty_index(self, empty_index):
         """An empty index should return an empty dataframe."""
-        df = index_contents(empty_index)
+        df = empty_index()
         assert df.empty
 
 
@@ -229,7 +213,7 @@ class TestUpdate:
         path = empty_index.path / get_patch_names(random_patch).iloc[0]
         random_patch.io.write(path, file_format="dasdae")
         new_index = empty_index.update(progress=None)
-        contents = index_contents(new_index)
+        contents = new_index()
         assert len(contents) == 1
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
@@ -237,7 +221,7 @@ class TestUpdate:
         indexer = DBDirectoryIndexer(spool_directory_with_non_das_file)
         updated = indexer.update(progress=None)
         assert isinstance(updated, DBDirectoryIndexer)
-        assert len(index_contents(updated)) == 2
+        assert len(updated()) == 2
 
     def test_removed_file_dropped(self, two_patch_directory, tmp_path_factory):
         """A deleted file's rows disappear on the next update."""
@@ -246,9 +230,9 @@ class TestUpdate:
         for index in Path(new).glob(".dascore_index*"):
             index.unlink()
         indexer = DBDirectoryIndexer(new).update(progress=None)
-        assert len(index_contents(indexer)) == 2
+        assert len(indexer()) == 2
         next(iter(Path(new).glob("*.hdf5"))).unlink()
-        assert len(index_contents(indexer.update(progress=None))) == 1
+        assert len(indexer.update(progress=None)()) == 1
 
     def test_noop_update_rescans_nothing(self, basic_indexer):
         """Unchanged sources are not rescanned."""
@@ -291,4 +275,4 @@ class TestNameResolution:
         from dascore.io.index.query import InvalidSpoolQueryError
 
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
-            index_contents(basic_indexer, bad_dimension=(1, 2))
+            basic_indexer(bad_dimension=(1, 2))
