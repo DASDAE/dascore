@@ -22,6 +22,7 @@ from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
 from dascore.io.index.backend import _ns_to_time, adapt_params, resolve_query
+from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.io.index.ingest import (
     SourceRecord,
@@ -31,7 +32,7 @@ from dascore.io.index.ingest import (
 from dascore.io.index.ingest import (
     summaries_to_records as s2r,
 )
-from dascore.io.index.query import InvalidSpoolQueryError, glob_match
+from dascore.io.index.query import InvalidSpoolQueryError
 from dascore.units import get_quantity, m
 
 
@@ -582,11 +583,6 @@ class TestQueryValueEdges:
         df = backend.query(Query(coords={"distance": mask}))
         assert len(df) == 4  # every patch with a distance coord
 
-    def test_glob_match_helper(self):
-        """Reference glob semantics."""
-        assert glob_match("STA1", "STA*")
-        assert not glob_match(5, "STA*")
-
     def test_slice_range_form(self, backend):
         """Slices resolve to the same range tuples patch selects accept."""
         lo = np.datetime64("2024-06-01T00:00:00", "ns")
@@ -939,16 +935,18 @@ class TestIndexerEdges:
     def test_auto_update_on_first_query(self, tmp_path, random_patch):
         """A brand-new index triggers one update on first query."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
-        indexer = DBDirectoryIndexer(tmp_path)
-        assert len(indexer()) == 1  # no explicit update() call
+        catalog = PatchCatalog.from_directory(tmp_path)
+        assert len(catalog) == 1  # no explicit update() call
+        catalog.close()
 
     def test_empty_index_file_updates_on_first_query(self, tmp_path, random_patch):
         """A pre-created empty SQLite path is still a new index."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         index_path = tmp_path / "empty.sqlite3"
         index_path.touch()
-        indexer = DBDirectoryIndexer(tmp_path, index_path=index_path)
-        assert len(indexer()) == 1
+        catalog = PatchCatalog.from_directory(tmp_path, index_path=index_path)
+        assert len(catalog) == 1
+        catalog.close()
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
@@ -971,8 +969,7 @@ class TestIndexerEdges:
             with (sub / name).open("wb") as fi:
                 rand.tofile(fi)
         indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
-        df = indexer()
-        assert len(df) == 2
+        assert indexer._backend.count(None) == 2
         # unchanged: second update rescans nothing
         before = indexer._backend.get_sources()["last_indexed_ns"].max()
         indexer.update(progress=None)

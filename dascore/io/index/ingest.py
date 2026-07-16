@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import re
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
 import pandas as pd
@@ -410,6 +410,23 @@ def summaries_to_records(
     return out
 
 
+# Record fields read straight off an index row of the same name. The
+# remaining fields need per-field handling: a coord's name/dims are
+# patch-level (they come from the link row, not the shared definition),
+# its hash is stored as "fingerprint", and a patch's id/dims/shape get
+# normalized below.
+_COORD_DEF_FIELDS = tuple(
+    f.name
+    for f in fields(CoordRecord)
+    if f.name not in ("coord_name", "coord_dims", "coord_hash")
+)
+_PATCH_ROW_FIELDS = tuple(
+    f.name
+    for f in fields(PatchRecord)
+    if f.name not in ("source_patch_id", "dims", "shape", "attrs", "coords")
+)
+
+
 def _py_scalar(value):
     """Convert a fetched cell to the plain python scalar records use."""
     if value is None or pd.isnull(value):
@@ -483,21 +500,8 @@ def assemble_source_records(
                     CoordRecord(
                         coord_name=link.coord_name,
                         coord_dims=link.coord_dims,
-                        value_kind=cdef.value_kind,
-                        dtype=_py_scalar(cdef.dtype),
-                        length=_py_scalar(cdef.length),
-                        units=_py_scalar(cdef.units),
-                        min_num=_py_scalar(cdef.min_num),
-                        max_num=_py_scalar(cdef.max_num),
-                        step_num=_py_scalar(cdef.step_num),
-                        min_ns=_py_scalar(cdef.min_ns),
-                        max_ns=_py_scalar(cdef.max_ns),
-                        step_ns=_py_scalar(cdef.step_ns),
-                        min_str=_py_scalar(cdef.min_str),
-                        max_str=_py_scalar(cdef.max_str),
-                        is_monotonic=_py_scalar(cdef.is_monotonic),
-                        is_relative=_py_scalar(cdef.is_relative),
                         coord_hash=_py_scalar(cdef.fingerprint),
+                        **{f: _py_scalar(getattr(cdef, f)) for f in _COORD_DEF_FIELDS},
                     )
                 )
             patch_records.append(
@@ -505,16 +509,9 @@ def assemble_source_records(
                     source_patch_id=normalize_source_patch_id(patch.source_patch_id),
                     dims=_py_scalar(patch.dims) or "",
                     shape=_py_scalar(patch.shape) or "",
-                    n_dims=_py_scalar(patch.n_dims),
-                    sample_count_total=_py_scalar(patch.sample_count_total),
-                    time_min=_py_scalar(patch.time_min),
-                    time_max=_py_scalar(patch.time_max),
-                    time_step=_py_scalar(patch.time_step),
-                    distance_min=_py_scalar(patch.distance_min),
-                    distance_max=_py_scalar(patch.distance_max),
-                    distance_step=_py_scalar(patch.distance_step),
                     attrs=typed,
                     coords=tuple(coords),
+                    **{f: _py_scalar(getattr(patch, f)) for f in _PATCH_ROW_FIELDS},
                 )
             )
         out.append(

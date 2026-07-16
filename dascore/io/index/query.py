@@ -10,7 +10,6 @@ exactly are applied as pandas residual filters.
 
 from __future__ import annotations
 
-import fnmatch
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -401,22 +400,33 @@ def _build_where(
     return where, residuals
 
 
-def build_query_sql(
+def build_sql(
     query: Query | Sequence[Query],
     dialect: BaseDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
+    count: bool = False,
 ) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
-    Build the flat-relation SELECT for one or more AND-composed queries.
+    Build SQL for one or more AND-composed queries.
 
-    coord_meta must cover every coordinate the queries reference (it may
-    be empty for attr-only queries). Returns (sql, params, residuals)
-    where residuals maps attr names to regex patterns that must be
-    re-applied to the resulting dataframe.
+    By default this projects the flat relation; with count=True the same
+    WHERE is reused for a COUNT with no projection, coordinate pivot, or
+    ordering. coord_meta must cover every coordinate the queries
+    reference (it may be empty for attr-only queries).
+
+    Returns (sql, params, residuals), where residuals pairs attr names
+    with regex patterns that must be re-applied to the resulting
+    dataframe. For a count a non-empty residual means the count is not
+    SQL-resolvable (regex must inspect rows) and the caller must fall
+    back to a projected count.
     """
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
+    if count:
+        # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
+        sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
+        return sql, where.params, residuals
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
     attr_cols = "".join(
@@ -432,27 +442,6 @@ def build_query_sql(
     return sql, where.params, residuals
 
 
-def build_count_sql(
-    query: Query | Sequence[Query],
-    dialect: BaseDialect,
-    attr_meta: pd.DataFrame,
-    coord_meta: pd.DataFrame,
-) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
-    """
-    Build a COUNT for one or more AND-composed queries.
-
-    Same WHERE as build_query_sql but no flat projection, coordinate
-    pivot, or ordering. Returns (sql, params, residuals); a non-empty
-    residual means the count is not SQL-resolvable (regex must inspect
-    rows) and the caller must fall back to a projected count.
-    """
-    queries = _as_query_list(query)
-    where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
-    # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
-    sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
-    return sql, where.params, residuals
-
-
 def apply_residuals(
     df: pd.DataFrame, residuals: list[tuple[str, re.Pattern]]
 ) -> pd.DataFrame:
@@ -464,8 +453,3 @@ def apply_residuals(
         )
         df = df[keep]
     return df
-
-
-def glob_match(value, pattern: str) -> bool:
-    """Reference glob semantics (used by pandas fallbacks and tests)."""
-    return isinstance(value, str) and fnmatch.fnmatch(value, pattern)

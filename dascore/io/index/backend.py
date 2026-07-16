@@ -28,9 +28,9 @@ from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import SourceRecord, attr_column_name
 from dascore.io.index.query import (
     Query,
+    _as_query_list,
     apply_residuals,
-    build_count_sql,
-    build_query_sql,
+    build_sql,
     normalize_range_forms,
 )
 from dascore.io.index.schema import (
@@ -589,8 +589,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         only consulted for coord predicates, so the (whole-relation
         DISTINCT) scan is skipped for attr-only/empty queries.
         """
-        query = query if query is not None else Query()
-        queries = [query] if isinstance(query, Query) else list(query)
+        queries = _as_query_list(query if query is not None else Query())
         attr_meta = self._attr_meta()
         coord_names = {name for q in queries for name in q.coords}
         coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
@@ -599,9 +598,7 @@ class SQLIndexBackend(AbstractIndexBackend):
     def query(self, query=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
         queries, attr_meta, coord_meta = self._query_context(query)
-        sql, params, residuals = build_query_sql(
-            queries, self.dialect, attr_meta, coord_meta
-        )
+        sql, params, residuals = build_sql(queries, self.dialect, attr_meta, coord_meta)
         df = self._fetch_df(sql, params)
         df = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
@@ -612,8 +609,8 @@ class SQLIndexBackend(AbstractIndexBackend):
     def count(self, query=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
         queries, attr_meta, coord_meta = self._query_context(query)
-        sql, params, residuals = build_count_sql(
-            queries, self.dialect, attr_meta, coord_meta
+        sql, params, residuals = build_sql(
+            queries, self.dialect, attr_meta, coord_meta, count=True
         )
         if not residuals:
             return int(self._fetch_df(sql, params)["n"].iloc[0])
