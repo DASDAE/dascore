@@ -68,6 +68,75 @@ def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
     return out
 
 
+def normalize_range_forms(value):
+    """
+    Normalize the patch-level slice range form to a 2-tuple.
+
+    Only slices are converted: bare None/Ellipsis keep their own errors,
+    and a fully-open range is rejected downstream as having no usable
+    bounds (per the selector spec).
+    """
+    if isinstance(value, slice):
+        return sanitize_range_param(value)
+    return value
+
+
+def resolve_selector_namespaces(
+    known_attrs: Collection[str],
+    known_coords: Collection[str],
+    _attrs: Mapping | None = None,
+    _coords: Mapping | None = None,
+    kwargs: Mapping | None = None,
+) -> tuple[dict, dict]:
+    """
+    Split selector kwargs into (attrs, coords) per the selector spec.
+
+    Bare kwargs resolve against attributes first, then coordinates;
+    `_attrs`/`_coords` name their namespace explicitly and validate
+    against that side only. Unknown names, and names supplied in more
+    than one namespace, raise (see #435).
+
+    Both the catalog (which pushes predicates into SQL) and the generic
+    dataframe select path resolve names here, so the two agree on which
+    names are valid, what a bare name means, and which range forms are
+    accepted — the paths differ only in how they *apply* a predicate.
+    """
+    known_attrs, known_coords = set(known_attrs), set(known_coords)
+    # A name in both explicit namespaces is a caller error whether or not
+    # it is valid in either, so this precedes the membership checks.
+    if duplicates := set(_attrs or {}) & set(_coords or {}):
+        names = ", ".join(repr(x) for x in sorted(duplicates))
+        raise InvalidSpoolQueryError(f"{names} given in both _attrs and _coords.")
+    attrs: dict = {}
+    coords: dict = {}
+    for items, allowed, out, noun in (
+        (_attrs, known_attrs, attrs, "an attribute"),
+        (_coords, known_coords, coords, "a coordinate"),
+    ):
+        for name, value in (items or {}).items():
+            if name not in allowed:
+                msg = f"{name!r} is not {noun} of this spool."
+                raise InvalidSpoolQueryError(msg)
+            out[name] = normalize_range_forms(value)
+    for name, value in (kwargs or {}).items():
+        if name in attrs or name in coords:
+            msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
+            raise InvalidSpoolQueryError(msg)
+        value = normalize_range_forms(value)
+        if name in known_attrs:
+            attrs[name] = value
+        elif name in known_coords:
+            coords[name] = value
+        else:
+            msg = (
+                f"{name!r} is neither an attribute nor a coordinate of this "
+                f"spool. Attributes: {sorted(known_attrs)}; "
+                f"coordinates: {sorted(known_coords)}."
+            )
+            raise InvalidSpoolQueryError(msg)
+    return attrs, coords
+
+
 def _get_min_max_query(kwargs, df):
     """
     Get a dict of {column_name: Optional[min_val], Optional[max_val]}.

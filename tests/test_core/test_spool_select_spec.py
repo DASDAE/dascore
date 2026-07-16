@@ -238,6 +238,26 @@ class TestMaterializedNamespaces:
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             materialized.select(nope=1)
 
+    def test_duplicate_namespace_raises(self, spool):
+        """A name in both explicit namespaces raises on either path."""
+        materialized = spool.chunk(time=None)
+        assert not materialized._catalog_native
+        for target in (spool, materialized):
+            with pytest.raises(InvalidSpoolQueryError, match="both _attrs and _coords"):
+                target.select(_attrs={"time": (None, None)}, _coords={"time": (1, 2)})
+
+    def test_slice_range_form(self, spool):
+        """Slice selectors resolve the same on either path (#435 spec)."""
+        materialized = spool.chunk(time=None)
+        assert not materialized._catalog_native
+        t0 = spool.get_contents()["time_min"].min()
+        window = slice(t0, t0 + np.timedelta64(2, "s"))
+        for target in (spool, materialized):
+            sliced = target.select(time=window)
+            tupled = target.select(time=(window.start, window.stop))
+            assert len(sliced) == len(tupled)
+            assert len(sliced) >= 1
+
 
 class TestExistingBehaviorKept:
     """The conventional selections still work."""

@@ -31,7 +31,6 @@ from dascore.io.index.query import (
     _as_query_list,
     apply_residuals,
     build_sql,
-    normalize_range_forms,
 )
 from dascore.io.index.schema import (
     COORD_DEFS,
@@ -46,6 +45,7 @@ from dascore.io.index.schema import (
     WHAT_IS_THIS,
 )
 from dascore.units import convert_units
+from dascore.utils.pd import resolve_selector_namespaces
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -924,36 +924,13 @@ def resolve_query(
         )
         raise InvalidSpoolQueryError(msg)
 
-    # accept the same open/slice range forms patch-level select does
-    attrs = {k: normalize_range_forms(v) for k, v in (_attrs or {}).items()}
-    coords = {k: normalize_range_forms(v) for k, v in (_coords or {}).items()}
-    duplicates = set(attrs) & set(coords)
-    if duplicates:
-        names = ", ".join(repr(x) for x in sorted(duplicates))
-        raise InvalidSpoolQueryError(f"{names} given in both _attrs and _coords.")
-    known_attrs = backend.attr_names()
-    known_coords = backend.coord_names()
-    for name, value in kwargs.items():
-        if name in attrs or name in coords:
-            msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
-            raise InvalidSpoolQueryError(msg)
-        value = normalize_range_forms(value)
-        if name in known_attrs:
-            attrs[name] = value
-        elif name in known_coords:
-            coords[name] = value
-        else:
-            msg = (
-                f"{name!r} is neither an attribute nor a coordinate of any "
-                f"patch in this spool."
-            )
-            raise InvalidSpoolQueryError(msg)
-    for name in attrs:
-        if name not in known_attrs:
-            raise InvalidSpoolQueryError(f"{name!r} is not an attribute of this spool.")
-    for name in coords:
-        if name not in known_coords:
-            raise InvalidSpoolQueryError(f"{name!r} is not a coordinate of this spool.")
+    attrs, coords = resolve_selector_namespaces(
+        backend.attr_names(),
+        backend.coord_names(),
+        _attrs=_attrs,
+        _coords=_coords,
+        kwargs=kwargs,
+    )
     coords = {k: _shape_coord_selector(k, v) for k, v in coords.items()}
     return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))
 

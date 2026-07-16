@@ -63,6 +63,7 @@ from dascore.utils.pd import (
     filter_df,
     get_column_names_from_dim,
     get_dim_names_from_columns,
+    resolve_selector_namespaces,
 )
 
 T = TypeVar("T")
@@ -989,40 +990,18 @@ class DataFrameSpool(BaseSpool):
         }
         return attrs, coords
 
-    def _resolve_select_kwargs(self, _attrs, _coords, kwargs) -> dict:
+    def _resolve_select_kwargs(self, _attrs, _coords, kwargs) -> tuple[dict, dict]:
         """
-        Validate and merge select kwargs per the selector spec.
+        Split select kwargs into (attrs, coords) per the selector spec.
 
-        Bare names resolve attrs-first, then coords; unknown names raise
-        (see #435). The _attrs/_coords namespaces validate against their
-        own side only.
+        Name resolution is shared with the catalog path, so a name means
+        the same thing whether or not this spool is catalog-backed; only
+        how the predicate is applied differs.
         """
         attrs, coords = self._select_namespaces()
-        out = {}
-
-        def _add(items, allowed, noun):
-            for name, value in (items or {}).items():
-                if name not in allowed:
-                    raise InvalidSpoolQueryError(
-                        f"{name!r} is not {noun} of this spool."
-                    )
-                out[name] = value
-
-        _add(_attrs, attrs, "an attribute")
-        _add(_coords, coords, "a coordinate")
-        for name, value in kwargs.items():
-            if name in out:
-                msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
-                raise InvalidSpoolQueryError(msg)
-            if name not in attrs and name not in coords:
-                msg = (
-                    f"{name!r} is neither an attribute nor a coordinate of "
-                    f"this spool. Attributes: {sorted(attrs)}; "
-                    f"coordinates: {sorted(coords)}."
-                )
-                raise InvalidSpoolQueryError(msg)
-            out[name] = value
-        return out
+        return resolve_selector_namespaces(
+            attrs, coords, _attrs=_attrs, _coords=_coords, kwargs=kwargs
+        )
 
     def _relative_select_kwargs(self, kwargs: dict) -> dict:
         """Resolve relative bounds against the spool's global envelopes."""
@@ -1064,16 +1043,14 @@ class DataFrameSpool(BaseSpool):
                 **kwargs,
             )
             return self._new_from_catalog(catalog)
-        kwargs = self._resolve_select_kwargs(_attrs, _coords, kwargs)
+        attr_kwargs, coord_kwargs = self._resolve_select_kwargs(_attrs, _coords, kwargs)
         if samples:
             # sample indices are patch-local: never filter the spool,
             # record the selection and apply it as patches load (#447).
-            _, coords = self._select_namespaces()
-            non_coords = set(kwargs) - coords
-            if non_coords:
+            if attr_kwargs:
                 msg = (
                     f"samples=True selections are coordinate-only; got "
-                    f"{sorted(non_coords)}."
+                    f"{sorted(attr_kwargs)}."
                 )
                 raise InvalidSpoolQueryError(msg)
             new = self.new_from_df(
@@ -1081,17 +1058,11 @@ class DataFrameSpool(BaseSpool):
                 source_df=self._source_df,
                 instruction_df=self._instruction_df,
             )
-            new._post_selects = (*self._post_selects, (kwargs, True))
+            new._post_selects = (*self._post_selects, (coord_kwargs, True))
             return new
-        if relative:
-            _, coords = self._select_namespaces()
-            coord_kwargs = {
-                key: value for key, value in kwargs.items() if key in coords
-            }
-            attr_kwargs = {
-                key: value for key, value in kwargs.items() if key not in coords
-            }
-            kwargs = {**attr_kwargs, **self._relative_select_kwargs(coord_kwargs)}
+        if relative and coord_kwargs:
+            coord_kwargs = self._relative_select_kwargs(coord_kwargs)
+        kwargs = {**attr_kwargs, **coord_kwargs}
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,

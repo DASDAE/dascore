@@ -21,7 +21,7 @@ from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
 from dascore.io.index.dialect import BaseDialect
 from dascore.io.index.ingest import typed_value
 from dascore.units import convert_units
-from dascore.utils.misc import is_range, sanitize_range_param
+from dascore.utils.misc import is_range
 
 _GLOB_CHARS = frozenset("*?[")
 _UNSET = object()
@@ -62,19 +62,6 @@ _FROM = (
 def _as_query_list(query: Query | Sequence[Query]) -> list[Query]:
     """Normalize a single Query or a sequence of them to a list."""
     return [query] if isinstance(query, Query) else list(query)
-
-
-def normalize_range_forms(value):
-    """
-    Normalize the patch-level slice range form to a 2-tuple.
-
-    Only slices are converted: bare None/Ellipsis keep their own errors,
-    and a fully-open range is rejected downstream as having no usable
-    bounds (per the selector spec).
-    """
-    if isinstance(value, slice):
-        return sanitize_range_param(value)
-    return value
 
 
 def _coerce_scalar(value, target_kinds: set[str]):
