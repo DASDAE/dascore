@@ -278,3 +278,31 @@ class TestCanonicalRange:
         assert hash(r1) == hash(r2)
         assert r1 != _CanonicalRange((1.0, 3.0))
         assert r1 != (1.0, 2.0)  # non-CanonicalRange comparand
+
+
+class TestViewSerialization:
+    """Views serialize only the live entries their rows reference."""
+
+    def test_view_pickles_membership_only(self):
+        """A one-patch view of an N-patch live spool ships one patch."""
+        import pickle
+
+        base = dc.get_example_patch()
+        patches = [
+            base.update_attrs(tag=str(i)).new(
+                data=np.random.default_rng(i).random(base.shape)
+            )
+            for i in range(5)
+        ]
+        spool = dc.spool(patches)
+        view = spool.select(tag="0")
+        assert len(view) == 1
+        payload = pickle.dumps(view)
+        baseline = pickle.dumps(dc.spool([patches[0]]))
+        assert len(payload) < 2 * len(baseline)
+        # the round trip serves the right patch from a one-entry registry
+        loaded = pickle.loads(payload)
+        assert len(loaded._catalog.resolver.live_entries()) == 1
+        assert loaded[0].attrs["tag"] == "0"
+        # and the root spool's registry is untouched
+        assert len(spool._catalog.resolver.live_entries()) == 5

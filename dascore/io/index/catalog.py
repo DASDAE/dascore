@@ -291,6 +291,17 @@ def _absolutize_record(record, root):
     return replace(record, source_path=resolved, base_uri=None)
 
 
+def _membership_resolver(resolver: PatchResolver, keep: dict) -> PatchResolver:
+    """Return a copy of resolver whose live registry holds only `keep`."""
+    if isinstance(resolver, LiveResolver):
+        out = LiveResolver()
+        out._registry = dict(keep)
+        return out
+    out = CompositeResolver()
+    out.live._registry = dict(keep)
+    return out
+
+
 def _merge_source_records(existing, new):
     """
     Merge two partial records for the same source.
@@ -494,6 +505,14 @@ class PatchCatalog:
         )
         if needs_records:
             state["_rebuild_records"] = tuple(self._backend.export_records())
+        # A view shares the root's resolver, but must not drag the whole
+        # live registry across the wire: keep only the entries its rows
+        # reference (a one-patch view of an N-patch spool serializes one
+        # patch, not N — the payload Spool.map ships per task).
+        if self.is_view and self.resolver.live_entries():
+            paths = set(self.to_df()["path"].astype(str))
+            keep = {k: v for k, v in self.resolver.live_entries().items() if k in paths}
+            state["resolver"] = _membership_resolver(self.resolver, keep)
         return state
 
     def _view(self, queries, residuals) -> PatchCatalog:
