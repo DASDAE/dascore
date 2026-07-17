@@ -307,3 +307,41 @@ class TestExportPushdown:
         assert len(file_row) == 1
         loaded = [p for p in combined]
         assert len(loaded) == 2
+
+
+class TestSameFileUnion:
+    """Unions of members selecting patches from the same multi-patch file."""
+
+    @pytest.fixture()
+    def two_patch_file_spool(self, contiguous_patches, tmp_path):
+        """A file spool over one file holding two patches."""
+        p1, p2 = (x.update_attrs(history=[]) for x in contiguous_patches)
+        path = tmp_path / "two_patch.h5"
+        dc.write(dc.spool([p1, p2]), path, "dasdae")
+        return dc.spool(path)
+
+    def test_disjoint_selections_union(self, two_patch_file_spool):
+        """Two members holding different patches of one file both survive."""
+        sp = two_patch_file_spool
+        combined = sp[:1] + sp[1:]
+        assert len(combined) == 2
+        for patch in combined:
+            assert isinstance(patch, dc.Patch)
+
+    def test_overlapping_selections_dedup(self, two_patch_file_spool):
+        """A patch present in both members appears once (dict-merge)."""
+        sp = two_patch_file_spool
+        combined = sp[:2] + sp[1:]
+        assert len(combined) == 2
+
+    def test_union_absorbs_only_member_registry_entries(self, contiguous_patches):
+        """Live entries outside a member's rows don't ride into the union."""
+        p1, p2 = contiguous_patches
+        t1 = p1.get_coord("time")
+        narrowed = dc.spool([p1, p2]).select(time=(None, t1.max()))
+        assert len(narrowed) == 1
+        other = dc.get_example_patch(time_min="2030-01-01")
+        combined = narrowed + dc.spool([other])
+        registry = combined._catalog.resolver.live_entries()
+        assert len(registry) == 2  # p1 and other; p2 stayed home
+        assert len(combined) == 2

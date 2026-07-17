@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -245,9 +245,17 @@ class CompositeResolver(PatchResolver):
         """Return the merged live patch registry."""
         return self.live._registry
 
-    def absorb(self, resolver: PatchResolver) -> None:
-        """Take over the live registry entries of another resolver."""
-        self.live._registry.update(resolver.live_entries())
+    def absorb(self, resolver: PatchResolver, paths=None) -> None:
+        """
+        Take over another resolver's live registry entries.
+
+        ``paths`` restricts absorption to the given synthetic paths
+        (the entries a transfer actually references); None takes all.
+        """
+        entries = resolver.live_entries()
+        if paths is not None:
+            entries = {k: v for k, v in entries.items() if k in paths}
+        self.live._registry.update(entries)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Dispatch to the live registry or the file reader."""
@@ -276,13 +284,30 @@ def _live_records(registry: Mapping[str, dc.Patch]):
 
 def _absolutize_record(record, root):
     """Return a source record whose relative path is resolved against root."""
-    from dataclasses import replace
-
     path = record.source_path
     if "://" in path or Path(path).is_absolute():
         return record
     resolved = str(Path(root) / (path if path != "." else ""))
     return replace(record, source_path=resolved, base_uri=None)
+
+
+def _merge_source_records(existing, new):
+    """
+    Merge two partial records for the same source.
+
+    Union members export only their selected patches, so two members can
+    hold disjoint (or overlapping) slices of one multi-patch file. The
+    merged record unions the patch lists by source_patch_id: a patch
+    keeps its first-occurrence position, a duplicate identity takes the
+    last occurrence's metadata (dict-merge semantics, matching the
+    ordering contract), and the source-level metadata (mtime, size)
+    comes from the last record.
+    """
+    if existing is None:
+        return new
+    patches = {p.source_patch_id: p for p in existing.patches}
+    patches.update({p.source_patch_id: p for p in new.patches})
+    return replace(new, patches=tuple(patches.values()))
 
 
 @dataclass
@@ -354,6 +379,14 @@ class PatchCatalog:
         resolver = CompositeResolver()
         out = cls(resolver=resolver)
         backend = out.backend
+        # Collect and merge every member's records before writing:
+        # write_sources replaces at (base_uri, source_path) grain, so
+        # partial records for the same source — two members selecting
+        # different patches of one multi-patch file — must merge into a
+        # complete record or the later write would delete the earlier
+        # member's patches. Dict insertion order keeps first-occurrence
+        # position; the merge keeps last-occurrence metadata.
+        merged: dict[tuple, SourceRecord] = {}
         for member in catalogs:
             catalog, patch_ids = member if isinstance(member, tuple) else (member, None)
             if patch_ids is None and catalog.is_view:
@@ -362,8 +395,14 @@ class PatchCatalog:
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
                 records = [_absolutize_record(x, root) for x in records]
-            backend.write_sources(records)
-            resolver.absorb(catalog.resolver)
+            for record in records:
+                identity = (record.base_uri or "", record.source_path)
+                merged[identity] = _merge_source_records(merged.get(identity), record)
+            # only the live entries this member actually transfers ride
+            # along; the rest of the registry stays with its own catalog
+            member_paths = {record.source_path for record in records}
+            resolver.absorb(catalog.resolver, paths=member_paths)
+        backend.write_sources(list(merged.values()))
         out._invalidate()
         return out
 
