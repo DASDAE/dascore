@@ -41,7 +41,8 @@ def fbe(
         can be used for downsampling of the resulting patch.
         See also [rolling](`dascore.Patch.rolling`)
     db
-        Return patch data in decibel [dB] instead of orginal units
+        Return patch data in decibel [dB] instead of orginal units.
+        Decibel is calculated as 20 * log10( sqrt(mean(x^2))) ).
     **kwargs
         Used to specify the dimension and asociated frequency, wavelength, or
         equivalent limits. For example time=(1, 100) applies a time-dimension bandpass
@@ -92,7 +93,7 @@ def fbe(
     )
 
     if db:
-        fbe = (10 * fbe.log10()).update(
+        fbe = (20 * fbe.log10()).update(
             attrs={"data_type": "frequency_band_energy", "data_units": "dB"}
         )
 
