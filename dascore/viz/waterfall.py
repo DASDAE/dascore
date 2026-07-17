@@ -329,6 +329,9 @@ def waterfall(
         'auto' (default) selects a suitable interpolation stage automatically.
         See matplotlib's imshow documentation for more details. This option
         does not apply when ``pcolormesh`` is used.
+    gap_factor
+        Coordinate intervals larger than this factor times the median interval
+        are treated as gaps. Must be greater than 1.
     gap_color
         Matplotlib color used to display gaps in irregular dimension
         coordinates. When a color is provided, a masked row or column is
@@ -337,9 +340,6 @@ def waterfall(
         without expanding the data matrix. This option only applies when
         ``pcolormesh`` is used. Existing masked or NaN data receive the same
         color as coordinate gaps.
-    gap_factor
-        Coordinate intervals larger than this factor times the median interval
-        are treated as gaps. Must be greater than 1.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value

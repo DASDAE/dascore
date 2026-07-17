@@ -91,6 +91,37 @@ class TestWaterfall:
         assert isinstance(ax.images[0], AxesImage)
         assert not any(isinstance(x, QuadMesh) for x in ax.collections)
 
+    def test_irregular_timedelta_coordinates_use_mesh(self, timedelta_patch):
+        """Irregular timedelta coordinates are converted to seconds for meshes."""
+        values = np.asarray(timedelta_patch.get_coord("time")).copy()
+        split = len(values) // 2
+        values[split:] += np.timedelta64(10, "s")
+        patch = timedelta_patch.update_coords(time=values)
+        ax = patch.viz.waterfall(cbar=False)
+        mesh = ax.collections[0]
+        assert isinstance(mesh, QuadMesh)
+        assert np.all(np.isfinite(mesh.get_coordinates()))
+
+    def test_singleton_irregular_coordinate_uses_mesh(self, random_patch):
+        """A singleton irregular coordinate receives finite cell edges."""
+        patch = random_patch.select(distance=0, samples=True)
+        distance = np.asarray(patch.get_coord("distance"))
+        patch = patch.update_coords(distance=distance)
+        assert not patch.get_coord("distance").evenly_sampled
+        ax = patch.viz.waterfall(cbar=False)
+        mesh = ax.collections[0]
+        assert isinstance(mesh, QuadMesh)
+        assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)
+
+    def test_nonmonotonic_coordinate_uses_image(self, random_patch):
+        """Nonmonotonic coordinates retain the image-rendering fallback."""
+        distance = np.asarray(random_patch.get_coord("distance")).copy()
+        distance[[1, 2]] = distance[[2, 1]]
+        patch = random_patch.update_coords(distance=distance)
+        ax = patch.viz.waterfall(cbar=False)
+        assert isinstance(ax.images[0], AxesImage)
+        assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+
     def test_gap_uses_masked_mesh(self, distance_gap_patch):
         """A gap color adds one masked mesh band."""
         patch, split = distance_gap_patch
