@@ -576,11 +576,11 @@ class TestQueryValueEdges:
         df = backend.query(Query(attrs={"gauge_length": "1*"}))
         assert df.empty
 
-    def test_boolean_array_coord_requires_presence_only(self, backend):
-        """Boolean masks are patch-local; index only checks coord presence."""
+    def test_boolean_array_coord_rejected(self, backend):
+        """Boolean sample masks are no longer index predicates."""
         mask = np.array([True, False, True])
-        df = backend.query(Query(coords={"distance": mask}))
-        assert len(df) == 4  # every patch with a distance coord
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
+            backend.query(Query(coords={"distance": mask}))
 
     def test_slice_range_form(self, backend):
         """Slices resolve to the same range tuples patch selects accept."""

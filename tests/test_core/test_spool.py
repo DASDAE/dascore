@@ -363,8 +363,8 @@ class TestSpoolBoolArraySelect:
         bool_array[1] = False
         out = random_spool[bool_array]
         assert len(out) == sum(bool_array)
-        df1 = out.get_contents()
-        df2 = random_spool.get_contents()[bool_array]
+        df1 = out.get_contents().reset_index(drop=True)
+        df2 = random_spool.get_contents()[bool_array].reset_index(drop=True)
         assert df1.equals(df2)
 
 
@@ -961,9 +961,11 @@ class TestSpoolCoverageEdges:
 
     def test_iteration_skips_unresolvable_patch(self, monkeypatch):
         """A patch that fails to resolve is skipped with a #583 warning."""
-        # a sorted spool is materialized, so iteration runs through the
-        # base __iter__ (memory spools have a fast patch-list iterator).
-        spool = dc.spool([dc.get_example_patch()]).sort("time")
+        # force the planned state (sort/slice are lazy catalog specs now)
+        base = dc.spool([dc.get_example_patch()])
+        spool = base.new_from_df(
+            base._df, source_df=base._source_df, instruction_df=base._instruction_df
+        )
 
         def _raise(_ind):
             raise MissingPatchError("trimmed to nothing")
@@ -987,7 +989,10 @@ class TestSpoolCoverageEdges:
     def test_planned_view_negative_and_bad_index(self):
         """Assembler indexing handles negatives and raises out-of-bounds."""
         patches = list(dc.get_example_spool(length=2))
-        planned = dc.spool(patches).sort("time")
+        base = dc.spool(patches)
+        planned = base.new_from_df(
+            base._df, source_df=base._source_df, instruction_df=base._instruction_df
+        )
         assert planned._plan is not None
         assert planned[-1] == planned[len(patches) - 1]
         with pytest.raises(IndexError, match="out of bounds"):

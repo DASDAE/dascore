@@ -116,13 +116,15 @@ class PatchAssembler:
         """Given an index (from current df), return the corresponding patch."""
         source = self.source_df
         instruction = self.instruction_df
-        # handle negative index.
-        df_ind = df_ind if df_ind >= 0 else len(self.df) + df_ind
-        try:
-            inds = self.df.index[df_ind]
-        except IndexError:
-            msg = f"index of [{df_ind}] is out of bounds for spool."
-            raise IndexError(msg) from None
+        # handle negative index; a still-negative value after
+        # normalization is out of bounds and must never wrap around
+        requested = df_ind
+        if df_ind < 0:
+            df_ind = len(self.df) + df_ind
+        if not 0 <= df_ind < len(self.df):
+            msg = f"index of [{requested}] is out of bounds for spool."
+            raise IndexError(msg)
+        inds = self.df.index[df_ind]
         # Group positional instruction rows by current index (and cache) to
         # avoid a full instruction df scan for each requested patch.
         if self._indices is None:

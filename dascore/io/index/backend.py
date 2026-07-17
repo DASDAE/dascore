@@ -103,11 +103,15 @@ class AbstractIndexBackend(abc.ABC):
         """Remove sources (identified by base_uri + path) and dependents."""
 
     @abc.abstractmethod
-    def query(self, query: Query) -> pd.DataFrame:
+    def query(self, query: Query, order_by=None, patch_ids=None) -> pd.DataFrame:
         """Return the flat patch-row relation matching a query."""
 
     @abc.abstractmethod
-    def count(self, query: Query) -> int:
+    def query_ids(self, query: Query, order_by=None, patch_ids=None) -> list[int]:
+        """Return matching patch ids in presentation order."""
+
+    @abc.abstractmethod
+    def count(self, query: Query, patch_ids=None) -> int:
         """Return how many patches match a query, without projecting rows."""
 
     @abc.abstractmethod
@@ -649,10 +653,17 @@ class SQLIndexBackend(AbstractIndexBackend):
         coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
         return queries, attr_meta, coord_meta
 
-    def query(self, query=None) -> pd.DataFrame:
+    def query(self, query=None, order_by=None, patch_ids=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
         queries, attr_meta, coord_meta = self._query_context(query)
-        sql, params, residuals = build_sql(queries, self.dialect, attr_meta, coord_meta)
+        sql, params, residuals = build_sql(
+            queries,
+            self.dialect,
+            attr_meta,
+            coord_meta,
+            order_by=order_by,
+            patch_ids=patch_ids,
+        )
         df = self._fetch_df(sql, params)
         df = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
@@ -660,17 +671,40 @@ class SQLIndexBackend(AbstractIndexBackend):
             df = apply_residuals(df, residuals)
         return df.reset_index(drop=True)
 
-    def count(self, query=None) -> int:
+    def query_ids(self, query=None, order_by=None, patch_ids=None) -> list[int]:
+        """Return matching patch ids in presentation order (ids only)."""
+        queries, attr_meta, coord_meta = self._query_context(query)
+        sql, params, residuals = build_sql(
+            queries,
+            self.dialect,
+            attr_meta,
+            coord_meta,
+            order_by=order_by,
+            patch_ids=patch_ids,
+            ids_only=True,
+        )
+        if residuals:
+            # regex residuals need string values; realize the relation
+            df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
+            return [int(x) for x in df["patch_id"]]
+        return [int(x) for x in self._fetch_df(sql, params)["patch_id"]]
+
+    def count(self, query=None, patch_ids=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
         queries, attr_meta, coord_meta = self._query_context(query)
         sql, params, residuals = build_sql(
-            queries, self.dialect, attr_meta, coord_meta, count=True
+            queries,
+            self.dialect,
+            attr_meta,
+            coord_meta,
+            count=True,
+            patch_ids=patch_ids,
         )
         if not residuals:
             return int(self._fetch_df(sql, params)["n"].iloc[0])
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
-        return len(self.query(queries))
+        return len(self.query(queries, patch_ids=patch_ids))
 
     def _fetch_in(self, base_sql: str, column: str, ids: list) -> pd.DataFrame:
         """Fetch ``{base_sql} WHERE {column} IN ids``, batching large sets."""
@@ -955,16 +989,23 @@ def resolve_query(
         """
         if value is None or value is Ellipsis:
             return value
-        if isinstance(value, np.ndarray):
-            if value.dtype == np.bool_:
-                return value
-        elif (
+        is_bool_array = (isinstance(value, np.ndarray) and value.dtype == np.bool_) or (
             isinstance(value, list)
             and value
             and all(isinstance(x, bool | np.bool_) for x in value)
-        ):
-            return np.asarray(value, dtype=bool)
-        elif isinstance(value, tuple | list):
+        )
+        if is_bool_array:
+            # A sample mask is positional/absolute, so it is only defined
+            # when every patch shares the coordinate's size — a guarantee
+            # spools never make — and it can never reduce file reads.
+            msg = (
+                f"Coordinate {name!r} no longer accepts boolean sample "
+                "masks at the spool level; apply them per patch, e.g. "
+                "spool.map(lambda p: p.select(...)). Boolean arrays over "
+                "patches (spool[mask]) still select membership."
+            )
+            raise InvalidSpoolQueryError(msg)
+        if isinstance(value, tuple | list):
             # range-like: a (start, stop) pair (2-element list is the
             # legacy range form). Wrong arity is a malformed range.
             if len(value) != 2:
@@ -975,8 +1016,8 @@ def resolve_query(
             return tuple(None if v is Ellipsis else v for v in value)
         msg = (
             f"Coordinate {name!r} accepts range selectors (a (start, stop) "
-            "tuple or slice, None/... for open ends) or boolean masks; "
-            f"scalar and membership values are not supported. Got {value!r}."
+            "tuple or slice, None/... for open ends); scalar, membership, "
+            f"and boolean-mask values are not supported. Got {value!r}."
         )
         raise InvalidSpoolQueryError(msg)
 

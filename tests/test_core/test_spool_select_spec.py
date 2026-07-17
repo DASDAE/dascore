@@ -37,8 +37,12 @@ def spool(request, tmp_path_factory):
         )
         out = dc.spool(path).update(progress=None)
     if request.param.endswith("_df"):
-        out = out.sort("time")
-        assert not out._catalog_native, "sort must yield the materialized state"
+        # force the planned (dataframe) state explicitly: sort/slice are
+        # lazy catalog specs now, so only a plan materializes the frames
+        out = out.new_from_df(
+            out._df, source_df=out._source_df, instruction_df=out._instruction_df
+        )
+        assert not out._catalog_native, "planned state expected"
     return out
 
 
@@ -93,9 +97,9 @@ class TestCatalogPushdown:
         calls = []
         original = backend.query
 
-        def wrapped(query=None):
+        def wrapped(query=None, **kwargs):
             calls.append(query)
-            return original(query)
+            return original(query, **kwargs)
 
         monkeypatch.setattr(backend, "query", wrapped)
         selected = spool.select(time=("2020-01-03", "2020-01-04"))
@@ -403,14 +407,110 @@ class TestUnitCanonicalSelection:
         assert float(coord.min()) >= 65
         assert float(coord.max()) <= 197
 
-    def test_boolean_mask_selectors(self, ft_patch):
-        """Boolean masks (array and list) select coordinates patch-locally."""
+    def test_boolean_mask_selectors_rejected(self, ft_patch):
+        """Sample masks are patch-level only; the spool points at map()."""
         coord = ft_patch.get_coord("distance")
         mask = np.zeros(len(coord), dtype=bool)
         mask[:5] = True
-        # ndarray mask
-        got = dc.spool([ft_patch]).select(distance=mask)
-        assert len(got[0].get_coord("distance")) == 5
-        # equivalent list-of-bools mask
-        got_list = dc.spool([ft_patch]).select(distance=list(mask))
-        assert len(got_list[0].get_coord("distance")) == 5
+        with pytest.raises(InvalidSpoolQueryError, match="boolean sample"):
+            dc.spool([ft_patch]).select(distance=mask)
+        with pytest.raises(InvalidSpoolQueryError, match="boolean sample"):
+            dc.spool([ft_patch]).select(distance=list(mask))
+        # the per-patch escape hatch still works
+        got = ft_patch.select(distance=mask)
+        assert len(got.get_coord("distance")) == 5
+
+
+class TestQuantityDimensionality:
+    """Quantity queries keep their dimensionality end to end (review P1)."""
+
+    @pytest.fixture()
+    def mixed_unit_spool(self):
+        """Two patches whose distance coords are metres and seconds."""
+        p_m = dc.get_example_patch()
+        p_s = p_m.update_coords(
+            distance=p_m.get_coord("distance").set_units("s")
+        ).update_attrs(history=[])
+        return dc.spool([p_m, p_s])
+
+    def test_incompatible_coord_excluded(self, mixed_unit_spool):
+        """A metre query never returns (or trims) a seconds coordinate."""
+        from dascore.units import get_quantity, m
+
+        out = mixed_unit_spool.select(_coords={"distance": (1 * m, 2 * m)})
+        patches = list(out)
+        assert len(patches) == 1
+        units = get_quantity(str(patches[0].get_coord("distance").units))
+        assert units.dimensionality == m.dimensionality
+
+    def test_all_incompatible_raises(self):
+        """A query incompatible with every stored unit raises UnitError."""
+        from dascore.exceptions import UnitError
+        from dascore.units import m
+
+        p_s = dc.get_example_patch().update_coords(
+            distance=dc.get_example_patch().get_coord("distance").set_units("s")
+        )
+        spool = dc.spool([p_s])
+        with pytest.raises(UnitError, match="no units compatible"):
+            spool.select(_coords={"distance": (1 * m, 2 * m)}).get_contents()
+
+
+class TestLazyOrderAndWindow:
+    """sort/slice/array selection are lazy Selection specs (D2)."""
+
+    def test_sort_is_lazy_and_ordered(self, tmp_path_factory):
+        """Sorting composes a spec; realization returns ordered rows."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(list(reversed(patches)))
+        out = spool.sort("time")
+        assert out._catalog_native  # no plan materialized
+        df = out.get_contents()
+        assert df["time_min"].is_monotonic_increasing
+        assert list(out) == patches
+
+    def test_slice_is_lazy_window(self):
+        """Slicing keeps the catalog state and correct membership."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(patches)
+        part = spool[1:]
+        assert part._catalog_native
+        assert len(part) == len(patches) - 1
+        assert list(part) == patches[1:]
+
+    def test_select_after_slice_filters_within_window(self):
+        """D2 composition: predicates apply inside the window."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(patches)
+        t0 = patches[0].get_coord("time").min()
+        # the first patch is outside the window, so selecting its time
+        # range inside the window matches nothing
+        windowed = spool[1:]
+        assert len(windowed.select(time=(None, t0 + np.timedelta64(1, "s")))) == 0
+
+    def test_slice_of_slice_composes(self):
+        """Windows compose arithmetically."""
+        patches = list(dc.get_example_spool("random_das"))
+        part = dc.spool(patches)[1:][1:]
+        assert list(part) == patches[2:]
+
+    def test_sorted_spool_slice(self):
+        """A slice of a sorted view respects the sort order."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(list(reversed(patches)))
+        first = spool.sort("time")[0:1]
+        assert list(first) == patches[0:1]
+
+    def test_split_parts_pickle_small(self):
+        """split() windows keep map() payloads at member size."""
+        import pickle
+
+        base = dc.get_example_patch()
+        rng = np.random.default_rng(0)
+        patches = [base.new(data=rng.random(base.shape)) for _ in range(5)]
+        spool = dc.spool(patches)
+        parts = list(spool.split(size=1))
+        assert len(parts) == 5
+        payload = len(pickle.dumps(parts[0]))
+        baseline = len(pickle.dumps(dc.spool([patches[0]])))
+        assert payload < 2 * baseline

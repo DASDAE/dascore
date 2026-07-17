@@ -586,13 +586,18 @@ class Spool(BaseSpool):
 
     def _select_from_array(self, array) -> Self:
         """Create new spool with contents changed from array input."""
-        if np.issubdtype(array.dtype, np.bool_):  # boolean select
-            df = self._df[array]
-        elif np.issubdtype(array.dtype, np.integer):
-            df = self._df.iloc[array]
-        else:
+        if not (
+            np.issubdtype(array.dtype, np.bool_)
+            or np.issubdtype(array.dtype, np.integer)
+        ):
             msg = "Only bool or int dtypes are supported for spool array selection."
             raise ValueError(msg)
+        if self._rows_are_catalog():
+            return self._new_from_catalog(self._catalog.restrict(array))
+        if np.issubdtype(array.dtype, np.bool_):  # boolean select
+            df = self._df[array]
+        else:
+            df = self._df.iloc[array]
         source = self._source_df
         inst = self._instruction_df
         new = self.new_from_df(
@@ -615,10 +620,16 @@ class Spool(BaseSpool):
 
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
+            if self._rows_are_catalog():
+                # a lazy id-membership window (D2); never realizes the
+                # flat relation, and keeps split()/map() parts cheap
+                return self._new_from_catalog(self._catalog.window(item))
             new_df = self._df.iloc[item]
             inst, source = self._instruction_df, self._source_df
             new_inst = inst[inst["current_index"].isin(new_df.index)]
-            new_source = source.loc[new_inst.index]
+            # unique labels only: member rows repeat source labels, and
+            # label indexing would multiply rows on every slice
+            new_source = source.loc[new_inst.index.unique()]
             out = self.new_from_df(
                 df=new_df,
                 instruction_df=new_inst,
@@ -980,6 +991,10 @@ class Spool(BaseSpool):
     @compose_docstring(doc=BaseSpool.sort.__doc__)
     def sort(self, attribute) -> Self:
         """{doc}."""
+        if self._rows_are_catalog():
+            # a lazy ORDER BY spec (D2): no copy, no realization; the
+            # ordinal contract supplies the deterministic tiebreak
+            return self._new_from_catalog(self._catalog.order_by(attribute))
         df = self._df
         inst_df = self._instruction_df
 

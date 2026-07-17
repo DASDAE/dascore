@@ -305,18 +305,12 @@ def build_coord_clause(
     typed_values = []
     if is_range(value):
         kind, lo, hi, typed_values = _range_bounds(value, kinds)
-    elif _is_collection(value) and np.asarray(value).dtype == bool:
-        # boolean masks are patch-local; no index predicate at all,
-        # but the coord must exist on the patch.
-        kind = lo = hi = None
     else:
-        # Scalars and value membership have no exact patch-level
-        # meaning; resolve_query rejects them before SQL composition,
-        # so only a hand-built Query can reach this.
-        msg = (
-            f"Coordinate {name!r} accepts range or boolean-mask "
-            f"selectors; got {value!r}."
-        )
+        # Scalars, value membership, and boolean masks have no exact
+        # patch-level meaning spool-wide; resolve_query rejects them
+        # before SQL composition, so only a hand-built Query can reach
+        # this.
+        msg = f"Coordinate {name!r} accepts range selectors; got {value!r}."
         raise InvalidSpoolQueryError(msg)
 
     compatible_units = _compatible_coord_units(rows, typed_values, name)
@@ -387,20 +381,49 @@ def _build_where(
     return where, residuals
 
 
+def _order_clause(order_by, dialect: BaseDialect, attr_meta: pd.DataFrame) -> str:
+    """
+    Resolve an order spec into an ORDER BY clause.
+
+    ``order_by`` is ``(kind, name, ascending)`` where kind is "attr"
+    (an attrs-table column ordered by its typed column) or "coord"
+    (ordered by the coordinate's envelope minimum). The ordinal contract
+    supplies the deterministic tiebreak.
+    """
+    kind, name, ascending = order_by
+    direction = "ASC" if ascending else "DESC"
+    if kind == "coord":
+        column = f"p.{dialect.quote(f'{name}_min')}"
+    else:
+        rows = attr_meta[attr_meta["attr_name"] == name]
+        columns = [dialect.quote(c) for c in rows["column_name"]]
+        # an attr observed under several kinds orders by its first column
+        column = f"a.{columns[0]}"
+    return f"ORDER BY {column} {direction}, s.ordinal, p.patch_id"
+
+
 def build_sql(
     query: Query | Sequence[Query],
     dialect: BaseDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
     count: bool = False,
+    order_by=None,
+    patch_ids=None,
+    ids_only: bool = False,
 ) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
     Build SQL for one or more AND-composed queries.
 
     By default this projects the flat relation; with count=True the same
     WHERE is reused for a COUNT with no projection, coordinate pivot, or
-    ordering. coord_meta must cover every coordinate the queries
-    reference (it may be empty for attr-only queries).
+    ordering; with ids_only=True only ordered patch ids are projected
+    (the cheap realization slices/windows use). coord_meta must cover
+    every coordinate the queries reference (it may be empty for
+    attr-only queries). ``order_by`` overrides the default ordinal
+    ordering (see `_order_clause`); ``patch_ids`` restricts rows to an
+    id membership (one JSON parameter, so the SQLite bound-variable cap
+    does not limit membership size).
 
     Returns (sql, params, residuals), where residuals pairs attr names
     with regex patterns that must be re-applied to the resulting
@@ -408,11 +431,27 @@ def build_sql(
     SQL-resolvable (regex must inspect rows) and the caller must fall
     back to a projected count.
     """
+    import json
+
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
+    if patch_ids is not None:
+        where.add(
+            "p.patch_id IN (SELECT value FROM json_each(?))",
+            json.dumps([int(x) for x in patch_ids]),
+        )
     if count:
         # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
         sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
+        return sql, where.params, residuals
+    order = (
+        _order_clause(order_by, dialect, attr_meta)
+        if order_by is not None
+        # the ordering contract: source ordinal, then file-internal order
+        else "ORDER BY s.ordinal, p.patch_id"
+    )
+    if ids_only:
+        sql = f"SELECT p.patch_id {_FROM}WHERE {where.sql} {order}"
         return sql, where.params, residuals
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
@@ -424,8 +463,7 @@ def build_sql(
         f"p.*{attr_cols} "
         f"{_FROM}"
         f"WHERE {where.sql} "
-        # the ordering contract: source ordinal, then file-internal order
-        "ORDER BY s.ordinal, p.patch_id"
+        f"{order}"
     )
     return sql, where.params, residuals
 

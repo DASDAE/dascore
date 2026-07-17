@@ -47,12 +47,22 @@ class TestMemoryUnion:
         assert any(x is p2 for x in loaded)
 
     def test_union_of_materialized_member(self):
-        """A sorted (materialized but catalog-backed) member unions by ids."""
+        """A planned (materialized but catalog-backed) member unions by ids."""
         sp = dc.get_example_spool("random_das")
         other = dc.get_example_spool("diverse_das")
-        materialized = sp.sort("time")  # dataframe path, keeps its catalog
+        # force the planned state; sort/slice are lazy specs now
+        materialized = sp.new_from_df(
+            sp._df, source_df=sp._source_df, instruction_df=sp._instruction_df
+        )
         assert not materialized._catalog_native
         combined = materialized + other
+        assert len(combined) == len(sp) + len(other)
+
+    def test_union_of_sorted_member(self):
+        """A lazily sorted member unions by its ordered membership."""
+        sp = dc.get_example_spool("random_das")
+        other = dc.get_example_spool("diverse_das")
+        combined = sp.sort("time") + other
         assert len(combined) == len(sp) + len(other)
 
     def test_select_on_union(self):

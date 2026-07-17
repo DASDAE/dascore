@@ -45,35 +45,48 @@ class _CanonicalRange:
     A numeric coordinate range resolved to canonical SI magnitudes.
 
     The exact per-patch re-select defers its representation until the
-    target patch is known: unit-bearing coordinates get quantities in
-    the canonical unit (`Patch.select` converts them to native units),
-    unitless coordinates get the bare magnitudes. A single eager form
-    cannot serve both — raw numbers trim the wrong physical interval
-    on non-SI patches, quantities break unitless coordinates.
+    target patch is known: unit-bearing coordinates get quantities
+    (`Patch.select` converts them to native units), unitless
+    coordinates get the bare magnitudes. A single eager form cannot
+    serve both — raw numbers trim the wrong physical interval on non-SI
+    patches, quantities break unitless coordinates.
+
+    ``units`` records the query's own base unit when the original
+    bounds carried one, so the residual preserves the query's
+    dimensionality instead of adopting each patch coordinate's — a
+    metre query must never trim a seconds coordinate as 1-2 s.
     """
 
-    __slots__ = ("magnitudes",)
+    __slots__ = ("magnitudes", "units")
 
-    def __init__(self, magnitudes: tuple):
+    def __init__(self, magnitudes: tuple, units: str | None = None):
         self.magnitudes = magnitudes
+        self.units = units
 
     def __eq__(self, other) -> bool:
         """Value equality so equal selections compare equal (spool __eq__)."""
         if not isinstance(other, _CanonicalRange):
             return NotImplemented
-        return self.magnitudes == other.magnitudes
+        return (self.magnitudes, self.units) == (other.magnitudes, other.units)
 
     def __hash__(self) -> int:
-        return hash(self.magnitudes)
+        return hash((self.magnitudes, self.units))
 
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
         from dascore.units import get_quantity
 
-        units = getattr(coord, "units", None)
-        if units is None:
+        coord_units = getattr(coord, "units", None)
+        if coord_units is None:
+            # unitless coords: bare canonical magnitudes (documented policy)
             return self.magnitudes
-        base = get_quantity(str(units)).to_base_units().units
+        # a unit-bearing query keeps its own dimensionality; a bare
+        # numeric query means canonical SI in the coord's dimension
+        base = (
+            get_quantity(self.units)
+            if self.units is not None
+            else get_quantity(str(coord_units)).to_base_units().units
+        )
         return tuple(None if mag is None else mag * base for mag in self.magnitudes)
 
 
@@ -82,11 +95,14 @@ def _canonical_range(value) -> _CanonicalRange | None:
     if not is_range(value):
         return None
     magnitudes = []
+    units = None
     for bound in value:
         if bound is None or bound is Ellipsis:
             magnitudes.append(None)
         elif hasattr(bound, "units"):  # pint quantity -> SI magnitude
-            magnitudes.append(float(bound.to_base_units().magnitude))
+            base = bound.to_base_units()
+            magnitudes.append(float(base.magnitude))
+            units = str(base.units)
         elif isinstance(bound, bool | np.bool_):
             return None
         elif isinstance(bound, int | float | np.integer | np.floating):
@@ -95,34 +111,43 @@ def _canonical_range(value) -> _CanonicalRange | None:
             return None
     if all(mag is None for mag in magnitudes):
         return None
-    return _CanonicalRange(tuple(magnitudes))
+    return _CanonicalRange(tuple(magnitudes), units)
+
+
+def _envelope_range(value):
+    """Return a range with quantity bounds as SI magnitudes.
+
+    Stored envelope columns are canonical SI, so the presented-envelope
+    adjustment needs bare magnitudes; non-numeric ranges pass through.
+    """
+    canonical = _canonical_range(value)
+    return value if canonical is None else canonical.magnitudes
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     """
     Split coordinate selectors into query-side and residual-side forms.
 
-    Numeric coordinate summaries are stored in canonical SI units, so
-    numeric range bounds resolve to SI magnitudes for the index and
-    dataframe side: bare numbers are already canonical SI (the index
-    contract), quantities convert. The residual keeps the range as a
-    `_CanonicalRange` so each patch decides its own representation at
-    load time, which keeps mixed unitful/unitless populations correct.
+    The query side keeps the *original* values: the SQL builder coerces
+    quantities itself and needs their units to constrain candidacy to
+    dimensionally compatible coordinate definitions (a metre query must
+    exclude — or raise on — a seconds coordinate, never trim it).
+    The residual keeps the range as a `_CanonicalRange` (canonical SI
+    magnitudes plus the query's base unit) so each patch decides its
+    own representation at load time, which keeps mixed unitful/unitless
+    populations correct.
 
     Selectors on non-numeric coordinates (time ranges, string ranges)
-    and boolean masks pass through unchanged.
+    pass through unchanged.
     """
     meta = backend._coord_meta(set(coords))
     numeric = set(meta.loc[meta["value_kind"] == "num", "coord_name"])
-    si_coords, residual_coords = {}, {}
+    query_coords, residual_coords = {}, {}
     for name, value in coords.items():
         canonical = _canonical_range(value) if name in numeric else None
-        if canonical is None:
-            si_coords[name] = residual_coords[name] = value
-        else:
-            si_coords[name] = canonical.magnitudes
-            residual_coords[name] = canonical
-    return si_coords, residual_coords
+        query_coords[name] = value
+        residual_coords[name] = value if canonical is None else canonical
+    return query_coords, residual_coords
 
 
 def _row_source_patch_id(row: Mapping) -> str:
@@ -328,6 +353,10 @@ class _CatalogRevision:
     value: int = 0
 
 
+# sentinel: _view keeps the current order/ids spec unless told otherwise
+_KEEP = object()
+
+
 class PatchCatalog:
     """
     Query-composable metadata catalog over the spool index tables.
@@ -346,12 +375,18 @@ class PatchCatalog:
         queries: tuple[Query, ...] = (),
         residuals: tuple[tuple[dict, bool], ...] = (),
         revision: _CatalogRevision | None = None,
+        order: tuple | None = None,
+        ids: tuple | None = None,
     ):
         self._backend = backend
         self.resolver = resolver
         self._syncer = syncer
         self._queries = tuple(queries)
         self._residuals = tuple(residuals)
+        # presentation specs (D2): an order override ("attr"|"coord",
+        # name, ascending) and/or an ordered patch-id membership
+        self._order = order
+        self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache: pd.DataFrame | None = None
         self._df_cache_revision = -1
@@ -495,6 +530,15 @@ class PatchCatalog:
         """
         state = dict(self.__dict__)
         state["_backend"] = None
+        # In-memory backends are rebuilt on the other side with FRESH
+        # patch ids, so a stored id membership would bind to the wrong
+        # rows. Restrict the rebuilt content to the current membership
+        # instead (records/registry in presentation order, so re-ingest
+        # ordinals preserve it) and drop the id spec; the syncer case
+        # reopens the same database file, where ids stay valid.
+        rebuilt_membership = self._syncer is None and self._ids is not None
+        if rebuilt_membership:
+            state["_ids"] = None
         # Live catalogs rebuild from their registry without touching the
         # connection (which may belong to another thread during pickling);
         # other in-memory catalogs (e.g. unions) capture their rows.
@@ -504,18 +548,25 @@ class PatchCatalog:
             and not isinstance(self.resolver, LiveResolver)
         )
         if needs_records:
-            state["_rebuild_records"] = tuple(self._backend.export_records())
+            patch_ids = self._ids if rebuilt_membership else None
+            state["_rebuild_records"] = tuple(
+                self._backend.export_records(patch_ids=patch_ids)
+            )
         # A view shares the root's resolver, but must not drag the whole
         # live registry across the wire: keep only the entries its rows
         # reference (a one-patch view of an N-patch spool serializes one
-        # patch, not N — the payload Spool.map ships per task).
+        # patch, not N — the payload Spool.map ships per task) — in
+        # presentation order, so a rebuilt registry keeps the view's
+        # ordering.
         if self.is_view and self.resolver.live_entries():
-            paths = set(self.to_df()["path"].astype(str))
-            keep = {k: v for k, v in self.resolver.live_entries().items() if k in paths}
+            df = self.to_df()
+            paths = list(dict.fromkeys(df["path"].astype(str)))
+            entries = self.resolver.live_entries()
+            keep = {k: entries[k] for k in paths if k in entries}
             state["resolver"] = _membership_resolver(self.resolver, keep)
         return state
 
-    def _view(self, queries, residuals) -> PatchCatalog:
+    def _view(self, queries, residuals, order=_KEEP, ids=_KEEP) -> PatchCatalog:
         out = PatchCatalog(
             backend=self.backend,
             resolver=self.resolver,
@@ -523,8 +574,67 @@ class PatchCatalog:
             queries=queries,
             residuals=residuals,
             revision=self._revision,
+            order=self._order if order is _KEEP else order,
+            ids=self._ids if ids is _KEEP else ids,
         )
         return out
+
+    def order_by(self, attribute: str, ascending: bool = True) -> PatchCatalog:
+        """
+        Return a view presenting rows ordered by an attribute or coord.
+
+        A lazy presentation spec (D2): realization adds ORDER BY with
+        the ordinal contract as the deterministic tiebreak; no rows are
+        copied and no relation is realized here.
+        """
+        name = str(attribute)
+        coords = self.backend.coord_names()
+        if name in coords:
+            spec = ("coord", name, ascending)
+        elif name in self.backend.attr_names():
+            spec = ("attr", name, ascending)
+        elif name.endswith("_min") and name.removesuffix("_min") in coords:
+            spec = ("coord", name.removesuffix("_min"), ascending)
+        else:
+            msg = "Invalid attribute. Please use a valid attribute such as: 'time'"
+            raise IndexError(msg)
+        return self._view(self._queries, self._residuals, order=spec)
+
+    def _ordered_ids(self) -> tuple[int, ...]:
+        """The view's patch ids in presentation order (ids only, cheap)."""
+        if self._ids is not None and self._order is None:
+            return self._ids
+        return tuple(
+            self.backend.query_ids(
+                list(self._queries) or None,
+                order_by=self._order,
+                patch_ids=self._ids,
+            )
+        )
+
+    def window(self, item: slice) -> PatchCatalog:
+        """
+        Return a view restricted to a slice of the presented rows.
+
+        Membership realizes as an ordered id list (ids only — never the
+        flat relation); subsequent selections compose within the window
+        per the D2 rules.
+        """
+        ids = self._ordered_ids()[item]
+        return self._view(self._queries, self._residuals, ids=tuple(ids))
+
+    def restrict(self, indices) -> PatchCatalog:
+        """
+        Return a view keeping the presented rows an array selects.
+
+        ``indices`` is a boolean mask over rows or an array of integer
+        positions (order-preserving; duplicate positions collapse to
+        one row, matching the spool's set semantics).
+        """
+        ids = np.asarray(self._ordered_ids())
+        picked = ids[np.asarray(indices)]
+        deduped = tuple(dict.fromkeys(int(x) for x in picked))
+        return self._view(self._queries, self._residuals, ids=deduped)
 
     def _invalidate(self) -> None:
         self._revision.value += 1
@@ -570,8 +680,13 @@ class PatchCatalog:
 
     @property
     def is_view(self) -> bool:
-        """True when this catalog carries selection state."""
-        return bool(self._queries or self._residuals)
+        """True when this catalog carries selection or presentation state."""
+        return bool(
+            self._queries
+            or self._residuals
+            or self._order is not None
+            or self._ids is not None
+        )
 
     def _require_root(self, operation: str) -> None:
         if self.is_view:
@@ -638,7 +753,17 @@ class PatchCatalog:
         compares all non-private columns) is not spuriously blocked.
         """
         if self._df_cache is None or self._df_cache_revision != self._revision.value:
-            df = self.backend.query(list(self._queries) or None)
+            df = self.backend.query(
+                list(self._queries) or None,
+                order_by=self._order,
+                patch_ids=self._ids,
+            )
+            if self._ids is not None and self._order is None:
+                # id membership presents in its own (window/array) order
+                position = {pid: i for i, pid in enumerate(self._ids)}
+                df = df.sort_values(
+                    "patch_id", key=lambda s: s.map(position), kind="stable"
+                ).reset_index(drop=True)
             df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore").rename(
                 columns={"patch_id": "_patch_id"}
             )
@@ -651,7 +776,7 @@ class PatchCatalog:
                 for query in self._queries
                 if (
                     ranges := {
-                        name: value
+                        name: _envelope_range(value)
                         for name, value in query.coords.items()
                         if is_range(value)
                     }
@@ -678,7 +803,7 @@ class PatchCatalog:
             and self._df_cache_revision == self._revision.value
         ):
             return len(self._df_cache)
-        return self.backend.count(list(self._queries) or None)
+        return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
