@@ -460,6 +460,12 @@ def assemble_source_records(
     """
     if sources.empty:
         return []
+    # Records transfer in catalog order: re-ingesting assigns fresh
+    # sequential ordinals, so record order IS the ordering contract.
+    if "ordinal" in sources.columns:
+        sources = sources.sort_values(["ordinal", "source_id"])
+    if "patch_id" in patches.columns:
+        patches = patches.sort_values("patch_id")
     col_info = {
         row.column_name: (row.attr_name, row.value_kind, _py_scalar(row.units))
         for row in meta.itertuples()

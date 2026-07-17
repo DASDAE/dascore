@@ -11,7 +11,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -47,6 +47,15 @@ SOURCES = MappingProxyType(
         "mtime_ns": "int64",
         "size_bytes": "int64",
         "last_indexed_ns": "int64",
+        # The catalog's explicit ordering contract: patch rows present in
+        # (ordinal, patch_id) order. Assigned at ingest (insertion
+        # sequence); a replaced source keeps its position while new
+        # sources append, so merging catalogs concatenates and
+        # deduplication keeps first-occurrence position with
+        # last-occurrence metadata (dict-merge semantics). The directory
+        # syncer renumbers to time order after each sync, preserving the
+        # conventional time-ordered presentation of file archives.
+        "ordinal": "int64",
     }
 )
 

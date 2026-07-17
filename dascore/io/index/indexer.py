@@ -20,6 +20,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
+from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, summaries_to_records
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
@@ -58,7 +59,14 @@ class DBDirectoryIndexer(AbstractIndexer):
         requires_local_directory(path, label="DBDirectoryIndexer")
         self.path = Path(path).absolute()
         self.index_path = Path(self._find_index_path(index_path))
-        self._backend = get_backend(self.index_path)
+        try:
+            self._backend = get_backend(self.index_path)
+        except InvalidIndexVersionError:
+            # The index is a disposable cache and the file already
+            # identified itself as a dascore spool index of another
+            # schema version; rebuild it rather than asking the user to.
+            self.index_path.unlink()
+            self._backend = get_backend(self.index_path)
         # Schema creation alone is not a successful directory scan. Read the
         # transactional marker so a new process retries an interrupted first
         # update instead of trusting a merely nonempty SQLite file.
@@ -286,6 +294,11 @@ class DBDirectoryIndexer(AbstractIndexer):
                 )
             if records:
                 self._backend.write_sources(records)
+        if stale or changed:
+            # Directory archives present in time order; ingest assigns
+            # walk-order ordinals, so each sync renumbers to keep the
+            # contract (iterate by ordinal) aligned with time.
+            self._backend.renumber_ordinals_by_time()
         if not self._initial_update_done:
             self._backend.mark_initial_update_done()
             self._initial_update_done = True

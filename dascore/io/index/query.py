@@ -424,7 +424,8 @@ def build_sql(
         f"p.*{attr_cols} "
         f"{_FROM}"
         f"WHERE {where.sql} "
-        "ORDER BY p.time_min NULLS LAST, p.patch_id"
+        # the ordering contract: source ordinal, then file-internal order
+        "ORDER BY s.ordinal, p.patch_id"
     )
     return sql, where.params, residuals
 

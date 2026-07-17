@@ -464,6 +464,14 @@ class SQLIndexBackend(AbstractIndexBackend):
             by_base: dict[str, list[str]] = {}
             for record in records:
                 by_base.setdefault(record.base_uri or "", []).append(record.source_path)
+            # Ordering contract: a replaced source keeps its ordinal
+            # (first-occurrence position, dict-merge semantics) while new
+            # sources append after every existing position. Read both
+            # before the delete below discards them.
+            kept_ordinals = self._existing_ordinals(by_base)
+            max_df = self._fetch_df("SELECT max(ordinal) AS m FROM sources")
+            max_ordinal = max_df["m"].iloc[0]
+            next_ordinal = 0 if pd.isnull(max_ordinal) else int(max_ordinal) + 1
             for base_uri, paths in by_base.items():
                 self._delete_by_paths(paths, base_uri=base_uri)
             column_map, skip_units = self._ensure_attr_columns(records)
@@ -474,6 +482,11 @@ class SQLIndexBackend(AbstractIndexBackend):
             defs_needed: dict[str, object] = {}
             attr_groups: dict[tuple[str, ...], list] = {}
             for record in records:
+                identity = (record.base_uri or "", record.source_path)
+                ordinal = kept_ordinals.get(identity)
+                if ordinal is None:
+                    ordinal = next_ordinal
+                    next_ordinal += 1
                 source_rows.append(
                     (
                         source_id,
@@ -484,6 +497,7 @@ class SQLIndexBackend(AbstractIndexBackend):
                         record.mtime_ns,
                         record.size_bytes,
                         now,
+                        ordinal,
                     )
                 )
                 for patch in record.patches:
@@ -556,6 +570,46 @@ class SQLIndexBackend(AbstractIndexBackend):
         for start in range(0, len(items), batch):
             chunk = items[start : start + batch]
             yield chunk, self._placeholders(len(chunk))
+
+    def _existing_ordinals(self, by_base: dict[str, list[str]]) -> dict:
+        """Map (base_uri, source_path) -> ordinal for already-stored sources."""
+        out: dict[tuple[str, str], int] = {}
+        for base_uri, paths in by_base.items():
+            for chunk, marks in self._iter_in_batches(paths):
+                df = self._fetch_df(
+                    f"SELECT source_path, ordinal FROM sources "
+                    f"WHERE source_path IN ({marks}) AND base_uri = ?",
+                    [*chunk, base_uri],
+                )
+                for row in df.itertuples():
+                    if not pd.isnull(row.ordinal):
+                        out[(base_uri, row.source_path)] = int(row.ordinal)
+        return out
+
+    def renumber_ordinals_by_time(self) -> None:
+        """
+        Renumber source ordinals into time order.
+
+        The directory syncer owns its catalog's presentation order and
+        calls this after each sync so file archives keep their
+        conventional time-ordered iteration; sources are ordered by the
+        earliest patch time (sources without patches last), path as the
+        deterministic tiebreak.
+        """
+        with self._transaction():
+            self._execute(
+                "UPDATE sources SET ordinal = ("
+                " SELECT rn - 1 FROM ("
+                "  SELECT s2.source_id AS sid, ROW_NUMBER() OVER ("
+                "   ORDER BY t.min_time IS NULL, t.min_time, s2.source_path"
+                "  ) AS rn"
+                "  FROM sources s2 LEFT JOIN ("
+                "   SELECT source_id, MIN(time_min) AS min_time"
+                "   FROM patches GROUP BY source_id"
+                "  ) t ON t.source_id = s2.source_id"
+                " ) WHERE sid = sources.source_id"
+                ")"
+            )
 
     def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:
         """
