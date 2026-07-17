@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch as upatch
 
 import numpy as np
 import pandas as pd
@@ -725,23 +724,6 @@ class TestFileSpoolIntegrations:
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):
         """Selecting outside of distance range reduces spool length (#583)."""
         assert len(dist_differ_spool) == 1
-
-    def test_iteration_unexpected_index_error(self, basic_file_spool):
-        """
-        Ensure unexpected IndexErrors (not #583) are re-raised during iteration.
-        """
-        # TODO this can be deleted once the new indexing is implemented.
-        # Mock _get_patches_from_index to raise an IndexError with unexpected
-        # message
-        with upatch.object(
-            basic_file_spool,
-            "_get_patches_from_index",
-            side_effect=IndexError("unexpected error from pandas"),
-        ):
-            # The iteration should re-raise the unexpected IndexError
-            with pytest.raises(IndexError, match="unexpected error from pandas"):
-                for _ in basic_file_spool:
-                    pass
 
 
 def _patch_shape(patch):

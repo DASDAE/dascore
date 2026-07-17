@@ -30,9 +30,16 @@ class TestLaziness:
         catalog = PatchCatalog.from_patches(patches)
         assert catalog._backend is None
 
-    def test_first_len_bootstraps(self, live_catalog, patches):
-        """First metadata op creates the backend and ingests."""
+    def test_len_serves_from_registry(self, live_catalog, patches):
+        """Len (and patch access) never bootstrap a backend."""
         assert len(live_catalog) == len(patches)
+        assert live_catalog.get_patch(0) is patches[0]
+        assert live_catalog._backend is None
+
+    def test_first_relation_op_bootstraps(self, live_catalog, patches):
+        """Realizing the flat relation creates the backend and ingests."""
+        df = live_catalog.to_df()
+        assert len(df) == len(patches)
         assert live_catalog._backend is not None
 
 
@@ -40,7 +47,7 @@ class TestLiveRoundtrip:
     """Live patches come back identical."""
 
     def test_iteration_returns_same_patches(self, live_catalog, patches):
-        """Iterated patches are the registered objects (order: time)."""
+        """Iterated patches are the registered objects (construction order)."""
         out = list(live_catalog)
         assert len(out) == len(patches)
         starts = [p.get_coord("time").min() for p in out]

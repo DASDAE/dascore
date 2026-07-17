@@ -88,7 +88,7 @@ class TestCatalogPushdown:
         """Selection does not query all rows before applying its predicate."""
         if not spool._catalog_native:
             pytest.skip("query pushdown only applies to catalog-native spools")
-        catalog = spool._catalog or spool._get_catalog()
+        catalog = spool._catalog
         backend = catalog.backend
         calls = []
         original = backend.query

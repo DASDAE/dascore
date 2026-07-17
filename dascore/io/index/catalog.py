@@ -310,6 +310,8 @@ class PatchCatalog:
         self._revision = revision or _CatalogRevision()
         self._df_cache: pd.DataFrame | None = None
         self._df_cache_revision = -1
+        self._live_cache: tuple | None = None
+        self._live_cache_revision = -1
         # Source records for rebuilding an in-memory backend (set by
         # __getstate__ so pickled catalogs survive losing the connection).
         self._rebuild_records: tuple = ()
@@ -436,6 +438,34 @@ class PatchCatalog:
         self._revision.value += 1
         self._df_cache = None
         self._df_cache_revision = -1
+        self._live_cache = None
+        self._live_cache_revision = -1
+
+    def _cold_live_values(self) -> tuple | None:
+        """
+        The patches, in registry (construction) order, when the registry
+        alone defines contents — a root live catalog whose backend was
+        never realized. None whenever the registry is not authoritative.
+
+        This keeps len/iteration/indexing on freshly-built patch-list
+        spools allocation-free: no ingest, no SQL, no flat relation.
+        """
+        cold = (
+            self._backend is None
+            and self._syncer is None
+            and not self.is_view
+            and not self._rebuild_records
+            and isinstance(self.resolver, LiveResolver)
+        )
+        if not cold:
+            return None
+        if (
+            self._live_cache is None
+            or self._live_cache_revision != self._revision.value
+        ):
+            self._live_cache = tuple(self.resolver.live_entries().values())
+            self._live_cache_revision = self._revision.value
+        return self._live_cache
 
     def __deepcopy__(self, memo) -> PatchCatalog:
         """
@@ -545,6 +575,8 @@ class PatchCatalog:
         return self._df_cache
 
     def __len__(self) -> int:
+        if (live := self._cold_live_values()) is not None:
+            return len(live)
         # Count in SQL when the relation is not already realized: coord
         # range residuals only drop patches the SQL candidacy already
         # excludes and samples/relative residuals never drop patches, so
@@ -558,6 +590,8 @@ class PatchCatalog:
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
+        if (live := self._cold_live_values()) is not None:
+            return live[index]
         row = self.to_df().iloc[index].to_dict()
         return self.resolve_row(row)
 

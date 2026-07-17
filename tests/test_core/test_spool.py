@@ -142,8 +142,7 @@ class TestMemorySpoolLazy:
         spool = dc.spool(data)
         data.pop()
         assert len(spool) == len(patch_list)
-        # The snapshot itself is immutable.
-        assert isinstance(spool._patches, tuple)
+        assert list(spool) == patch_list
 
     def test_derived_spools_use_df_machinery(self, patch_list):
         """Chunked/selected spools must go through the instruction dfs."""
@@ -154,23 +153,29 @@ class TestMemorySpoolLazy:
         expected_min = min(x.summary.get_coord_summary("time").min for x in patch_list)
         assert time_coord.min() == expected_min
 
-    def test_derived_spool_does_not_retain_parent(self, patch_list):
-        """Derived spools must not hold a reference to their parent."""
+    def test_derived_spool_shares_only_the_catalog(self, patch_list):
+        """Derived spools resolve patches through the shared catalog only."""
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
-        assert chunked._data is None
-        assert chunked._patches is None
+        assert chunked._catalog is spool._catalog
+        # no other patch containers exist on the instance
+        assert "_patches" not in chunked.__dict__
+        assert "_data" not in chunked.__dict__
 
     def test_single_patch_input_uses_lazy_storage(self, random_patch):
-        """A single patch should be stored lazily just like a patch sequence."""
+        """A single patch lands in the registry without realizing tables."""
         spool = MemorySpool(random_patch)
-        assert spool._patches == (random_patch,)
         assert len(spool) == 1
+        registry = spool._catalog.resolver.live_entries()
+        assert tuple(registry.values()) == (random_patch,)
+        # simple access never bootstrapped the index backend
+        assert spool._catalog._backend is None
 
-    def test_empty_memory_spool_has_no_dataframe(self):
-        """An empty MemorySpool should report no managing dataframe."""
+    def test_empty_memory_spool(self):
+        """An empty MemorySpool is a valid, iterable, zero-length spool."""
         spool = MemorySpool()
-        assert spool._get_df() is None
+        assert len(spool) == 0
+        assert list(spool) == []
 
     def test_instruction_df_builds_from_lazy_patches(self, patch_list):
         """Lazy patch input should still build instruction dataframes on demand."""
@@ -988,12 +993,11 @@ class TestSpoolCoverageEdges:
         )
 
     def test_union_of_scanless_spool(self, tmp_path):
-        """A scanless (pickle) spool has no catalog; union falls back to
-        materializing its patches.
+        """A scanless (pickle) spool wraps its read patches in a live
+        catalog; union shares them like any in-memory member.
         """
         dc.get_example_patch().io.write(tmp_path / "a.pkl", "pickle")
         pickle_spool = dc.spool(tmp_path / "a.pkl")
-        assert pickle_spool._catalog is None
         combined = pickle_spool + dc.spool([dc.get_example_patch(tag="other")])
         assert len(combined) == 2
 

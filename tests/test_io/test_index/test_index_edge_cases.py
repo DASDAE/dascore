@@ -1269,7 +1269,7 @@ class TestReservedAttrNames:
         with pytest.warns(UserWarning, match="reserved attr name 'event_time_min'"):
             spool = dc.spool([p1, p2])
             df = spool.get_contents()
-        backend = spool._get_catalog().backend
+        backend = spool._catalog.backend
         assert "event_time_min" not in backend.attr_names()
         # the column is the coordinate envelope, not the stray attr value.
         assert "event_time_min" in df.columns
@@ -1281,4 +1281,4 @@ class TestReservedAttrNames:
 
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
-        assert "data_units" in spool._get_catalog().backend.attr_names()
+        assert "data_units" in spool._catalog.backend.attr_names()

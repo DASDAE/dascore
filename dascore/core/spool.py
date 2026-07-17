@@ -52,7 +52,6 @@ from dascore.utils.patch import (
     _spool_up,
     concatenate_patches,
     get_patch_names,
-    patches_to_df,
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
@@ -497,12 +496,12 @@ class DataFrameSpool(BaseSpool):
     - **catalog-backed** (``_catalog_native`` and ``_catalog is not None``):
       rows map one-to-one to a ``PatchCatalog`` query, so metadata
       operations (length, selection) can stay lazy and push down to the
-      index. Use ``_is_catalog_backed()`` to test this and
-      ``_ensure_catalog()`` to enter it without realizing the relation.
+      index. Use ``_is_catalog_backed()`` to test this.
     - **materialized**: the managed dataframe/instruction frames are the
       authoritative contents. Operations that restructure or reorder rows
       (chunk, sort, slice) leave catalog-backed mode via
-      ``new_from_df`` (which clears ``_catalog_native``).
+      ``new_from_df`` (which clears ``_catalog_native``); the catalog
+      remains attached for patch resolution.
     """
 
     # A dataframe which represents contents as they will be output
@@ -566,6 +565,20 @@ class DataFrameSpool(BaseSpool):
         )
         return new
 
+    def _rows_are_catalog(self) -> bool:
+        """
+        True when patch access can go straight through the catalog.
+
+        Holds for catalog-backed views with no spool-level row filtering
+        or patch-local selections layered outside the catalog (which
+        carries its own selection as queries/residuals).
+        """
+        return (
+            self._is_catalog_backed()
+            and not self._select_kwargs
+            and not self._post_selects
+        )
+
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
             new_df = self._df.iloc[item]
@@ -579,6 +592,13 @@ class DataFrameSpool(BaseSpool):
             )
         elif is_array(item):  # An array was passed use np type selection.
             return self._select_from_array(np.asarray(item))
+        elif self._rows_are_catalog() and isinstance(item, int | np.integer):
+            # catalog rows are 1:1 with patches; skip the instruction join
+            try:
+                return self._catalog.get_patch(int(item))
+            except IndexError:
+                msg = f"index of [{item}] is out of bounds for spool."
+                raise IndexError(msg) from None
         else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
         return out
@@ -600,6 +620,14 @@ class DataFrameSpool(BaseSpool):
         return 0 if df is None else len(df)
 
     def __iter__(self):
+        if self._rows_are_catalog():
+            for ind in range(len(self._catalog)):
+                try:
+                    yield self._catalog.get_patch(ind)
+                except MissingPatchError as e:
+                    msg = f"Skipping patch at index {ind} (see #583): {e}"
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+            return
         if self._df is None:  # an empty spool has nothing to yield
             return
         for ind in range(len(self._df)):
@@ -1009,16 +1037,6 @@ class DataFrameSpool(BaseSpool):
 
         return relative_ranges_to_absolute(self._df, kwargs)
 
-    def _ensure_catalog(self) -> None:
-        """
-        Switch to catalog-native mode if this spool supports it.
-
-        Must not realize the flat relation: it exists so selection can
-        route through the catalog on cold spools while staying lazy.
-        Dataframe-backed spools (post chunk/sort/slice) stay put.
-        """
-        return
-
     @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(
         self,
@@ -1031,9 +1049,7 @@ class DataFrameSpool(BaseSpool):
     ) -> Self:
         """{doc}."""
         # The catalog path owns the full selector semantics (e.g. unit
-        # canonicalization); adopt it where possible without realizing
-        # the flat relation (selection must stay lazy on cold spools).
-        self._ensure_catalog()
+        # canonicalization) and stays lazy on cold spools.
         if self._catalog_native:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -1151,83 +1167,53 @@ class MemorySpool(DataFrameSpool):
     """
     A Spool for storing patches in memory.
 
-    When created from patches, the managing dataframes are built lazily
-    (on first access by an operation which needs them, such as chunk or
-    select) and simple operations (len, integer access, iteration) are
-    served straight from the patch tuple. This makes creating a spool
-    from patches nearly free, which matters when reading many files.
+    The catalog's live-patch registry is the store from birth: creating
+    a spool from patches only builds the (insertion-ordered, identity-
+    deduplicated) registry, so construction stays nearly free; index
+    tables materialize lazily on the first metadata operation.
     """
 
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
     _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
 
-    def __init__(self, data: PatchType | Sequence[PatchType] | None = None):
+    def __init__(self, data: PatchType | Sequence[PatchType] | Self | None = None):
         super().__init__()
-        self._patches: tuple[PatchType, ...] | None = None
-        self._data = None
-        self._catalog = None
-        if data is not None:
-            if isinstance(data, dc.Patch):
-                self._patches = (data,)
-            elif isinstance(data, Sequence) and all(
-                isinstance(x, dc.Patch) for x in data
-            ):
-                # The same patch instance (by lineage: copies share an
-                # identity) appears once; spools have set semantics for
-                # identical in-memory patches.
-                unique = {x._instance_id: x for x in data}
-                self._patches = tuple(unique.values())
-            else:  # eg a spool or dataframe; needs the dataframe machinery.
-                self._data = data
+        from dascore.io.index.catalog import PatchCatalog
+
+        if isinstance(data, self.__class__):
+            # copy-construction (the new_from_df convention): share the
+            # catalog, take fresh derived state
+            self.__dict__.update(data.__dict__)
+            self._cache = {}
+            self._select_kwargs = dict(data._select_kwargs)
+            self._merge_kwargs = dict(data._merge_kwargs)
+            return
+        if data is None:
+            patches = ()
+        elif isinstance(data, dc.Patch):
+            patches = (data,)
+        elif isinstance(data, BaseSpool):
+            # e.g. wrapping dc.read output; the patches are in memory
+            patches = tuple(data)
+        elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
+            patches = data
+        else:
+            msg = (
+                "MemorySpool accepts a Patch, a sequence of patches, or a "
+                f"spool; got {type(data)}."
+            )
+            raise InvalidSpoolError(msg)
+        self._catalog = PatchCatalog.from_patches(patches)
+        self._catalog_native = True
 
     def _get_df(self):
-        """Build the managing dataframes from the input patches."""
-        if self._is_catalog_backed():
-            current = self._catalog.to_df()
-        else:
-            data = self._patches if self._patches is not None else self._data
-            if data is None:
-                return None
-            if self._patches is not None:
-                # patch-list spools run on the index catalog: one metadata
-                # engine (and one select semantics) for every spool type.
-                self._ensure_catalog()
-                current = self._catalog.to_df()
-            else:  # spools/dataframes: legacy flat-dump path (patch column)
-                current = patches_to_df(data)
+        """Realize the flat relation from the catalog."""
+        current = self._catalog.to_df()
         df, source, instruction = self._get_dummy_dataframes(current)
         self._source_df = source
         self._instruction_df = instruction
         return df
-
-    def _get_catalog(self):
-        """Get (lazily creating) the catalog for patch-list spools.
-
-        Pure accessor: never flips ``_catalog_native``; the transition
-        into catalog-backed state belongs to ``_ensure_catalog``.
-        """
-        from dascore.io.index.catalog import PatchCatalog
-
-        if self._catalog is None:
-            self._catalog = PatchCatalog.from_patches(self._patches)
-        return self._catalog
-
-    def _ensure_catalog(self) -> None:
-        """Patch-list spools ingest into a catalog; no flat realization."""
-        if self._patches is not None and not self._catalog_native:
-            self._get_catalog()
-            self._catalog_native = True
-
-    def _as_catalog_member(self):
-        """
-        Return (catalog, patch_ids) describing this spool for a union.
-
-        Patch-list spools contribute their own (lazily created) catalog,
-        reusing any summaries the patches already computed.
-        """
-        self._ensure_catalog()
-        return super()._as_catalog_member()
 
     def _get_source_df(self):
         """Build the source df (happens as part of building current df)."""
@@ -1238,34 +1224,6 @@ class MemorySpool(DataFrameSpool):
         """Build the instruction df (happens as part of building current df)."""
         _ = self._df
         return self._cache.get("_instruction_df")
-
-    def __len__(self) -> int:
-        if self._patches is not None:
-            return len(self._patches)
-        return super().__len__()
-
-    def __getitem__(self, item) -> PatchType | BaseSpool:
-        # Fast path: a spool created directly from patches (which never has
-        # select kwargs) can serve integer requests from the patch list.
-        patches = self._patches
-        if (
-            patches is not None
-            and not self._select_kwargs
-            and isinstance(item, int | np.integer)
-        ):
-            try:
-                return patches[item]
-            except IndexError:
-                msg = f"index of [{item}] is out of bounds for spool."
-                raise IndexError(msg) from None
-        return super().__getitem__(item)
-
-    def __iter__(self) -> PatchType:
-        patches = self._patches
-        if patches is not None and not self._select_kwargs:
-            yield from patches
-        else:
-            yield from super().__iter__()
 
     def __eq__(self, other) -> bool:
         """
@@ -1299,8 +1257,6 @@ class MemorySpool(DataFrameSpool):
             "_source_df": _strip_identity(self._source_df),
             "_instruction_df": _strip_identity(self._instruction_df),
         }
-        out.pop("_patches", None)
-        out.pop("_data", None)
         out.pop("_catalog", None)
         out.pop("_catalog_native", None)
         return out
@@ -1323,8 +1279,6 @@ class MemorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
-        if (patch := kwargs.get("patch")) is not None:
-            return patch
         return self._catalog.resolve_row(kwargs)
 
     def _new_from_catalog(self, catalog) -> Self:
@@ -1332,19 +1286,6 @@ class MemorySpool(DataFrameSpool):
         new = self.__class__()
         new._catalog = catalog
         new._catalog_native = True
-        return new
-
-    @compose_docstring(doc=DataFrameSpool.new_from_df.__doc__)
-    def new_from_df(self, *args, **kwargs):
-        """{doc}."""
-        new = super().new_from_df(*args, **kwargs)
-        # The provided dataframes fully define the new spool; drop the
-        # construction input so derived spools don't retain their parents.
-        new._data = None
-        new._patches = None
-        # derived spools resolve patches through the shared catalog
-        new._catalog = self._catalog
-        new._catalog_native = False
         return new
 
     # Add specific implementation of concatenate patches.
