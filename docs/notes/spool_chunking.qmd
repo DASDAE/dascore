@@ -6,7 +6,7 @@ title: Spool Chunking
 
 ## Plans
 
-The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments.
+The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments. The chunked spool carries this shape as its derived view, and assembly (`dascore.utils.patch_assembly`) executes it row by row; re-chunking a chunked spool re-plans from the current view's members, so plans never nest.
 
 ```{python}
 import dascore as dc

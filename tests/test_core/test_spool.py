@@ -11,12 +11,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.spool import (
-    BaseSpool,
-    Spool,
-    _estimate_merge_samples,
-    _get_varying_dim,
-)
+from dascore.core.spool import BaseSpool, Spool
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
@@ -24,6 +19,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.downloader import fetch
+from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -229,21 +225,13 @@ class TestSpoolEquals:
         """A spool should always eq itself."""
         assert random_spool == random_spool
 
-    def test_unequal_attr(self, random_spool):
-        """Simulate some attribute which isn't equal."""
+    def test_foreign_attrs_do_not_join_equality(self, random_spool):
+        """Equality state is enumerated; stray instance attrs are ignored."""
         new1 = copy.deepcopy(random_spool)
         new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
         new2.__dict__["bad_attr"] = 2
-        assert new1 != new2
-
-    def test_unequal_dicts(self, random_spool):
-        """Simulate some dicts which don't have the same values."""
-        new1 = copy.deepcopy(random_spool)
-        new1.__dict__["bad_attr"] = {1: 2}
-        new2 = copy.deepcopy(random_spool)
-        new2.__dict__["bad_attr"] = {2: 3}
-        assert new1 != new2
+        assert new1 == new2
 
 
 class TestIndexing:
@@ -805,140 +793,52 @@ class TestMisc:
         assert isinstance(patch, dc.Patch)
 
 
-class TestSpoolEquality:
-    """Tests for spool equality comparisons to ensure 100% coverage."""
+class TestDeepEqualityCheck:
+    """Coverage for deep_equality_check branches (formerly via spool attrs)."""
 
-    def test_spool_equality_non_dict_comparison(self, random_spool):
-        """Test line 107: non-dict comparison in _vals_equal."""
-        spool1 = copy.deepcopy(random_spool)
-        spool2 = copy.deepcopy(random_spool)
+    def test_non_dict_comparison(self):
+        """Plain value comparison inside dicts."""
+        from dascore.utils.misc import deep_equality_check
 
-        # Add non-dict values to test the non-dict comparison path
-        spool1._test_string = "hello"
-        spool2._test_string = "hello"
+        assert deep_equality_check({"a": "hello"}, {"a": "hello"})
+        assert not deep_equality_check({"a": "hello"}, {"a": "world"})
 
-        # This should be equal
-        assert spool1 == spool2
-
-        # Now make them different to test the comparison
-        spool2._test_string = "world"
-
-        # This should be False
-        assert spool1 != spool2
-
-    def test_spool_equality_with_objects_having_dict(self, random_spool):
-        """Test line 127: objects with __dict__ that are not equal."""
+    def test_objects_with_dict(self):
+        """Objects compare via recursive __dict__ comparison."""
+        from dascore.utils.misc import deep_equality_check
 
         class TestObject:
             def __init__(self, value):
                 self.value = value
 
-        spool1 = copy.deepcopy(random_spool)
-        spool2 = copy.deepcopy(random_spool)
+        assert deep_equality_check({"o": TestObject(42)}, {"o": TestObject(42)})
+        assert not deep_equality_check({"o": TestObject(1)}, {"o": TestObject(2)})
 
-        # Add objects with __dict__ that have different values
-        spool1._test_obj = TestObject(1)
-        spool2._test_obj = TestObject(2)  # Different data
+    def test_mixed_types(self):
+        """Ints, lists, and numpy arrays compare by value."""
+        from dascore.utils.misc import deep_equality_check
 
-        # This should hit line 127 and return False
-        assert spool1 != spool2
+        d1 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
+        d2 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
+        assert deep_equality_check(d1, d2)
+        d2["a"] = np.array([1, 2, 4])
+        assert not deep_equality_check(d1, d2)
 
-    def test_spool_equality_with_objects_having_dict_equal(self, random_spool):
-        """Test objects with __dict__ that are equal via recursive comparison."""
+    def test_dataframes(self):
+        """DataFrames compare via .equals."""
+        from dascore.utils.misc import deep_equality_check
 
-        class TestObject:
-            def __init__(self, value):
-                self.value = value
-
-        spool1 = random_spool
-        spool2 = copy.deepcopy(random_spool)
-
-        # Add objects with __dict__ that have same internal state
-        spool1._test_obj = TestObject(42)
-        spool2._test_obj = TestObject(42)
-
-        # This should be equal via recursive __dict__ comparison
-        assert spool1 == spool2
-
-    def test_spool_equality_mixed_types(self):
-        """Test equality with various mixed data types."""
-        # Create simple spools to avoid cache issues
-        patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-
-        # Test with integers (non-dict)
-        spool1._int_val = 42
-        spool2._int_val = 42
-        assert spool1 == spool2
-
-        # Test with lists (non-dict)
-        spool1._list_val = [1, 2, 3]
-        spool2._list_val = [1, 2, 3]
-        assert spool1 == spool2
-
-        # Test with numpy arrays (non-dict)
-        spool1._array_val = np.array([1, 2, 3])
-        spool2._array_val = np.array([1, 2, 3])
-        assert spool1 == spool2
-
-        # Test arrays with different values
-        spool1._array_val = np.array([1, 2, 3])
-        spool2._array_val = np.array([1, 2, 4])
-        assert spool1 != spool2
-
-    def test_spool_equality_with_dataframes(self):
-        """Test equality with pandas DataFrames (has equals method)."""
-        # Create simple spools to avoid cache issues
-        patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-
-        # Add DataFrames that should be equal
         df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        assert deep_equality_check({"df": df1}, {"df": df2})
+        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})
+        assert not deep_equality_check({"df": df1}, {"df": df3})
 
-        spool1._test_df = df1
-        spool2._test_df = df2
+    def test_unequal_sub_dicts(self):
+        """Nested dicts with different values are unequal."""
+        from dascore.utils.misc import deep_equality_check
 
-        # Should be equal via df.equals()
-        assert spool1 == spool2
-
-        # Now test with different DataFrames
-        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})  # Different data
-        spool2._test_df = df3
-
-        # Should not be equal
-        assert spool1 != spool2
-
-    def test_specific_coverage_lines(self):
-        """Test to specifically cover lines 107 and 127."""
-        # Create minimal spools
-        patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-
-        # Line 107: Non-dict comparison
-        spool1._string_test = "hello"
-        spool2._string_test = "hello"
-        assert spool1 == spool2
-
-        # Make them different to test line 107 return False
-        spool2._string_test = "world"
-        assert spool1 != spool2
-
-        # Line 127: Objects with __dict__ that are different
-        class SimpleObj:
-            def __init__(self, val):
-                self.val = val
-
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-        spool1._obj = SimpleObj(1)
-        spool2._obj = SimpleObj(2)
-
-        # This should return False at line 127
-        assert spool1 != spool2
+        assert not deep_equality_check({"d": {1: 2}}, {"d": {2: 3}})
 
 
 class TestSpoolCoverageEdges:
@@ -1017,17 +917,17 @@ class TestSpoolCoverageEdges:
         def _raise(_ind):
             raise MissingPatchError("trimmed to nothing")
 
-        monkeypatch.setattr(spool, "_get_patches_from_index", _raise)
+        monkeypatch.setattr(spool._assembler, "get_patch", _raise)
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
 
     def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
         """An under-estimated merge buffer is grown to fit (uneven sampling)."""
-        import dascore.core.spool as spool_mod
+        import dascore.utils.patch_assembly as assembly_mod
 
         # Force the pre-merge sample estimate to be too small so the
         # streaming buffer must grow mid-merge.
-        monkeypatch.setattr(spool_mod, "_estimate_merge_samples", lambda *a, **k: 1)
+        monkeypatch.setattr(assembly_mod, "_estimate_merge_samples", lambda *a, **k: 1)
         merged = dc.spool(many_contiguous).chunk(time=None)
         assert merged[0].get_coord("time").size == sum(
             p.get_coord("time").size for p in many_contiguous

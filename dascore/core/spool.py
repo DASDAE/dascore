@@ -28,27 +28,20 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.exceptions import (
-    CoordMergeError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
 )
-from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _spool_map,
-    broadcast_for_index,
     deep_equality_check,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
-    _force_patch_merge,
-    _get_merge_dim,
-    _get_merged_coord,
-    _split_coord_merge_kwargs,
     _spool_up,
     concatenate_patches,
     get_patch_names,
@@ -57,66 +50,13 @@ from dascore.utils.patch import (
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 from dascore.utils.pd import (
     _column_or_value,
-    _convert_min_max_in_kwargs,
     adjust_segments,
-    filter_df,
     get_column_names_from_dim,
     get_dim_names_from_columns,
     resolve_selector_namespaces,
 )
 
 T = TypeVar("T")
-
-
-def _get_varying_dim(df) -> str | None:
-    """
-    Get the single dimension whose range varies across rows of df.
-
-    Returns None when no dimension varies, several do, or the dataframe
-    doesn't carry range columns for the varying dimension; those cases
-    need the fully materialized merge to sort out.
-    """
-    dims = get_dim_names_from_columns(df)
-    varying = []
-    for dim in dims:
-        mins, maxs = df.get(f"{dim}_min"), df.get(f"{dim}_max")
-        if mins.nunique(dropna=False) > 1 or maxs.nunique(dropna=False) > 1:
-            varying.append(dim)
-    return varying[0] if len(varying) == 1 else None
-
-
-def _estimate_merge_samples(df, dim) -> int | None:
-    """
-    Estimate the total number of samples along dim of the merged rows.
-
-    Returns None if the estimate cannot be made (eg unknown steps), in
-    which case streaming the merge isn't possible.
-    """
-    if dim is None:
-        return None
-    cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
-    if not set(cols).issubset(df.columns):
-        return None
-    mins, maxs, steps = (df[x] for x in cols)
-    if mins.isnull().any() or maxs.isnull().any() or steps.isnull().any():
-        return None
-    ratios = (maxs - mins) / steps
-    # Degenerate steps (eg 0) make the sample counts meaningless.
-    if not np.isfinite(ratios.astype(np.float64)).all():
-        return None
-    counts = np.round(ratios).astype(np.int64) + 1
-    if (counts < 0).any():
-        return None
-    return int(counts.sum())
-
-
-def _coord_only_kwargs(patch, kwargs) -> dict:
-    """Keep only the kwargs naming a dim or coordinate of patch."""
-    return {
-        k: v
-        for k, v in kwargs.items()
-        if k in patch.dims or k in patch.coords.coord_map
-    }
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -508,10 +448,26 @@ class Spool(BaseSpool):
     """
     The concrete spool: a `PatchCatalog` plus an optional derived view.
 
+    Constructed from in-memory patches directly (or via
+    [`dascore.spool`](`dascore.spool`)), from a directory of files with
+    [`Spool.from_directory`](`dascore.core.spool.Spool.from_directory`),
+    or from a single file with
+    [`Spool.from_file`](`dascore.core.spool.Spool.from_file`).
+
+    Parameters
+    ----------
+    data
+        A patch, sequence of patches, or another spool whose (in-memory)
+        patches this spool should hold; None creates an empty spool.
+    merge_kwargs
+        Kwargs controlling how member patches merge when assembled.
+
+    Notes
+    -----
     The catalog is the single store — live patches sit in its resolver
     registry, file-backed patches in its index tables — regardless of
-    how the spool was constructed (patches, a directory, or a single
-    file). A spool presents rows from exactly one of two derivations:
+    how the spool was constructed. A spool presents rows from exactly
+    one of two derivations:
 
     - **catalog-backed** (``_plan is None``): rows map one-to-one to a
       ``PatchCatalog`` query, so metadata operations (length,
@@ -522,8 +478,6 @@ class Spool(BaseSpool):
       The catalog remains attached for patch resolution.
     """
 
-    # kwargs for filtering contents
-    _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
     _merge_kwargs: Mapping | None = FrozenDict()
     # synthetic catalog identity columns must not join patch kwargs
@@ -581,11 +535,6 @@ class Spool(BaseSpool):
         if self._catalog is None:
             return None
         current = self._catalog.to_df().reset_index(drop=True)
-        if self._select_kwargs:
-            # constructor select_kwargs restrict contents (docstring contract)
-            current = adjust_segments(
-                current, ignore_bad_kwargs=True, **self._select_kwargs
-            )
         df, source, instruction = self._get_dummy_dataframes(current)
         self._cache["_source_df"] = source
         self._cache["_instruction_df"] = instruction
@@ -604,13 +553,11 @@ class Spool(BaseSpool):
     def __init__(
         self,
         data: PatchType | Sequence[PatchType] | BaseSpool | None = None,
-        select_kwargs: dict | None = None,
         merge_kwargs: dict | None = None,
     ):
         from dascore.io.index.catalog import PatchCatalog
 
         self._cache = {}
-        self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
         self._post_selects = ()
         if isinstance(data, Spool):
@@ -618,9 +565,6 @@ class Spool(BaseSpool):
             # catalog, take fresh derived state
             self.__dict__.update(data.__dict__)
             self._cache = {}
-            self._select_kwargs = dict(data._select_kwargs)
-            if select_kwargs:
-                self._select_kwargs.update(select_kwargs)
             self._merge_kwargs = dict(data._merge_kwargs)
             if merge_kwargs:
                 self._merge_kwargs.update(merge_kwargs)
@@ -653,13 +597,11 @@ class Spool(BaseSpool):
             raise ValueError(msg)
         source = self._source_df
         inst = self._instruction_df
-        select_kwargs, merge_kwargs = self._select_kwargs, self._merge_kwargs
         new = self.new_from_df(
             df,
             source_df=source,
             instruction_df=inst,
-            select_kwargs=select_kwargs,
-            merge_kwargs=merge_kwargs,
+            merge_kwargs=self._merge_kwargs,
         )
         return new
 
@@ -671,11 +613,7 @@ class Spool(BaseSpool):
         or patch-local selections layered outside the catalog (which
         carries its own selection as queries/residuals).
         """
-        return (
-            self._is_catalog_backed()
-            and not self._select_kwargs
-            and not self._post_selects
-        )
+        return self._is_catalog_backed() and not self._post_selects
 
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
@@ -698,20 +636,15 @@ class Spool(BaseSpool):
                 msg = f"index of [{item}] is out of bounds for spool."
                 raise IndexError(msg) from None
         else:  # a single index was used, should return a single patch
-            out = self._unbox_patch(self._get_patches_from_index(item))
+            out = self._assembler.get_patch(item)
         return out
 
     def __len__(self):
         # A catalog-native view can count in SQL, skipping the full flat
         # realization (query + attr expansion + coordinate pivot) a plain
         # len(self._df) would force. Fall back to the realized frame once
-        # it is cached, on the dataframe path, or when constructor
-        # select_kwargs post-filter rows outside the catalog's queries.
-        if (
-            self._is_catalog_backed()
-            and not self._select_kwargs
-            and "_df" not in self._cache
-        ):
+        # it is cached or on the dataframe path.
+        if self._is_catalog_backed() and "_df" not in self._cache:
             return len(self._catalog)
         df = self._df
         # An empty spool with no patches, data, or catalog has no frame.
@@ -730,165 +663,29 @@ class Spool(BaseSpool):
             return
         for ind in range(len(self._df)):
             try:
-                yield self._unbox_patch(self._get_patches_from_index(ind))
+                yield self._assembler.get_patch(ind)
             except MissingPatchError as e:
                 # The patch couldn't be produced, usually because a
                 # coordinate mismatch trimmed it to nothing (see #583).
                 msg = f"Skipping patch at index {ind} (see #583): {e}"
                 warnings.warn(msg, UserWarning, stacklevel=2)
 
-    def _unbox_patch(self, patch_list):
-        """Unbox a single patch from a patch list, check len."""
-        assert len(patch_list) == 1
-        return patch_list[0]
+    @property
+    def _assembler(self):
+        """The (cached per view) executor turning member rows into patches."""
+        from dascore.utils.patch_assembly import PatchAssembler
 
-    def _get_patches_from_index(self, df_ind):
-        """Given an index (from current df), return the corresponding patch."""
-        source = self._source_df
-        instruction = self._instruction_df
-        # handle negative index.
-        df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
-        try:
-            inds = self._df.index[df_ind]
-        except IndexError:
-            msg = f"index of [{df_ind}] is out of bounds for spool."
-            raise IndexError(msg) from None
-        # Group positional instruction rows by current index (and cache) to
-        # avoid a full instruction df scan for each requested patch.
-        indices = self._cache.get("_instruction_indices")
-        if indices is None:
-            indices = instruction.groupby("current_index").indices
-            self._cache["_instruction_indices"] = indices
-        positions = indices.get(inds)
-        assert positions is not None and len(positions), "no instructions found"
-        df1 = instruction.iloc[positions]
-        joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
-        # Occasionally, duplicates can creep into the source_df,
-        # but it costs a bit to check for duplicates, so only check and drop
-        # duplicates on large joined dataframes where performance might be
-        # affected.
-        if len(joined) > 10:
-            cols = set(joined.columns) - set(self._drop_columns)
-            joined = joined.drop_duplicates(subset=list(cols), keep="first")
-        return self._patch_from_instruction_df(joined)
-
-    def _patch_from_instruction_df(self, joined):
-        """Get the patches joined columns of instruction df."""
-        df_dict_list = self._df_to_dict_list(joined)
-        expected_len = len(joined["current_index"].unique())
-        if len(df_dict_list) > expected_len:
-            # Several sources merge into one patch. When the output size can
-            # be determined from the instructions, stream the sources into a
-            # pre-allocated array so they don't all need to be in memory with
-            # the merged output at once.
-            merge_dim = _get_varying_dim(joined)
-            samples = _estimate_merge_samples(joined, merge_dim)
-            if samples is not None:
-                patch = self._merge_patches_streaming(
-                    joined, df_dict_list, merge_dim, samples
-                )
-                return [patch]
-        out = []
-        for patch_kwargs in df_dict_list:
-            patch = self._load_trimmed_patch(patch_kwargs, joined)
-            # The index doesn't carry all the dimensional info, so get what
-            # merging needs from the patch coords (cheaper than attr dumps).
-            info = patch.coords._get_dim_summary()
-            info["patch"] = patch
-            out.append(info)
-        if len(out) > expected_len:
-            out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
-        return [x["patch"] for x in out]
-
-    def _load_trimmed_patch(self, patch_kwargs, joined) -> dc.Patch:
-        """Load a single patch and trim it to its instruction range."""
-        # convert kwargs to format understood by parser/patch.select
-        kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
-        patch = self._load_patch(kwargs)
-        # If the limits of the source patch were not modified, we can just
-        # use the select kwargs. This is important for missing coordinates
-        # (NaN values) to not get trimmed out.
-        source_kwargs = kwargs if kwargs.get("_modified") else self._select_kwargs
-        # attr-style entries (e.g. constructor select_kwargs) filter rows
-        # above; only coordinate entries are valid patch selections.
-        if select_kwargs := _coord_only_kwargs(patch, source_kwargs):
-            patch = patch.select(**select_kwargs)
-        # patch-local selections (samples=True) recorded by spool.select
-        for post_kwargs, samples in self._post_selects:
-            if usable := _coord_only_kwargs(patch, post_kwargs):
-                patch = patch.select(**usable, samples=samples)
-        return patch
-
-    def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):
-        """
-        Merge the patches described by the instructions along merge_dim.
-
-        Each patch is copied into a pre-allocated output array as it is
-        loaded, then released; this avoids holding all source patches and
-        the merged output in memory at the same time, as concatenating
-        would.
-        """
-        buffer, offset, axis, dims = None, 0, None, None
-        coords, attrs, summaries = [], [], []
-        for patch_kwargs in df_dict_list:
-            patch = self._load_trimmed_patch(patch_kwargs, joined)
-            if dims is None:
-                dims = patch.dims
-                axis = patch.get_axis(merge_dim)
-            elif patch.dims != dims:
-                patch = patch.transpose(*dims)
-            data = patch.data
-            if buffer is None:
-                shape = list(data.shape)
-                shape[axis] = samples
-                buffer = np.empty(shape, dtype=data.dtype)
-            # Mixed dtypes upcast, mirroring np.concatenate behavior.
-            dtype = np.result_type(buffer.dtype, data.dtype)
-            if dtype != buffer.dtype:
-                buffer = buffer.astype(dtype)
-            end = offset + data.shape[axis]
-            if end > buffer.shape[axis]:
-                # The estimate came up short (eg from slightly uneven
-                # sampling); grow the buffer to fit.
-                shape = list(buffer.shape)
-                shape[axis] = end
-                new_buffer = np.empty(shape, dtype=buffer.dtype)
-                head = broadcast_for_index(buffer.ndim, axis, slice(0, offset))
-                new_buffer[head] = buffer[head]
-                buffer = new_buffer
-            try:
-                index = broadcast_for_index(buffer.ndim, axis, slice(offset, end))
-                buffer[index] = data
-            except ValueError as e:
-                msg = (
-                    f"Cannot merge patches; their shapes are incompatible "
-                    f"along the dimensions not being merged ({merge_dim})."
-                )
-                raise CoordMergeError(msg) from e
-            offset = end
-            coords.append(patch.coords)
-            attrs.append(patch.attrs)
-            summaries.append(patch.coords._get_dim_summary())
-        if offset != buffer.shape[axis]:  # over-estimated; trim excess.
-            buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        # Ensure the loaded patches only vary along the expected dimension,
-        # the same requirement _force_patch_merge enforces.
-        summary_df = pd.DataFrame(summaries)
-        found_dim = _get_merge_dim(summary_df)
-        if found_dim != merge_dim:
-            msg = (
-                f"Cannot merge patches; expected them to vary along "
-                f"{merge_dim} but found {found_dim}."
+        if "_assembler" not in self._cache:
+            self._cache["_assembler"] = PatchAssembler(
+                df=self._df,
+                source_df=self._source_df,
+                instruction_df=self._instruction_df,
+                load_patch=self._load_patch,
+                merge_kwargs=self._merge_kwargs,
+                post_selects=self._post_selects,
+                drop_columns=self._drop_columns,
             )
-            raise CoordMergeError(msg)
-        attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self._merge_kwargs)
-        conf = attr_kwargs.get("conflicts", None)
-        drop_conflicting = conf in {"drop", "keep_first"}
-        new_coord = _get_merged_coord(
-            summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
-        )
-        new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
-        return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
+        return self._cache["_assembler"]
 
     def _get_dummy_dataframes(self, current):
         """
@@ -914,30 +711,17 @@ class Spool(BaseSpool):
         )
         return current, source, instruction
 
-    def _df_to_dict_list(self, df):
-        """
-        Convert the dataframe to a list of dicts for iteration.
-
-        This is significantly faster than iterating rows. Empty strings
-        (missing format fields on file rows) normalize to None; stored
-        relative paths pass through unchanged — the catalog's resolver
-        owns resolving them against the spool root.
-        """
-        df = df.copy(deep=False).replace("", None)
-        return df.to_dict("records")
-
     def _load_patch(self, kwargs) -> dc.Patch:
         """Given a row from the managed dataframe, return a patch."""
         # Push trims into the reader only when the instruction row narrows
-        # the source (chunk/select) or constructor select_kwargs restrict
-        # it; otherwise the whole source is wanted and selection is wasted.
-        # Live patches ignore trim hints; exactness is re-applied above.
+        # the source (chunk/select); otherwise the whole source is wanted
+        # and selection is wasted. Live patches ignore trim hints;
+        # exactness is re-applied above (catalog residuals).
         trim = {}
-        if kwargs.get("_modified") or self._select_kwargs:
-            merged = {**kwargs, **self._select_kwargs}
+        if kwargs.get("_modified"):
             trim = {
                 k: v
-                for k, v in merged.items()
+                for k, v in kwargs.items()
                 if k not in self._drop_columns and not k.startswith("_")
             }
         return self._catalog.resolve_row(kwargs, extra_trim=trim)
@@ -954,11 +738,7 @@ class Spool(BaseSpool):
         """
         if self._catalog is None:
             return super()._as_catalog_member()
-        # A catalog-native spool is the whole catalog only when nothing
-        # narrows it; constructor select_kwargs (directory spools) restrict
-        # the visible rows without touching the catalog, so carry only the
-        # surviving patch ids rather than the entire catalog.
-        if self._catalog_native and not self._select_kwargs:
+        if self._catalog_native:
             return self._catalog, None
         df = self._df
         if "_patch_id" in df.columns:
@@ -1082,7 +862,6 @@ class Spool(BaseSpool):
         df,
         source_df=None,
         instruction_df=None,
-        select_kwargs=None,
         merge_kwargs=None,
     ):
         """Create a new instance from dataframes."""
@@ -1096,8 +875,6 @@ class Spool(BaseSpool):
         # resolution but no longer defines the presented rows.
         new._plan = SpoolView(outputs=df, members=instruction_df, sources=source_df)
         new._cache = {}
-        new._select_kwargs = dict(self._select_kwargs)
-        new._select_kwargs.update(select_kwargs or {})
         new._merge_kwargs = dict(self._merge_kwargs)
         new._merge_kwargs.update(merge_kwargs or {})
         new._post_selects = self._post_selects
@@ -1205,9 +982,6 @@ class Spool(BaseSpool):
         new._catalog = catalog
         new._plan = None
         new._cache = {}
-        # selection composed into the catalog is dropped, but constructor
-        # select_kwargs (directory-spool contract) persist across views.
-        new._select_kwargs = dict(self._select_kwargs)
         new._post_selects = ()
         return new
 
@@ -1261,10 +1035,7 @@ class Spool(BaseSpool):
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
-        # identity views apply select_kwargs during realization (_get_df)
-        if self._plan is None:
-            return self._df
-        return self._df[filter_df(self._df, **self._select_kwargs)]
+        return self._df
 
     # --- construction --------------------------------------------------
 
@@ -1281,19 +1052,25 @@ class Spool(BaseSpool):
 
         The directory's index (created/updated via ``update()``) backs
         the catalog; ``path`` may also be an existing directory indexer.
+        ``select_kwargs`` compose a selection into the catalog exactly
+        like ``.select(**select_kwargs)`` — validating the names
+        triggers the initial directory index if it doesn't exist yet.
         """
         from dascore.io.index.catalog import FileResolver, PatchCatalog
         from dascore.io.indexer import AbstractIndexer
 
-        out = cls(select_kwargs=select_kwargs, merge_kwargs=merge_kwargs)
+        out = cls(merge_kwargs=merge_kwargs)
         if isinstance(path, AbstractIndexer):
-            out._catalog = PatchCatalog(
+            catalog = PatchCatalog(
                 backend=path._backend,
                 resolver=FileResolver(root=path.path),
                 syncer=path,
             )
         else:
-            out._catalog = PatchCatalog.from_directory(path, index_path=index_path)
+            catalog = PatchCatalog.from_directory(path, index_path=index_path)
+        if select_kwargs:
+            catalog = catalog.select(**select_kwargs)
+        out._catalog = catalog
         return out
 
     @classmethod
@@ -1402,18 +1179,20 @@ class Spool(BaseSpool):
             return True
         if not isinstance(other, Spool):
             return super().__eq__(other)
-        return deep_equality_check(self._eq_dict(), other._eq_dict())
+        return deep_equality_check(self._eq_state(), other._eq_state())
 
-    def _eq_dict(self) -> dict:
+    def _eq_state(self) -> dict:
         """
-        Get a dict for equality checks, normalizing lazy state.
+        The spool's semantic state, explicitly enumerated for equality.
 
         Equality is over rows, never backends: same length and order of
         patch rows, row-wise equal semantic columns (source identity
         like paths and live-vs-file backing stripped), plus equal
-        pending residual selections. Whether rows come from a live
-        registry, an index file, or a plan is invisible; data arrays
-        are never compared (metadata-level, like everything else here).
+        pending residual selections and policy. Whether rows come from
+        a live registry, an index file, or a plan is invisible; data
+        arrays are never compared (metadata-level, like everything
+        here). Because the state is enumerated — never ``__dict__`` —
+        new instance attributes cannot silently join equality.
         """
 
         def _strip_identity(df):
@@ -1433,27 +1212,21 @@ class Spool(BaseSpool):
             out = df.drop(columns=list(drop), errors="ignore")
             return out[sorted(out.columns)]
 
-        out = dict(self.__dict__)
-        # Build (if needed) and compare the dataframes; drop the inputs
-        # they were built from, whose form can differ for equal contents.
-        # The plan's frames are exposed through the same accessors, so
-        # planned and identity views with equal contents compare equal.
-        out["_cache"] = {
-            "_df": _strip_identity(self._df),
-            "_source_df": _strip_identity(self._source_df),
-            "_instruction_df": _strip_identity(self._instruction_df),
+        catalog = self._catalog
+        return {
+            # the presented relation (row content and order), plus the
+            # source rows and member bindings that define patch assembly;
+            # the plan's frames surface through the same accessors, so
+            # planned and identity views with equal contents compare equal
+            "rows": _strip_identity(self._df),
+            "sources": _strip_identity(self._source_df),
+            "members": _strip_identity(self._instruction_df),
+            # residuals (e.g. samples trims) change what patches load
+            # without changing the visible rows
+            "residuals": None if catalog is None else catalog._residuals,
+            "post_selects": self._post_selects,
+            "merge_kwargs": dict(self._merge_kwargs),
         }
-        out.pop("_plan", None)
-        # Backend provenance is not content.
-        out.pop("_file_path", None)
-        out.pop("_file_format", None)
-        out.pop("_file_version", None)
-        # The catalog object is backend identity, but its composed view
-        # state is content: residuals (e.g. samples trims) change what
-        # patches load without changing the visible rows.
-        catalog = out.pop("_catalog", None)
-        out["_catalog_residuals"] = None if catalog is None else catalog._residuals
-        return out
 
     def __rich__(self):
         base = super().__rich__()
@@ -1461,8 +1234,6 @@ class Spool(BaseSpool):
         path = getattr(indexer, "path", None) or self._file_path
         if path is not None:
             base += Text(f"\n    Path: {path}")
-        if self._select_kwargs:
-            base += Text(f"\n    Select kwargs: {self._select_kwargs}")
         # Only render a time span when the relation is (or is nearly)
         # realized: planned views carry their frames and live spools are
         # in memory; a huge directory index is not realized for a repr.
