@@ -264,3 +264,17 @@ class TestCount:
         view = live_catalog.select(distance=(5, -5), relative=True)
         patch = view.get_patch(0)
         assert patch.get_coord("distance").min() >= 5
+
+
+class TestCanonicalRange:
+    """Value semantics of the deferred canonical-SI range."""
+
+    def test_eq_and_hash(self):
+        """Equal magnitudes compare and hash equal; other types don't."""
+        from dascore.io.index.catalog import _CanonicalRange
+
+        r1, r2 = _CanonicalRange((1.0, 2.0)), _CanonicalRange((1.0, 2.0))
+        assert r1 == r2
+        assert hash(r1) == hash(r2)
+        assert r1 != _CanonicalRange((1.0, 3.0))
+        assert r1 != (1.0, 2.0)  # non-CanonicalRange comparand

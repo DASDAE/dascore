@@ -532,8 +532,6 @@ class Spool(BaseSpool):
 
     def _get_df(self):
         """Realize the flat relation from the catalog."""
-        if self._catalog is None:
-            return None
         current = self._catalog.to_df().reset_index(drop=True)
         df, source, instruction = self._get_dummy_dataframes(current)
         self._cache["_source_df"] = source
@@ -646,9 +644,7 @@ class Spool(BaseSpool):
         # it is cached or on the dataframe path.
         if self._is_catalog_backed() and "_df" not in self._cache:
             return len(self._catalog)
-        df = self._df
-        # An empty spool with no patches, data, or catalog has no frame.
-        return 0 if df is None else len(df)
+        return len(self._df)
 
     def __iter__(self):
         if self._rows_are_catalog():
@@ -658,8 +654,6 @@ class Spool(BaseSpool):
                 except MissingPatchError as e:
                     msg = f"Skipping patch at index {ind} (see #583): {e}"
                     warnings.warn(msg, UserWarning, stacklevel=2)
-            return
-        if self._df is None:  # an empty spool has nothing to yield
             return
         for ind in range(len(self._df)):
             try:
@@ -736,8 +730,6 @@ class Spool(BaseSpool):
         Restructured rows (e.g. chunked views) no longer map to sources
         and contribute their materialized patches instead.
         """
-        if self._catalog is None:
-            return super()._as_catalog_member()
         if self._catalog_native:
             return self._catalog, None
         df = self._df
@@ -1124,8 +1116,6 @@ class Spool(BaseSpool):
         from dascore.io.index.catalog import LiveResolver
         from dascore.utils.paths import is_memory_uri
 
-        if self._catalog is None:
-            return False
         if isinstance(self._catalog.resolver, LiveResolver):
             return False
         paths = self._catalog.backend.get_sources()["source_path"]
@@ -1207,8 +1197,6 @@ class Spool(BaseSpool):
                 "file_format",
                 "file_version",
             )
-            if df is None:
-                return df
             out = df.drop(columns=list(drop), errors="ignore")
             return out[sorted(out.columns)]
 

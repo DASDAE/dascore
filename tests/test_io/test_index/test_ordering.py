@@ -109,3 +109,32 @@ class TestDirectoryOrder:
         assert len(df) == 3
         assert df["time_min"].is_monotonic_increasing
         assert df["time_min"].iloc[0] == early.get_coord("time").min()
+
+
+class TestIndexVersionRebuild:
+    """Old-version index files rebuild automatically (disposable cache)."""
+
+    def test_version_mismatch_rebuilds(self, tmp_path):
+        """An index of another schema version is replaced, not fatal."""
+        import sqlite3
+
+        patch = dc.get_example_patch()
+        dc.write(patch, tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        index_path = spool.indexer.index_path
+        spool.indexer.close()
+        # simulate an index written by another (older/newer) schema version
+        with sqlite3.connect(index_path) as con:
+            con.execute("UPDATE meta_data SET index_version = 1")
+        reopened = dc.spool(tmp_path).update(progress=None)
+        assert len(reopened) == 1
+        reopened.indexer.close()
+
+    def test_indexer_deepcopy_shares_instance(self, tmp_path):
+        """Derived spools share the indexer (and its live DB connection)."""
+        import copy
+
+        dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        assert copy.deepcopy(spool.indexer) is spool.indexer
+        spool.indexer.close()

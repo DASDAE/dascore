@@ -78,6 +78,52 @@ class TestSpoolBasics:
         with pytest.raises(NotImplementedError, match=msg):
             BaseSpool.concatenate(random_spool, time=2)
 
+    def test_base_update_returns_self(self, random_spool):
+        """The BaseSpool update default (for third-party spools) no-ops."""
+        assert BaseSpool.update(random_spool) is random_spool
+
+    def test_invalid_input_raises(self):
+        """A non-patch, non-spool input raises a clear error."""
+        with pytest.raises(InvalidSpoolError, match="accepts a Patch"):
+            Spool(42)
+
+    def test_wraps_third_party_spool(self, random_spool):
+        """A non-Spool BaseSpool input realizes into the registry."""
+
+        class MiniSpool(BaseSpool):
+            """Minimal third-party spool over a patch list."""
+
+            def __init__(self, patches):
+                self._patches = list(patches)
+
+            def __getitem__(self, item):
+                return self._patches[item]
+
+            def __iter__(self):
+                return iter(self._patches)
+
+            def __len__(self):
+                return len(self._patches)
+
+            def chunk(self, **kwargs):
+                raise NotImplementedError
+
+            def select(self, **kwargs):
+                raise NotImplementedError
+
+            def get_contents(self):
+                raise NotImplementedError
+
+        patches = list(random_spool)
+        wrapped = Spool(MiniSpool(patches))
+        assert isinstance(wrapped, Spool)
+        assert list(wrapped) == patches
+
+    def test_copy_construct_merge_kwargs(self, random_spool):
+        """Copy-construction can override the merge policy."""
+        new = Spool(random_spool, merge_kwargs={"conflicts": "drop"})
+        assert new._merge_kwargs["conflicts"] == "drop"
+
     def test_viz_raises(self, random_spool):
         """Ensure Spool.viz raises AttributeError."""
         msg = "Apply 'viz' on a Patch object"
@@ -176,6 +222,11 @@ class TestLiveSpoolLazy:
         """Lazy patch input should still build instruction dataframes on demand."""
         spool = dc.spool(patch_list)
         assert len(spool._get_instruction_df()) == len(patch_list)
+
+    def test_instruction_df_property_cold_access(self, patch_list):
+        """Accessing the instruction frame first still derives everything."""
+        spool = dc.spool(patch_list)
+        assert len(spool._instruction_df) == len(patch_list)
 
 
 class TestSpoolHelpers:
@@ -920,6 +971,27 @@ class TestSpoolCoverageEdges:
         monkeypatch.setattr(spool._assembler, "get_patch", _raise)
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
+
+    def test_catalog_iteration_skips_unresolvable_patch(self, monkeypatch):
+        """The catalog fast path also skips with a #583 warning."""
+        spool = dc.spool([dc.get_example_patch()])
+        assert spool._rows_are_catalog()
+
+        def _raise(_ind):
+            raise MissingPatchError("not available in this session")
+
+        monkeypatch.setattr(spool._catalog, "get_patch", _raise)
+        with pytest.warns(UserWarning, match="Skipping patch"):
+            assert list(spool) == []
+
+    def test_planned_view_negative_and_bad_index(self):
+        """Assembler indexing handles negatives and raises out-of-bounds."""
+        patches = list(dc.get_example_spool(length=2))
+        planned = dc.spool(patches).sort("time")
+        assert planned._plan is not None
+        assert planned[-1] == planned[len(patches) - 1]
+        with pytest.raises(IndexError, match="out of bounds"):
+            _ = planned[len(patches)]
 
     def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
         """An under-estimated merge buffer is grown to fit (uneven sampling)."""
