@@ -15,16 +15,31 @@ import dascore as dc
 from dascore.exceptions import InvalidSpoolQueryError
 
 
-@pytest.fixture(scope="module", params=("memory", "directory"))
+@pytest.fixture(
+    scope="module",
+    params=("memory", "directory", "memory_df", "directory_df"),
+)
 def spool(request, tmp_path_factory):
-    """The same patches served by each spool type."""
+    """
+    The same patches served by each spool type and select-path state.
+
+    The ``*_df`` params force the materialized (dataframe) state via a
+    content-preserving sort, so every spec test runs over both select
+    implementations (catalog-native and dataframe) — the parity net for
+    collapsing the dual-state spool internals.
+    """
     base = dc.get_example_spool("random_das")
-    if request.param == "memory":
-        return dc.spool(list(base))
-    path = dc.examples.spool_to_directory(
-        base, path=tmp_path_factory.mktemp("select_spec")
-    )
-    return dc.spool(path).update(progress=None)
+    if request.param.startswith("memory"):
+        out = dc.spool(list(base))
+    else:
+        path = dc.examples.spool_to_directory(
+            base, path=tmp_path_factory.mktemp("select_spec")
+        )
+        out = dc.spool(path).update(progress=None)
+    if request.param.endswith("_df"):
+        out = out.sort("time")
+        assert not out._catalog_native, "sort must yield the materialized state"
+    return out
 
 
 class TestUnknownNames:
@@ -71,6 +86,8 @@ class TestCatalogPushdown:
 
     def test_coord_predicate_reaches_backend(self, spool, monkeypatch):
         """Selection does not query all rows before applying its predicate."""
+        if not spool._catalog_native:
+            pytest.skip("query pushdown only applies to catalog-native spools")
         catalog = spool._catalog or spool._get_catalog()
         backend = catalog.backend
         calls = []

@@ -57,7 +57,11 @@ def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
             msg = f"Cannot use relative select on {name!r}."
             raise InvalidSpoolQueryError(msg)
         if not is_range(value):
-            msg = f"relative=True requires (start, stop) ranges, got {value!r}."
+            # same vocabulary as the catalog path's selector shaping
+            msg = (
+                f"relative=True accepts range selectors only (a (start, stop) "
+                f"tuple or slice), got {value!r}."
+            )
             raise InvalidSpoolQueryError(msg)
         gmin, gmax = df[lo_col].min(), df[hi_col].max()
         lo, hi = value

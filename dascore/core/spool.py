@@ -1192,7 +1192,8 @@ class MemorySpool(DataFrameSpool):
             if self._patches is not None:
                 # patch-list spools run on the index catalog: one metadata
                 # engine (and one select semantics) for every spool type.
-                current = self._get_catalog().to_df()
+                self._ensure_catalog()
+                current = self._catalog.to_df()
             else:  # spools/dataframes: legacy flat-dump path (patch column)
                 current = patches_to_df(data)
         df, source, instruction = self._get_dummy_dataframes(current)
@@ -1201,18 +1202,22 @@ class MemorySpool(DataFrameSpool):
         return df
 
     def _get_catalog(self):
-        """Get (lazily creating) the catalog for patch-list spools."""
+        """Get (lazily creating) the catalog for patch-list spools.
+
+        Pure accessor: never flips ``_catalog_native``; the transition
+        into catalog-backed state belongs to ``_ensure_catalog``.
+        """
         from dascore.io.index.catalog import PatchCatalog
 
         if self._catalog is None:
             self._catalog = PatchCatalog.from_patches(self._patches)
-        self._catalog_native = True
         return self._catalog
 
     def _ensure_catalog(self) -> None:
         """Patch-list spools ingest into a catalog; no flat realization."""
         if self._patches is not None and not self._catalog_native:
             self._get_catalog()
+            self._catalog_native = True
 
     def _as_catalog_member(self):
         """
@@ -1221,8 +1226,7 @@ class MemorySpool(DataFrameSpool):
         Patch-list spools contribute their own (lazily created) catalog,
         reusing any summaries the patches already computed.
         """
-        if self._catalog is None and self._patches is not None:
-            self._get_catalog()
+        self._ensure_catalog()
         return super()._as_catalog_member()
 
     def _get_source_df(self):

@@ -484,5 +484,5 @@ class TestRelativeRangesToAbsolute:
         from dascore.utils.pd import relative_ranges_to_absolute
 
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
-        with pytest.raises(InvalidSpoolQueryError, match="requires"):
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             relative_ranges_to_absolute(df, {"time": 5})
