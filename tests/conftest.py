@@ -423,12 +423,15 @@ def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch
 
 
 @pytest.fixture(scope="class")
-def diverse_spool_directory(diverse_spool):
-    """Save the diverse spool contents to a directory."""
-    out = ex.spool_to_directory(diverse_spool)
-    yield out
-    if out.is_dir():
-        shutil.rmtree(out)
+def diverse_spool_directory(diverse_spool, tmp_path_factory):
+    """Save the diverse spool contents to a directory.
+
+    Pytest owns the directory's lifetime: an explicit rmtree teardown
+    raced lazily-finalized SQLite index connections on Windows
+    (WinError 32), so no teardown here.
+    """
+    out = tmp_path_factory.mktemp("diverse_spool_dir")
+    return ex.spool_to_directory(diverse_spool, path=out)
 
 
 @pytest.fixture(scope="class")
