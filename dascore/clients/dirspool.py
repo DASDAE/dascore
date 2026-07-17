@@ -73,7 +73,6 @@ class DirectorySpool(DataFrameSpool):
             )
             self.indexer = self._catalog._syncer
         assert hasattr(self, "indexer"), "indexer not set."
-        self._catalog_native = True
         self._preferred_format = preferred_format
 
     def __rich__(self):

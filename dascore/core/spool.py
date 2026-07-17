@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import warnings
 from collections.abc import Callable, Generator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import singledispatch
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
@@ -38,7 +39,6 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
-    CacheDescriptor,
     _spool_map,
     broadcast_for_index,
     deep_equality_check,
@@ -200,7 +200,6 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         union = PatchCatalog.union(members)
         new = MemorySpool()
         new._catalog = union
-        new._catalog_native = True
         return new
 
     def _as_catalog_member(self):
@@ -487,29 +486,39 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         raise AttributeError(msg)
 
 
+@dataclass(eq=False, frozen=True)
+class SpoolView:
+    """
+    The derived relation a restructured spool presents.
+
+    ``outputs`` are the rows the spool shows (one per patch it yields),
+    ``members`` bind each output to the source rows that feed it (the
+    instruction frame), and ``sources`` are those source rows. A spool
+    without a view presents its catalog's rows directly; operations
+    that restructure or reorder rows (chunk, sort, slice) attach a view
+    instead of replacing the backing store.
+    """
+
+    outputs: pd.DataFrame
+    members: pd.DataFrame
+    sources: pd.DataFrame
+
+
 class DataFrameSpool(BaseSpool):
     """
     An abstract class for spools whose contents are managed by a dataframe.
 
-    A spool is in one of two internal states:
+    A spool presents rows from exactly one of two derivations:
 
-    - **catalog-backed** (``_catalog_native`` and ``_catalog is not None``):
+    - **catalog-backed** (``_plan is None`` and a catalog is attached):
       rows map one-to-one to a ``PatchCatalog`` query, so metadata
-      operations (length, selection) can stay lazy and push down to the
+      operations (length, selection) stay lazy and push down to the
       index. Use ``_is_catalog_backed()`` to test this.
-    - **materialized**: the managed dataframe/instruction frames are the
-      authoritative contents. Operations that restructure or reorder rows
-      (chunk, sort, slice) leave catalog-backed mode via
-      ``new_from_df`` (which clears ``_catalog_native``); the catalog
-      remains attached for patch resolution.
+    - **planned** (``_plan`` is a :class:`SpoolView`): the view's
+      outputs/members/sources frames are the presented relation.
+      The catalog remains attached for patch resolution.
     """
 
-    # A dataframe which represents contents as they will be output
-    _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
-    # A dataframe which shows patches in the source
-    _source_df: pd.DataFrame = CacheDescriptor("_cache", "_get_source_df")
-    # A dataframe of instructions for going from source_df to df
-    _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
@@ -519,13 +528,44 @@ class DataFrameSpool(BaseSpool):
     _post_selects: tuple = ()
     # The catalog backing this spool (None until one is built).
     _catalog = None
-    # True while rows directly represent a PatchCatalog query. Operations
-    # which restructure/order rows switch back to the dataframe machinery.
-    _catalog_native = False
+    # The derived relation for restructured views (None = catalog rows).
+    _plan: SpoolView | None = None
 
     def _is_catalog_backed(self) -> bool:
         """True when rows map one-to-one to a live catalog query."""
-        return self._catalog_native and self._catalog is not None
+        return self._plan is None and self._catalog is not None
+
+    @property
+    def _catalog_native(self) -> bool:
+        """Derived state: presented rows are the catalog's own rows."""
+        return self._is_catalog_backed()
+
+    @property
+    def _df(self) -> pd.DataFrame | None:
+        """The dataframe of contents as they will be output."""
+        if self._plan is not None:
+            return self._plan.outputs
+        if "_df" not in self._cache:
+            self._cache["_df"] = self._get_df()
+        return self._cache["_df"]
+
+    @property
+    def _source_df(self) -> pd.DataFrame | None:
+        """The dataframe of source patch rows."""
+        if self._plan is not None:
+            return self._plan.sources
+        if "_source_df" not in self._cache:
+            self._cache["_source_df"] = self._get_source_df()
+        return self._cache["_source_df"]
+
+    @property
+    def _instruction_df(self) -> pd.DataFrame | None:
+        """The instructions for going from source_df to df."""
+        if self._plan is not None:
+            return self._plan.members
+        if "_instruction_df" not in self._cache:
+            self._cache["_instruction_df"] = self._get_instruction_df()
+        return self._cache["_instruction_df"]
 
     def _get_df(self):
         """Function to get the current df."""
@@ -985,19 +1025,16 @@ class DataFrameSpool(BaseSpool):
             _, source_, inst_ = self._get_dummy_dataframes(df)
             source_df = source_df if source_df is not None else source_
             instruction_df = instruction_df if instruction_df is not None else inst_
-        new._df = df
-        new._source_df = source_df
-        new._instruction_df = instruction_df
-        # Discard stale instruction indices (eg from copied caches).
-        new._cache.pop("_instruction_indices", None)
+        # Dataframe-producing operations (chunk, sort, slice) define their
+        # own row/instruction plan; the catalog stays attached for patch
+        # resolution but no longer defines the presented rows.
+        new._plan = SpoolView(outputs=df, members=instruction_df, sources=source_df)
+        new._cache = {}
         new._select_kwargs = dict(self._select_kwargs)
         new._select_kwargs.update(select_kwargs or {})
         new._merge_kwargs = dict(self._merge_kwargs)
         new._merge_kwargs.update(merge_kwargs or {})
         new._post_selects = self._post_selects
-        # Dataframe-producing operations (chunk, sort, slice) define their
-        # own row/instruction plan and must not bypass it through the catalog.
-        new._catalog_native = False
         return new
 
     def _select_namespaces(self) -> tuple[set[str], set[str]]:
@@ -1100,7 +1137,7 @@ class DataFrameSpool(BaseSpool):
         """Create a lazy catalog-native view of this spool."""
         new = self.__class__(self)
         new._catalog = catalog
-        new._catalog_native = True
+        new._plan = None
         new._cache = {}
         # selection composed into the catalog is dropped, but constructor
         # select_kwargs (DirectorySpool contract) persist across views.
@@ -1205,14 +1242,13 @@ class MemorySpool(DataFrameSpool):
             )
             raise InvalidSpoolError(msg)
         self._catalog = PatchCatalog.from_patches(patches)
-        self._catalog_native = True
 
     def _get_df(self):
         """Realize the flat relation from the catalog."""
         current = self._catalog.to_df()
         df, source, instruction = self._get_dummy_dataframes(current)
-        self._source_df = source
-        self._instruction_df = instruction
+        self._cache["_source_df"] = source
+        self._cache["_instruction_df"] = instruction
         return df
 
     def _get_source_df(self):
@@ -1252,13 +1288,15 @@ class MemorySpool(DataFrameSpool):
         out = dict(self.__dict__)
         # Build (if needed) and compare the dataframes; drop the inputs
         # they were built from, whose form can differ for equal contents.
+        # The plan's frames are exposed through the same accessors, so
+        # planned and identity views with equal contents compare equal.
         out["_cache"] = {
             "_df": _strip_identity(self._df),
             "_source_df": _strip_identity(self._source_df),
             "_instruction_df": _strip_identity(self._instruction_df),
         }
         out.pop("_catalog", None)
-        out.pop("_catalog_native", None)
+        out.pop("_plan", None)
         return out
 
     def __rich__(self):
@@ -1285,7 +1323,6 @@ class MemorySpool(DataFrameSpool):
         """Create a lazy memory-spool view backed by a catalog query."""
         new = self.__class__()
         new._catalog = catalog
-        new._catalog_native = True
         return new
 
     # Add specific implementation of concatenate patches.

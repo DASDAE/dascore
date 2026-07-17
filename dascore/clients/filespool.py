@@ -11,7 +11,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, SpoolType
-from dascore.core.spool import BaseSpool, DataFrameSpool
+from dascore.core.spool import BaseSpool, DataFrameSpool, SpoolView
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
 
@@ -56,8 +56,8 @@ class FileSpool(DataFrameSpool):
 
         _format, _version = dc.get_format(path, file_format, file_version)
         source_df = dc.scan_to_df(path, file_format=_format, file_version=_version)
-        dfs = self._get_dummy_dataframes(source_df)
-        self._df, self._source_df, self._instruction_df = dfs
+        df, source, instruction = self._get_dummy_dataframes(source_df)
+        self._plan = SpoolView(outputs=df, members=instruction, sources=source)
         self._file_format = _format
         self._file_version = _version
 
