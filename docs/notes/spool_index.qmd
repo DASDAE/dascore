@@ -11,7 +11,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 | Table | One row per | Purpose |
 |---|---|---|
 | `meta_data` | index | Identifies the file and its schema version |
-| `sources` | file or directory-format source | Tracks the source path, format, size, and modification time |
+| `sources` | file or directory-format source | Tracks the source path, format, size, modification time, and presentation ordinal |
 | `patches` | patch within a source | Stores patch identity and common time/distance envelopes |
 | `attrs` | patch | Stores typed attribute values in dynamically added columns |
 | `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
@@ -26,7 +26,11 @@ The last two tables are deliberately separate. Many patches can share a distance
 
 The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse.
 
-The current schema version is validated before any mutation. An unrelated, incomplete, or older prototype database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it.
+The current schema version is validated before any mutation. An unrelated or incomplete database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it. A file that identifies itself as a DASCore spool index of a different schema version is rebuilt automatically by the directory indexer — the index is a disposable cache whose truth is the files.
+
+## Ordering
+
+Patch rows present in `(sources.ordinal, patch_id)` order — the catalog's explicit ordering contract. Ordinals are assigned at ingest: a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path. The directory indexer renumbers ordinals to time order (earliest patch per source, path as tiebreak) after each sync, so file archives keep their conventional time-ordered presentation, including files added by later updates.
 
 SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
 
