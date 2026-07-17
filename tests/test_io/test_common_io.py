@@ -10,6 +10,7 @@ test_io_core.py
 
 from __future__ import annotations
 
+import inspect
 from contextlib import suppress
 from functools import cache
 from io import BytesIO, UnsupportedOperation
@@ -411,6 +412,36 @@ class TestScan:
             assert str(summary.source_path) == str(path)
             assert summary.source_format == io.name
             assert summary.source_version == io.version
+
+    def test_scan_snap_false_conforms(self, io_path_tuple):
+        """Exact scans should work and match exact reads when supported."""
+        io, path = io_path_tuple
+        read_params = inspect.signature(io.read).parameters
+        read_kwargs = {}
+        supports_exact_read = False
+        if "snap" in read_params:
+            read_kwargs["snap"] = False
+            supports_exact_read = True
+        elif "snap_dims" in read_params:
+            read_kwargs["snap_dims"] = False
+            supports_exact_read = True
+        with skip_missing():
+            payloads = io.scan(path, snap=False)
+            patches = io.read(path, **read_kwargs)
+
+        assert len(payloads) == len(patches)
+        for payload, patch in zip(payloads, patches, strict=True):
+            coords = payload["coords"]
+            assert isinstance(coords, dc.CoordManager)
+            assert coords.dims == patch.dims
+            assert coords.shape == patch.shape
+            if not supports_exact_read:
+                continue
+            for name in coords.coord_map:
+                np.testing.assert_array_equal(
+                    coords.get_coord(name).values,
+                    patch.get_coord(name).values,
+                )
 
     def test_time_coord_is_time(self, scanned_summaries):
         """Ensure scanned summaries have correct dtype for time."""

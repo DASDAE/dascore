@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
+from dascore.core.coords import CoordSegmented
+from dascore.exceptions import CoordError
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -179,12 +181,22 @@ def _get_g1_h5_version(resource, required_datasets, required_attrs) -> str | boo
     return str(attrs["format_version"])
 
 
-def _get_g1_h5_base_coords(resource, dims, extra_coords=None):
+def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     """Return time/distance coords shared by G1 HDF5 files."""
+
+    def _coord(values, units=None):
+        """Return a tolerant or exact coordinate from stored values."""
+        if snap:
+            return dc.get_coord(data=values, units=units)
+        try:
+            return CoordSegmented.from_array(values, tolerance=0, units=units)
+        except CoordError:
+            return dc.get_coord(data=values, units=units)
+
     extra_coords = {} if extra_coords is None else extra_coords
-    time = dc.get_coord(data=dc.to_datetime64(resource["start_times"][...]))
-    distance = dc.get_coord(data=resource["distances"][...], units="m")
-    temperature = dc.get_coord(data=resource["temperatures"][...], units="°C")
+    time = _coord(dc.to_datetime64(resource["start_times"][...]))
+    distance = _coord(resource["distances"][...], units="m")
+    temperature = _coord(resource["temperatures"][...], units="°C")
     coords = {
         "time": time,
         "distance": distance,
@@ -252,7 +264,7 @@ def _get_mtx_frequency(resource):
     )
 
 
-def _get_mtx_coords(resource, dims=_MTX_DIMS):
+def _get_mtx_coords(resource, dims=_MTX_DIMS, snap=True):
     """Return the coordinate manager for a Febus MTX HDF5 file."""
     mtx = resource["mtx"]
     if mtx.ndim != 3:
@@ -260,7 +272,7 @@ def _get_mtx_coords(resource, dims=_MTX_DIMS):
         raise ValueError(msg)
     frequency = _get_mtx_frequency(resource)
     return _get_g1_h5_base_coords(
-        resource, dims=dims, extra_coords={"frequency": frequency}
+        resource, dims=dims, extra_coords={"frequency": frequency}, snap=snap
     )
 
 
@@ -281,9 +293,9 @@ def _bsl_version(resource) -> str | bool:
     return _get_g1_h5_version(resource, _BSL_H5_DATASETS, _BSL_H5_ATTRS)
 
 
-def _get_bsl_coords(resource, dims=_BSL_DIMS):
+def _get_bsl_coords(resource, dims=_BSL_DIMS, snap=True):
     """Get the coordinate manager from BSL HDF5 datasets."""
-    return _get_g1_h5_base_coords(resource, dims=dims)
+    return _get_g1_h5_base_coords(resource, dims=dims, snap=snap)
 
 
 def _get_bsl_attrs(resource, file_format=None, file_version=None):

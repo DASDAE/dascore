@@ -41,9 +41,11 @@ class OptoDASV8(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
-        attrs, coords = _get_opto_das_attrs(resource)
+        attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
         return [
             {

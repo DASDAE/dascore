@@ -635,6 +635,29 @@ class TestScan:
         assert scanned.dtype == str(random_patch.dtype)
         assert not scanned.source_patch_id
 
+    def test_scan_payloads_patch_returns_full_coords(self, random_patch):
+        """Direct patch payload scans should retain full coordinate values."""
+        out = dc.scan_payloads(random_patch)
+
+        assert len(out) == 1
+        payload = out[0]
+        assert isinstance(payload["coords"], dc.CoordManager)
+        assert payload["coords"] == random_patch.coords
+        assert payload["source_path"] == ""
+        assert payload["source_format"] == ""
+        assert payload["source_version"] == ""
+
+    def test_scan_payloads_spool_returns_each_patch(self, random_patch):
+        """Spool inputs should produce one raw payload per patch."""
+        spool = dc.spool(
+            [random_patch.update_attrs(tag="one"), random_patch.update_attrs(tag="two")]
+        )
+
+        out = dc.scan_payloads(spool)
+
+        assert [payload["attrs"].tag for payload in out] == ["one", "two"]
+        assert all(isinstance(payload["coords"], dc.CoordManager) for payload in out)
+
     def test_scan_multi_patch_includes_source_patch_id(self, tmp_path):
         """Multi-patch scan rows should include a stable source patch id."""
         path = tmp_path / "multi_patch.h5"
@@ -824,6 +847,34 @@ class TestReloadableSourcePath:
         assert "path" not in out[0].attrs.model_dump()
         assert "file_format" not in out[0].attrs.model_dump()
         assert "file_version" not in out[0].attrs.model_dump()
+
+    def test_scan_payloads_adds_provenance_and_forwards_snap(
+        self, monkeypatch, tmp_path
+    ):
+        """Raw public scans should attach provenance and pass snap to FiberIO."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=_ReadOnlySummaryFormatter.name,
+            version=_ReadOnlySummaryFormatter.version,
+        )
+        original_scan = fiber_io.scan
+        seen = {}
+
+        def _scan(resource, snap=True, **kwargs):
+            seen["snap"] = snap
+            return original_scan(resource, snap=snap, **kwargs)
+
+        monkeypatch.setattr(fiber_io, "scan", _scan)
+
+        out = dc.scan_payloads(path, snap=False)
+
+        assert seen["snap"] is False
+        assert len(out) == 1
+        assert isinstance(out[0]["coords"], dc.CoordManager)
+        assert str(out[0]["source_path"]) == str(path)
+        assert out[0]["source_format"] == fiber_io.name
+        assert out[0]["source_version"] == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
         self, tmp_path

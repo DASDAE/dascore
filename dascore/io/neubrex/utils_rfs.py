@@ -1,6 +1,8 @@
 """Utilities functions for Neubrex IO support"""
 
 import dascore as dc
+from dascore.core.coords import CoordSegmented
+from dascore.exceptions import CoordError
 from dascore.utils.misc import maybe_get_items
 
 
@@ -23,9 +25,13 @@ def _get_coord_manager(h5fi, snap=True):
         """Get the time coordinate."""
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
-        time_coord = dc.get_coord(data=unix_stamps)
         if snap:
-            time_coord = time_coord.snap()
+            time_coord = dc.get_coord(data=unix_stamps).snap()
+        else:
+            try:
+                time_coord = CoordSegmented.from_array(unix_stamps, tolerance=0)
+            except CoordError:
+                time_coord = dc.get_coord(data=unix_stamps)
         return time_coord
 
     def _get_dist_coord(h5fi):

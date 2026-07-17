@@ -80,7 +80,7 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path, **kwargs) -> list[ScanPayload]:
+    def scan(self, path, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -92,7 +92,7 @@ class JingleV1(FiberIO):
             "coords": coord_manager,
             "dims": coord_manager.dims,
             "shape": coord_manager.shape,
-            "data_type": "...",
+            "dtype": "...",
             "source_patch_id": "...",  # when needed
         }
 
@@ -128,6 +128,19 @@ and `source_patch_id` values that match what `read()` would produce for the
 same logical patch. Otherwise the lazy planning done by `spool(...)` can be
 wrong.
 :::
+
+## Scan payloads and the `snap` contract
+
+[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects inside `ScanPayload` dictionaries. DASCore's public [`scan_payloads`](`dascore.scan_payloads`) function exposes those raw payloads and adds `source_path`, `source_format`, and `source_version` provenance. By contrast, [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce coordinates to envelope summaries and remain the appropriate APIs for indexing whole directories.
+
+Every `FiberIO.scan` implementation must accept `snap: bool = True`, either explicitly or through `**kwargs`. The contract is:
+
+- `snap=True` (the default) preserves existing behavior. Formats may represent stored sample times as an idealized uniform range.
+- `snap=False` means returned coords must represent stored coordinate values exactly. For header-defined formats whose coordinates are already specified by start, step, and sample count, this is a documented no-op.
+
+Formats that read stored per-sample coordinate arrays must not use bare `get_coord(array)` for the exact path because its tolerant uniformity inference can snap small jitter. For strictly monotonic arrays, use `CoordSegmented.from_array(values, tolerance=0, units=...)`; this preserves every value, returns a `CoordRange` for a truly uniform array, and exposes internal sampling changes through `CoordSegmented` when present. Non-monotonic stored arrays may fall back to an array coordinate because they cannot be represented as segmented monotonic runs.
+
+`scan_payloads` retains real coordinate arrays, so callers should scan specific files and discard payloads promptly rather than retaining payloads for an entire large directory.
 
 ## `source_patch_id`
 

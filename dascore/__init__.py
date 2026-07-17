@@ -13,7 +13,7 @@ from dascore.core.coordmanager import get_coord_manager, CoordManager
 from dascore.core.coords import get_coord
 from dascore.config import DascoreConfig, get_config, reset_config, set_config
 from dascore.examples import get_example_patch, get_example_spool
-from dascore.io.core import get_format, read, scan, scan_to_df, write
+from dascore.io.core import get_format, read, scan, scan_payloads, scan_to_df, write
 from dascore.units import get_quantity, get_unit
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64, to_timedelta64, to_float

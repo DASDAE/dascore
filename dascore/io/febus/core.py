@@ -201,10 +201,12 @@ class FebusMTXH5V1(FiberIO):
         version = _mtx_version(resource)
         return (self.name, self.version) if version == self.version else False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a Febus MTX HDF5 file."""
         attrs = _get_mtx_attrs(resource)
-        coords = _get_mtx_coords(resource)
+        coords = _get_mtx_coords(resource, snap=snap)
         return [
             _make_scan_payload(
                 attrs=FebusMTXAttrs(**attrs),
@@ -257,10 +259,12 @@ class FebusBSLH5V1(FiberIO):
         version = _bsl_version(resource)
         return (self.name, self.version) if version == self.version else False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a Febus BSL HDF5 file."""
         attrs = _get_bsl_attrs(resource)
-        coords = _get_bsl_coords(resource)
+        coords = _get_bsl_coords(resource, snap=snap)
         return [
             _make_scan_payload(
                 attrs=FebusBOTDRStrainAttrs(**attrs),
@@ -321,9 +325,11 @@ class FebusT1V1(FiberIO):
         """Return (name, version) if this is a FEBUS T1 file, else False."""
         return (self.name, self.version) if _is_t1_file(fi) else False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Return a list with one PatchAttrs for the file's temperature data."""
-        return [_scan_t1(resource, format=self.name, version=self.version)]
+        return [_scan_t1(resource, format=self.name, version=self.version, snap=snap)]
 
     def read(
         self,
