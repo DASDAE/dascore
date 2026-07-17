@@ -123,9 +123,15 @@ class TestIndexVersionRebuild:
         spool = dc.spool(tmp_path).update(progress=None)
         index_path = spool.indexer.index_path
         spool.indexer.close()
-        # simulate an index written by another (older/newer) schema version
-        with sqlite3.connect(index_path) as con:
+        # simulate an index written by another (older/newer) schema version;
+        # close the connection explicitly (the sqlite3 context manager only
+        # manages transactions) or Windows cannot unlink the file below.
+        con = sqlite3.connect(index_path)
+        try:
             con.execute("UPDATE meta_data SET index_version = 1")
+            con.commit()
+        finally:
+            con.close()
         reopened = dc.spool(tmp_path).update(progress=None)
         assert len(reopened) == 1
         reopened.indexer.close()
