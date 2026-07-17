@@ -6,10 +6,10 @@ from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSegmented, get_coord
-from dascore.exceptions import CoordError
+from dascore.core.coords import get_coord
 from dascore.io import ScanPayload
 from dascore.io.core import _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -109,10 +109,7 @@ def _get_raw_time_coord(data_node):
     """Read the time from the data node and return it."""
     time = _get_time_node(data_node)[:]
     values = to_datetime64(time)
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units="s")
-    except CoordError:
-        return get_coord(data=values, units="s")
+    return get_exact_coord(values, units="s")
 
 
 def _read_terra15(

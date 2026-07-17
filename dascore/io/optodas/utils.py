@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import dascore as dc
 import dascore.core
-from dascore.core.coords import CoordSegmented, get_coord
-from dascore.exceptions import CoordError
+from dascore.core.coords import get_coord
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
 from dascore.utils.misc import unbyte
 
@@ -51,10 +51,7 @@ def _get_coord_manager(fi, snap=True):
             if snap:
                 coord = get_coord(data=distance)
             else:
-                try:
-                    coord = CoordSegmented.from_array(distance, tolerance=0)
-                except CoordError:
-                    coord = get_coord(data=distance)
+                coord = get_exact_coord(distance)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out

@@ -8,10 +8,9 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.coords import CoordSegmented
-from dascore.exceptions import CoordError
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.io import patch_to_xarray, xarray_to_patch
 from dascore.utils.misc import optional_import
@@ -161,14 +160,7 @@ class NetCDFCFV18(FiberIO):
         values = coord.values
         if snap or np.ndim(values) != 1:
             return values
-        try:
-            return CoordSegmented.from_array(
-                values,
-                tolerance=0,
-                units=coord.attrs.get("units"),
-            )
-        except CoordError:
-            return values
+        return get_exact_coord(values, units=coord.attrs.get("units"))
 
     def _get_source_patch_id(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

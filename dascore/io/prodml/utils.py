@@ -10,8 +10,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
-from dascore.core.coords import CoordSegmented, get_coord
-from dascore.exceptions import CoordError
+from dascore.core.coords import get_coord
+from dascore.io.utils import get_exact_coord
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 from dascore.utils.models import UnitQuantity, UTF8Str
@@ -139,10 +139,7 @@ def _get_time_coord(node, snap=True):
     assert array_len > 0, "Missing time array in ProdML file."
     if not snap:
         values = time_array[:].astype("datetime64[us]")
-        try:
-            return CoordSegmented.from_array(values, tolerance=0, units="s")
-        except CoordError:
-            return get_coord(data=values, units="s")
+        return get_exact_coord(values, units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))

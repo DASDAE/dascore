@@ -14,10 +14,10 @@ import pandas as pd
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSegmented, get_coord
-from dascore.exceptions import CoordError
+from dascore.core.coords import get_coord
 from dascore.io.core import _make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
+from dascore.io.utils import get_exact_coord
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -230,10 +230,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
             if snap or np.ndim(array) != 1:
                 coord = get_coord(data=array, units=units, step=step)
             else:
-                try:
-                    coord = CoordSegmented.from_array(array, tolerance=0, units=units)
-                except CoordError:
-                    coord = get_coord(data=array, units=units, step=step)
+                coord = get_exact_coord(array, units=units)
         coord_dict[name] = coord
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs

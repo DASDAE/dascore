@@ -691,6 +691,18 @@ class TestNetCDFXarrayCompatibility:
 class TestNetCDFEdgeCases:
     """Test edge cases and error conditions."""
 
+    def test_exact_scan_coord_preserves_values(self):
+        """Exact NetCDF scan coords should retain irregular stored values."""
+
+        class Coord:
+            values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
+            attrs: ClassVar = {"units": "m"}
+
+        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+
+        np.testing.assert_array_equal(coord.values, Coord.values)
+        assert coord.units == dc.get_quantity("m")
+
     @pytest.fixture
     def multi_patch_spool(self):
         """Create a spool with multiple patches for testing."""

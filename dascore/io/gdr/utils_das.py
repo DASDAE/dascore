@@ -8,8 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.core.coords import CoordSegmented
-from dascore.exceptions import CoordError
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
 from dascore.utils.misc import unbyte
 
@@ -66,10 +65,7 @@ def _get_coord_manager(resource, snap=True):
         time = resource["DasRawData/DasTimeArray"]
         if not snap:
             values = np.array(time).astype("datetime64[ns]")
-            try:
-                return CoordSegmented.from_array(values, tolerance=0)
-            except CoordError:
-                return get_coord(data=values)
+            return get_exact_coord(values)
         t1 = np.int64(time[0]).astype("datetime64[ns]")
         t2 = np.int64(time[-1]).astype("datetime64[ns]")
         step = (t2 - t1) / (len(time) - 1)

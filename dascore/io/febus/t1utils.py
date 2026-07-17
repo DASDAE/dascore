@@ -7,9 +7,8 @@ import numpy as np
 import dascore as dc
 from dascore import get_coord_manager
 from dascore.constants import timeable_types
-from dascore.core.coords import CoordSegmented
-from dascore.exceptions import CoordError
 from dascore.io.core import _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader
 
 _DATA = "Data"
@@ -31,10 +30,7 @@ def _get_distance_coord(fi, snap=True):
     dist = fi["Data/Distance"][()]
     if snap:
         return dc.get_coord(values=dist, units="m")
-    try:
-        return CoordSegmented.from_array(dist, tolerance=0, units="m")
-    except CoordError:
-        return dc.get_coord(values=dist, units="m")
+    return get_exact_coord(dist, units="m")
 
 
 def _get_time_coord(fi, snap=True):
@@ -43,10 +39,7 @@ def _get_time_coord(fi, snap=True):
     times = (ts * 1e9).astype("datetime64[ns]")
     if snap:
         return dc.get_coord(values=times, units="s")
-    try:
-        return CoordSegmented.from_array(times, tolerance=0, units="s")
-    except CoordError:
-        return dc.get_coord(values=times, units="s")
+    return get_exact_coord(times, units="s")
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:

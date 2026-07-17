@@ -6,8 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.core.coords import CoordSegmented
-from dascore.exceptions import CoordError
+from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import unbyte
 
 # --- Getting format/version
@@ -49,10 +48,7 @@ def _get_coord(v, snap, name):
         assert len(coord) == len(v)
     else:
         values = v[:] if name != "time" else dc.to_datetime64(v[:])
-        try:
-            coord = CoordSegmented.from_array(values, tolerance=0)
-        except CoordError:
-            coord = get_coord(data=values)
+        coord = get_exact_coord(values)
     return coord
 
 

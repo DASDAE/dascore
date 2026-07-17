@@ -9,8 +9,7 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
-from dascore.core.coords import CoordSegmented
-from dascore.exceptions import CoordError
+from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -188,10 +187,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
         """Return a tolerant or exact coordinate from stored values."""
         if snap:
             return dc.get_coord(data=values, units=units)
-        try:
-            return CoordSegmented.from_array(values, tolerance=0, units=units)
-        except CoordError:
-            return dc.get_coord(data=values, units=units)
+        return get_exact_coord(values, units=units)
 
     extra_coords = {} if extra_coords is None else extra_coords
     time = _coord(dc.to_datetime64(resource["start_times"][...]))

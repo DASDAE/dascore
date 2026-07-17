@@ -799,8 +799,14 @@ class FiberIO:
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
         # when possible.
+        read_params = inspect.signature(self.read).parameters
+        read_kwargs = {}
+        if "snap" in read_params:
+            read_kwargs["snap"] = snap
+        elif "snap_dims" in read_params:
+            read_kwargs["snap_dims"] = snap
         try:
-            spool = self.read(resource)
+            spool = self.read(resource, **read_kwargs)
         except NotImplementedError:
             msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)

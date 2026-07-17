@@ -31,6 +31,7 @@ from dascore.io.core import (
     _scan_result_to_summary,
 )
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.io.utils import get_exact_coord
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
@@ -122,6 +123,19 @@ class _FiberDirectory(FiberIO):
             return self.name, self.version
         return False
 
+    def scan(self, resource, snap=True, **kwargs):
+        """Return a payload that records the forwarded snap mode."""
+        patch = dc.get_example_patch().update_attrs(tag=str(snap))
+        return [
+            _make_scan_payload(
+                attrs=patch.attrs,
+                coords=patch.coords,
+                dims=patch.dims,
+                shape=patch.shape,
+                dtype=str(patch.dtype),
+            )
+        ]
+
 
 class _ReadOnlySummaryFormatter(FiberIO):
     """A formatter that relies on FiberIO.scan falling back to read()."""
@@ -129,9 +143,15 @@ class _ReadOnlySummaryFormatter(FiberIO):
     name = "_read_only_summary_formatter"
     version = "1"
 
-    def read(self, resource: Path, **kwargs) -> SpoolType:
+    def read(self, resource: Path, snap_dims=True, **kwargs) -> SpoolType:
         """Return a simple spool for default scan conversion."""
-        return dc.spool([dc.get_example_patch().update_attrs(tag="fallback")])
+        patch = dc.get_example_patch().update_attrs(tag="fallback")
+        values = patch.get_coord("time").values.copy()
+        values[len(values) // 2] += np.timedelta64(1, "ms")
+        time = dc.get_coord(data=values)
+        if snap_dims:
+            time = time.snap()
+        return dc.spool([patch.update_coords(time=time)])
 
     def get_format(self, resource: Path) -> tuple[str, str] | bool:
         """Only accept the explicit fallback-scan test resource."""
@@ -181,6 +201,27 @@ class TestPatchFileSummary:
         # flat dump is just here for compatibility with dc.PatchAttrs
         out = PatchFileSummary(d_time=10, dims="time,distance")
         assert isinstance(out.flat_dump(), dict)
+
+
+class TestGetExactCoord:
+    """Tests for constructing exact coordinates during scans."""
+
+    def test_preserves_irregular_monotonic_values(self):
+        """Irregular monotonic arrays should retain every stored value."""
+        values = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
+
+        coord = get_exact_coord(values, units="m")
+
+        np.testing.assert_array_equal(coord.values, values)
+        assert coord.units == dc.get_quantity("m")
+
+    def test_preserves_non_monotonic_values(self):
+        """Non-monotonic arrays should use the exact generic fallback."""
+        values = np.array([0.0, 2.0, 1.0])
+
+        coord = get_exact_coord(values)
+
+        np.testing.assert_array_equal(coord.values, values)
 
 
 class TestScanResultToSummary:
@@ -610,6 +651,16 @@ class TestScan:
         out = dc.scan(tmp_path)
         assert len(out) == 0
 
+    def test_scan_payloads_directory_forwards_snap(self, tmp_path):
+        """Exact payload scans should forward snap to directory formatters."""
+        path = tmp_path / _FiberDirectory.name
+        path.mkdir()
+
+        out = dc.scan_payloads(path, snap=False)
+
+        assert len(out) == 1
+        assert out[0]["attrs"].tag == "False"
+
     def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error."""
         new = tmp_path / "myfile.txt"
@@ -812,6 +863,21 @@ class TestReloadableSourcePath:
         with pytest.raises(ValueError, match=r"PatchAttrs from FiberIO\.scan"):
             dc.scan(terra15_v6_path)
 
+    def test_scan_payloads_legacy_patch_attrs_raises(
+        self, monkeypatch, terra15_v6_path
+    ):
+        """Raw payload scans should reject legacy summary-only results."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def return_patch_attrs(*args, **kwargs):
+            return [dc.PatchAttrs(tag="legacy")]
+
+        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
+
+        with pytest.raises(TypeError, match="requires FiberIO.scan"):
+            dc.scan_payloads(terra15_v6_path)
+
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
         """Default FiberIO.scan should return structured scan payloads."""
         path = tmp_path / "fallback_scan.h5"
@@ -826,6 +892,36 @@ class TestReloadableSourcePath:
         assert "source_format" not in out[0]
         assert "source_version" not in out[0]
         assert not out[0]["source_patch_id"]
+
+    def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
+        """Default scans should forward exact-coordinate mode to read()."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fio = _ReadOnlySummaryFormatter()
+
+        exact = fio.scan(path, snap=False)[0]["coords"].get_coord("time")
+        snapped = fio.scan(path, snap=True)[0]["coords"].get_coord("time")
+        read_exact = fio.read(path, snap_dims=False)[0].get_coord("time")
+
+        np.testing.assert_array_equal(exact.values, read_exact.values)
+        assert not np.array_equal(exact.values, snapped.values)
+
+    def test_default_fiberio_scan_forwards_snap(self, monkeypatch, tmp_path):
+        """Default scans should also support a read() snap parameter."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fio = _ReadOnlySummaryFormatter()
+        seen = {}
+
+        def read(resource, snap=True):
+            seen["snap"] = snap
+            return dc.spool([dc.get_example_patch()])
+
+        monkeypatch.setattr(fio, "read", read)
+
+        fio.scan(path, snap=False)
+
+        assert seen["snap"] is False
 
     def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
         """dc.scan should add path/format/version on top of raw formatter scan."""
