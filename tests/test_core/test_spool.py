@@ -11,10 +11,9 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.clients.filespool import FileSpool
 from dascore.core.spool import (
     BaseSpool,
-    MemorySpool,
+    Spool,
     _estimate_merge_samples,
     _get_varying_dim,
 )
@@ -90,7 +89,7 @@ class TestSpoolBasics:
             random_spool.viz.waterfall(random_spool)
 
 
-class TestMemorySpoolLazy:
+class TestLiveSpoolLazy:
     """
     Tests for lazy behavior of in-memory spools.
 
@@ -164,7 +163,7 @@ class TestMemorySpoolLazy:
 
     def test_single_patch_input_uses_lazy_storage(self, random_patch):
         """A single patch lands in the registry without realizing tables."""
-        spool = MemorySpool(random_patch)
+        spool = Spool(random_patch)
         assert len(spool) == 1
         registry = spool._catalog.resolver.live_entries()
         assert tuple(registry.values()) == (random_patch,)
@@ -172,8 +171,8 @@ class TestMemorySpoolLazy:
         assert spool._catalog._backend is None
 
     def test_empty_memory_spool(self):
-        """An empty MemorySpool is a valid, iterable, zero-length spool."""
-        spool = MemorySpool()
+        """An empty Spool is a valid, iterable, zero-length spool."""
+        spool = Spool()
         assert len(spool) == 0
         assert list(spool) == []
 
@@ -678,9 +677,9 @@ class TestGetSpool:
     def test_file_spool(self, random_spool, tmp_path_factory):
         """
         Tests for getting a file spool vs in-memory spool. Basically,
-        if a format supports scanning a FileSpool is returned. If it doesn't,
-        all the file contents have to be loaded into memory to scan so a
-        MemorySpool is just returned.
+        if a format supports scanning, a lazy file-backed spool is
+        returned. If it doesn't, all the file contents have to be loaded
+        into memory, so the spool holds live patches.
         """
         path = tmp_path_factory.mktemp("file_spoolin")
         dasdae_path = path / "patch.h5"
@@ -689,10 +688,10 @@ class TestGetSpool:
         dc.write(random_spool, pickle_path, "pickle")
 
         dasdae_spool = dc.spool(dasdae_path)
-        assert isinstance(dasdae_spool, FileSpool)
+        assert not dasdae_spool.has_live_patches
 
         pickle_spool = dc.spool(pickle_path)
-        assert isinstance(pickle_spool, MemorySpool)
+        assert pickle_spool.has_live_patches
 
 
 class TestSpoolBehaviorOptionalImports:
@@ -968,7 +967,7 @@ class TestSpoolCoverageEdges:
 
     def test_equality_of_empty_spools(self):
         """Empty spools (None frames) compare equal via the None-strip path."""
-        assert MemorySpool() == MemorySpool()
+        assert Spool() == Spool()
 
     def test_repr_without_time_coordinate(self):
         """A spool whose patches have no time coord omits the time-span line."""
@@ -1035,8 +1034,8 @@ class TestSpoolCoverageEdges:
         )
 
     def test_empty_memory_spool_len_iter_repr(self):
-        """A bare MemorySpool() (no dataframe) is a valid empty spool."""
-        empty = MemorySpool()
+        """A bare Spool() is a valid empty spool."""
+        empty = Spool()
         assert len(empty) == 0
         assert list(empty) == []
         assert "Spool" in str(empty)

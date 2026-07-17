@@ -1,5 +1,5 @@
 """
-Integration tests: DirectorySpool running on the database index.
+Integration tests: directory spools running on the database index.
 
 Exercises the full path — directory walk, scan, ingest, query, patch
 loading, and chunk against real files.
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.clients.dirspool import DirectorySpool
+from dascore.core.spool import Spool
 from dascore.examples import spool_to_directory
 
 
@@ -24,15 +24,15 @@ def spool_directory(tmp_path_factory):
 
 @pytest.fixture()
 def db_spool(spool_directory):
-    """A DirectorySpool using its SQLite index."""
-    spool = DirectorySpool(spool_directory)
+    """A directory spool using its SQLite index."""
+    spool = Spool.from_directory(spool_directory)
     out = spool.update(progress=None)
     yield out
     out.indexer.close()
 
 
-class TestDBDirectorySpool:
-    """DirectorySpool wired to the database index."""
+class TestDBDirectorySpools:
+    """Directory spools wired to the database index."""
 
     def test_length(self, db_spool):
         """One entry per patch in the source spool."""
@@ -87,7 +87,7 @@ class TestUpdateLifecycle:
         """A modifiable spool directory and database spool."""
         spool = dc.get_example_spool("random_das")
         path = spool_to_directory(spool, path=tmp_path / "data")
-        out = DirectorySpool(path).update(progress=None)
+        out = Spool.from_directory(path).update(progress=None)
         yield path, out
         out.indexer.close()
 

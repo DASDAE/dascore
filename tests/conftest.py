@@ -16,11 +16,11 @@ import pytest
 
 import dascore as dc
 import dascore.examples as ex
-from dascore.clients.dirspool import DirectorySpool
 from dascore.compat import random_state
 from dascore.config import set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.core.spool import Spool
 from dascore.examples import get_example_patch
 from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
@@ -497,7 +497,7 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
 @register_func(SPOOL_FIXTURES)
 def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    return DirectorySpool(one_file_dir).update()
+    return Spool.from_directory(one_file_dir).update()
 
 
 @pytest.fixture(scope="class")
@@ -521,7 +521,7 @@ def diverse_directory_spool(diverse_spool_directory):
 @register_func(SPOOL_FIXTURES)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = DirectorySpool(two_patch_directory).update().update()
+    out = Spool.from_directory(two_patch_directory).update().update()
     yield out
     out.indexer.close()
 

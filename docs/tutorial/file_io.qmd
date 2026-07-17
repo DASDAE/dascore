@@ -100,9 +100,9 @@ print(loaded_patch.data.shape)
 `Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
 :::
 
-## DirectorySpool
+## Directory spools
 
-The [DirectorySpool](`dascore.clients.dirspool.DirectorySpool`) is used to retrieve data from a directory of dascore-readable files. It has the same interface as other spools and is created with the [`dascore.spool`](`dascore.spool`) function.
+A spool over a directory of dascore-readable files is created with the [`dascore.spool`](`dascore.spool`) function. It has the same interface as every other spool; the only difference is how it was constructed.
 
 For example:
 
@@ -135,7 +135,7 @@ The `Patch.io` namespace also includes functionality for converting `Patch` inst
 
 
 ## Directory Indexer
-The `DBDirectoryIndexer` tracks the contents of a directory which contains fiber data. It creates a small, hidden SQLite index named `.dascore_index.sqlite3` at the top of the directory. `DirectorySpool` uses this index internally and pushes metadata selections into SQLite before loading patch data. See the [spool index note](../notes/spool_index.qmd) for the schema and lifecycle.
+The `DBDirectoryIndexer` tracks the contents of a directory which contains fiber data. It creates a small, hidden SQLite index named `.dascore_index.sqlite3` at the top of the directory. Directory spools use this index internally and push metadata selections into SQLite before loading patch data. See the [spool index note](../notes/spool_index.qmd) for the schema and lifecycle.
 
 
 ```{python}

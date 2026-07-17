@@ -8,7 +8,7 @@ from rich import print  # noqa
 from dascore.core.patch import Patch
 from dascore.core.attrs import PatchAttrs
 from dascore.core.summary import PatchSummary
-from dascore.core.spool import BaseSpool, spool
+from dascore.core.spool import BaseSpool, Spool, spool
 from dascore.core.coordmanager import get_coord_manager, CoordManager
 from dascore.core.coords import get_coord
 from dascore.config import DascoreConfig, get_config, reset_config, set_config

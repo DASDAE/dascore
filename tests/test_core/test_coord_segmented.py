@@ -1021,7 +1021,7 @@ class TestSplitGapsAndWrite:
         """Non-memory spools skip the gap inspection (never gapped)."""
         path1 = dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
         file_spool = dc.spool(path1)
-        assert not isinstance(file_spool, dc.core.spool.MemorySpool)
+        assert not file_spool.has_live_patches
         path2 = dc.write(file_spool, tmp_path / "b.h5", "dasdae")
         assert path2.exists()
 

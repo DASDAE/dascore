@@ -146,7 +146,7 @@ class DBDirectoryIndexer(AbstractIndexer):
         """
         Derived spools share the indexer (and its live DB connection).
 
-        DataFrameSpool copies spool state on select/chunk; the index
+        Spool copies its state on select/chunk; the index
         connection is read-shared, matching the single-writer model.
         """
         return self

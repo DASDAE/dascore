@@ -57,6 +57,15 @@ class _CanonicalRange:
     def __init__(self, magnitudes: tuple):
         self.magnitudes = magnitudes
 
+    def __eq__(self, other) -> bool:
+        """Value equality so equal selections compare equal (spool __eq__)."""
+        if not isinstance(other, _CanonicalRange):
+            return NotImplemented
+        return self.magnitudes == other.magnitudes
+
+    def __hash__(self) -> int:
+        return hash(self.magnitudes)
+
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
         from dascore.units import get_quantity
@@ -190,7 +199,7 @@ class FileResolver(PatchResolver):
         The recorded format/version are forwarded so dc.read skips format
         probing; it reads the file exactly once (an earlier fast path that
         called the reader directly re-read the file whenever the reader
-        returned a non-MemorySpool).
+        returned patches lazily).
         """
         id_kwargs = {"source_patch_id": source_patch_id} if source_patch_id else {}
         kwargs = {"path": path}
@@ -359,6 +368,31 @@ class PatchCatalog:
         return out
 
     @classmethod
+    def from_file(
+        cls,
+        path: str | Path,
+        file_format: str | None = None,
+        file_version: str | None = None,
+    ) -> PatchCatalog:
+        """
+        Catalog over a single fiber file.
+
+        The file is scanned eagerly (one row per contained patch) into an
+        in-memory backend; patches load through the file resolver on
+        demand. There is no syncer — a changed file needs a new catalog.
+        """
+        from dascore.io.index.ingest import summaries_to_records
+
+        summaries = dc.scan(
+            path, file_format=file_format, file_version=file_version, progress=None
+        )
+        records = summaries_to_records(summaries)
+        out = cls(resolver=FileResolver())
+        out.backend.write_sources(records)
+        out._invalidate()
+        return out
+
+    @classmethod
     def from_directory(
         cls,
         path: str | Path,
@@ -471,7 +505,7 @@ class PatchCatalog:
         """
         Derived spools share the catalog (live registry + connection).
 
-        DataFrameSpool copies spool state on select/chunk; catalog state
+        Spool copies its state on select/chunk; catalog state
         is read-shared, matching the single-writer model.
         """
         return self

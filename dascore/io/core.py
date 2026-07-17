@@ -31,7 +31,7 @@ from dascore.constants import (
 )
 from dascore.core.attrs import PatchAttrs, str_validator
 from dascore.core.coordmanager import CoordManager
-from dascore.core.spool import DataFrameSpool
+from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.exceptions import (
     DependencyError,
@@ -1008,7 +1008,7 @@ def scan_to_df(
     """
     if isinstance(path, pd.DataFrame):
         return path
-    if isinstance(path, DataFrameSpool):
+    if isinstance(path, Spool):
         return path.get_contents()
     info = scan(
         path=path,
@@ -1346,11 +1346,10 @@ def is_directory_format(path) -> bool:
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
     from dascore.core.coords import CoordSegmented
-    from dascore.core.spool import MemorySpool
 
     # Only in-memory patches are inspected; file-backed patches always have
     # contiguous coordinates (gapped patches are never persisted).
-    if not isinstance(spool, MemorySpool):
+    if not getattr(spool, "has_live_patches", False):
         return spool
 
     def _has_gaps(patch):

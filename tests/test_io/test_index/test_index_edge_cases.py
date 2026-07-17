@@ -977,15 +977,15 @@ class TestIndexerEdges:
 
 
 class TestDirSpoolPassthrough:
-    """DirectorySpool accepts a prebuilt indexer."""
+    """Directory spools accept a prebuilt indexer."""
 
     def test_spool_from_indexer(self, tmp_path, random_patch):
-        """Passing an indexer instance to DirectorySpool works."""
-        from dascore.clients.dirspool import DirectorySpool
+        """Passing an indexer instance to from_directory works."""
+        from dascore.core.spool import Spool
 
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         indexer = DBDirectoryIndexer(tmp_path)
-        spool = DirectorySpool(indexer).update(progress=None)
+        spool = Spool.from_directory(indexer).update(progress=None)
         assert len(spool) == 1
 
 

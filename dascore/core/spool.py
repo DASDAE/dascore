@@ -198,7 +198,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
         members = [self._as_catalog_member(), other._as_catalog_member()]
         union = PatchCatalog.union(members)
-        new = MemorySpool()
+        new = Spool()
         new._catalog = union
         return new
 
@@ -280,7 +280,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         To inspect what a chunk call will do before running it — which
         output patches it produces and which slice of which source patch
         feeds each one — use
-        [`Spool.chunk_plan`](`dascore.core.spool.DataFrameSpool.chunk_plan`),
+        [`Spool.chunk_plan`](`dascore.core.spool.Spool.chunk_plan`),
         which takes the same arguments and returns the plan without
         touching any data.
         """
@@ -504,16 +504,19 @@ class SpoolView:
     sources: pd.DataFrame
 
 
-class DataFrameSpool(BaseSpool):
+class Spool(BaseSpool):
     """
-    An abstract class for spools whose contents are managed by a dataframe.
+    The concrete spool: a `PatchCatalog` plus an optional derived view.
 
-    A spool presents rows from exactly one of two derivations:
+    The catalog is the single store — live patches sit in its resolver
+    registry, file-backed patches in its index tables — regardless of
+    how the spool was constructed (patches, a directory, or a single
+    file). A spool presents rows from exactly one of two derivations:
 
-    - **catalog-backed** (``_plan is None`` and a catalog is attached):
-      rows map one-to-one to a ``PatchCatalog`` query, so metadata
-      operations (length, selection) stay lazy and push down to the
-      index. Use ``_is_catalog_backed()`` to test this.
+    - **catalog-backed** (``_plan is None``): rows map one-to-one to a
+      ``PatchCatalog`` query, so metadata operations (length,
+      selection) stay lazy and push down to the index. Use
+      ``_is_catalog_backed()`` to test this.
     - **planned** (``_plan`` is a :class:`SpoolView`): the view's
       outputs/members/sources frames are the presented relation.
       The catalog remains attached for patch resolution.
@@ -523,13 +526,19 @@ class DataFrameSpool(BaseSpool):
     _select_kwargs: Mapping | None = FrozenDict()
     # kwargs for merging patches
     _merge_kwargs: Mapping | None = FrozenDict()
-    _drop_columns = ("patch",)
+    # synthetic catalog identity columns must not join patch kwargs
+    # comparisons or chunk merge-compatibility checks
+    _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
     # patch-local selections (samples=True) applied as patches load
     _post_selects: tuple = ()
     # The catalog backing this spool (None until one is built).
     _catalog = None
     # The derived relation for restructured views (None = catalog rows).
     _plan: SpoolView | None = None
+    # single-file provenance (set by from_file; drives update())
+    _file_path = None
+    _file_format = None
+    _file_version = None
 
     def _is_catalog_backed(self) -> bool:
         """True when rows map one-to-one to a live catalog query."""
@@ -568,21 +577,70 @@ class DataFrameSpool(BaseSpool):
         return self._cache["_instruction_df"]
 
     def _get_df(self):
-        """Function to get the current df."""
+        """Realize the flat relation from the catalog."""
+        if self._catalog is None:
+            return None
+        current = self._catalog.to_df().reset_index(drop=True)
+        if self._select_kwargs:
+            # constructor select_kwargs restrict contents (docstring contract)
+            current = adjust_segments(
+                current, ignore_bad_kwargs=True, **self._select_kwargs
+            )
+        df, source, instruction = self._get_dummy_dataframes(current)
+        self._cache["_source_df"] = source
+        self._cache["_instruction_df"] = instruction
+        return df
 
     def _get_source_df(self):
-        """Function to get the current df."""
+        """Build the source df (happens as part of building current df)."""
+        _ = self._df
+        return self._cache.get("_source_df")
 
     def _get_instruction_df(self):
-        """Function to get the current df."""
+        """Build the instruction df (happens as part of building current df)."""
+        _ = self._df
+        return self._cache.get("_instruction_df")
 
     def __init__(
-        self, select_kwargs: dict | None = None, merge_kwargs: dict | None = None
+        self,
+        data: PatchType | Sequence[PatchType] | BaseSpool | None = None,
+        select_kwargs: dict | None = None,
+        merge_kwargs: dict | None = None,
     ):
+        from dascore.io.index.catalog import PatchCatalog
+
         self._cache = {}
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
         self._post_selects = ()
+        if isinstance(data, Spool):
+            # copy-construction (the new_from_df convention): share the
+            # catalog, take fresh derived state
+            self.__dict__.update(data.__dict__)
+            self._cache = {}
+            self._select_kwargs = dict(data._select_kwargs)
+            if select_kwargs:
+                self._select_kwargs.update(select_kwargs)
+            self._merge_kwargs = dict(data._merge_kwargs)
+            if merge_kwargs:
+                self._merge_kwargs.update(merge_kwargs)
+            return
+        if data is None:
+            patches = ()
+        elif isinstance(data, dc.Patch):
+            patches = (data,)
+        elif isinstance(data, BaseSpool):
+            # e.g. wrapping dc.read output; the patches are in memory
+            patches = tuple(data)
+        elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
+            patches = data
+        else:
+            msg = (
+                "Spool accepts a Patch, a sequence of patches, or a "
+                f"spool; got {type(data)}."
+            )
+            raise InvalidSpoolError(msg)
+        self._catalog = PatchCatalog.from_patches(patches)
 
     def _select_from_array(self, array) -> Self:
         """Create new spool with contents changed from array input."""
@@ -860,21 +918,29 @@ class DataFrameSpool(BaseSpool):
         """
         Convert the dataframe to a list of dicts for iteration.
 
-        This is significantly faster than iterating rows.
+        This is significantly faster than iterating rows. Empty strings
+        (missing format fields on file rows) normalize to None; stored
+        relative paths pass through unchanged — the catalog's resolver
+        owns resolving them against the spool root.
         """
+        df = df.copy(deep=False).replace("", None)
         return df.to_dict("records")
 
-    @abc.abstractmethod
     def _load_patch(self, kwargs) -> dc.Patch:
         """Given a row from the managed dataframe, return a patch."""
-
-    def _read_and_resolve_patch(self, final_kwargs) -> dc.Patch:
-        """Read patches for one instruction row and resolve to one patch."""
-        from dascore.io.core import _resolve_read_spool
-
-        source_patch_id = final_kwargs.get("source_patch_id", "")
-        spool = dc.read(**final_kwargs)
-        return _resolve_read_spool(spool, source_patch_id)
+        # Push trims into the reader only when the instruction row narrows
+        # the source (chunk/select) or constructor select_kwargs restrict
+        # it; otherwise the whole source is wanted and selection is wasted.
+        # Live patches ignore trim hints; exactness is re-applied above.
+        trim = {}
+        if kwargs.get("_modified") or self._select_kwargs:
+            merged = {**kwargs, **self._select_kwargs}
+            trim = {
+                k: v
+                for k, v in merged.items()
+                if k not in self._drop_columns and not k.startswith("_")
+            }
+        return self._catalog.resolve_row(kwargs, extra_trim=trim)
 
     def _as_catalog_member(self):
         """
@@ -889,7 +955,7 @@ class DataFrameSpool(BaseSpool):
         if self._catalog is None:
             return super()._as_catalog_member()
         # A catalog-native spool is the whole catalog only when nothing
-        # narrows it; constructor select_kwargs (DirectorySpool) restrict
+        # narrows it; constructor select_kwargs (directory spools) restrict
         # the visible rows without touching the catalog, so carry only the
         # surviving patch ids rather than the entire catalog.
         if self._catalog_native and not self._select_kwargs:
@@ -1140,7 +1206,7 @@ class DataFrameSpool(BaseSpool):
         new._plan = None
         new._cache = {}
         # selection composed into the catalog is dropped, but constructor
-        # select_kwargs (DirectorySpool contract) persist across views.
+        # select_kwargs (directory-spool contract) persist across views.
         new._select_kwargs = dict(self._select_kwargs)
         new._post_selects = ()
         return new
@@ -1195,71 +1261,135 @@ class DataFrameSpool(BaseSpool):
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
+        # identity views apply select_kwargs during realization (_get_df)
+        if self._plan is None:
+            return self._df
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
-    get_patch_names = get_patch_names
+    # --- construction --------------------------------------------------
 
+    @classmethod
+    def from_directory(
+        cls,
+        path,
+        index_path=None,
+        select_kwargs: dict | None = None,
+        merge_kwargs: dict | None = None,
+    ) -> Self:
+        """
+        Create a spool over a directory of fiber files.
 
-class MemorySpool(DataFrameSpool):
-    """
-    A Spool for storing patches in memory.
+        The directory's index (created/updated via ``update()``) backs
+        the catalog; ``path`` may also be an existing directory indexer.
+        """
+        from dascore.io.index.catalog import FileResolver, PatchCatalog
+        from dascore.io.indexer import AbstractIndexer
 
-    The catalog's live-patch registry is the store from birth: creating
-    a spool from patches only builds the (insertion-ordered, identity-
-    deduplicated) registry, so construction stays nearly free; index
-    tables materialize lazily on the first metadata operation.
-    """
+        out = cls(select_kwargs=select_kwargs, merge_kwargs=merge_kwargs)
+        if isinstance(path, AbstractIndexer):
+            out._catalog = PatchCatalog(
+                backend=path._backend,
+                resolver=FileResolver(root=path.path),
+                syncer=path,
+            )
+        else:
+            out._catalog = PatchCatalog.from_directory(path, index_path=index_path)
+        return out
 
-    # synthetic catalog identity columns must not join patch kwargs
-    # comparisons or chunk merge-compatibility checks
-    _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
+    @classmethod
+    def from_file(
+        cls,
+        path,
+        file_format: str | None = None,
+        file_version: str | None = None,
+    ) -> Self:
+        """
+        Create a spool over a single (multi-patch capable) fiber file.
 
-    def __init__(self, data: PatchType | Sequence[PatchType] | Self | None = None):
-        super().__init__()
+        The file is scanned once; patches load lazily per row.
+        """
+        path = path if isinstance(path, UPath) else Path(path)
+        if not path.exists() or path.is_dir():
+            msg = f"{path} does not exist or is a directory"
+            raise FileNotFoundError(msg)
         from dascore.io.index.catalog import PatchCatalog
 
-        if isinstance(data, self.__class__):
-            # copy-construction (the new_from_df convention): share the
-            # catalog, take fresh derived state
-            self.__dict__.update(data.__dict__)
-            self._cache = {}
-            self._select_kwargs = dict(data._select_kwargs)
-            self._merge_kwargs = dict(data._merge_kwargs)
-            return
-        if data is None:
-            patches = ()
-        elif isinstance(data, dc.Patch):
-            patches = (data,)
-        elif isinstance(data, BaseSpool):
-            # e.g. wrapping dc.read output; the patches are in memory
-            patches = tuple(data)
-        elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
-            patches = data
-        else:
-            msg = (
-                "MemorySpool accepts a Patch, a sequence of patches, or a "
-                f"spool; got {type(data)}."
+        _format, _version = dc.get_format(path, file_format, file_version)
+        out = cls()
+        out._catalog = PatchCatalog.from_file(
+            path, file_format=_format, file_version=_version
+        )
+        out._file_path = path
+        out._file_format = _format
+        out._file_version = _version
+        return out
+
+    # --- capabilities --------------------------------------------------
+
+    @property
+    def indexer(self):
+        """The directory syncer, or None for non-directory spools."""
+        return None if self._catalog is None else self._catalog._syncer
+
+    @property
+    def spool_path(self):
+        """Return the path in which the spool contents are found."""
+        return self.indexer.path
+
+    @property
+    def has_live_patches(self) -> bool:
+        """True when any of this spool's patches live in memory."""
+        catalog = self._catalog
+        return catalog is not None and bool(catalog.resolver.live_entries())
+
+    def _has_file_rows(self) -> bool:
+        """True when any catalog row is backed by a file."""
+        from dascore.io.index.catalog import LiveResolver
+        from dascore.utils.paths import is_memory_uri
+
+        if self._catalog is None:
+            return False
+        if isinstance(self._catalog.resolver, LiveResolver):
+            return False
+        paths = self._catalog.backend.get_sources()["source_path"]
+        return not paths.map(is_memory_uri).all()
+
+    @compose_docstring(doc=BaseSpool.update.__doc__)
+    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
+        """
+        {doc}
+
+        Update means syncing contents with the backing source: a
+        directory-backed spool re-indexes its directory, a single-file
+        spool rescans the file, and a purely in-memory spool is
+        trivially current (no-op). A spool with file-backed contents
+        but no update source (e.g. the result of combining spools)
+        raises — recreate it from its directory instead.
+        """
+        catalog = self._catalog
+        if catalog is not None and catalog._syncer is not None:
+            catalog.update(progress=progress)
+            return self._new_from_catalog(catalog)
+        if self._file_path is not None:
+            from dascore.io.core import FiberIO
+
+            formatter = FiberIO.manager.get_fiberio(
+                format=self._file_format, version=self._file_version
             )
-            raise InvalidSpoolError(msg)
-        self._catalog = PatchCatalog.from_patches(patches)
+            getattr(formatter, "index", lambda _: None)(self._file_path)
+            return self.from_file(
+                self._file_path, self._file_format, self._file_version
+            )
+        if not self._has_file_rows():
+            return self  # in-memory contents are trivially current
+        msg = (
+            "This spool has file-backed contents but no update source "
+            "(e.g. it combines several spools); recreate it from its "
+            "directory to pick up new files."
+        )
+        raise InvalidSpoolError(msg)
 
-    def _get_df(self):
-        """Realize the flat relation from the catalog."""
-        current = self._catalog.to_df()
-        df, source, instruction = self._get_dummy_dataframes(current)
-        self._cache["_source_df"] = source
-        self._cache["_instruction_df"] = instruction
-        return df
-
-    def _get_source_df(self):
-        """Build the source df (happens as part of building current df)."""
-        _ = self._df
-        return self._cache.get("_source_df")
-
-    def _get_instruction_df(self):
-        """Build the instruction df (happens as part of building current df)."""
-        _ = self._df
-        return self._cache.get("_instruction_df")
+    # --- equality ------------------------------------------------------
 
     def __eq__(self, other) -> bool:
         """
@@ -1270,20 +1400,38 @@ class MemorySpool(DataFrameSpool):
         """
         if self is other:
             return True
-        if not isinstance(other, MemorySpool):
+        if not isinstance(other, Spool):
             return super().__eq__(other)
         return deep_equality_check(self._eq_dict(), other._eq_dict())
 
     def _eq_dict(self) -> dict:
-        """Get a dict for equality checks, normalizing lazy state."""
+        """
+        Get a dict for equality checks, normalizing lazy state.
+
+        Equality is over rows, never backends: same length and order of
+        patch rows, row-wise equal semantic columns (source identity
+        like paths and live-vs-file backing stripped), plus equal
+        pending residual selections. Whether rows come from a live
+        registry, an index file, or a plan is invisible; data arrays
+        are never compared (metadata-level, like everything else here).
+        """
 
         def _strip_identity(df):
-            # synthetic per-catalog identities (memory:// paths, ids) are
-            # not content; equal spools must compare equal without them.
-            drop = ("path", "_patch_id", "source_patch_id", "file_format")
+            # synthetic per-catalog identities (memory:// paths, ids) and
+            # backend provenance (format/version) are not content; equal
+            # spools must compare equal without them, and column order
+            # (a construction artifact) must not matter.
+            drop = (
+                "path",
+                "_patch_id",
+                "source_patch_id",
+                "file_format",
+                "file_version",
+            )
             if df is None:
                 return df
-            return df.drop(columns=list(drop), errors="ignore")
+            out = df.drop(columns=list(drop), errors="ignore")
+            return out[sorted(out.columns)]
 
         out = dict(self.__dict__)
         # Build (if needed) and compare the dataframes; drop the inputs
@@ -1295,38 +1443,45 @@ class MemorySpool(DataFrameSpool):
             "_source_df": _strip_identity(self._source_df),
             "_instruction_df": _strip_identity(self._instruction_df),
         }
-        out.pop("_catalog", None)
         out.pop("_plan", None)
+        # Backend provenance is not content.
+        out.pop("_file_path", None)
+        out.pop("_file_format", None)
+        out.pop("_file_version", None)
+        # The catalog object is backend identity, but its composed view
+        # state is content: residuals (e.g. samples trims) change what
+        # patches load without changing the visible rows.
+        catalog = out.pop("_catalog", None)
+        out["_catalog_residuals"] = None if catalog is None else catalog._residuals
         return out
 
     def __rich__(self):
         base = super().__rich__()
-        df = self._df
-        # An empty MemorySpool() has no dataframe, and patches without a
-        # time coordinate have a null time_min; only render a time span
-        # when the spool actually carries one.
-        if df is not None and len(df) and "time_min" in df.columns:
-            t1, t2 = df["time_min"].min(), df["time_min"].max()
-            if pd.notna(t1) and pd.notna(t2):
-                duration = get_nice_text(t2 - t1)
-                base += Text(
-                    f"\n    Time Span: <{duration}> "
-                    f"{get_nice_text(t1)} to {get_nice_text(t2)}"
-                )
+        indexer = self.indexer
+        path = getattr(indexer, "path", None) or self._file_path
+        if path is not None:
+            base += Text(f"\n    Path: {path}")
+        if self._select_kwargs:
+            base += Text(f"\n    Select kwargs: {self._select_kwargs}")
+        # Only render a time span when the relation is (or is nearly)
+        # realized: planned views carry their frames and live spools are
+        # in memory; a huge directory index is not realized for a repr.
+        if self._plan is not None or self.has_live_patches:
+            df = self._df
+            if df is not None and len(df) and "time_min" in df.columns:
+                t1, t2 = df["time_min"].min(), df["time_min"].max()
+                if pd.notna(t1) and pd.notna(t2):
+                    duration = get_nice_text(t2 - t1)
+                    base += Text(
+                        f"\n    Time Span: <{duration}> "
+                        f"{get_nice_text(t1)} to {get_nice_text(t2)}"
+                    )
         return base
-
-    def _load_patch(self, kwargs) -> Self:
-        """Load the patch into memory."""
-        return self._catalog.resolve_row(kwargs)
-
-    def _new_from_catalog(self, catalog) -> Self:
-        """Create a lazy memory-spool view backed by a catalog query."""
-        new = self.__class__()
-        new._catalog = catalog
-        return new
 
     # Add specific implementation of concatenate patches.
     concatenate = _spool_up(concatenate_patches)
+
+    get_patch_names = get_patch_names
 
 
 @singledispatch
@@ -1368,24 +1523,19 @@ def spool(obj: path_types | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSp
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = coerce_to_upath(path)
-    # A directory was passed, create Directory Spool
+    # A directory was passed; index it.
     if path.is_dir():
         requires_local_directory(path, label="Directory spool")
-        from dascore.clients.dirspool import DirectorySpool
-
-        return DirectorySpool(path, **kwargs)
-    # A single file was passed. If the file format supports quick scanning
-    # Return a FileSpool (lazy file reader), else return DirectorySpool.
+        return Spool.from_directory(path, **kwargs)
+    # A single file was passed. If the file format supports quick
+    # scanning build a lazy file-backed spool, else read it into memory.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
         formatter = dc.io.FiberIO.manager.get_fiberio(format=_format, version=_version)
         if formatter.implements_scan:
-            from dascore.clients.filespool import FileSpool
-
-            return FileSpool(path, _format, _version)
-
+            return Spool.from_file(path, _format, _version)
         else:
-            return MemorySpool(dc.read(path, _format, _version))
+            return Spool(dc.read(path, _format, _version))
     else:
         msg = (
             f"could not get spool from argument: {path}. "
@@ -1404,10 +1554,10 @@ def _spool_from_spool(spool, **kwargs):
 @spool.register(tuple)
 def _spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
-    return MemorySpool(patch_list)
+    return Spool(patch_list)
 
 
 @spool.register(dc.Patch)
 def _spool_from_patch(patch):
     """Get a spool from a single patch."""
-    return MemorySpool([patch])
+    return Spool([patch])

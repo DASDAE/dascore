@@ -1,4 +1,4 @@
-"""Tests for FileSpool."""
+"""Tests for directory-backed spools."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 
 import dascore as dc
 import dascore.examples
-from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
+from dascore.core.spool import Spool
 from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.utils.misc import register_func, suppress_warnings
 
@@ -40,7 +40,7 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
 @register_func(DIRECTORY_SPOOLS)
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = DirectorySpool(one_file_dir)
+    spool = Spool.from_directory(one_file_dir)
     return spool.update()
 
 
@@ -98,7 +98,7 @@ class TestDirectorySpoolBasics:
 
     def test_isinstance(self, directory_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(directory_spool, DirectorySpool)
+        assert isinstance(directory_spool, Spool)
 
     def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
@@ -113,7 +113,7 @@ class TestDirectorySpoolBasics:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
-        spool = DirectorySpool(path).update().sort("time")
+        spool = Spool.from_directory(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -245,7 +245,7 @@ class TestSelectKwargs:
 
     def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
         """Rows outside the requested range must not appear (regression)."""
-        spool = DirectorySpool(
+        spool = Spool.from_directory(
             spool_dir, select_kwargs={"time": first_patch_range}
         ).update()
         assert 1 <= len(spool) < len(random_spool)
@@ -261,7 +261,7 @@ class TestSelectKwargs:
         self, spool_dir, random_spool, first_patch_range
     ):
         """Derived spools keep the constructor restriction."""
-        spool = DirectorySpool(
+        spool = Spool.from_directory(
             spool_dir, select_kwargs={"time": first_patch_range}
         ).update()
         expected = len(spool)
@@ -272,10 +272,14 @@ class TestSelectKwargs:
 
     def test_attr_select_kwargs(self, spool_dir, random_spool):
         """Attr-valued select_kwargs filter rows and load cleanly."""
-        spool = DirectorySpool(spool_dir, select_kwargs={"tag": "random"}).update()
+        spool = Spool.from_directory(
+            spool_dir, select_kwargs={"tag": "random"}
+        ).update()
         assert len(spool) == len(random_spool)
         assert isinstance(spool[0], dc.Patch)
-        empty = DirectorySpool(spool_dir, select_kwargs={"tag": "no_such"}).update()
+        empty = Spool.from_directory(
+            spool_dir, select_kwargs={"tag": "no_such"}
+        ).update()
         assert len(empty) == 0
 
 
@@ -622,7 +626,7 @@ class TestIndexing:
         assert all(isinstance(patch, dc.Patch) for patch in chunked)
 
 
-class TestFileSpoolIntegrations:
+class TestFileBackedSpoolIntegrations:
     """Small integration tests for the file spool."""
 
     @pytest.fixture(scope="class")

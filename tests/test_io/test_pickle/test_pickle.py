@@ -46,7 +46,7 @@ class TestGetFormat:
         """dc.spool on a scanless format wraps the read spool and serves it.
 
         PICKLE implements read but not scan, so dc.spool routes through
-        MemorySpool(dc.read(...)); the wrapped patches must load back.
+        Spool(dc.read(...)); the wrapped patches must load back.
         """
         spool = dc.spool(pickle_patch_path)
         assert len(spool) == 1

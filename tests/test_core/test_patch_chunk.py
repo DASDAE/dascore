@@ -695,16 +695,16 @@ class TestStreamingMerge:
 
     def test_streaming_path_used(self, adjacent_spool_no_overlap, monkeypatch):
         """Ensure simple merges take the streaming path."""
-        from dascore.core.spool import DataFrameSpool
+        from dascore.core.spool import Spool
 
         called = []
-        original = DataFrameSpool._merge_patches_streaming
+        original = Spool._merge_patches_streaming
 
         def wrapper(self, *args, **kwargs):
             called.append(True)
             return original(self, *args, **kwargs)
 
-        monkeypatch.setattr(DataFrameSpool, "_merge_patches_streaming", wrapper)
+        monkeypatch.setattr(Spool, "_merge_patches_streaming", wrapper)
         merged = adjacent_spool_no_overlap.chunk(time=None)
         assert isinstance(merged[0], dc.Patch)
         assert called
