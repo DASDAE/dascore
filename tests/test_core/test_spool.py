@@ -11,19 +11,15 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.clients.filespool import FileSpool
-from dascore.core.spool import (
-    BaseSpool,
-    MemorySpool,
-    _estimate_merge_samples,
-    _get_varying_dim,
-)
+from dascore.core.spool import BaseSpool, Spool
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
+    MissingPatchError,
     ParameterError,
 )
 from dascore.utils.downloader import fetch
+from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -82,6 +78,47 @@ class TestSpoolBasics:
         with pytest.raises(NotImplementedError, match=msg):
             BaseSpool.concatenate(random_spool, time=2)
 
+    def test_base_update_returns_self(self, random_spool):
+        """The BaseSpool update default (for third-party spools) no-ops."""
+        assert BaseSpool.update(random_spool) is random_spool
+
+    def test_invalid_input_raises(self):
+        """A non-patch, non-spool input raises a clear error."""
+        with pytest.raises(InvalidSpoolError, match="accepts a Patch"):
+            Spool(42)
+
+    def test_wraps_third_party_spool(self, random_spool):
+        """A non-Spool BaseSpool input realizes into the registry."""
+
+        class MiniSpool(BaseSpool):
+            """Minimal third-party spool over a patch list."""
+
+            def __init__(self, patches):
+                self._patches = list(patches)
+
+            def __getitem__(self, item):
+                return self._patches[item]
+
+            def __iter__(self):
+                return iter(self._patches)
+
+            def __len__(self):
+                return len(self._patches)
+
+            def chunk(self, **kwargs):
+                raise NotImplementedError
+
+            def select(self, **kwargs):
+                raise NotImplementedError
+
+            def get_contents(self):
+                raise NotImplementedError
+
+        patches = list(random_spool)
+        wrapped = Spool(MiniSpool(patches))
+        assert isinstance(wrapped, Spool)
+        assert list(wrapped) == patches
+
     def test_viz_raises(self, random_spool):
         """Ensure Spool.viz raises AttributeError."""
         msg = "Apply 'viz' on a Patch object"
@@ -89,7 +126,7 @@ class TestSpoolBasics:
             random_spool.viz.waterfall(random_spool)
 
 
-class TestMemorySpoolLazy:
+class TestLiveSpoolLazy:
     """
     Tests for lazy behavior of in-memory spools.
 
@@ -109,7 +146,7 @@ class TestMemorySpoolLazy:
         assert spool[0] == patch_list[0]
         assert spool[-1] == patch_list[-1]
         assert list(spool) == patch_list
-        assert "_df" not in spool._cache
+        assert spool._catalog._backend is None
 
     def test_out_of_bounds_raises(self, patch_list):
         """The fast path must raise the same IndexError as the df path."""
@@ -117,14 +154,14 @@ class TestMemorySpoolLazy:
         match = "out of bounds for spool"
         with pytest.raises(IndexError, match=match):
             _ = spool[len(patch_list)]
-        assert "_df" not in spool._cache
+        assert spool._catalog._backend is None
 
     def test_access_unchanged_after_df_built(self, patch_list):
         """Patch access must return the same thing before/after df built."""
         spool = dc.spool(patch_list)
         lazy_patches = list(spool)
-        _ = spool.get_contents()  # forces the dataframes to build
-        assert "_df" in spool._cache
+        _ = spool.get_contents()  # forces the flat relation to build
+        assert spool._catalog._backend is not None
         assert list(spool) == lazy_patches
         assert spool[0] == lazy_patches[0]
 
@@ -141,8 +178,7 @@ class TestMemorySpoolLazy:
         spool = dc.spool(data)
         data.pop()
         assert len(spool) == len(patch_list)
-        # The snapshot itself is immutable.
-        assert isinstance(spool._patches, tuple)
+        assert list(spool) == patch_list
 
     def test_derived_spools_use_df_machinery(self, patch_list):
         """Chunked/selected spools must go through the instruction dfs."""
@@ -150,33 +186,38 @@ class TestMemorySpoolLazy:
         merged = spool.chunk(time=None)
         assert len(merged) == 1
         time_coord = merged[0].get_coord("time")
-        expected_min = min(
-            x.summary.get_coord_summary("time").min for x in patch_list
-        )
+        expected_min = min(x.summary.get_coord_summary("time").min for x in patch_list)
         assert time_coord.min() == expected_min
 
-    def test_derived_spool_does_not_retain_parent(self, patch_list):
-        """Derived spools must not hold a reference to their parent."""
+    def test_derived_spool_is_own_catalog(self, patch_list):
+        """A chunked spool is a fresh derived catalog sharing patches."""
+        from dascore.io.index.planned import PlanResolver
+
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
-        assert chunked._data is None
-        assert chunked._patches is None
+        assert chunked._catalog is not spool._catalog
+        assert isinstance(chunked._catalog.resolver, PlanResolver)
+        # member loading shares the parent's live patches, not copies
+        registry = chunked._catalog.resolver.live_entries()
+        assert {id(p) for p in registry.values()} <= {id(p) for p in patch_list}
+        # no other patch containers exist on the instance
+        assert "_patches" not in chunked.__dict__
+        assert "_data" not in chunked.__dict__
 
     def test_single_patch_input_uses_lazy_storage(self, random_patch):
-        """A single patch should be stored lazily just like a patch sequence."""
-        spool = MemorySpool(random_patch)
-        assert spool._patches == (random_patch,)
+        """A single patch lands in the registry without realizing tables."""
+        spool = Spool(random_patch)
         assert len(spool) == 1
+        registry = spool._catalog.resolver.live_entries()
+        assert tuple(registry.values()) == (random_patch,)
+        # simple access never bootstrapped the index backend
+        assert spool._catalog._backend is None
 
-    def test_empty_memory_spool_has_no_dataframe(self):
-        """An empty MemorySpool should report no managing dataframe."""
-        spool = MemorySpool()
-        assert spool._get_df() is None
-
-    def test_instruction_df_builds_from_lazy_patches(self, patch_list):
-        """Lazy patch input should still build instruction dataframes on demand."""
-        spool = dc.spool(patch_list)
-        assert len(spool._get_instruction_df()) == len(patch_list)
+    def test_empty_memory_spool(self):
+        """An empty Spool is a valid, iterable, zero-length spool."""
+        spool = Spool()
+        assert len(spool) == 0
+        assert list(spool) == []
 
 
 class TestSpoolHelpers:
@@ -226,21 +267,13 @@ class TestSpoolEquals:
         """A spool should always eq itself."""
         assert random_spool == random_spool
 
-    def test_unequal_attr(self, random_spool):
-        """Simulate some attribute which isn't equal."""
+    def test_foreign_attrs_do_not_join_equality(self, random_spool):
+        """Equality state is enumerated; stray instance attrs are ignored."""
         new1 = copy.deepcopy(random_spool)
         new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
         new2.__dict__["bad_attr"] = 2
-        assert new1 != new2
-
-    def test_unequal_dicts(self, random_spool):
-        """Simulate some dicts which don't have the same values."""
-        new1 = copy.deepcopy(random_spool)
-        new1.__dict__["bad_attr"] = {1: 2}
-        new2 = copy.deepcopy(random_spool)
-        new2.__dict__["bad_attr"] = {2: 3}
-        assert new1 != new2
+        assert new1 == new2
 
 
 class TestIndexing:
@@ -321,8 +354,8 @@ class TestSpoolBoolArraySelect:
         bool_array[1] = False
         out = random_spool[bool_array]
         assert len(out) == sum(bool_array)
-        df1 = out.get_contents()
-        df2 = random_spool.get_contents()[bool_array]
+        df1 = out.get_contents().reset_index(drop=True)
+        df2 = random_spool.get_contents()[bool_array].reset_index(drop=True)
         assert df1.equals(df2)
 
 
@@ -674,9 +707,9 @@ class TestGetSpool:
     def test_file_spool(self, random_spool, tmp_path_factory):
         """
         Tests for getting a file spool vs in-memory spool. Basically,
-        if a format supports scanning a FileSpool is returned. If it doesn't,
-        all the file contents have to be loaded into memory to scan so a
-        MemorySpool is just returned.
+        if a format supports scanning, a lazy file-backed spool is
+        returned. If it doesn't, all the file contents have to be loaded
+        into memory, so the spool holds live patches.
         """
         path = tmp_path_factory.mktemp("file_spoolin")
         dasdae_path = path / "patch.h5"
@@ -685,10 +718,10 @@ class TestGetSpool:
         dc.write(random_spool, pickle_path, "pickle")
 
         dasdae_spool = dc.spool(dasdae_path)
-        assert isinstance(dasdae_spool, FileSpool)
+        assert not dasdae_spool.has_live_patches
 
         pickle_spool = dc.spool(pickle_path)
-        assert isinstance(pickle_spool, MemorySpool)
+        assert pickle_spool.has_live_patches
 
 
 class TestSpoolBehaviorOptionalImports:
@@ -802,137 +835,170 @@ class TestMisc:
         assert isinstance(patch, dc.Patch)
 
 
-class TestSpoolEquality:
-    """Tests for spool equality comparisons to ensure 100% coverage."""
+class TestDeepEqualityCheck:
+    """Coverage for deep_equality_check branches (formerly via spool attrs)."""
 
-    def test_spool_equality_non_dict_comparison(self, random_spool):
-        """Test line 107: non-dict comparison in _vals_equal."""
-        spool1 = copy.deepcopy(random_spool)
-        spool2 = copy.deepcopy(random_spool)
+    def test_non_dict_comparison(self):
+        """Plain value comparison inside dicts."""
+        from dascore.utils.misc import deep_equality_check
 
-        # Add non-dict values to test the non-dict comparison path
-        spool1._test_string = "hello"
-        spool2._test_string = "hello"
+        assert deep_equality_check({"a": "hello"}, {"a": "hello"})
+        assert not deep_equality_check({"a": "hello"}, {"a": "world"})
 
-        # This should be equal
-        assert spool1 == spool2
-
-        # Now make them different to test the comparison
-        spool2._test_string = "world"
-
-        # This should be False
-        assert spool1 != spool2
-
-    def test_spool_equality_with_objects_having_dict(self, random_spool):
-        """Test line 127: objects with __dict__ that are not equal."""
+    def test_objects_with_dict(self):
+        """Objects compare via recursive __dict__ comparison."""
+        from dascore.utils.misc import deep_equality_check
 
         class TestObject:
             def __init__(self, value):
                 self.value = value
 
-        spool1 = copy.deepcopy(random_spool)
-        spool2 = copy.deepcopy(random_spool)
+        assert deep_equality_check({"o": TestObject(42)}, {"o": TestObject(42)})
+        assert not deep_equality_check({"o": TestObject(1)}, {"o": TestObject(2)})
 
-        # Add objects with __dict__ that have different values
-        spool1._test_obj = TestObject(1)
-        spool2._test_obj = TestObject(2)  # Different data
+    def test_mixed_types(self):
+        """Ints, lists, and numpy arrays compare by value."""
+        from dascore.utils.misc import deep_equality_check
 
-        # This should hit line 127 and return False
-        assert spool1 != spool2
+        d1 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
+        d2 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
+        assert deep_equality_check(d1, d2)
+        d2["a"] = np.array([1, 2, 4])
+        assert not deep_equality_check(d1, d2)
 
-    def test_spool_equality_with_objects_having_dict_equal(self, random_spool):
-        """Test objects with __dict__ that are equal via recursive comparison."""
+    def test_dataframes(self):
+        """DataFrames compare via .equals."""
+        from dascore.utils.misc import deep_equality_check
 
-        class TestObject:
-            def __init__(self, value):
-                self.value = value
-
-        spool1 = random_spool
-        spool2 = copy.deepcopy(random_spool)
-
-        # Add objects with __dict__ that have same internal state
-        spool1._test_obj = TestObject(42)
-        spool2._test_obj = TestObject(42)
-
-        # This should be equal via recursive __dict__ comparison
-        assert spool1 == spool2
-
-    def test_spool_equality_mixed_types(self):
-        """Test equality with various mixed data types."""
-        # Create simple spools to avoid cache issues
-        patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-
-        # Test with integers (non-dict)
-        spool1._int_val = 42
-        spool2._int_val = 42
-        assert spool1 == spool2
-
-        # Test with lists (non-dict)
-        spool1._list_val = [1, 2, 3]
-        spool2._list_val = [1, 2, 3]
-        assert spool1 == spool2
-
-        # Test with numpy arrays (non-dict)
-        spool1._array_val = np.array([1, 2, 3])
-        spool2._array_val = np.array([1, 2, 3])
-        assert spool1 == spool2
-
-        # Test arrays with different values
-        spool1._array_val = np.array([1, 2, 3])
-        spool2._array_val = np.array([1, 2, 4])
-        assert spool1 != spool2
-
-    def test_spool_equality_with_dataframes(self):
-        """Test equality with pandas DataFrames (has equals method)."""
-        # Create simple spools to avoid cache issues
-        patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-
-        # Add DataFrames that should be equal
         df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        assert deep_equality_check({"df": df1}, {"df": df2})
+        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})
+        assert not deep_equality_check({"df": df1}, {"df": df3})
 
-        spool1._test_df = df1
-        spool2._test_df = df2
+    def test_unequal_sub_dicts(self):
+        """Nested dicts with different values are unequal."""
+        from dascore.utils.misc import deep_equality_check
 
-        # Should be equal via df.equals()
-        assert spool1 == spool2
+        assert not deep_equality_check({"d": {1: 2}}, {"d": {2: 3}})
 
-        # Now test with different DataFrames
-        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})  # Different data
-        spool2._test_df = df3
 
-        # Should not be equal
-        assert spool1 != spool2
+class TestSpoolCoverageEdges:
+    """Cover remaining spool-machinery branches with real operations."""
 
-    def test_specific_coverage_lines(self):
-        """Test to specifically cover lines 107 and 127."""
-        # Create minimal spools
+    @pytest.fixture(scope="class")
+    def many_contiguous(self):
+        """Twelve contiguous patches (for >10-row merge handling)."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        patch = dc.get_example_patch(time_min=t0)
+        step = patch.get_coord("time").step
+        out = [patch]
+        for _ in range(11):
+            nxt = dc.get_example_patch(time_min=out[-1].get_coord("time").max() + step)
+            out.append(nxt)
+        return out
+
+    def test_equality_and_repr(self):
+        """Spool equality strips synthetic identity; repr shows a time span."""
         patch = dc.get_example_patch()
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
+        left, right = dc.spool([patch]), dc.spool([patch])
+        left.get_contents()  # realize so equality compares built frames
+        right.get_contents()
+        assert left == right
+        assert "Time Span" in left.__rich__().__str__()
 
-        # Line 107: Non-dict comparison
-        spool1._string_test = "hello"
-        spool2._string_test = "hello"
-        assert spool1 == spool2
+    def test_equality_of_empty_spools(self):
+        """Empty spools (None frames) compare equal via the None-strip path."""
+        assert Spool() == Spool()
 
-        # Make them different to test line 107 return False
-        spool2._string_test = "world"
-        assert spool1 != spool2
+    def test_repr_without_time_coordinate(self):
+        """A spool whose patches have no time coord omits the time-span line."""
+        data = np.random.default_rng().random((6, 4))
+        coords = {"distance": np.arange(6), "frequency": np.arange(4.0)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "frequency"))
+        rendered = dc.spool([patch]).__rich__().__str__()
+        assert "Spool" in rendered
+        assert "Time Span" not in rendered  # no time coordinate to summarize
 
-        # Line 127: Objects with __dict__ that are different
-        class SimpleObj:
-            def __init__(self, val):
-                self.val = val
+    def test_repr_with_time_coordinate(self):
+        """A normal spool renders its time span."""
+        assert "Time Span" in dc.spool([dc.get_example_patch()]).__rich__().__str__()
 
-        spool1 = dc.spool([patch])
-        spool2 = dc.spool([patch])
-        spool1._obj = SimpleObj(1)
-        spool2._obj = SimpleObj(2)
+    def test_large_merge_dedups(self, many_contiguous):
+        """Merging >10 sources into one patch exercises the de-dup branch."""
+        merged = dc.spool(many_contiguous).chunk(time=None)
+        assert len(merged) == 1
+        # 12 contiguous patches merge into one continuous coordinate.
+        assert merged[0].get_coord("time").size == sum(
+            p.get_coord("time").size for p in many_contiguous
+        )
 
-        # This should return False at line 127
-        assert spool1 != spool2
+    def test_union_of_scanless_spool(self, tmp_path):
+        """A scanless (pickle) spool wraps its read patches in a live
+        catalog; union shares them like any in-memory member.
+        """
+        dc.get_example_patch().io.write(tmp_path / "a.pkl", "pickle")
+        pickle_spool = dc.spool(tmp_path / "a.pkl")
+        combined = pickle_spool + dc.spool([dc.get_example_patch(tag="other")])
+        assert len(combined) == 2
+
+    def test_union_of_chunked_spool(self, many_contiguous):
+        """A chunked spool is a derived catalog; unions compose it."""
+        from dascore.io.index.planned import PlanResolver
+
+        chunked = dc.spool(many_contiguous).chunk(time=None)
+        assert isinstance(chunked._catalog.resolver, PlanResolver)
+        combined = chunked + dc.spool([dc.get_example_patch(tag="other")])
+        assert len(combined) == 2
+        assert all(isinstance(p, dc.Patch) for p in combined)
+
+    def test_iteration_skips_unresolvable_patch(self, monkeypatch):
+        """A patch that fails to resolve is skipped with a #583 warning."""
+        spool = dc.spool([dc.get_example_patch()])
+
+        def _raise(_ind):
+            raise MissingPatchError("not available in this session")
+
+        monkeypatch.setattr(spool._catalog, "get_patch", _raise)
+        with pytest.warns(UserWarning, match="Skipping patch"):
+            assert list(spool) == []
+
+    def test_derived_negative_and_bad_index(self):
+        """Derived-catalog indexing handles negatives, raises out-of-bounds."""
+        patches = list(dc.get_example_spool(length=2))
+        derived = dc.spool(patches).concatenate(time=1)
+        assert derived[-1] == derived[len(patches) - 1]
+        with pytest.raises(IndexError, match="out of bounds"):
+            _ = derived[len(patches)]
+        with pytest.raises(IndexError, match="out of bounds"):
+            _ = derived[-len(patches) - 1]
+
+    def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
+        """An under-estimated merge buffer is grown to fit (uneven sampling)."""
+        import dascore.utils.patch_assembly as assembly_mod
+
+        # Force the pre-merge sample estimate to be too small so the
+        # streaming buffer must grow mid-merge.
+        monkeypatch.setattr(assembly_mod, "_estimate_merge_samples", lambda *a, **k: 1)
+        merged = dc.spool(many_contiguous).chunk(time=None)
+        assert merged[0].get_coord("time").size == sum(
+            p.get_coord("time").size for p in many_contiguous
+        )
+
+    def test_empty_memory_spool_len_iter_repr(self):
+        """A bare Spool() is a valid empty spool."""
+        empty = Spool()
+        assert len(empty) == 0
+        assert list(empty) == []
+        assert "Spool" in str(empty)
+
+
+class TestEmptyConcatenate:
+    """Concatenating an empty spool returns an empty spool (F7)."""
+
+    @pytest.mark.parametrize("kwargs", [{"time": None}, {"time": 2}, {"new_dim": None}])
+    def test_empty_returns_empty(self, kwargs):
+        """Empty in, empty out — matching chunk's behavior."""
+        out = dc.spool([]).concatenate(**kwargs)
+        assert len(out) == 0
+        assert list(out) == []

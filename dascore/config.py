@@ -51,6 +51,34 @@ class DascoreConfig(BaseModel):
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
     )
+    sampling_group_tolerance: float = Field(
+        default=0.05,
+        gt=0,
+        description=(
+            "Relative sampling-interval difference above which patches are "
+            "never combined during chunk/merge operations. E.g. the default "
+            "0.05 keeps patches whose steps differ by more than 5% in "
+            "separate groups."
+        ),
+    )
+    groupby_attrs: tuple[str, ...] = Field(
+        default=(
+            "network",
+            "station",
+            "data_type",
+            "data_category",
+            "tag",
+            "instrument_id",
+            "acquisition_id",
+        ),
+        description=(
+            "Attributes which partition patches into separate groups for "
+            "chunk/merge operations. Patches whose values differ on any of "
+            "these are never combined (no error); the per-call `group` "
+            "argument overrides this default. Names missing from a spool "
+            "are ignored."
+        ),
+    )
 
     # Local cache and index locations.
     downloader_cache_dir: Path = Field(
@@ -64,20 +92,6 @@ class DascoreConfig(BaseModel):
     index_query_buffer: np.timedelta64 = Field(
         default=np.timedelta64(1, "s"),
         description="Time buffer applied when querying cached directory indexes.",
-    )
-
-    # HDF index writing.
-    hdf_index_complib: str = Field(
-        default="blosc:lz4",
-        description="Compression library used when writing DASCore HDF index files.",
-    )
-    hdf_index_complevel: int = Field(
-        default=5,
-        description="Compression level used when writing DASCore HDF index files.",
-    )
-    hdf_index_max_retries: int = Field(
-        default=3,
-        description="Maximum number of retries for concurrent HDF index access.",
     )
 
     # Progress display.

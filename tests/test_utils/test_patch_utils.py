@@ -30,8 +30,8 @@ from dascore.utils.patch import (
     get_patch_names,
     get_patch_window_size,
     get_window_axis_step,
-    merge_patches,
     merge_compatible_coords_attrs,
+    merge_patches,
     patches_to_df,
     stack_patches,
     swap_kwargs_dim_to_axis,
@@ -396,10 +396,28 @@ class TestPatchesToDF:
     """Test for getting metadata from patch into a dataframe."""
 
     def test_spool_input(self, random_spool):
-        """A spool should return its contents."""
+        """A spool should return its contents with its patches embedded."""
         df = patches_to_df(random_spool)
         assert isinstance(df, pd.DataFrame)
         assert len(df) == len(random_spool)
+        # the "patch" column carries the actual patches, not None
+        assert "patch" in df.columns
+        assert all(isinstance(x, dc.Patch) for x in df["patch"])
+
+    def test_list_of_patches_input(self, random_spool):
+        """A plain sequence of patches is scanned and the patches embedded."""
+        patches = list(random_spool)
+        df = patches_to_df(patches)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(patches)
+        assert list(df["patch"]) == patches
+
+    def test_empty_list_input(self):
+        """An empty sequence produces an empty frame with the right columns."""
+        df = patches_to_df([])
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+        assert "patch" in df.columns
 
     def test_dataframe_input(self, random_spool):
         """The function should be idempotent."""
@@ -568,8 +586,13 @@ class TestConcatenate:
             concatenate_patches([p1, p2], time=None)
 
     def test_duplicate_patches_existing_dim(self, random_patch):
-        """Ensure duplicate patches are concatenated together."""
-        spool = dc.spool([random_patch, random_patch])
+        """Ensure equal (but distinct) patches are concatenated together.
+
+        Note: the same patch *instance* twice would collapse to one entry
+        (spools have set semantics by patch identity); patch.new() mints
+        a distinct instance with equal contents.
+        """
+        spool = dc.spool([random_patch, random_patch.new()])
         out = concatenate_patches(spool, time=None)
         assert len(out) == 1
         patch = out[0]
@@ -614,7 +637,8 @@ class TestConcatenate:
         """Ensure the new dimension can be chunked by an int value."""
         # When new_dim = 1 it should only add a new dimension to each patch
         # and not change the original shape.
-        spool = dc.spool([random_patch] * 6)
+        # Distinct instances: identical instances would dedup to one.
+        spool = dc.spool([random_patch] + [random_patch.new() for _ in range(5)])
         # Test for single values along new dimension
         new = spool.concatenate(new_dim=1)
         assert len(new) == len(spool)
@@ -832,6 +856,22 @@ class TestGetPatchName:
         """If extension is false the file extension should remain."""
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
+
+    def test_mixed_path_sources_use_metadata(self, random_spool):
+        """Mixed real and memory paths consistently use metadata names."""
+        df = random_spool.get_contents().iloc[:2].copy()
+        df["path"] = ["/tmp/real_file.h5", "memory://registry/patch"]
+        names = get_patch_names(df)
+        assert names.iloc[0] != "real_file"
+        assert names.iloc[1] != "patch"
+
+    def test_multiple_coord_fields(self, random_spool):
+        """Naming on more than one coordinate flattens the min/max fields."""
+        # drop path so the coordinate-based naming branch is exercised
+        df = random_spool.get_contents().drop(columns=["path"], errors="ignore")
+        names = get_patch_names(df, coords=("time", "distance"))
+        assert len(names) == len(df)
+        assert names.str.len().gt(0).all()
 
 
 class TestSwapKwargsDimToAxis:
@@ -1093,3 +1133,22 @@ class TestGetWindowAxisStep:
             random_patch, distance=self.window * step, overlap=None
         )
         assert out == (self.window, random_patch.get_axis("distance"), None)
+
+
+class TestForcePatchMergeOverlap:
+    """_force_patch_merge tolerates complete-envelope overlap (keep first)."""
+
+    def test_complete_overlap_keeps_first(self, random_patch):
+        """Identical envelopes merge to the first patch."""
+        from dascore.utils.patch import _force_patch_merge
+
+        twin = random_patch.new()
+        infos = []
+        for patch in (random_patch, twin):
+            info = patch.coords._get_dim_summary()
+            info["patch"] = patch
+            info["dims"] = ",".join(patch.dims)
+            infos.append(info)
+        out = _force_patch_merge(infos, merge_kwargs={})
+        assert len(out) == 1
+        assert out[0]["patch"] is random_patch

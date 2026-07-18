@@ -8,20 +8,19 @@ import warnings
 from contextlib import suppress
 from pathlib import Path
 
+import h5py
 import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-import tables as tb
-import tables.parameters
 
 import dascore as dc
 import dascore.examples as ex
-from dascore.clients.dirspool import DirectorySpool
 from dascore.compat import random_state
 from dascore.config import set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.core.spool import Spool
 from dascore.examples import get_example_patch
 from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
@@ -84,9 +83,6 @@ def pytest_sessionstart(session):
     # If running in CI make sure to turn off matplotlib.
     if os.environ.get("CI", False):
         matplotlib.use("Agg")
-
-    # need to set nodes to 32 to avoid crash on p3.11. See pytables#977.
-    tables.parameters.NODE_CACHE_SLOTS = 32
 
     # Test-time debug defaults are applied by fixture to avoid state leakage.
 
@@ -427,12 +423,15 @@ def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch
 
 
 @pytest.fixture(scope="class")
-def diverse_spool_directory(diverse_spool):
-    """Save the diverse spool contents to a directory."""
-    out = ex.spool_to_directory(diverse_spool)
-    yield out
-    if out.is_dir():
-        shutil.rmtree(out)
+def diverse_spool_directory(diverse_spool, tmp_path_factory):
+    """Save the diverse spool contents to a directory.
+
+    Pytest owns the directory's lifetime: an explicit rmtree teardown
+    raced lazily-finalized SQLite index connections on Windows
+    (WinError 32), so no teardown here.
+    """
+    out = tmp_path_factory.mktemp("diverse_spool_dir")
+    return ex.spool_to_directory(diverse_spool, path=out)
 
 
 @pytest.fixture(scope="class")
@@ -501,7 +500,7 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
 @register_func(SPOOL_FIXTURES)
 def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    return DirectorySpool(one_file_dir).update()
+    return Spool.from_directory(one_file_dir).update()
 
 
 @pytest.fixture(scope="class")
@@ -516,15 +515,18 @@ def diverse_spool():
 def diverse_directory_spool(diverse_spool_directory):
     """Save the diverse spool contents to a directory."""
     out = dc.spool(diverse_spool_directory).update()
-    return out
+    yield out
+    # release the SQLite index handle so Windows can clean the temp dir
+    out.indexer.close()
 
 
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = DirectorySpool(two_patch_directory).update()
-    return out.update()
+    out = Spool.from_directory(two_patch_directory).update().update()
+    yield out
+    out.indexer.close()
 
 
 @pytest.fixture(scope="class")
@@ -609,9 +611,9 @@ def generic_hdf5(tmp_path_factory):
     parent.mkdir()
     path = parent / "simple.hdf5"
 
-    with tb.open_file(str(path), "w") as fi:
-        group = fi.create_group("/", "bob")
-        fi.create_carray(group, "data", obj=random_state.rand(10))
+    with h5py.File(str(path), "w") as fi:
+        group = fi.create_group("bob")
+        group.create_dataset("data", data=random_state.rand(10))
     return path
 
 

@@ -486,6 +486,16 @@ class TestPatchSummary:
         assert "distance_min" not in out
         assert np.isnan(out["time_step"])
 
+    def test_flat_dump_null_datetime_step(self, random_patch):
+        """A datetime coord without a clean step flat-dumps a NaT sentinel."""
+        time = random_patch.coords.get_array("time").copy()
+        time[-1] += np.timedelta64(1, "s")  # break uniformity
+        patch = random_patch.update_coords(time=time)
+        out = patch.summary.flat_dump()
+        step = out["time_step"]
+        assert isinstance(step, np.timedelta64)
+        assert pd.isnull(step)
+
     def test_select_from_spool_by_integer_source_patch_id(self, random_patch):
         """Integer-like source ids should fall back to positional selection."""
         spool = dc.spool(

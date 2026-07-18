@@ -1,0 +1,116 @@
+---
+title: Spool Index
+---
+
+Directory and in-memory spools use the same metadata model. The persisted directory index is one SQLite file named `.dascore_index.sqlite3`; in-memory spools use the same schema in an in-memory SQLite database. The index stores summaries and source identities, not patch data.
+
+## Why seven tables?
+
+The schema separates records with different lifetimes and cardinalities. This avoids repeating source and coordinate metadata on every patch and gives SQLite enforceable ownership boundaries.
+
+| Table | One row per | Purpose |
+|---|---|---|
+| `meta_data` | index | Identifies the file and its schema version |
+| `sources` | file or directory-format source | Tracks the source path, format, size, modification time, and presentation ordinal |
+| `patches` | patch within a source | Stores patch identity and common time/distance envelopes |
+| `attrs` | patch | Stores typed attribute values in dynamically added columns |
+| `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
+| `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
+| `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions |
+
+The last two tables are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive an exact semantic fingerprint, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides an exact fingerprint. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
+
+`attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
+
+## Lifecycle and validation
+
+The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse.
+
+The current schema version is validated before any mutation. An unrelated or incomplete database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it. A file that identifies itself as a DASCore spool index of a different schema version is rebuilt automatically by the directory indexer — the index is a disposable cache whose truth is the files.
+
+## Ordering
+
+The base ordering contract is `(sources.ordinal, patch_id)`: ordinals are assigned at ingest, a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path.
+
+Directory catalogs additionally carry a **per-patch default presentation order**: rows present by time (`time IS NULL` last, then time, with ordinal and patch id as deterministic tiebreaks), because source-grain ordinals alone cannot interleave a multi-patch file whose span straddles a patch of another file. The default order is a catalog contract, not view state — a directory root still updates — and an explicit `sort(...)` replaces it. The directory indexer still renumbers source ordinals to time order (earliest patch per source, path as tiebreak) after each sync, which keeps the ordinal grain stable for replacement and union dedup.
+
+SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
+
+## The flat relation
+
+Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` canonical units — the chunk planner's unit-partition key), the `dims` signature, and one column per attribute. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
+
+```{python}
+import dascore as dc
+from dascore.io.index.catalog import PatchCatalog
+
+catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
+df = catalog.to_df()
+required = {
+    "_patch_id",
+    "_time_def_key",
+    "_time_units",
+    "dims",
+    "time_min",
+    "time_max",
+    "time_step",
+}
+assert required.issubset(df.columns)
+```
+
+## Patch identity and spool set semantics
+
+A spool of in-memory patches has **set semantics by patch identity**: constructing a spool from a sequence keeps one entry per distinct patch instance, and `spool + spool` unions membership. Each patch carries an instance identity minted eagerly at construction; because patches are immutable, copies (including deep copies and unpickled patches) share that identity, while every patch operation produces a new instance with its own. The identity is the patch's synthetic `memorypatch://` source path in the index, so identity, deduplication, and resolution all agree:
+
+```{python}
+import copy
+
+patch = dc.get_example_patch()
+
+# a sequence with the same instance twice is one spool entry
+assert len(dc.spool([patch, patch])) == 1
+
+# copies share identity regardless of when they are made — identity is
+# eager, so there is no access-order dependence
+clone = copy.deepcopy(patch)
+assert clone._instance_id == patch._instance_id
+assert len(dc.spool([patch, clone])) == 1
+
+# any operation mints a new, distinct identity
+assert len(dc.spool([patch, patch.new()])) == 2
+
+# the identity is the row's synthetic path, and it resolves back to the
+# very same object
+cat = PatchCatalog.from_patches([patch, patch])  # one entry, not two
+row = cat.to_df().iloc[0]
+assert len(cat.to_df()) == 1
+assert row["path"].startswith("memorypatch://")
+assert cat.resolve_row(row.to_dict()) is patch
+```
+
+File-backed patches are identified by `(base_uri, source_path, source_patch_id)` instead; their rows resolve through readers rather than the registry.
+
+## Federation
+
+`spool + spool` merges catalogs table-to-table: source records are reconstructed from the member backends and re-ingested, so coordinate definitions deduplicate by definition key, the same source appearing in several members keeps a single entry, and file paths are absolutized so members with different roots coexist. A composite resolver routes in-memory rows to the shared registry, plan-output rows to their plan resolvers, and everything else through file readers.
+
+Row-membership state (attribute predicates, slice windows, patch-id arrays) transfers as rows, preserving the set semantics above. State that only lives Python-side — coordinate/samples residual trims, sort specs, and a directory default order that record-grain transfer would actually scramble — is first **baked into an identity-plan derived catalog** (table work only; no patch data loads), so each operand contributes exactly its current contents in its current order. Baking mints new patch identities, so a trimmed operand no longer deduplicates against its source: its contents genuinely differ. Spool equality follows the same philosophy — it compares *effective contents* (residual trims folded into the envelopes, representation artifacts like def keys and backing excluded), so a trimmed view equals its union-materialized twin.
+
+```{python}
+other = dc.get_example_patch().new()
+union = dc.spool([patch]) + dc.spool([other])
+assert len(union) == 2
+assert len(dc.spool([patch]) + dc.spool([patch])) == 1  # same patch dedups
+
+# A trimmed operand contributes its trimmed contents (baked, not dropped),
+# and equality compares those effective contents.
+t = patch.get_coord("time")
+trimmed = dc.spool([patch]).select(time=(t.min() + 10 * t.step, t.min() + 20 * t.step))
+combined = trimmed + dc.spool([])
+assert combined[0].shape == trimmed[0].shape
+assert combined == trimmed
+```
+
+## Scope
+
+The index answers metadata selection, identifies candidate patches, and plans chunk operations — all without touching patch data. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Materialized derived data (persisting chunked results) remains future work.

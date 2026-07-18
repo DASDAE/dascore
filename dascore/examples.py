@@ -28,7 +28,7 @@ EXAMPLE_SPOOLS = {}
 
 
 def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
-    """Load the first patch from an example file without FileSpool indirection."""
+    """Load the first patch from an example file without spool indirection."""
     with set_config(allow_dasdae_format_unpickle=True):
         return dc.read(path)[0]
 

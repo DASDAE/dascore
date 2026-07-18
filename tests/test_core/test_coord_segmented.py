@@ -1021,7 +1021,7 @@ class TestSplitGapsAndWrite:
         """Non-memory spools skip the gap inspection (never gapped)."""
         path1 = dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
         file_spool = dc.spool(path1)
-        assert not isinstance(file_spool, dc.core.spool.MemorySpool)
+        assert not file_spool.has_live_patches
         path2 = dc.write(file_spool, tmp_path / "b.h5", "dasdae")
         assert path2.exists()
 
@@ -1115,3 +1115,44 @@ class TestFromArray:
         values = np.array([0.0, 1, 2, 10, 11, 12])
         coord = CoordSegmented.from_array(values, units="m")
         assert get_quantity(coord.units) == get_quantity("m")
+
+
+class TestPlannedSpoolWriteGuard:
+    """The gap write guard covers plan-assembled spools (round-4 F3)."""
+
+    @pytest.fixture()
+    def gapped_planned_spool(self, tmp_path):
+        """A file-backed planned spool whose output spans a real gap."""
+        import warnings
+
+        src = tmp_path / "src"
+        src.mkdir()
+        p1 = dc.get_example_patch()
+        t = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=t.max() + 4 * t.step)
+        dc.write(p1, src / "a.h5", "DASDAE")
+        dc.write(p2, src / "b.h5", "DASDAE")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            planned = (
+                dc.spool(src)
+                .update(progress=None)
+                .chunk(time=None, tolerance=5, snap_coords=False, conflict="drop")
+            )
+        assert isinstance(planned[0].get_coord("time"), CoordSegmented)
+        assert not planned.has_live_patches
+        return planned
+
+    def test_write_raises_without_split(self, gapped_planned_spool, tmp_path):
+        """Writing a gapped planned spool raises the documented error."""
+        with pytest.raises(ParameterError, match="split"):
+            dc.write(gapped_planned_spool, tmp_path / "out.h5", "DASDAE")
+
+    def test_write_split_true(self, gapped_planned_spool, tmp_path):
+        """split=True writes each contiguous section as its own patch."""
+        path = tmp_path / "out.h5"
+        dc.write(gapped_planned_spool, path, "DASDAE", split=True)
+        back = dc.spool(path)
+        assert len(back) == 2
+        for patch in back:
+            assert not isinstance(patch.get_coord("time"), CoordSegmented)

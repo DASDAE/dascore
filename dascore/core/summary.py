@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
@@ -18,6 +19,27 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.paths import coerce_to_upath, is_pathlike
+
+
+def normalize_source_patch_id(value: Any) -> str:
+    """
+    Return a source patch id as a clean string ("" when missing).
+
+    Missing ids arrive as None, empty strings, pandas NaN/NaT, or numpy
+    scalars. pandas NaN is truthy, so a plain ``value or ""`` does not
+    normalize it — every conversion site must go through this helper to
+    avoid the NaN-truthiness bug the catalog resolver already had to fix.
+    """
+    if value is None or value == "":
+        return ""
+    try:
+        if pd.isnull(value):
+            return ""
+    except (TypeError, ValueError):
+        pass  # non-scalar (e.g. an array): fall through to str()
+    if hasattr(value, "item"):  # numpy scalar -> python scalar
+        value = value.item()
+    return str(value)
 
 
 def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
@@ -169,10 +191,8 @@ def _normalize_source_patch_id(
     attrs: PatchAttrs, source_patch_id: Any = ""
 ) -> tuple[PatchAttrs, str]:
     """Normalize summary and private attr source ids to one value."""
-    summary_source_patch_id = (
-        "" if source_patch_id in (None, "") else str(source_patch_id)
-    )
-    attrs_source_patch_id = str(attrs.get("_source_patch_id", "") or "")
+    summary_source_patch_id = normalize_source_patch_id(source_patch_id)
+    attrs_source_patch_id = normalize_source_patch_id(attrs.get("_source_patch_id", ""))
     normalized = summary_source_patch_id or attrs_source_patch_id
     if normalized:
         attrs = attrs.update(_source_patch_id=normalized)

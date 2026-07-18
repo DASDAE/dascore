@@ -42,6 +42,18 @@ class TestGetFormat:
         assert isinstance(out[0], dc.Patch)
         assert random_patch == out[0]
 
+    def test_spool_from_pickle(self, pickle_patch_path, random_patch):
+        """dc.spool on a scanless format wraps the read spool and serves it.
+
+        PICKLE implements read but not scan, so dc.spool routes through
+        Spool(dc.read(...)); the wrapped patches must load back.
+        """
+        spool = dc.spool(pickle_patch_path)
+        assert len(spool) == 1
+        assert len(spool.get_contents()) == 1
+        assert spool[0] == random_patch
+        assert next(iter(spool)) == random_patch
+
     def test_file_not_there(self):
         """Get format should return false if the file doesn't exist."""
         parser = PickleIO()

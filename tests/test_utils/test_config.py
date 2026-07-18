@@ -75,3 +75,44 @@ class TestSetConfig:
         assert _UsesConfig().value == get_config().display_float_precision
         with set_config(display_float_precision=7):
             assert _UsesConfig().value == 7
+
+    def test_groupby_attrs_default(self):
+        """The default group attrs are the conventional identity set."""
+        expected = (
+            "network",
+            "station",
+            "data_type",
+            "data_category",
+            "tag",
+            "instrument_id",
+            "acquisition_id",
+        )
+        assert get_config().groupby_attrs == expected
+
+    def test_groupby_attrs_override(self):
+        """groupby_attrs round-trips through scoped set_config."""
+        previous = get_config()
+        with set_config(groupby_attrs=("network", "station")):
+            assert get_config().groupby_attrs == ("network", "station")
+        assert get_config() == previous
+
+    def test_groupby_attrs_coerced_to_tuple(self):
+        """List inputs coerce to the immutable tuple form."""
+        with set_config(groupby_attrs=["tag"]):
+            assert get_config().groupby_attrs == ("tag",)
+
+    def test_sampling_group_tolerance_default(self):
+        """The default sampling group tolerance is 5%."""
+        assert get_config().sampling_group_tolerance == 0.05
+
+    def test_sampling_group_tolerance_override(self):
+        """sampling_group_tolerance round-trips through scoped set_config."""
+        previous = get_config()
+        with set_config(sampling_group_tolerance=0.01):
+            assert get_config().sampling_group_tolerance == 0.01
+        assert get_config() == previous
+
+    def test_sampling_group_tolerance_must_be_positive(self):
+        """Non-positive tolerances are rejected."""
+        with pytest.raises(ValueError, match="sampling_group_tolerance"):
+            set_config(sampling_group_tolerance=0)

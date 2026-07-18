@@ -928,3 +928,47 @@ class TestGetSupportedIOTable:
 
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
+
+
+class TestIOCoreCoverageEdges:
+    """Remaining io.core resolution/robustness branches."""
+
+    def test_numeric_singleton_without_identity_not_trusted(self):
+        """A positional ID cannot resolve an anonymous trimmed singleton."""
+        from dascore.exceptions import PatchAttributeError
+        from dascore.io.core import _resolve_read_spool
+
+        spool = dc.spool([dc.get_example_patch()])
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _resolve_read_spool(spool, source_patch_id="1")
+
+    def test_non_unique_patch_resolution_raises(self):
+        """An unresolvable source id in a multi-patch read raises clearly."""
+        from dascore.exceptions import PatchAttributeError
+        from dascore.io.core import _select_patch_from_spool
+
+        spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _select_patch_from_spool(spool, source_patch_id="neither-id-nor-index")
+
+    def test_single_patch_resolved_by_name(self):
+        """A one-patch read resolves when the id matches the patch name."""
+        from dascore.io.core import _select_patch_from_spool
+
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+        resolved = _select_patch_from_spool(
+            spool, source_patch_id=str(patch.get_patch_name())
+        )
+        assert resolved == patch
+
+    def test_corrupt_file_format_detection_is_robust(self, tmp_path):
+        """A reader raising during format detection is caught, not propagated."""
+        from dascore.exceptions import UnknownFiberFormatError
+
+        # valid HDF5 magic followed by garbage: an HDF5 reader raises while
+        # probing, which format detection must swallow before giving up.
+        bad = tmp_path / "bad.h5"
+        bad.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 256)
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(bad)

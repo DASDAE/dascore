@@ -5,10 +5,10 @@ from __future__ import annotations
 import shutil
 from typing import ClassVar
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
-import tables
 
 import dascore as dc
 from dascore.io.terra15 import Terra15FormatterV4
@@ -22,8 +22,8 @@ class TestTerra15:
         """Creates a terra15 file with missing GPS Time."""
         new = tmp_path_factory.mktemp("missing_gps") / "missing.hdf5"
         shutil.copy(terra15_v5_path, new)
-        with tables.open_file(new, "a") as fi:
-            fi.root.data_product.gps_time._f_remove()
+        with h5py.File(new, "a") as fi:
+            del fi["data_product/gps_time"]
         return new
 
     def test_missing_gps_time(self, missing_gps_terra15_hdf5):

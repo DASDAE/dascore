@@ -432,34 +432,6 @@ def iterate(obj):
     return obj if isinstance(obj, Iterable) else (obj,)
 
 
-class CacheDescriptor:
-    """A descriptor for storing infor in an instance cache (mapping)."""
-
-    def __init__(self, cache_name, func_name, args=None, kwargs=None):
-        self._cache_name = cache_name
-        self._func_name = func_name
-        self._args = () if args is None else args
-        self._kwargs = {} if kwargs is None else kwargs
-
-    def __set_name__(self, owner, name):
-        """Method to set the name of the description on the instance."""
-        self._name = name
-
-    def __get__(self, instance, owner):
-        """Get contents of the cache."""
-        cache = getattr(instance, self._cache_name)
-        if self._name not in cache:
-            func = getattr(instance, self._func_name)
-            out = func(*self._args, **self._kwargs)
-            cache[self._name] = out
-        return cache[self._name]
-
-    def __set__(self, instance, value):
-        """Set the cache contents."""
-        cache = getattr(instance, self._cache_name)
-        cache[self._name] = value
-
-
 def optional_import(
     package_name: str, on_missing: Literal["raise", "warn", "ignore"] = "raise"
 ) -> ModuleType | None:
@@ -764,6 +736,11 @@ def _dict_list_diffs(dict_list):
             if first[key] != other[key]:
                 out.add(key)
     return sorted(out)
+
+
+def is_range(value) -> bool:
+    """True for a 2-tuple range (a ``(start, stop)`` selector)."""
+    return isinstance(value, tuple) and len(value) == 2
 
 
 def sanitize_range_param(select) -> tuple:

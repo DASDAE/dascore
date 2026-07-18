@@ -13,7 +13,6 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.exceptions import TimeError
 from dascore.utils.time import (
-    get_max_min_times,
     is_datetime64,
     is_timedelta64,
     saturate_add,
@@ -321,6 +320,13 @@ class TestToTimeDelta64:
         assert isinstance(out, np.timedelta64)
         assert out == to_timedelta64(3600)
 
+    def test_series(self):
+        """A Series converts to timedeltas without losing its index."""
+        ser = pd.Series([1.0, 2.0], index=["first", "second"])
+        out = to_timedelta64(ser)
+        expected = pd.Series(to_timedelta64(ser.values), index=ser.index)
+        pd.testing.assert_series_equal(out, expected)
+
     def test_pandas_string_array(self):
         """Ensure pandas StringArray converts to timedelta64[ns]."""
         arr = pd.array(["1s", "2s", None], dtype="string")
@@ -423,6 +429,13 @@ class TestToInt:
         """Ensure int ns is returned for datetime64."""
         out = to_int(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))
         assert out == 1
+
+    def test_series(self):
+        """A datetime Series converts to integer ns and preserves its index."""
+        ser = pd.Series(to_datetime64(["1970-01-01", "2000-01-01"]))
+        ser.index = ["first", "second"]
+        out = to_int(ser)
+        pd.testing.assert_series_equal(out, ser.astype(np.int64))
 
     def test_timedelta64_array(self):
         """Ensure int ns is returned for datetime64."""
@@ -662,14 +675,3 @@ class TestIsTimeDelta:
         d2 = np.array([1, 2]).astype("timedelta64[ms]").dtype
         assert not is_timedelta64(d1)
         assert is_timedelta64(d2)
-
-
-class TestGetmaxMinTimes:
-    """Tests for max_min fetching."""
-
-    def test_raises_bad_value(self):
-        """Simple test to make sure error is raised if unordered tuple."""
-        t1 = to_datetime64("2020-01-01")
-        t2 = to_datetime64("1994-01-01")
-        with pytest.raises(ValueError):
-            get_max_min_times((t1, t2))

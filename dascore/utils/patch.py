@@ -26,12 +26,13 @@ from dascore.constants import (
 )
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
     PatchCoordinateError,
 )
-from dascore.units import get_quantity, is_percent
+from dascore.units import convert_units, get_quantity, is_percent
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
@@ -40,13 +41,13 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
-    all_diffs_close_enough,
     get_middle_value,
     iterate,
     to_object_array,
     warn_or_raise,
     yield_sub_sequences,
 )
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
@@ -338,6 +339,10 @@ def patches_to_df(
     # Handle spool case
     if hasattr(patches, "get_contents"):
         df = patches.get_contents()
+        # get_contents() carries only metadata; embed the patches so the
+        # flat-dump path can serve them (the "patch" column is the point).
+        if "patch" not in df.columns:
+            df = df.assign(patch=to_object_array(list(patches)))
     elif isinstance(patches, pd.DataFrame):
         df = patches
     else:
@@ -357,6 +362,7 @@ def patches_to_df(
     if "patch" not in df.columns:
         df["patch"] = None
     return df
+
 
 @deprecate(
     info=(
@@ -417,25 +423,63 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _maybe_expected_step(df, dim):
-    """Get the expected step if all steps are close, else None."""
-    col = df[f"{dim}_step"].values
-    if all_diffs_close_enough(col):
-        return get_middle_value(col)
-    return None
+def _middle_step(coords, dim, target_units):
+    """Return the middle member step expressed in the merged coord's units."""
+    steps = []
+    for manager in coords:
+        coord = manager.coord_map[dim]
+        step = coord.step
+        if pd.isnull(step):
+            continue
+        if target_units is not None and coord.units is not None:
+            step = convert_units(step, to_units=target_units, from_units=coord.units)
+        steps.append(step)
+    if not steps:
+        return None
+    return get_middle_value(np.asarray(steps))
 
 
-def _get_merged_coord(df, merge_dim, coords, drop_conflicting=False):
-    """Get merged coordinates, also validate anticipated sampling."""
-    new_coord = merge_coord_managers(
-        coords, dim=merge_dim, drop_conflicting=drop_conflicting
+def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
+    """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
+    merge_kwargs = dict(merge_kwargs or {})
+    coord_kwargs = {
+        "snap_coords": merge_kwargs.pop("snap_coords", True),
+        "tolerance": merge_kwargs.pop("tolerance", 1.5),
+    }
+    return merge_kwargs, coord_kwargs
+
+
+def _get_merged_coord(
+    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+):
+    """
+    Get merged coordinates for patches combined along merge_dim.
+
+    The merged dimension coordinate is built by truth-preserving
+    concatenation of the member coords (exactly contiguous members fuse to
+    a plain range; recorded seams otherwise), then — when `snap_coords` —
+    simplified with bounded error: no value moves more than
+    `tolerance * step`. Merges whose gaps exceed that stay segmented
+    (honestly non-uniform) rather than being relabeled.
+    """
+    from dascore.core.coords import concat_coords
+
+    try:
+        merged = concat_coords(*[cm.coord_map[merge_dim] for cm in coords])
+    except CoordError:
+        # Non-monotonic (or otherwise unsegmentable) member coordinates:
+        # fall back to raw value concatenation of the dim coord.
+        return merge_coord_managers(
+            coords, dim=merge_dim, drop_conflicting=drop_conflicting
+        )
+    step = _middle_step(coords, merge_dim, merged.units)
+    if snap_coords and step is not None:
+        merged = merged.simplify(tolerance * np.abs(step))
+    # Passing the pre-built dim coord avoids materializing the members'
+    # concatenated values only to discard them.
+    return merge_coord_managers(
+        coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
     )
-    expected_step = _maybe_expected_step(df, merge_dim)
-    if not pd.isnull(expected_step):
-        new_coord = new_coord.snap(merge_dim)[0]
-        # TODO slightly different dt can be produced, let pass for now
-        # need to think more about how the merging should work.
-    return new_coord
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
@@ -447,7 +491,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_dim(df)
-    merge_kwargs = merge_kwargs if merge_kwargs is not None else {}
+    attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(merge_kwargs)
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
@@ -461,10 +505,12 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
-    conf = merge_kwargs.get("conflicts", None)
+    conf = attr_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords)
-    new_attrs = combine_patch_attrs(attrs, **merge_kwargs)
+    new_coord = _get_merged_coord(
+        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
+    )
+    new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
@@ -583,15 +629,17 @@ def get_patch_names(
     # Handle special cases.
     if "name" in col_set:
         return df["name"].astype(str)
-    if "path" in col_set and df["path"].astype(str).str.len().gt(0).any():
-        return _get_filename(df["path"], strip_extension)
-    # Determine the requested fields and get the ones that are there.
+    path_ser = df["path"].astype(str) if "path" in col_set else None
+    if path_ser is not None:
+        # synthetic in-memory identities are not real file names
+        usable = path_ser.str.len().gt(0) & ~path_ser.map(is_memory_uri)
+        if usable.all():
+            return _get_filename(df["path"], strip_extension)
+    # Determine the requested fields; absent columns render as empty so
+    # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
-    requested_fields = list(attrs) + list(*coord_fields)
-    current = set(df.columns)
-    fields = [x for x in requested_fields if x in current]
-    # Get a sub dataframe and convert any datetime things to strings.
-    sub = df[fields].pipe(_format_time_columns).fillna("").astype(str)
+    fields = list(attrs) + [field for pair in coord_fields for field in pair]
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).fillna("").astype(str)
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 
@@ -1256,8 +1304,9 @@ def concatenate_patches(
     >>> spool_concat = spool.concatenate(wave_rank=None)
     >>> assert "wave_rank" in spool_concat[0].dims
     >>>
-    >>> # Concatenate patches in groups of 3.
-    >>> big_spool = dc.spool([patch] * 12)
+    >>> # Concatenate patches in groups of 3. Note: spools keep one
+    >>> # entry per patch instance, so distinct copies are needed.
+    >>> big_spool = dc.spool([patch.new() for _ in range(12)])
     >>> spool_concat = big_spool.concatenate(time=3)
     >>> assert len(spool_concat) == 4
 
