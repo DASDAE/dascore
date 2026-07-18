@@ -875,7 +875,41 @@ class TestReloadableSourcePath:
 
         monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
 
-        with pytest.raises(TypeError, match="requires FiberIO.scan"):
+        with pytest.raises(ValueError, match="no longer accepts PatchAttrs"):
+            dc.scan_payloads(terra15_v6_path)
+
+    def test_scan_payloads_missing_keys_raises(self, monkeypatch, terra15_v6_path):
+        """Raw payload scans should validate all required payload keys."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def return_malformed_payload(*args, **kwargs):
+            return [{"unexpected": 1}]
+
+        monkeypatch.setattr(fiber_io, "scan", return_malformed_payload)
+
+        with pytest.raises(TypeError, match="missing required keys"):
+            dc.scan_payloads(terra15_v6_path)
+
+    def test_scan_payloads_requires_coord_manager(self, monkeypatch, terra15_v6_path):
+        """Raw payload scans should reject collapsed coordinate summaries."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+        patch = dc.get_example_patch()
+        payload = {
+            "attrs": patch.attrs,
+            "coords": patch.coords.to_summary_dict(),
+            "dims": patch.dims,
+            "shape": patch.shape,
+            "dtype": str(patch.data.dtype),
+        }
+
+        def return_summary_coords(*args, **kwargs):
+            return [payload]
+
+        monkeypatch.setattr(fiber_io, "scan", return_summary_coords)
+
+        with pytest.raises(TypeError, match="must be a CoordManager"):
             dc.scan_payloads(terra15_v6_path)
 
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):

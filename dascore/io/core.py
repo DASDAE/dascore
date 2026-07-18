@@ -143,6 +143,48 @@ def _make_scan_payload(
     }
 
 
+_SCAN_PAYLOAD_REQUIRED = ("attrs", "coords", "dims", "shape", "dtype")
+
+
+def _validate_scan_payload(result, require_coord_manager: bool = False):
+    """
+    Validate one FiberIO.scan() result against the ScanPayload contract.
+
+    Shared by the `dc.scan` summary path and `dc.scan_payloads` so both
+    public boundaries enforce the same requirements; only the payload
+    API additionally requires `coords` to be a full CoordManager (the
+    summary path also accepts already-collapsed coordinate mappings).
+    """
+    if isinstance(result, dc.PatchAttrs):
+        msg = (
+            "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
+            "Return a structured scan payload instead. "
+            "See docs/contributing/new_format.qmd."
+        )
+        raise ValueError(msg)
+    if not isinstance(result, Mapping):
+        msg = (
+            "FiberIO.scan() must return ScanPayload mappings; got "
+            f"{type(result).__name__}. See docs/contributing/new_format.qmd."
+        )
+        raise TypeError(msg)
+    missing = sorted(set(_SCAN_PAYLOAD_REQUIRED) - set(result))
+    if missing:
+        msg = (
+            f"scan payload is missing required keys {missing}; a ScanPayload "
+            "requires a mapping with `coords`, `attrs`, and `dtype` as well "
+            "as `dims` and `shape`. See docs/contributing/new_format.qmd."
+        )
+        raise TypeError(msg)
+    if require_coord_manager and not isinstance(result["coords"], CoordManager):
+        msg = (
+            "scan payload `coords` must be a CoordManager holding the full "
+            f"coordinates; got {type(result['coords']).__name__}."
+        )
+        raise TypeError(msg)
+    return result
+
+
 def _scan_payload_to_summary(
     payload: ScanPayload | Mapping[str, Any],
     *,
@@ -152,12 +194,7 @@ def _scan_payload_to_summary(
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert one structured FiberIO scan payload into a PatchSummary."""
-    if "coords" not in payload or "attrs" not in payload or "dtype" not in payload:
-        msg = (
-            "_scan_payload_to_summary requires a mapping with `coords`, "
-            "`attrs`, and `dtype`."
-        )
-        raise TypeError(msg)
+    _validate_scan_payload(payload)
     coords = payload["coords"]
     if hasattr(coords, "to_summary_dict"):
         coords = coords.to_summary_dict()
@@ -1328,12 +1365,7 @@ def scan_payloads(
         payloads=True,
     )
     for result, source_info in iterator:
-        if not isinstance(result, Mapping):
-            msg = (
-                "scan_payloads requires FiberIO.scan() to return ScanPayload "
-                "mappings with full coordinate managers."
-            )
-            raise TypeError(msg)
+        _validate_scan_payload(result, require_coord_manager=True)
         payload = dict(result)
         payload.update(
             {

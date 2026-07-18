@@ -166,7 +166,7 @@ In implementation code, the simplest pattern is usually:
 
 1. Build normal `PatchAttrs` for one logical patch.
 2. Build the exact `CoordManager` you would use for `read()`.
-3. Return one payload with those values plus `dims`, `shape`, and `data_type`.
+3. Return one payload with those values plus `dims`, `shape`, and `dtype`.
 
 If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
 implementation will normalize it into the same structured payload shape. Format
