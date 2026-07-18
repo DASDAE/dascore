@@ -33,6 +33,11 @@ pytestmark = [
     ),
 ]
 
+# Sintela protobuf walks its MTLV envelope with three small sequential reads
+# per record (magic, header, payload), so a modest file issues hundreds of
+# reads. That is fine locally and over memory://, but each read becomes a
+# request on the localhost-HTTP range-streaming path, which blows the timeouts
+# below. Remote coverage for this format stays at the memory:// level.
 REMOTE_COMMON_IO_READ_TESTS = {
     io: fetch_names
     for io, fetch_names in COMMON_IO_READ_TESTS.items()
