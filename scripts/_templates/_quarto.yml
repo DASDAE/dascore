@@ -211,6 +211,9 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
+        - text: Coordinate Internals
+          href: notes/coordinate_internals.qmd
+
         - text: PatchAttrs
           href: notes/patch_attrs.qmd
 

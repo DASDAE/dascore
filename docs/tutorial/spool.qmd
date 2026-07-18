@@ -89,7 +89,7 @@ It is best not to delete files once added to a directory managed by DASCore.
 Despite some implementation differences, all spools have common behavior/methods.
 
 :::{.callout-note}
-Remote file resources work with `dc.spool(...)`, `dc.read(...)`, and `dc.scan(...)`. 
+Remote file resources work with `dc.spool(...)`, `dc.read(...)`, `dc.scan(...)`, and `dc.scan_payloads(...)`.
 :::
 
 :::{.callout-note}

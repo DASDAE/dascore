@@ -71,7 +71,7 @@ print(round_trip.dims)
 
 ## Scan Metadata Without Loading Data
 
-[`dascore.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects. These scan results expose metadata, coordinates, and source information without loading the data array into memory.
+[`dascore.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects. These results expose patch metadata, coordinate-summary envelopes, and source information without loading the data array into memory.
 
 ```{python}
 import dascore as dc
@@ -95,6 +95,19 @@ loaded_patch = dc.read(
 )[0]
 print(loaded_patch.data.shape)
 ```
+
+When a coordinate-summary envelope is insufficient, [`dascore.scan_payloads(...)`](`dascore.scan_payloads`) exposes each formatter's full `CoordManager` without loading the patch data array. Pass `snap=False` to request the exact stored coordinate values from formats that store per-sample arrays.
+
+```{python}
+payload = dc.scan_payloads(path, snap=False)[0]
+time_coord = payload["coords"].get_coord("time")
+
+print(payload["source_path"])
+print(type(time_coord).__name__)
+print(time_coord.get_discontinuities("gaps"))
+```
+
+`scan_payloads` may read and retain large coordinate arrays, so prefer a specific file over an entire directory and discard each result promptly. Use `dc.scan` or `dc.scan_to_df` for compact directory indexing.
 
 :::{.callout-note}
 `Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
