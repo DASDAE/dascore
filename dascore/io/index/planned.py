@@ -475,10 +475,12 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     """
     Return the re-planning frame for a derived catalog, or None.
 
-    Plans collapse (never nest): re-chunking a planned spool plans over
-    the current view's *members* — the trimmed source rows — restricted
-    to outputs the view still presents, with the view's value residuals
-    applied to the envelopes.
+    Re-planning the *same* dimension collapses: it plans over the
+    current view's *members* — the trimmed source rows — restricted to
+    outputs the view still presents, with the view's value residuals
+    applied to the envelopes. (Planning a different dimension must keep
+    the assembled boundaries, so its caller plans over the output rows
+    instead and never collapses.)
     """
     resolver = catalog.resolver
     if not isinstance(resolver, PlanResolver):

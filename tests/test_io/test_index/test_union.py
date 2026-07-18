@@ -453,3 +453,41 @@ class TestLossyStateUnion:
         loaded = pickle.loads(pickle.dumps(combined))
         assert len(loaded) == 1
         assert loaded[0].shape == combined[0].shape
+
+
+def _patch_shape(patch):
+    """Module-level shape getter (process pools need a picklable callable)."""
+    return patch.shape
+
+
+class TestMixedViewPickle:
+    """Serialization keeps plan routes in mixed views (round-4 F2)."""
+
+    def test_sliced_mixed_union_pickles(self):
+        """A sliced union of planned and live rows loads all rows back."""
+        import pickle
+
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        trimmed = dc.spool([p]).select(
+            time=(t.min() + 10 * t.step, t.min() + 20 * t.step)
+        )
+        other = p.new().update_attrs(tag="other")
+        view = (trimmed + dc.spool([other]))[:]
+        loaded = pickle.loads(pickle.dumps(view))
+        shapes = {loaded[i].shape for i in range(len(loaded))}
+        assert shapes == {(300, 11), (300, 2000)}
+
+    def test_mixed_union_map_processes(self):
+        """Process-backed map ships plan routes with each task."""
+        from concurrent.futures import ProcessPoolExecutor
+
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        trimmed = dc.spool([p]).select(
+            time=(t.min() + 10 * t.step, t.min() + 20 * t.step)
+        )
+        combined = trimmed + dc.spool([p.new().update_attrs(tag="other")])
+        with ProcessPoolExecutor(2) as executor:
+            shapes = set(combined.map(_patch_shape, client=executor))
+        assert shapes == {(300, 11), (300, 2000)}

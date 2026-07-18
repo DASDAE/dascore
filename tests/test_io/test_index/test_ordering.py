@@ -196,3 +196,75 @@ class TestSortNonHotCoords:
         srt = dc.spool([p2, p]).sort("time")
         mins = [x.get_coord("time").min() for x in srt]
         assert mins == sorted(mins)
+
+
+class TestInterleavedSourceOrder:
+    """Directory time order across interleaved multi-patch files (F4)."""
+
+    def test_multi_patch_file_straddles_another(self, tmp_path):
+        """A patch between two patches of another file presents in order."""
+        p0 = dc.get_example_patch()
+        t = p0.get_coord("time")
+        span = t.max() - t.min() + t.step
+        p1 = p0.update_coords(time_min=t.min() + span)
+        p2 = p0.update_coords(time_min=t.min() + 2 * span)
+        dc.write(dc.spool([p0, p2]), tmp_path / "a.h5", "DASDAE")
+        dc.write(p1, tmp_path / "b.h5", "DASDAE")
+        spool = dc.spool(tmp_path).update(progress=None)
+        contents = spool.get_contents()
+        assert contents["time_min"].is_monotonic_increasing
+        mins = [x.get_coord("time").min() for x in spool]
+        assert mins == sorted(mins)
+        # windows and sorting stay consistent with the presentation
+        assert spool[1:2][0].get_coord("time").min() == mins[1]
+        assert spool.sort("distance").get_contents().shape[0] == 3
+
+    def test_default_order_is_not_view_state(self, tmp_path):
+        """The presentation contract does not make a root a view."""
+        dc.write(dc.get_example_patch(), tmp_path / "a.h5", "DASDAE")
+        spool = dc.spool(tmp_path).update(progress=None)
+        assert spool.update() is not None  # root update allowed
+
+
+class TestInterruptedInitialUpdate:
+    """The initial-update marker only sets after renumbering (F6)."""
+
+    def test_interruption_before_renumber_recovers(self, tmp_path):
+        """A crash after write_sources still renumbers on the retry."""
+        from dascore.io.index.indexer import DBDirectoryIndexer
+
+        p0 = dc.get_example_patch()
+        t = p0.get_coord("time")
+        span = t.max() - t.min() + t.step
+        late = p0.update_coords(time_min=t.min() + span)
+        # walk order (file names) disagrees with time order
+        dc.write(late, tmp_path / "a_late.h5", "DASDAE")
+        dc.write(p0, tmp_path / "b_early.h5", "DASDAE")
+
+        class _InterruptedError(RuntimeError):
+            pass
+
+        indexer = DBDirectoryIndexer(tmp_path)
+        original = type(indexer._backend).renumber_ordinals_by_time
+
+        def _boom(self):
+            raise _InterruptedError
+
+        type(indexer._backend).renumber_ordinals_by_time = _boom
+        try:
+            with pytest.raises(_InterruptedError):
+                indexer.ensure_updated()
+        finally:
+            type(indexer._backend).renumber_ordinals_by_time = original
+        del indexer  # simulate the process dying after write_sources
+
+        # a fresh open must not treat the interrupted update as done
+        spool = dc.spool(tmp_path).update(progress=None)
+        mins = list(spool.get_contents()["time_min"])
+        assert mins == sorted(mins)
+        sources = spool._catalog.backend.get_sources()
+        by_ordinal = sources.sort_values("ordinal")["source_path"].tolist()
+        assert [p.split("/")[-1] for p in by_ordinal] == [
+            "b_early.h5",
+            "a_late.h5",
+        ]

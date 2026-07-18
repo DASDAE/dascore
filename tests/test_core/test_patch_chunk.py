@@ -869,3 +869,63 @@ class TestMixedUnitChunk:
         out = sp.chunk(distance=None, conflict="drop")
         assert len(out) == 1
         assert str(out[0].get_coord("distance").units) == "1 m"
+
+
+class TestChainedChunk:
+    """Chunking a derived spool along another dimension (round-4 F1)."""
+
+    def test_other_dim_keeps_prior_boundaries(self):
+        """Re-chunking distance must not undo a time concatenation."""
+        p1 = dc.get_example_patch()
+        t = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=t.max() + t.step)
+        merged = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        current = merged[0]
+        d = current.get_coord("distance")
+        size = (d.max() - d.min()) / 2
+        actual = merged.chunk(distance=size, keep_partial=True, conflict="drop")
+        expected = dc.spool([current]).chunk(
+            distance=size, keep_partial=True, conflict="drop"
+        )
+        assert sorted(x.shape for x in actual) == sorted(x.shape for x in expected)
+        got = {
+            (str(x.get_coord("time").min()), str(x.get_coord("time").max()))
+            for x in actual
+        }
+        want = {
+            (str(x.get_coord("time").min()), str(x.get_coord("time").max()))
+            for x in expected
+        }
+        assert got == want
+
+    def test_segment_then_segment(self):
+        """chunk(time=...) then chunk(distance=...) partitions both dims."""
+        p = dc.get_example_patch()  # (300, 2000), 8 s
+        out = dc.spool([p]).chunk(time=2).chunk(distance=100)
+        assert len(out) == 12
+        assert {x.shape for x in out} == {(100, 500)}
+
+    def test_same_dim_rechunk_still_collapses(self):
+        """Re-chunking the same dim re-plans from members (no nesting)."""
+        p1 = dc.get_example_patch()
+        t = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=t.max() + t.step)
+        merged = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        rechunk = merged.chunk(time=2)
+        assert len(rechunk) == 8
+        assert {x.shape for x in rechunk} == {(300, 500)}
+
+
+class TestMatchMergeUnits:
+    """The member unit normalizer's defensive paths."""
+
+    def test_incompatible_units_pass_through(self):
+        """Dimensionality mismatches pass through for the merge to police."""
+        from dascore.units import get_quantity
+        from dascore.utils.patch_assembly import _match_merge_units
+
+        patch = dc.get_example_patch().set_units(distance="m")
+        target = get_quantity("s").units
+        out, kept = _match_merge_units(patch, "distance", target)
+        assert out is patch  # unconverted
+        assert kept == target

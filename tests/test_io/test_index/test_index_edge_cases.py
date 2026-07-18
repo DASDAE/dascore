@@ -1282,3 +1282,63 @@ class TestReservedAttrNames:
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
         assert "data_units" in spool._catalog.backend.attr_names()
+
+
+class TestTransactionIsolation:
+    """The statement lock covers whole transactions (round-4 F5)."""
+
+    def test_reader_never_sees_half_written_replacement(self, tmp_path):
+        """A concurrent reader blocks during a source replacement."""
+        import threading
+
+        from dascore.io.index.backend import get_backend
+        from dascore.io.index.ingest import SourceRecord, patch_record
+
+        patch = dc.get_example_patch()
+        record = SourceRecord(
+            source_path="mem://one",
+            source_format="mem",
+            format_version="",
+            patches=(patch_record(patch.summary),),
+        )
+        backend = get_backend(str(tmp_path / "idx.sqlite3"))
+        backend.write_sources([record])
+        assert len(backend.query()) == 1
+
+        in_delete = threading.Event()
+        release = threading.Event()
+        original = type(backend)._delete_by_paths
+
+        def paused_delete(self, *args, **kwargs):
+            out = original(self, *args, **kwargs)
+            in_delete.set()
+            release.wait(timeout=10)
+            return out
+
+        counts = []
+
+        def read():
+            counts.append(len(backend.query()))
+
+        writer = threading.Thread(
+            target=lambda: backend.write_sources([record]), daemon=True
+        )
+        type(backend)._delete_by_paths = paused_delete
+        try:
+            writer.start()
+            assert in_delete.wait(timeout=10)
+            # the writer sits mid-transaction with the row deleted; a
+            # reader must block on the transaction lock, not observe it
+            reader = threading.Thread(target=read, daemon=True)
+            reader.start()
+            reader.join(timeout=0.3)
+            assert reader.is_alive(), "reader observed a half-written state"
+            assert counts == []
+            release.set()
+            writer.join(timeout=10)
+            reader.join(timeout=10)
+        finally:
+            type(backend)._delete_by_paths = original
+            release.set()
+        assert counts == [1]
+        backend.close()

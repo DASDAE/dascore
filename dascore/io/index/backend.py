@@ -11,7 +11,7 @@ from __future__ import annotations
 import abc
 import time
 import warnings
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
 import numpy as np
@@ -202,15 +202,21 @@ class SQLIndexBackend(AbstractIndexBackend):
 
         Commits on normal (or early-return) exit; on any error rolls back
         without letting a failed rollback mask the original exception.
+        The backend's statement lock (when present) is held for the whole
+        transaction, so readers sharing the connection can never observe
+        a half-applied write; the reentrant lock keeps the statement
+        helpers inside the body working unchanged.
         """
-        self._begin()
-        try:
-            yield
-            self._commit()
-        except Exception:
-            with suppress(Exception):
-                self._rollback()
-            raise
+        lock = getattr(self, "_lock", None)
+        with lock if lock is not None else nullcontext():
+            self._begin()
+            try:
+                yield
+                self._commit()
+            except Exception:
+                with suppress(Exception):
+                    self._rollback()
+                raise
 
     # --- schema ------------------------------------------------------
 
@@ -551,7 +557,11 @@ class SQLIndexBackend(AbstractIndexBackend):
                 tuple(PATCH_COORDS),
                 [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
             )
-            self._execute("UPDATE meta_data SET last_indexed_ns = ?", (now,))
+            # meta_data.last_indexed_ns is the initial-update-complete
+            # marker; only mark_initial_update_done (after renumbering
+            # succeeds) may set it, or an interruption here would defeat
+            # the reopen recovery path. Per-source timestamps already
+            # live on the sources rows.
 
     # Batch size for IN (...) parameter lists; SQLite caps bound
     # variables (32766 by default) so large replacements must chunk.

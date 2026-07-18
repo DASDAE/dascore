@@ -16,6 +16,7 @@ from dascore.io.index.planned import (
     PlanResolver,
     _coord_record_from_row,
     _ns,
+    collapse_working_df,
     derived_catalog,
 )
 
@@ -316,3 +317,12 @@ class TestAuxInfoEdges:
             {"_patch_id": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
         )
         assert _aux_coord_info(sources, members, "time", {"sensor": "distance"}) == {}
+
+
+class TestCollapseGuard:
+    """collapse_working_df only applies to plan-backed catalogs."""
+
+    def test_non_plan_catalog_returns_none(self):
+        """A live catalog has no plan to collapse."""
+        catalog = dc.spool([dc.get_example_patch()])._catalog
+        assert collapse_working_df(catalog) is None

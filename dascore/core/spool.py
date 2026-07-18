@@ -644,22 +644,28 @@ class Spool(BaseSpool):
 
     # --- restructuring (materializing) operations -----------------------
 
-    def _plan_frames(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _plan_frames(self, dim: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Return (source_rows, working) frames for planning.
+        Return (source_rows, working) frames for planning along ``dim``.
 
-        Plans collapse (never nest): a derived catalog re-plans from its
-        members — the trimmed source rows — restricted to the outputs
-        the current view presents. Patch-local samples residuals adjust
-        the working envelopes so plans reflect the loading truth.
+        Re-planning the *same* dimension collapses (never nests): a
+        derived catalog re-plans from its members — the trimmed source
+        rows — restricted to the outputs the current view presents.
+        Planning a *different* dimension must keep the already-assembled
+        boundaries, so it plans over the current output rows themselves
+        (loaded through the plan resolver). Patch-local samples
+        residuals adjust the working envelopes so plans reflect the
+        loading truth.
         """
-        from dascore.io.index.planned import collapse_working_df
+        from dascore.io.index.planned import PlanResolver, collapse_working_df
         from dascore.utils.chunk_plan import (
             _ensure_patch_id,
             samples_adjusted_envelopes,
         )
 
-        base = collapse_working_df(self._catalog)
+        resolver = self._catalog.resolver
+        same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
+        base = collapse_working_df(self._catalog) if same_dim else None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
         base = _ensure_patch_id(base)
@@ -703,7 +709,7 @@ class Spool(BaseSpool):
         """
         from dascore.utils.chunk_plan import build_chunk_plan
 
-        _, working = self._plan_frames()
+        _, working = self._plan_frames(next(iter(kwargs), None))
         return build_chunk_plan(
             working,
             overlap=overlap,
@@ -732,7 +738,7 @@ class Spool(BaseSpool):
         from dascore.io.index.planned import derived_catalog
         from dascore.utils.chunk_plan import build_chunk_plan
 
-        source_rows, working = self._plan_frames()
+        source_rows, working = self._plan_frames(next(iter(kwargs), None))
         plan = build_chunk_plan(
             working,
             overlap=overlap,
@@ -773,7 +779,7 @@ class Spool(BaseSpool):
             raise ParameterError(msg)
         ((dim, value),) = kwargs.items()
         value = None if value is Ellipsis else value
-        source_rows, working = self._plan_frames()
+        source_rows, working = self._plan_frames(dim)
         # a dim absent from the metadata envelopes is legal: concatenate
         # can stack patches along a brand-new dimension
         has_envelope = f"{dim}_min" in working.columns
@@ -837,10 +843,13 @@ class Spool(BaseSpool):
 
         out = cls()
         if isinstance(path, AbstractIndexer):
+            from dascore.io.index.catalog import _DIRECTORY_ORDER
+
             out._catalog = PatchCatalog(
                 backend=path._backend,
                 resolver=FileResolver(root=path.path),
                 syncer=path,
+                default_order=_DIRECTORY_ORDER,
             )
         else:
             out._catalog = PatchCatalog.from_directory(path, index_path=index_path)

@@ -39,6 +39,11 @@ from dascore.utils.misc import is_range
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
+# Directory archives present in per-patch time order (source ordinals
+# alone cannot interleave multi-patch files); ordinal and patch id stay
+# the deterministic tiebreak inside the ORDER BY.
+_DIRECTORY_ORDER = ("coord", "time", True)
+
 
 class _CanonicalRange:
     """
@@ -358,14 +363,28 @@ def _absolutize_record(record, root):
     return replace(record, source_path=resolved, base_uri=None)
 
 
-def _membership_resolver(resolver: PatchResolver, keep: dict) -> PatchResolver:
-    """Return a copy of resolver whose live registry holds only `keep`."""
+def _membership_resolver(
+    resolver: PatchResolver, keep: dict, paths=()
+) -> PatchResolver:
+    """
+    Return a copy of resolver whose live registry holds only `keep`.
+
+    ``paths`` are the synthetic paths the view's rows reference: plan
+    routes serving any of them must survive the restriction or mixed
+    planned/live views lose their plan-backed rows on serialization.
+    """
     if isinstance(resolver, LiveResolver):
         out = LiveResolver()
         out._registry = dict(keep)
         return out
     out = CompositeResolver()
     out.live._registry = dict(keep)
+    plans = getattr(resolver, "plan_entries", dict)()
+    out.plans = {
+        prefix: plan
+        for prefix, plan in plans.items()
+        if any(str(p).startswith(prefix) for p in paths)
+    }
     return out
 
 
@@ -419,6 +438,7 @@ class PatchCatalog:
         revision: _CatalogRevision | None = None,
         order: tuple | None = None,
         ids: tuple | None = None,
+        default_order: tuple | None = None,
     ):
         self._backend = backend
         self.resolver = resolver
@@ -428,6 +448,11 @@ class PatchCatalog:
         # presentation specs (D2): an order override ("attr"|"coord",
         # name, ascending) and/or an ordered patch-id membership
         self._order = order
+        # the catalog's own presentation contract when no user order is
+        # set (directory archives present in per-patch time order —
+        # source ordinals alone cannot interleave multi-patch files).
+        # Not view state: a root with a default order still updates.
+        self._default_order = default_order
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache: pd.DataFrame | None = None
@@ -533,6 +558,7 @@ class PatchCatalog:
             backend=syncer._backend,
             resolver=FileResolver(root=syncer.path),
             syncer=syncer,
+            default_order=_DIRECTORY_ORDER,
         )
 
     # --- internals ------------------------------------------------------
@@ -605,7 +631,7 @@ class PatchCatalog:
             paths = list(dict.fromkeys(df["path"].astype(str)))
             entries = self.resolver.live_entries()
             keep = {k: entries[k] for k in paths if k in entries}
-            state["resolver"] = _membership_resolver(self.resolver, keep)
+            state["resolver"] = _membership_resolver(self.resolver, keep, paths)
         return state
 
     def _view(self, queries, residuals, order=_KEEP, ids=_KEEP) -> PatchCatalog:
@@ -618,6 +644,7 @@ class PatchCatalog:
             revision=self._revision,
             order=self._order if order is _KEEP else order,
             ids=self._ids if ids is _KEEP else ids,
+            default_order=self._default_order,
         )
         return out
 
@@ -642,6 +669,11 @@ class PatchCatalog:
             raise IndexError(msg)
         return self._view(self._queries, self._residuals, order=spec)
 
+    @property
+    def _effective_order(self) -> tuple | None:
+        """The presentation order: a user order spec, else the default."""
+        return self._order if self._order is not None else self._default_order
+
     def _ordered_ids(self) -> tuple[int, ...]:
         """The view's patch ids in presentation order (ids only, cheap)."""
         if self._ids is not None and self._order is None:
@@ -649,7 +681,7 @@ class PatchCatalog:
         return tuple(
             self.backend.query_ids(
                 list(self._queries) or None,
-                order_by=self._order,
+                order_by=self._effective_order,
                 patch_ids=self._ids,
             )
         )
@@ -797,7 +829,7 @@ class PatchCatalog:
         if self._df_cache is None or self._df_cache_revision != self._revision.value:
             df = self.backend.query(
                 list(self._queries) or None,
-                order_by=self._order,
+                order_by=self._effective_order,
                 patch_ids=self._ids,
             )
             if self._ids is not None and self._order is None:

@@ -1343,13 +1343,30 @@ def is_directory_format(path) -> bool:
     return True
 
 
+def _resolves_assembled_patches(spool) -> bool:
+    """
+    Return True when the spool can produce patches that are not literal
+    persisted file reads (live patches or plan-assembled outputs).
+
+    Persisted patches are always contiguous, so purely file-backed
+    spools skip gap inspection; plan resolvers can assemble several
+    sources across a real gap into a segmented coordinate.
+    """
+    if getattr(spool, "has_live_patches", False):
+        return True
+    catalog = getattr(spool, "_catalog", None)
+    resolver = getattr(catalog, "resolver", None)
+    return bool(getattr(resolver, "plan_entries", dict)())
+
+
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
     from dascore.core.coords import CoordSegmented
 
-    # Only in-memory patches are inspected; file-backed patches always have
-    # contiguous coordinates (gapped patches are never persisted).
-    if not getattr(spool, "has_live_patches", False):
+    # Gap inspection depends on what the spool resolves, not on where
+    # its ultimate members live: only literal file reads are always
+    # contiguous (gapped patches are never persisted).
+    if not _resolves_assembled_patches(spool):
         return spool
 
     def _has_gaps(patch):
