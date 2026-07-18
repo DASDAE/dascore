@@ -10,6 +10,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Generator, Mapping
 from functools import cache, cached_property, wraps
+from numbers import Integral
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired, TypedDict, get_type_hints
 
@@ -153,7 +154,8 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
     Shared by the `dc.scan` summary path and `dc.scan_payloads` so both
     public boundaries enforce the same requirements; only the payload
     API additionally requires `coords` to be a full CoordManager (the
-    summary path also accepts already-collapsed coordinate mappings).
+    summary path also accepts already-collapsed coordinate mappings) and
+    requires `dims` and `shape` to match it exactly.
     """
     if isinstance(result, dc.PatchAttrs):
         msg = (
@@ -182,6 +184,66 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
             f"coordinates; got {type(result['coords']).__name__}."
         )
         raise TypeError(msg)
+    if not isinstance(result["coords"], CoordManager | Mapping):
+        msg = "scan payload `coords` must be a CoordManager or coordinate mapping."
+        raise TypeError(msg)
+    attrs = result["attrs"]
+    if not isinstance(attrs, PatchAttrs | Mapping):
+        msg = "scan payload `attrs` must be PatchAttrs or an attribute mapping."
+        raise TypeError(msg)
+    try:
+        PatchAttrs.from_dict(attrs)
+    except (TypeError, ValueError) as exc:
+        msg = "scan payload `attrs` contains invalid attribute values."
+        raise TypeError(msg) from exc
+    dims = result["dims"]
+    valid_dims = (
+        isinstance(dims, tuple)
+        and all(isinstance(x, str) and x for x in dims)
+        and len(set(dims)) == len(dims)
+    )
+    if not valid_dims:
+        msg = "scan payload `dims` must be a tuple of unique, non-empty strings."
+        raise TypeError(msg)
+    shape = result["shape"]
+    valid_shape = (
+        isinstance(shape, tuple)
+        and len(shape) == len(dims)
+        and all(
+            isinstance(x, Integral) and not isinstance(x, bool) and x >= 0
+            for x in shape
+        )
+    )
+    if not valid_shape:
+        msg = "scan payload `shape` must contain one non-negative integer per dim."
+        raise TypeError(msg)
+    dtype = result["dtype"]
+    if not isinstance(dtype, str):
+        msg = "scan payload `dtype` must be a string."
+        raise TypeError(msg)
+    try:
+        np.dtype(dtype)
+    except (TypeError, ValueError) as exc:
+        msg = f"scan payload `dtype` is invalid: {dtype!r}."
+        raise TypeError(msg) from exc
+    optional_types = {
+        "source_patch_id": str,
+        "source_path": (str, Path, UPath),
+        "source_format": str,
+        "source_version": str,
+    }
+    for name, expected_type in optional_types.items():
+        if name in result and not isinstance(result[name], expected_type):
+            msg = f"scan payload `{name}` has an invalid type."
+            raise TypeError(msg)
+    if require_coord_manager:
+        coords = result["coords"]
+        if dims != coords.dims:
+            msg = "scan payload `dims` must exactly match `coords.dims`."
+            raise ValueError(msg)
+        if shape != coords.shape:
+            msg = "scan payload `shape` must exactly match `coords.shape`."
+            raise ValueError(msg)
     return result
 
 
@@ -837,7 +899,7 @@ class FiberIO:
         # however, this can be very slow, so each parser should implement scan
         # when possible.
         read_params = inspect.signature(self.read).parameters
-        read_kwargs = {}
+        read_kwargs = dict(kwargs)
         if "snap" in read_params:
             read_kwargs["snap"] = snap
         elif "snap_dims" in read_params:
@@ -1367,6 +1429,7 @@ def scan_payloads(
     for result, source_info in iterator:
         _validate_scan_payload(result, require_coord_manager=True)
         payload = dict(result)
+        payload["attrs"] = PatchAttrs.from_dict(payload["attrs"])
         payload.update(
             {
                 "source_path": source_info.get("source_path") or "",

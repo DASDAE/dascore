@@ -29,6 +29,7 @@ from dascore.io.core import (
     _get_reloadable_source_path,
     _make_scan_payload,
     _scan_result_to_summary,
+    _validate_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import get_exact_coord
@@ -925,6 +926,78 @@ class TestReloadableSourcePath:
         with pytest.raises(TypeError, match="must be a CoordManager"):
             dc.scan_payloads(terra15_v6_path)
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("attrs", "not-attrs"),
+            ("attrs", {"tag": ["not-a-string"]}),
+            ("coords", object()),
+            ("dims", "time"),
+            ("dims", ("time", "")),
+            ("dims", ("time", "time")),
+            ("shape", [1, 2]),
+            ("shape", (1, -1)),
+            ("dtype", np.dtype("float64")),
+            ("dtype", "not-a-dtype"),
+            ("source_patch_id", 1),
+            ("source_path", 1),
+            ("source_format", Path("format")),
+            ("source_version", None),
+        ],
+    )
+    def test_scan_payload_field_validation(self, key, value):
+        """Every declared payload field should enforce its public type."""
+        patch = dc.get_example_patch()
+        payload = _make_scan_payload(
+            attrs=patch.attrs,
+            coords=patch.coords,
+            dims=patch.dims,
+            shape=patch.shape,
+            dtype=str(patch.dtype),
+        )
+        payload[key] = value
+
+        with pytest.raises(TypeError, match=key):
+            _validate_scan_payload(payload)
+
+    @pytest.mark.parametrize("key", ["dims", "shape"])
+    def test_scan_payload_coord_metadata_must_match(self, key):
+        """Strict payload metadata must agree with the full coord manager."""
+        patch = dc.get_example_patch()
+        payload = _make_scan_payload(
+            attrs=patch.attrs,
+            coords=patch.coords,
+            dims=patch.dims,
+            shape=patch.shape,
+            dtype=str(patch.dtype),
+        )
+        if key == "dims":
+            payload[key] = tuple(reversed(patch.dims))
+        else:
+            payload[key] = (patch.shape[0] + 1, *patch.shape[1:])
+
+        with pytest.raises(ValueError, match=rf"`{key}` must exactly match"):
+            _validate_scan_payload(payload, require_coord_manager=True)
+
+    def test_scan_payloads_normalizes_attrs(self, monkeypatch, terra15_v6_path):
+        """The public payload API should always return PatchAttrs."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+        patch = dc.get_example_patch()
+        payload = _make_scan_payload(
+            attrs=patch.attrs,
+            coords=patch.coords,
+            dims=patch.dims,
+            shape=patch.shape,
+            dtype=str(patch.dtype),
+        )
+        payload["attrs"] = patch.attrs.model_dump()
+        monkeypatch.setattr(fiber_io, "scan", lambda *args, **kwargs: [payload])
+
+        out = dc.scan_payloads(terra15_v6_path)
+
+        assert isinstance(out[0]["attrs"], dc.PatchAttrs)
+
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
         """Default FiberIO.scan should return structured scan payloads."""
         path = tmp_path / "fallback_scan.h5"
@@ -969,6 +1042,28 @@ class TestReloadableSourcePath:
         fio.scan(path, snap=False)
 
         assert seen["snap"] is False
+
+    def test_default_fiberio_scan_forwards_read_kwargs(self, monkeypatch, tmp_path):
+        """Default scans should preserve reader filters and override snap mode."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fio = _ReadOnlySummaryFormatter()
+        seen = {}
+
+        def read(resource, snap_dims=True, **kwargs):
+            seen.update(kwargs)
+            seen["snap_dims"] = snap_dims
+            return dc.spool([dc.get_example_patch()])
+
+        monkeypatch.setattr(fio, "read", read)
+
+        fio.scan(path, snap=False, snap_dims=True, time=(1, 2), custom="value")
+
+        assert seen == {
+            "snap_dims": False,
+            "time": (1, 2),
+            "custom": "value",
+        }
 
     def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
         """dc.scan should add path/format/version on top of raw formatter scan."""

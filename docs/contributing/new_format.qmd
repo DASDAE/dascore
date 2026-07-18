@@ -133,6 +133,8 @@ wrong.
 
 [`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects inside `ScanPayload` dictionaries. DASCore's public [`scan_payloads`](`dascore.scan_payloads`) function exposes those raw payloads and adds `source_path`, `source_format`, and `source_version` provenance. By contrast, [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce coordinates to envelope summaries and remain the appropriate APIs for indexing whole directories.
 
+The public payload boundary validates attrs, dimension names, shape, dtype, and provenance types. It also requires `dims` and `shape` to match the returned `CoordManager` exactly, so malformed formatter payloads fail immediately rather than entering indexing or lazy reload paths.
+
 Every `FiberIO.scan` implementation must accept `snap: bool = True`, either explicitly or through `**kwargs`. The contract is:
 
 - `snap=True` (the default) preserves existing behavior. Formats may represent stored sample times as an idealized uniform range.
