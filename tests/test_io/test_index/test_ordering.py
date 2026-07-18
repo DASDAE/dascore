@@ -268,3 +268,67 @@ class TestInterruptedInitialUpdate:
             "b_early.h5",
             "a_late.h5",
         ]
+
+
+class TestDefaultOrderThroughUnion:
+    """Directory presentation order survives combining (round-5)."""
+
+    @pytest.fixture()
+    def interleaved_dir_spool(self, tmp_path):
+        """A directory whose multi-patch file straddles another file."""
+        p0 = dc.get_example_patch()
+        t = p0.get_coord("time")
+        span = t.max() - t.min() + t.step
+        p1 = p0.update_coords(time_min=t.min() + span)
+        p2 = p0.update_coords(time_min=t.min() + 2 * span)
+        dc.write(dc.spool([p0, p2]), tmp_path / "a.h5", "DASDAE")
+        dc.write(p1, tmp_path / "b.h5", "DASDAE")
+        return dc.spool(tmp_path).update(progress=None)
+
+    def test_empty_union_keeps_order_and_equality(self, interleaved_dir_spool):
+        """Adding an empty spool preserves contents, order, and equality."""
+        source = interleaved_dir_spool
+        combined = source + dc.spool([])
+        want = [x.get_coord("time").min() for x in source]
+        got = [x.get_coord("time").min() for x in combined]
+        assert got == want
+        assert combined == source
+
+    def test_live_append_keeps_directory_prefix(self, interleaved_dir_spool):
+        """A live operand appends after the directory's presented rows."""
+        source = interleaved_dir_spool
+        later = dc.get_example_patch(time_min="2030-01-01")
+        combined = source + dc.spool([later])
+        mins = [x.get_coord("time").min() for x in combined]
+        assert mins[:3] == [x.get_coord("time").min() for x in source]
+        assert len(mins) == 4
+
+    def test_non_interleaved_union_still_dedups(self, tmp_path):
+        """Ordinary archives keep record-grain transfer and dedup."""
+        p0 = dc.get_example_patch()
+        t = p0.get_coord("time")
+        span = t.max() - t.min() + t.step
+        dc.write(p0, tmp_path / "a.h5", "DASDAE")
+        dc.write(p0.update_coords(time_min=t.min() + span), tmp_path / "b.h5", "DASDAE")
+        spool = dc.spool(tmp_path).update(progress=None)
+        assert len(spool + spool) == len(spool)
+
+
+class TestMissingTimeSortsLast:
+    """Rows without a value sort last under any order (round-5)."""
+
+    def test_directory_no_time_patch_presents_last(self, tmp_path):
+        """A distance-only patch follows every time-bearing patch."""
+        timed = dc.get_example_patch().update_attrs(tag="time")
+        no_time = timed.mean("time").squeeze().update_attrs(tag="no_time")
+        dc.write(timed, tmp_path / "a_time.h5", "DASDAE")
+        dc.write(no_time, tmp_path / "b_no_time.h5", "DASDAE")
+        spool = dc.spool(tmp_path).update(progress=None)
+        assert list(spool.get_contents()["tag"]) == ["time", "no_time"]
+
+    def test_sort_puts_missing_values_last(self):
+        """Explicit sort also presents value-less rows last."""
+        timed = dc.get_example_patch().update_attrs(tag="a_time")
+        no_time = timed.mean("time").squeeze().update_attrs(tag="b_no_time")
+        spool = dc.spool([no_time, timed]).sort("time")
+        assert [x.attrs.tag for x in spool] == ["a_time", "b_no_time"]

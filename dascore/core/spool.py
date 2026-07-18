@@ -593,12 +593,31 @@ class Spool(BaseSpool):
         table union as-is, but residual trims and order specs live
         Python-side and would silently vanish; a spool carrying those
         first bakes them into a derived catalog (tables only — no patch
-        data is loaded).
+        data is loaded). A catalog default order (directory time
+        presentation) bakes only when the source-record transfer would
+        actually present rows differently — an interleaved multi-patch
+        file — so ordinary archives keep record-grain transfer and its
+        same-source deduplication.
         """
         catalog = self._catalog
         if catalog._residuals or catalog._order is not None:
             return self._materialize_lossy(), None
+        if catalog._default_order is not None and not self._transfer_keeps_order():
+            return self._materialize_lossy(), None
         return catalog, None
+
+    def _transfer_keeps_order(self) -> bool:
+        """True when ordinal-grain transfer matches the presented order."""
+        catalog = self._catalog
+        presented = catalog._ordered_ids()
+        by_ordinal = tuple(
+            catalog.backend.query_ids(
+                list(catalog._queries) or None,
+                order_by=None,
+                patch_ids=catalog._ids,
+            )
+        )
+        return tuple(presented) == by_ordinal
 
     def _materialize_lossy(self):
         """

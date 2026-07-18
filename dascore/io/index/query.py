@@ -420,7 +420,12 @@ def _order_clause(
         columns = [dialect.quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
         column = f"a.{columns[0]}"
-    return f"ORDER BY {column} {direction}, s.ordinal, p.patch_id", params
+    # rows without a value sort last regardless of direction (matching
+    # the ordinal renumberer's missing-time-last rule); the null key
+    # repeats the column expression, so its parameters repeat too
+    params = [*params, *params]
+    sql = f"ORDER BY {column} IS NULL, {column} {direction}, s.ordinal, p.patch_id"
+    return sql, params
 
 
 def build_sql(
