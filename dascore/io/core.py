@@ -1567,7 +1567,7 @@ def is_directory_format(path) -> bool:
         return False
     try:
         get_format(path)
-    except Exception:
+    except UnknownFiberFormatError:
         return False
     return True
 

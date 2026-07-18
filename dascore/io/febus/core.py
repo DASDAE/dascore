@@ -329,7 +329,7 @@ class FebusT1V1(FiberIO):
         self, resource: H5Reader, snap: bool = True, **kwargs
     ) -> list[ScanPayload]:
         """Return a list with one PatchAttrs for the file's temperature data."""
-        return [_scan_t1(resource, format=self.name, version=self.version, snap=snap)]
+        return [_scan_t1(resource, snap=snap)]
 
     def read(
         self,

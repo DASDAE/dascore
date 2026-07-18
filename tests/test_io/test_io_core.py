@@ -1222,6 +1222,27 @@ class TestGetSupportedIOTable:
 class TestIOCoreCoverageEdges:
     """Remaining io.core resolution/robustness branches."""
 
+    def test_directory_format_ignores_unknown_format(self, monkeypatch, tmp_path):
+        """An unsupported directory is not itself a scan unit."""
+        from dascore.io.core import is_directory_format
+
+        def _raise_unknown_format(_path):
+            raise UnknownFiberFormatError
+
+        monkeypatch.setattr("dascore.io.core.get_format", _raise_unknown_format)
+        assert not is_directory_format(tmp_path)
+
+    def test_directory_format_propagates_unexpected_error(self, monkeypatch, tmp_path):
+        """Unexpected format-detection failures remain visible to callers."""
+        from dascore.io.core import is_directory_format
+
+        def _raise_unexpected_error(_path):
+            raise RuntimeError("format detection failed")
+
+        monkeypatch.setattr("dascore.io.core.get_format", _raise_unexpected_error)
+        with pytest.raises(RuntimeError, match="format detection failed"):
+            is_directory_format(tmp_path)
+
     def test_numeric_singleton_without_identity_not_trusted(self):
         """A positional ID cannot resolve an anonymous trimmed singleton."""
         from dascore.exceptions import PatchAttributeError

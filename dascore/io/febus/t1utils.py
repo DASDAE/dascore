@@ -66,7 +66,7 @@ def _get_attrs(path, format, version):
     )
 
 
-def _scan_t1(fi: H5Reader, format, version, snap=True):
+def _scan_t1(fi: H5Reader, snap=True):
     """Get the coordinates and attributes for a T1 data patch"""
     coords = _get_coords(fi, snap=snap)
     attrs = _get_attrs(path="", format="", version="")
