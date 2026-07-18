@@ -534,3 +534,66 @@ class TestSamplesAdjustedEnvelopes:
         got = out.get_contents()["time_max"].iloc[0]
         assert got == want
         assert patch.shape[patch.get_axis("time")] == 10
+
+
+class TestChunkOnlyOnDims:
+    """Chunking is defined on dimensions; non-dim coords are 'missing'."""
+
+    @pytest.fixture()
+    def aux_time_patch(self):
+        """A patch carrying time only as a coord riding distance."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        base = p.mean("time").squeeze()
+        n = base.shape[base.get_axis("distance")]
+        return base.update_coords(time=("distance", t.data[:n]))
+
+    def test_aux_only_raises_with_detail(self, aux_time_patch):
+        """The default error explains the name rides as a coordinate."""
+        from dascore.exceptions import ChunkError
+
+        with pytest.raises(ChunkError, match="non-dimensional coordinate"):
+            dc.spool([aux_time_patch]).chunk(time=None)
+
+    def test_mixed_population_raises_by_default(self, aux_time_patch):
+        """Mixed dim/aux populations fail eagerly, not at patch access."""
+        from dascore.exceptions import ChunkError
+
+        sp = dc.spool([dc.get_example_patch(), aux_time_patch])
+        with pytest.raises(ChunkError, match="lack the chunk dimension"):
+            sp.chunk(time=None)
+
+    def test_drop_excludes_aux_patches(self, aux_time_patch):
+        """missing_dim='drop' keeps only patches with the real dimension."""
+        sp = dc.spool([dc.get_example_patch(), aux_time_patch])
+        out = sp.chunk(time=None, missing_dim="drop", conflict="drop")
+        assert len(out) == 1
+        assert out[0].dims == ("distance", "time")
+
+    def test_segmenting_aux_coord_raises(self):
+        """chunk(<aux coord>=value) is rejected, not accidentally served."""
+        import numpy as np
+
+        from dascore.exceptions import ChunkError
+
+        p = dc.get_example_patch()
+        q = p.update_coords(sensor=("distance", np.arange(p.shape[0], dtype=float)))
+        with pytest.raises(ChunkError, match="non-dimensional coordinate"):
+            dc.spool([q]).chunk(sensor=100)
+
+
+class TestDimlessFrames:
+    """Plain planner frames without a dims column still plan."""
+
+    def test_frame_without_dims_column(self):
+        """Dimension membership checks are skipped when dims is absent."""
+        df = pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0],
+                "time_max": [10.0, 20.0],
+                "time_step": [1.0, 1.0],
+            }
+        )
+        plan = build_chunk_plan(df, time=None)
+        assert len(plan.outputs) == 1
+        assert len(plan.members) == 2

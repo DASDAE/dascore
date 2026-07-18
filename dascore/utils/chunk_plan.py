@@ -490,18 +490,35 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
     df = _ensure_patch_id(df)
-    # Missing chunk-dim envelopes (spec 7 / D2).
+    # Missing chunk-dim envelopes, and patches carrying the name only as
+    # a non-dimensional coordinate (spec 7 / D2): chunking is defined on
+    # dimensions, so both fall under missing_dim. Envelope presence is
+    # not enough — auxiliary coordinates index their envelopes too, but
+    # their patches cannot be trimmed or merged *along* the name.
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
-    if null_rows.any():
+    if "dims" in df.columns:
+        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
+        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
+    else:
+        not_a_dim = pd.Series(False, index=df.index)
+    unusable = null_rows | not_a_dim
+    if unusable.any():
         if missing_dim == "raise":
-            bad = df.loc[null_rows, "_patch_id"].tolist()
+            bad = df.loc[unusable, "_patch_id"].tolist()
+            rides = int((not_a_dim & ~null_rows).sum())
+            detail = (
+                f" ({rides} of them carry {name!r} only as a non-dimensional "
+                "coordinate; chunking is defined on dimensions)"
+                if rides
+                else ""
+            )
             msg = (
-                f"{int(null_rows.sum())} patch(es) lack the chunk dimension "
-                f"{name!r} (patch ids {bad[:5]}...). Pass missing_dim='drop' "
-                "to exclude them."
+                f"{int(unusable.sum())} patch(es) lack the chunk dimension "
+                f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
+                "missing_dim='drop' to exclude them."
             )
             raise ChunkError(msg)
-        df = df[~null_rows]
+        df = df[~unusable]
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
