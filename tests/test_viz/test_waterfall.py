@@ -108,7 +108,8 @@ class TestWaterfall:
         distance = np.asarray(patch.get_coord("distance"))
         patch = patch.update_coords(distance=distance)
         assert not patch.get_coord("distance").evenly_sampled
-        ax = patch.viz.waterfall(cbar=False)
+        with pytest.warns(UserWarning, match="Singleton coordinate"):
+            ax = patch.viz.waterfall(cbar=False)
         mesh = ax.collections[0]
         assert isinstance(mesh, QuadMesh)
         assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)

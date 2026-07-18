@@ -6,13 +6,13 @@ from collections.abc import Sequence
 from typing import Literal
 
 import matplotlib as mpl
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
@@ -165,44 +165,6 @@ def _get_waterfall_colormap(patch, cmap=None):
     return _get_cmap(cmap)
 
 
-def _get_plot_coord(coord):
-    """Return coordinate values in units understood by matplotlib meshes."""
-    values = np.asarray(coord)
-    if np.issubdtype(values.dtype, np.datetime64):
-        return mdates.date2num(values)
-    if np.issubdtype(values.dtype, np.timedelta64):
-        return values / np.timedelta64(1, "s")
-    return values
-
-
-def _get_gap_edges(values, gap_factor):
-    """Return cell edges and locations of gaps in monotonic center values."""
-    values = np.asarray(values)
-    if len(values) == 1:
-        return np.asarray([values[0] - 0.5, values[0] + 0.5]), np.array([])
-    diffs = np.diff(values)
-    abs_diffs = np.abs(diffs)
-    representative_step = np.median(abs_diffs)
-    gap_mask = abs_diffs > (representative_step * gap_factor)
-    signed_step = np.sign(diffs[0]) * representative_step
-
-    first_step = signed_step if gap_mask[0] else diffs[0]
-    last_step = signed_step if gap_mask[-1] else diffs[-1]
-    edges = [values[0] - first_step / 2]
-    for index, diff in enumerate(diffs):
-        if gap_mask[index]:
-            edges.extend(
-                [
-                    values[index] + signed_step / 2,
-                    values[index + 1] - signed_step / 2,
-                ]
-            )
-        else:
-            edges.append(values[index] + diff / 2)
-    edges.append(values[-1] + last_step / 2)
-    return np.asarray(edges), gap_mask
-
-
 def _insert_gap_bands(data, gap_mask, axis):
     """Insert masked bands into an array at each coordinate gap."""
     if not np.any(gap_mask):
@@ -221,38 +183,14 @@ def _insert_gap_bands(data, gap_mask, axis):
     return out
 
 
-def _coordinates_support_mesh(coords):
-    """Return True when coordinates define finite monotonic mesh centers."""
-    for values in coords.values():
-        values = _get_plot_coord(values)
-        if not np.all(np.isfinite(values)):
-            return False
-        diffs = np.diff(values)
-        if len(diffs) and not (np.all(diffs > 0) or np.all(diffs < 0)):
-            return False
-    return True
-
-
 def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
     """Plot irregularly sampled data using a quadrilateral mesh."""
     mesh_data = np.ma.asarray(data)
     edges = {}
+    mesh_gap_factor = gap_factor if gap_color is not None else None
     for axis, dim in enumerate(dims):
-        values = _get_plot_coord(coords[dim])
-        dim_edges, gap_mask = _get_gap_edges(values, gap_factor)
-        if gap_color is None:
-            dim_edges = (
-                np.concatenate(
-                    (
-                        [values[0] - (values[1] - values[0]) / 2],
-                        values[:-1] + np.diff(values) / 2,
-                        [values[-1] + (values[-1] - values[-2]) / 2],
-                    )
-                )
-                if len(values) > 1
-                else dim_edges
-            )
-        else:
+        dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
+        if gap_color is not None:
             mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
         edges[dim] = dim_edges
 
@@ -329,9 +267,6 @@ def waterfall(
         'auto' (default) selects a suitable interpolation stage automatically.
         See matplotlib's imshow documentation for more details. This option
         does not apply when ``pcolormesh`` is used.
-    gap_factor
-        Coordinate intervals larger than this factor times the median interval
-        are treated as gaps. Must be greater than 1.
     gap_color
         Matplotlib color used to display gaps in irregular dimension
         coordinates. When a color is provided, a masked row or column is
@@ -340,6 +275,16 @@ def waterfall(
         without expanding the data matrix. This option only applies when
         ``pcolormesh`` is used. Existing masked or NaN data receive the same
         color as coordinate gaps.
+    gap_factor
+        When ``gap_color`` is provided, coordinate intervals larger than this
+        factor times the median interval are displayed as gaps. With the
+        default ``gap_color=None``, cells bridge intervals and this parameter
+        has no visual effect. Gap detection assumes the median interval
+        represents the sampling interval, so coordinates containing contiguous
+        regions with different sampling rates may classify the more coarsely
+        sampled region as gaps. For such data, use the default
+        ``gap_color=None``, increase ``gap_factor``, or plot/resample the
+        regions separately. Must be greater than 1.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
@@ -421,7 +366,7 @@ def waterfall(
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
-    if use_image or not _coordinates_support_mesh(coords):
+    if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
         extents = _get_extents(dims_r, coords)
         with mpl.rc_context({"image.resample": True}):
             im = ax.imshow(
