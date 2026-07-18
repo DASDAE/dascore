@@ -174,3 +174,33 @@ class TestTypeSurface:
         assert not dc.spool(file_path).has_live_patches
         mixed = dc.spool(file_path) + dc.spool(patches[:1])
         assert mixed.has_live_patches
+
+
+class TestEqualityOverEffectiveRows:
+    """Equality compares contents, not representation (2026-07-18)."""
+
+    @pytest.fixture()
+    def patch(self):
+        """The example patch."""
+        return dc.get_example_patch()
+
+    def test_value_trimmed_view_equals_materialized(self, patch):
+        """A coordinate-trimmed view equals its union-materialized twin."""
+        t = patch.get_coord("time")
+        sel = dc.spool([patch]).select(
+            time=(t.min() + 10 * t.step, t.min() + 20 * t.step)
+        )
+        assert sel == sel + dc.spool([])
+
+    @pytest.mark.parametrize("window", [(0, 10), (-10, None)])
+    def test_samples_trimmed_view_equals_materialized(self, patch, window):
+        """Samples-trimmed views (negative included) equal their twins."""
+        sel = dc.spool([patch]).select(time=window, samples=True)
+        assert sel == sel + dc.spool([])
+
+    def test_differing_trims_stay_unequal(self, patch):
+        """Different windows fold to different envelopes and stay unequal."""
+        a = dc.spool([patch]).select(time=(0, 10), samples=True)
+        b = dc.spool([patch]).select(time=(0, 11), samples=True)
+        assert a != b
+        assert a != dc.spool([patch])

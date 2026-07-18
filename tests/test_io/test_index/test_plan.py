@@ -597,3 +597,68 @@ class TestDimlessFrames:
         plan = build_chunk_plan(df, time=None)
         assert len(plan.outputs) == 1
         assert len(plan.members) == 2
+
+
+class TestNegativeSamplesEnvelopes:
+    """Negative samples indices resolve per patch (2026-07-18)."""
+
+    @staticmethod
+    def _frame():
+        """One ascending row: 10 samples at step 1 spanning [0, 9]."""
+        return pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [1.0]})
+
+    def test_negative_start_resolves(self):
+        """(-3, None) selects the last three samples."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (-3, None)}, True),))
+        assert out["time_min"].iloc[0] == 7.0
+        assert out["time_max"].iloc[0] == 9.0
+
+    def test_negative_stop_resolves(self):
+        """(None, -2) drops the last two samples."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (None, -2)}, True),))
+        assert out["time_max"].iloc[0] == 7.0
+
+    def test_unknown_step_keeps_envelope(self):
+        """Rows whose count is unknown keep their candidacy envelope."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [np.nan]})
+        out = samples_adjusted_envelopes(df, (({"time": (-3, None)}, True),))
+        assert len(out) == 1
+        assert out["time_min"].iloc[0] == 0.0
+        assert out["time_max"].iloc[0] == 9.0
+
+    def test_drop_empty_false_keeps_rows(self):
+        """Equality's variant keeps presented-but-empty rows."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(
+            self._frame(), (({"time": (3, 3)}, True),), drop_empty=False
+        )
+        assert len(out) == 1
+
+    def test_public_negative_window_contents_honest(self):
+        """Derived contents match the loaded patch for negative windows."""
+        p = dc.get_example_patch()
+        out = dc.spool([p]).select(time=(-10, None), samples=True).chunk(time=None)
+        got = out.get_contents()["time_min"].iloc[0]
+        want = pd.Timestamp(out[0].get_coord("time").min())
+        assert got == want
+        assert out[0].shape[out[0].get_axis("time")] == 10
+
+
+class TestNonIntSamplesIndices:
+    """Non-integer samples indices leave envelopes untouched."""
+
+    def test_float_index_skipped(self):
+        """A float index cannot adjust; the envelope stays candidacy."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [1.0]})
+        out = samples_adjusted_envelopes(df, (({"time": (0.5, None)}, True),))
+        assert out["time_min"].iloc[0] == 0.0
+        assert out["time_max"].iloc[0] == 9.0

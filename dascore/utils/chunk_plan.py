@@ -95,21 +95,25 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
 
 
-def samples_adjusted_envelopes(df: pd.DataFrame, residuals) -> pd.DataFrame:
+def samples_adjusted_envelopes(
+    df: pd.DataFrame, residuals, drop_empty: bool = True
+) -> pd.DataFrame:
     """
     Adjust envelope columns for patch-local samples residuals.
 
     A ``samples=True`` index window trims each patch at load, so the
     planner must consume the trimmed envelopes or it publishes outputs
     that lie entirely outside the selected samples (phantom empties).
-    Only non-negative index windows adjust (Python-slice clamping per
-    patch); anything else leaves the envelope as a candidacy superset —
-    exactness is always re-applied at load, and the adjustment only
-    exists so plans reflect the truth.
+    Negative indices resolve per patch against the envelope-derived
+    sample count (rows whose count is unknown keep their envelope as a
+    candidacy superset — exactness is always re-applied at load).
+    ``drop_empty`` removes rows whose window selects nothing (planning
+    truth); equality comparison keeps them, since a presented-but-empty
+    row is still a presented row.
     """
 
     def _usable_index(value) -> bool:
-        return value is None or (isinstance(value, int | np.integer) and value >= 0)
+        return value is None or isinstance(value, int | np.integer)
 
     df = df.copy(deep=False)
     for coords, samples in residuals:
@@ -129,21 +133,43 @@ def samples_adjusted_envelopes(df: pd.DataFrame, residuals) -> pd.DataFrame:
             # descending ones.
             abs_steps = steps.abs()
             descending = to_float(steps.values) < 0
-            lo_off = None if lo_idx is None else lo_idx * abs_steps
-            hi_off = None if hi_idx is None else (hi_idx - 1) * abs_steps
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ratio = to_float((maxs - mins).values) / to_float(abs_steps.values)
+            counts = pd.Series(np.round(ratio) + 1, index=df.index)
+
+            def _positions(idx, counts=counts, index=df.index):
+                """Per-row absolute positions (Python-slice clamping)."""
+                if idx is None:
+                    return None
+                if idx >= 0:
+                    return pd.Series(float(idx), index=index)
+                return (counts + idx).clip(lower=0)
+
+            lo_pos, hi_pos = _positions(lo_idx), _positions(hi_idx)
+            unresolved = pd.Series(False, index=df.index)
+            for pos in (lo_pos, hi_pos):
+                if pos is not None:
+                    unresolved |= pos.isna()
+            lo_off = None if lo_pos is None else lo_pos * abs_steps
+            hi_off = None if hi_pos is None else (hi_pos - 1) * abs_steps
             new_min = mins if lo_off is None else mins + lo_off
             new_max = maxs if hi_off is None else mins + hi_off
             desc_min = maxs if hi_off is None else maxs - hi_off
             desc_max = maxs if lo_off is None else maxs - lo_off
             new_min = new_min.where(~descending, other=desc_min)
             new_max = new_max.where(~descending, other=desc_max)
+            # unresolvable rows keep their envelope (candidacy superset)
+            new_min = new_min.mask(unresolved, mins)
+            new_max = new_max.mask(unresolved, maxs)
             # rows whose window is empty or lies entirely outside the
             # patch contribute nothing; test before clipping so such
             # windows are not resurrected as one-sample envelopes
             keep = (new_min <= new_max) & (new_min <= maxs) & (new_max >= mins)
+            keep |= unresolved
             df[cols[0]] = new_min.clip(lower=mins, upper=maxs)
             df[cols[1]] = new_max.clip(lower=mins, upper=maxs)
-            df = df[keep]
+            if drop_empty:
+                df = df[keep]
     return df
 
 

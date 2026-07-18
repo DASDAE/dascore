@@ -1001,36 +1001,51 @@ class Spool(BaseSpool):
         """
         The spool's semantic state, explicitly enumerated for equality.
 
-        Equality is over rows, never backends: same length and order of
-        patch rows, row-wise equal semantic columns (source identity
-        like paths and live-vs-file backing stripped), plus equal
-        pending residual selections. Whether rows come from a live
-        registry, an index file, or a plan is invisible; data arrays
-        are never compared (metadata-level, like everything here).
-        Because the state is enumerated — never ``__dict__`` — new
-        instance attributes cannot silently join equality.
+        Equality is over *effective* rows, never backends or
+        representation: same length and order of patch rows, row-wise
+        equal semantic columns (source identity like paths and
+        live-vs-file backing stripped), with pending residual
+        selections folded into the envelopes — a trimmed view equals
+        its materialized twin, and spools differing only by a samples
+        trim differ in their adjusted envelopes. Whether rows come from
+        a live registry, an index file, or a plan is invisible; data
+        arrays are never compared (metadata-level, like everything
+        here). Because the state is enumerated — never ``__dict__`` —
+        new instance attributes cannot silently join equality.
         """
 
         def _strip_identity(df):
             # synthetic per-catalog identities (memory:// paths, ids) and
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
-            # (a construction artifact) must not matter.
-            drop = (
+            # (a construction artifact) must not matter. Coordinate def
+            # keys are representation artifacts too: a residual-trimmed
+            # view cannot know its trimmed fingerprint without loading,
+            # and data values are never compared here anyway.
+            drop = [
                 "path",
                 "_patch_id",
                 "source_patch_id",
                 "file_format",
                 "file_version",
-            )
-            out = df.drop(columns=list(drop), errors="ignore")
+                "_modified",
+                *[c for c in df.columns if str(c).endswith("_def_key")],
+            ]
+            out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
 
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
         catalog = self._catalog
-        return {
-            "rows": _strip_identity(self._df),
-            "residuals": None if catalog is None else catalog._residuals,
-        }
+        rows = self._df
+        # value residuals already trim the presented envelopes (to_df);
+        # samples residuals fold in here. Presented-but-empty rows stay:
+        # a spool exposing an emptied patch is not equal to one without.
+        if catalog is not None and catalog._residuals:
+            rows = samples_adjusted_envelopes(
+                rows, catalog._residuals, drop_empty=False
+            )
+        return {"rows": _strip_identity(rows)}
 
     def __rich__(self):
         base = super().__rich__()
