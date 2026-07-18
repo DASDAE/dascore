@@ -30,13 +30,15 @@ The current schema version is validated before any mutation. An unrelated or inc
 
 ## Ordering
 
-Patch rows present in `(sources.ordinal, patch_id)` order — the catalog's explicit ordering contract. Ordinals are assigned at ingest: a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path. The directory indexer renumbers ordinals to time order (earliest patch per source, path as tiebreak) after each sync, so file archives keep their conventional time-ordered presentation, including files added by later updates.
+The base ordering contract is `(sources.ordinal, patch_id)`: ordinals are assigned at ingest, a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path.
+
+Directory catalogs additionally carry a **per-patch default presentation order**: rows present by time (`time IS NULL` last, then time, with ordinal and patch id as deterministic tiebreaks), because source-grain ordinals alone cannot interleave a multi-patch file whose span straddles a patch of another file. The default order is a catalog contract, not view state — a directory root still updates — and an explicit `sort(...)` replaces it. The directory indexer still renumbers source ordinals to time order (earliest patch per source, path as tiebreak) after each sync, which keeps the ordinal grain stable for replacement and union dedup.
 
 SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
 
 ## The flat relation
 
-Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{dim}_def_key` coordinate identities), the `dims` signature, and one column per attribute. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
+Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` canonical units — the chunk planner's unit-partition key), the `dims` signature, and one column per attribute. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
 
 ```{python}
 import dascore as dc
@@ -44,7 +46,15 @@ from dascore.io.index.catalog import PatchCatalog
 
 catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
 df = catalog.to_df()
-required = {"_patch_id", "_time_def_key", "dims", "time_min", "time_max", "time_step"}
+required = {
+    "_patch_id",
+    "_time_def_key",
+    "_time_units",
+    "dims",
+    "time_min",
+    "time_max",
+    "time_step",
+}
 assert required.issubset(df.columns)
 ```
 
@@ -82,13 +92,23 @@ File-backed patches are identified by `(base_uri, source_path, source_patch_id)`
 
 ## Federation
 
-`spool + spool` merges catalogs table-to-table: source records are reconstructed from the member backends and re-ingested, so coordinate definitions deduplicate by definition key, the same source appearing in several members keeps a single entry, and file paths are absolutized so members with different roots coexist. A composite resolver routes in-memory rows to the shared registry and everything else through file readers.
+`spool + spool` merges catalogs table-to-table: source records are reconstructed from the member backends and re-ingested, so coordinate definitions deduplicate by definition key, the same source appearing in several members keeps a single entry, and file paths are absolutized so members with different roots coexist. A composite resolver routes in-memory rows to the shared registry, plan-output rows to their plan resolvers, and everything else through file readers.
+
+Row-membership state (attribute predicates, slice windows, patch-id arrays) transfers as rows, preserving the set semantics above. State that only lives Python-side — coordinate/samples residual trims, sort specs, and a directory default order that record-grain transfer would actually scramble — is first **baked into an identity-plan derived catalog** (table work only; no patch data loads), so each operand contributes exactly its current contents in its current order. Baking mints new patch identities, so a trimmed operand no longer deduplicates against its source: its contents genuinely differ. Spool equality follows the same philosophy — it compares *effective contents* (residual trims folded into the envelopes, representation artifacts like def keys and backing excluded), so a trimmed view equals its union-materialized twin.
 
 ```{python}
 other = dc.get_example_patch().new()
 union = dc.spool([patch]) + dc.spool([other])
 assert len(union) == 2
 assert len(dc.spool([patch]) + dc.spool([patch])) == 1  # same patch dedups
+
+# A trimmed operand contributes its trimmed contents (baked, not dropped),
+# and equality compares those effective contents.
+t = patch.get_coord("time")
+trimmed = dc.spool([patch]).select(time=(t.min() + 10 * t.step, t.min() + 20 * t.step))
+combined = trimmed + dc.spool([])
+assert combined[0].shape == trimmed[0].shape
+assert combined == trimmed
 ```
 
 ## Scope

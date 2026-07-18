@@ -6,7 +6,7 @@ title: Spool Chunking
 
 ## Plans
 
-The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments. The chunked spool *is* a fresh in-memory catalog whose patch rows are the plan outputs; a plan resolver loads each output's members through the parent's resolver and executes the assembly engine (`dascore.utils.patch_assembly`) row by row. Re-chunking a chunked spool re-plans from the current view's members, so plans never nest, and `concatenate` is the same machinery with order-based grouping instead of continuity.
+The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments. The chunked spool *is* a fresh in-memory catalog whose patch rows are the plan outputs; a plan resolver loads each output's members through the parent's resolver and executes the assembly engine (`dascore.utils.patch_assembly`) row by row. Chunking is one dimension per call; multi-dimensional chunking chains. Re-chunking a chunked spool along the *same* dimension re-plans from the current view's members (the collapse rule); chunking a *different* dimension plans over the spool's current output rows, preserving the boundaries the earlier operation assembled — `chunk(time=2).chunk(distance=100)` partitions both dimensions. `concatenate` is the same machinery with order-based grouping instead of continuity.
 
 ```{python}
 import dascore as dc
@@ -18,6 +18,11 @@ assert {"output_id", "_patch_id", "_modified"}.issubset(plan.members.columns)
 # Resolved parameters are recorded on the plan, never left in config.
 assert isinstance(plan.params["group"], tuple)
 assert plan.params["sampling_group_tolerance"] == dc.get_config().sampling_group_tolerance
+
+# Chaining partitions both dimensions: the second chunk plans over the
+# first one's outputs, not the original members.
+chained = dc.get_example_spool("random_das").chunk(time=None).chunk(distance=100)
+assert all(p.shape[p.get_axis("distance")] <= 100 for p in chained)
 ```
 
 Plans are deterministic: the same spool produces the same plan regardless of metadata row order, and members with `_modified=False` load whole (no per-patch selection cost).
@@ -27,8 +32,8 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 Patches may only combine when they agree on all of:
 
 1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: network, station, data type/category, tag, instrument and acquisition ids), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
-2. **Structure** — the dimensions tuple and the coordinate identity of every non-chunked dimension.
-3. **Sampling** — steps within the relative tolerance `config.sampling_group_tolerance` (default 5%).
+2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's canonical units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet plan together and assembly converts them to the first member's units).
+3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
 
 ```{python}
@@ -47,7 +52,7 @@ assert len(merged) == 2
 
 Remaining (non-group, non-dimensional) attributes must be single-valued within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`.
 
-Patches lacking the chunked dimension raise by default; `missing_dim="drop"` excludes them instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
+Chunking is defined on dimensions: a patch that lacks the chunked dimension — including one that carries the name only as a *non-dimensional coordinate*, which cannot be trimmed or merged along it — raises by default, and `missing_dim="drop"` excludes it instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
 
 ```{python}
 import pytest
@@ -57,6 +62,14 @@ no_time = [dc.get_example_patch().mean("time") for _ in range(2)]
 with pytest.raises(ChunkError, match="missing_dim"):
     dc.spool(no_time).chunk(time=None)
 assert len(dc.spool(no_time).chunk(time=None, missing_dim="drop")) == 0
+
+# A name carried only as a non-dimensional coordinate counts as missing.
+base = dc.get_example_patch()
+aux = base.update_coords(
+    sensor=("distance", np.arange(base.shape[base.get_axis("distance")], dtype=float))
+)
+with pytest.raises(ChunkError, match="non-dimensional coordinate"):
+    dc.spool([aux]).chunk(sensor=100)
 ```
 
 ## Merged coordinates
