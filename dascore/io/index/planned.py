@@ -116,10 +116,12 @@ def _coord_record_from_row(
         # a degenerate (zero) step is not a range; drop it rather than
         # letting range reconstruction divide by it
         step = None
-    units = row.get(f"{name}_units")
-    # numeric envelope values are stored canonical-SI; attaching the
-    # original unit string would make ingest re-convert them
-    if dtype != "float64" or units == "" or (units is not None and pd.isnull(units)):
+    # numeric envelope values are stored canonical-SI, so only the
+    # canonical (base) unit carried by the pivot may be attached —
+    # ingest's re-conversion is then the identity (time kinds attach
+    # without conversion)
+    units = row.get(f"_{name}_units")
+    if units == "" or (units is not None and pd.isnull(units)):
         units = None
     length = None
     if step is not None:
@@ -191,11 +193,14 @@ def _aux_coord_info(
                 if keep and step_col in sub.columns
                 else set()
             )
+            unit_col = f"_{name}_units"
+            units = set(sub[unit_col].dropna()) if unit_col in sub.columns else set()
             info = {
                 cmin: lo,
                 cmax: hi,
                 step_col: steps.pop() if len(steps) == 1 else None,
                 key_col: keys.pop() if keep else None,
+                unit_col: units.pop() if len(units) == 1 else None,
                 "dims": dims,
             }
             out.setdefault(int(output_id), {})[name] = info

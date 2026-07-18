@@ -76,6 +76,32 @@ def _estimate_merge_samples(df, dim) -> int | None:
     return int(counts.sum())
 
 
+def _match_merge_units(patch, merge_dim, target_units):
+    """
+    Convert a member's merge-dim units to the first member's.
+
+    The planner groups by SI-canonical envelopes, so one output may mix
+    unit spellings of one dimensionality (metres with feet); merging
+    requires a single spelling, and the first member's wins. Returns
+    (patch, target_units); incompatible or missing units pass through
+    for the merge itself to police.
+    """
+    from dascore.exceptions import UnitError
+
+    if merge_dim is None or merge_dim not in getattr(patch.coords, "coord_map", {}):
+        return patch, target_units
+    units = patch.coords.coord_map[merge_dim].units
+    if target_units is None:
+        return patch, units
+    if units is None or units == target_units:
+        return patch, target_units
+    try:
+        patch = patch.convert_units(**{merge_dim: target_units})
+    except UnitError:  # incompatible dimensionality: merge will raise
+        return patch, target_units
+    return patch, target_units
+
+
 def _coord_only_kwargs(patch, kwargs) -> dict:
     """Keep only the kwargs naming a dim or coordinate of patch."""
     return {
@@ -103,12 +129,13 @@ class PatchAssembler:
         """Get the patches joined columns of instruction df."""
         df_dict_list = self._df_to_dict_list(joined)
         expected_len = len(joined["current_index"].unique())
-        if len(df_dict_list) > expected_len:
+        merging = len(df_dict_list) > expected_len
+        merge_dim = _get_varying_dim(joined) if merging else None
+        if merging:
             # Several sources merge into one patch. When the output size can
             # be determined from the instructions, stream the sources into a
             # pre-allocated array so they don't all need to be in memory with
             # the merged output at once.
-            merge_dim = _get_varying_dim(joined)
             samples = _estimate_merge_samples(joined, merge_dim)
             if samples is not None:
                 patch = self._merge_patches_streaming(
@@ -116,8 +143,10 @@ class PatchAssembler:
                 )
                 return [patch]
         out = []
+        target_units = None
         for patch_kwargs in df_dict_list:
             patch = self._load_trimmed_patch(patch_kwargs, joined)
+            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
             # The index doesn't carry all the dimensional info, so get what
             # merging needs from the patch coords (cheaper than attr dumps).
             info = patch.coords._get_dim_summary()
@@ -153,8 +182,10 @@ class PatchAssembler:
         """
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs, summaries = [], [], []
+        target_units = None
         for patch_kwargs in df_dict_list:
             patch = self._load_trimmed_patch(patch_kwargs, joined)
+            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
             if dims is None:
                 dims = patch.dims
                 axis = patch.get_axis(merge_dim)

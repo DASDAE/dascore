@@ -135,7 +135,16 @@ def merge_coord_managers(
             data = [x.data for x in snap_coords]
             dims = managers[0].dim_map[dim]
             new_data = np.concatenate(data, axis=axis)
-            out[coord_name] = (dims, new_data)
+            # raw value concatenation loses the coord's units; reattach
+            # the (verified common) units so the merge stays unit-true
+            common_units = next(iter(units))
+            if common_units is not None:
+                from dascore.core.coords import get_coord
+
+                coord = get_coord(data=new_data, units=common_units)
+                out[coord_name] = (dims, coord)
+            else:
+                out[coord_name] = (dims, new_data)
         return out
 
     def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:

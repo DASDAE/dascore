@@ -815,3 +815,57 @@ class TestDescendingChunk:
         n_time = p.shape[p.get_axis("time")]
         assert patch.shape[patch.get_axis("time")] == 2 * n_time
         assert time.min() == t.min()
+
+
+class TestMixedUnitChunk:
+    """Chunk partitioning and merging across unit differences."""
+
+    @staticmethod
+    def _shifted(patch, units=None):
+        """The example patch shifted to be distance-contiguous, in units."""
+        d = patch.get_coord("distance")
+        span = d.max() - d.min() + d.step
+        values = d.data + span
+        if units == "ft":
+            values = values / 0.3048
+        out = patch.update_coords(distance=values)
+        return out.set_units(distance=units) if units else out
+
+    def test_incompatible_dimensionality_splits(self):
+        """Metre and second patches with contiguous SI magnitudes stay apart."""
+        p = dc.get_example_patch()
+        pm = p.set_units(distance="m")
+        ps = self._shifted(p, "s")
+        sp = dc.spool([pm, ps])
+        plan = sp.chunk_plan(distance=None)
+        assert len(plan.outputs) == 2
+        out = sp.chunk(distance=None, conflict="drop")
+        assert {str(x.get_coord("distance").units) for x in out} == {"1 m", "1 s"}
+
+    def test_unitless_and_unitful_split(self):
+        """A unitless patch never merges with a unitful one."""
+        p = dc.get_example_patch()
+        sp = dc.spool([p.set_units(distance="m"), self._shifted(p)])
+        assert len(sp.chunk(distance=None, conflict="drop")) == 2
+
+    def test_compatible_units_convert_and_merge(self):
+        """Metres and feet (one dimensionality) merge, converted, unit-true."""
+        p = dc.get_example_patch()
+        pm = p.set_units(distance="m")
+        pf = self._shifted(p, "ft")
+        out = dc.spool([pm, pf]).chunk(distance=None, conflict="drop")
+        assert len(out) == 1
+        patch = out[0]
+        coord = patch.get_coord("distance")
+        assert str(coord.units) == "1 m"
+        n = p.shape[p.get_axis("distance")]
+        assert patch.shape[patch.get_axis("distance")] == 2 * n
+        assert float(coord.max()) == pytest.approx(2 * n - 1)
+
+    def test_same_units_unchanged(self):
+        """The ordinary same-unit merge keeps its behavior and units."""
+        p = dc.get_example_patch()
+        sp = dc.spool([p.set_units(distance="m"), self._shifted(p, "m")])
+        out = sp.chunk(distance=None, conflict="drop")
+        assert len(out) == 1
+        assert str(out[0].get_coord("distance").units) == "1 m"

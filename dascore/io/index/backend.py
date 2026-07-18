@@ -901,7 +901,7 @@ class SQLIndexBackend(AbstractIndexBackend):
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, cd.is_relative, cd.min_num, cd.max_num, "
+            "cd.value_kind, cd.is_relative, cd.units, cd.min_num, cd.max_num, "
             "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
             "cd.min_str, cd.max_str "
             "FROM patch_coords pc "
@@ -926,7 +926,11 @@ class SQLIndexBackend(AbstractIndexBackend):
             mins = dict(zip(pids, group["_env_min"]))
             maxs = dict(zip(pids, group["_env_max"]))
             steps = dict(zip(pids, group["_env_step"]))
+            units = dict(zip(pids, group["units"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # canonical (base) units: numeric envelopes are stored SI, so
+            # this is the dimensionality marker chunk partitioning needs
+            out[f"_{name}_units"] = out["patch_id"].map(units)
             kinds = set(group["value_kind"])
             # time/distance envelopes already live on patches...
             if name in ("time", "distance"):

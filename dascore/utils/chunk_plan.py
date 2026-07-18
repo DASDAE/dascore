@@ -234,6 +234,13 @@ def _partition(
     # (spec 2.2). Non-dimensional coordinate conflicts are policed at
     # assembly per the `conflict` argument, never partitioned on.
     cols += [x for x in _dim_def_key_columns(df, name) if x in df.columns]
+    # The chunked dim's canonical (base) units partition too: envelopes
+    # are SI magnitudes, so without this a metre patch and a second
+    # patch with contiguous magnitudes would plan into one unmergeable
+    # output. Unitless (NULL) stays its own group — assembly cannot
+    # merge unitless with unitful coordinates either.
+    if (unit_col := f"_{name}_units") in df.columns:
+        cols.append(unit_col)
     base = (
         df.groupby(cols, dropna=False, sort=False).ngroup()
         if cols
@@ -335,6 +342,12 @@ def _police_columns(sub: pd.DataFrame, name, conflict) -> dict:
         # conflict == "drop": omit the column entirely.
     # Structural (dimension) def keys carry — single-valued by partitioning.
     for col in _dim_def_key_columns(sub, name):
+        if col in sub.columns:
+            carried[col] = sub[col].iloc[0]
+    # Canonical units carry for every dimension, the chunked one included
+    # (partition-constant: units are a sampling-partition component).
+    for coord in coord_names:
+        col = f"_{coord}_units"
         if col in sub.columns:
             carried[col] = sub[col].iloc[0]
     return carried
