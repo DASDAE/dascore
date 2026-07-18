@@ -107,7 +107,10 @@ class SintelaProtobufAttrs(PatchAttrs):
     fiber_id: int | None = None
     serial_number: str = ""
     start_channel: int | None = None
-    channel_step: int | None = None
+    # Named "stride" rather than the wire field's "channel_step" because the
+    # index reserves any {name}_{min,max,step} attr as a coordinate envelope
+    # column, which would make "channel_step" unqueryable.
+    channel_stride: int | None = None
     demod_data_type: str = ""
 
 
@@ -545,7 +548,7 @@ def _base_attrs(
         serial_number=meta.serial_number,
         fiber_id=meta.fiber_id,
         start_channel=int(getattr(common_header, "start_channel", 0)),
-        channel_step=None,
+        channel_stride=None,
     )
     if extra:
         attrs.update(extra)
@@ -749,7 +752,7 @@ class TimeseriesMetadata(_PacketMetadata):
             meta=meta,
             extra=dict(
                 gauge_length=gauge_length,
-                channel_step=channel_step,
+                channel_stride=channel_step,
                 data_type=mapping[0],
                 data_units=mapping[1],
                 demod_data_type=str(demod_data_type),
@@ -952,7 +955,7 @@ class FFTMetadata(_PacketMetadata):
             meta=meta,
             extra=dict(
                 gauge_length=gauge_length,
-                channel_step=channel_step,
+                channel_stride=channel_step,
                 **_FFT_ATTR_DEFAULTS,
             ),
         )

@@ -270,6 +270,18 @@ class TestSintelaProtobuf:
         assert patch.attrs.fiber_id == 2
         assert patch.attrs.data_type == "strain"
 
+    def test_channel_stride_attr_is_indexable(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """
+        The channel stride attr must avoid the reserved {name}_{min,max,step}
+        shape, else the index drops it (and warns) as an envelope column.
+        """
+        path = write_sintela_file("ts.pb", ts_records)
+        attrs = fiber_io.read(path)[0].attrs
+        assert attrs.channel_stride == 1
+        assert not hasattr(attrs, "channel_step")
+
     def test_band_read_returns_expected_dims(
         self, fiber_io, write_sintela_file, band_records
     ):
