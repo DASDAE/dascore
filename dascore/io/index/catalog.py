@@ -155,6 +155,29 @@ def _row_source_patch_id(row: Mapping) -> str:
     return normalize_source_patch_id(row.get("source_patch_id"))
 
 
+def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
+    """
+    Apply a view's exact residual selections to a loaded patch.
+
+    Shared by catalog row resolution and plan-member loading so the
+    two-stage select contract has exactly one implementation.
+    """
+    for coords, samples in residuals:
+        coord_map = patch.coords.coord_map
+        usable = {
+            k: (
+                v.for_patch_coord(coord_map[k]) if isinstance(v, _CanonicalRange) else v
+            )
+            for k, v in coords.items()
+            if k in coord_map
+        }
+        if usable:
+            # residual bounds are already absolute (relative queries
+            # resolve to absolute before the residual is recorded).
+            patch = patch.select(**usable, samples=samples, relative=False)
+    return patch
+
+
 class PatchResolver(abc.ABC):
     """Turn one flat-relation row into a Patch."""
 
@@ -256,23 +279,30 @@ class FileResolver(PatchResolver):
 
 class CompositeResolver(PatchResolver):
     """
-    Route rows to a live registry or the filesystem by path scheme.
+    Route rows to a live registry, a plan, or the filesystem by scheme.
 
-    Union catalogs mix file-backed rows (absolute paths) with in-memory
-    rows (memory:// paths); this resolver dispatches accordingly.
+    Union catalogs mix file-backed rows (absolute paths), in-memory rows
+    (memory:// paths), and plan-output rows (plan://token/... paths);
+    this resolver dispatches accordingly.
     """
 
     def __init__(self):
         self.live = LiveResolver()
         self.file = FileResolver(root=None)
+        # plan://<token>/ prefix -> the PlanResolver that owns it
+        self.plans: dict[str, PatchResolver] = {}
 
     def live_entries(self) -> Mapping[str, dc.Patch]:
         """Return the merged live patch registry."""
         return self.live._registry
 
+    def plan_entries(self) -> Mapping[str, PatchResolver]:
+        """Return the plan-prefix routing table."""
+        return self.plans
+
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
-        Take over another resolver's live registry entries.
+        Take over another resolver's live and plan entries.
 
         ``paths`` restricts absorption to the given synthetic paths
         (the entries a transfer actually references); None takes all.
@@ -281,11 +311,23 @@ class CompositeResolver(PatchResolver):
         if paths is not None:
             entries = {k: v for k, v in entries.items() if k in paths}
         self.live._registry.update(entries)
+        plans = getattr(resolver, "plan_entries", dict)()
+        if paths is not None:
+            plans = {
+                prefix: plan
+                for prefix, plan in plans.items()
+                if any(str(p).startswith(prefix) for p in paths)
+            }
+        self.plans.update(plans)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
-        """Dispatch to the live registry or the file reader."""
-        if is_memory_uri(row.get("path", "")):
+        """Dispatch by scheme: live registry, plan, or file reader."""
+        path = str(row.get("path", ""))
+        if is_memory_uri(path):
             return self.live.resolve(row, **trim)
+        for prefix, plan in self.plans.items():
+            if path.startswith(prefix):
+                return plan.resolve(row, **trim)
         return self.file.resolve(row, **trim)
 
 
@@ -837,22 +879,7 @@ class PatchCatalog:
                 )
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
-        for coords, samples in self._residuals:
-            coord_map = patch.coords.coord_map
-            usable = {
-                k: (
-                    v.for_patch_coord(coord_map[k])
-                    if isinstance(v, _CanonicalRange)
-                    else v
-                )
-                for k, v in coords.items()
-                if k in coord_map
-            }
-            if usable:
-                # residual bounds are already absolute (relative queries
-                # resolve to absolute before the residual is recorded).
-                patch = patch.select(**usable, samples=samples, relative=False)
-        return patch
+        return apply_exact_residuals(patch, self._residuals)
 
     def __iter__(self):
         for index in range(len(self)):

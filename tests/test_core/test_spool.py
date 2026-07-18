@@ -119,11 +119,6 @@ class TestSpoolBasics:
         assert isinstance(wrapped, Spool)
         assert list(wrapped) == patches
 
-    def test_copy_construct_merge_kwargs(self, random_spool):
-        """Copy-construction can override the merge policy."""
-        new = Spool(random_spool, merge_kwargs={"conflicts": "drop"})
-        assert new._merge_kwargs["conflicts"] == "drop"
-
     def test_viz_raises(self, random_spool):
         """Ensure Spool.viz raises AttributeError."""
         msg = "Apply 'viz' on a Patch object"
@@ -151,7 +146,7 @@ class TestLiveSpoolLazy:
         assert spool[0] == patch_list[0]
         assert spool[-1] == patch_list[-1]
         assert list(spool) == patch_list
-        assert "_df" not in spool._cache
+        assert spool._catalog._backend is None
 
     def test_out_of_bounds_raises(self, patch_list):
         """The fast path must raise the same IndexError as the df path."""
@@ -159,14 +154,14 @@ class TestLiveSpoolLazy:
         match = "out of bounds for spool"
         with pytest.raises(IndexError, match=match):
             _ = spool[len(patch_list)]
-        assert "_df" not in spool._cache
+        assert spool._catalog._backend is None
 
     def test_access_unchanged_after_df_built(self, patch_list):
         """Patch access must return the same thing before/after df built."""
         spool = dc.spool(patch_list)
         lazy_patches = list(spool)
-        _ = spool.get_contents()  # forces the dataframes to build
-        assert "_df" in spool._cache
+        _ = spool.get_contents()  # forces the flat relation to build
+        assert spool._catalog._backend is not None
         assert list(spool) == lazy_patches
         assert spool[0] == lazy_patches[0]
 
@@ -194,11 +189,17 @@ class TestLiveSpoolLazy:
         expected_min = min(x.summary.get_coord_summary("time").min for x in patch_list)
         assert time_coord.min() == expected_min
 
-    def test_derived_spool_shares_only_the_catalog(self, patch_list):
-        """Derived spools resolve patches through the shared catalog only."""
+    def test_derived_spool_is_own_catalog(self, patch_list):
+        """A chunked spool is a fresh derived catalog sharing patches."""
+        from dascore.io.index.planned import PlanResolver
+
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
-        assert chunked._catalog is spool._catalog
+        assert chunked._catalog is not spool._catalog
+        assert isinstance(chunked._catalog.resolver, PlanResolver)
+        # member loading shares the parent's live patches, not copies
+        registry = chunked._catalog.resolver.live_entries()
+        assert {id(p) for p in registry.values()} <= {id(p) for p in patch_list}
         # no other patch containers exist on the instance
         assert "_patches" not in chunked.__dict__
         assert "_data" not in chunked.__dict__
@@ -217,16 +218,6 @@ class TestLiveSpoolLazy:
         spool = Spool()
         assert len(spool) == 0
         assert list(spool) == []
-
-    def test_instruction_df_builds_from_lazy_patches(self, patch_list):
-        """Lazy patch input should still build instruction dataframes on demand."""
-        spool = dc.spool(patch_list)
-        assert len(spool._get_instruction_df()) == len(patch_list)
-
-    def test_instruction_df_property_cold_access(self, patch_list):
-        """Accessing the instruction frame first still derives everything."""
-        spool = dc.spool(patch_list)
-        assert len(spool._instruction_df) == len(patch_list)
 
 
 class TestSpoolHelpers:
@@ -952,32 +943,18 @@ class TestSpoolCoverageEdges:
         assert len(combined) == 2
 
     def test_union_of_chunked_spool(self, many_contiguous):
-        """A chunked (restructured) spool's rows no longer map to sources."""
+        """A chunked spool is a derived catalog; unions compose it."""
+        from dascore.io.index.planned import PlanResolver
+
         chunked = dc.spool(many_contiguous).chunk(time=None)
-        assert not chunked._catalog_native
-        assert "_patch_id" not in chunked._df.columns
+        assert isinstance(chunked._catalog.resolver, PlanResolver)
         combined = chunked + dc.spool([dc.get_example_patch(tag="other")])
         assert len(combined) == 2
+        assert all(isinstance(p, dc.Patch) for p in combined)
 
     def test_iteration_skips_unresolvable_patch(self, monkeypatch):
         """A patch that fails to resolve is skipped with a #583 warning."""
-        # force the planned state (sort/slice are lazy catalog specs now)
-        base = dc.spool([dc.get_example_patch()])
-        spool = base.new_from_df(
-            base._df, source_df=base._source_df, instruction_df=base._instruction_df
-        )
-
-        def _raise(_ind):
-            raise MissingPatchError("trimmed to nothing")
-
-        monkeypatch.setattr(spool._assembler, "get_patch", _raise)
-        with pytest.warns(UserWarning, match="Skipping patch"):
-            assert list(spool) == []
-
-    def test_catalog_iteration_skips_unresolvable_patch(self, monkeypatch):
-        """The catalog fast path also skips with a #583 warning."""
         spool = dc.spool([dc.get_example_patch()])
-        assert spool._rows_are_catalog()
 
         def _raise(_ind):
             raise MissingPatchError("not available in this session")
@@ -986,17 +963,15 @@ class TestSpoolCoverageEdges:
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
 
-    def test_planned_view_negative_and_bad_index(self):
-        """Assembler indexing handles negatives and raises out-of-bounds."""
+    def test_derived_negative_and_bad_index(self):
+        """Derived-catalog indexing handles negatives, raises out-of-bounds."""
         patches = list(dc.get_example_spool(length=2))
-        base = dc.spool(patches)
-        planned = base.new_from_df(
-            base._df, source_df=base._source_df, instruction_df=base._instruction_df
-        )
-        assert planned._plan is not None
-        assert planned[-1] == planned[len(patches) - 1]
+        derived = dc.spool(patches).concatenate(time=1)
+        assert derived[-1] == derived[len(patches) - 1]
         with pytest.raises(IndexError, match="out of bounds"):
-            _ = planned[len(patches)]
+            _ = derived[len(patches)]
+        with pytest.raises(IndexError, match="out of bounds"):
+            _ = derived[-len(patches) - 1]
 
     def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
         """An under-estimated merge buffer is grown to fit (uneven sampling)."""

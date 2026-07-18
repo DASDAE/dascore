@@ -31,7 +31,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.chunk import get_intervals
-from dascore.utils.misc import get_middle_value
+from dascore.utils.misc import get_middle_value, is_range
 from dascore.utils.pd import _remove_overlaps, get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
@@ -93,6 +93,43 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
         return group
     # Config (and default) names are best-effort.
     return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
+
+
+def samples_adjusted_envelopes(df: pd.DataFrame, residuals) -> pd.DataFrame:
+    """
+    Adjust envelope columns for patch-local samples residuals.
+
+    A ``samples=True`` index window trims each patch at load, so the
+    planner must consume the trimmed envelopes or it publishes outputs
+    that lie entirely outside the selected samples (phantom empties).
+    Only non-negative index windows adjust (Python-slice clamping per
+    patch); anything else leaves the envelope as a candidacy superset —
+    exactness is always re-applied at load, and the adjustment only
+    exists so plans reflect the truth.
+    """
+
+    def _usable_index(value) -> bool:
+        return value is None or (isinstance(value, int | np.integer) and value >= 0)
+
+    df = df.copy(deep=False)
+    for coords, samples in residuals:
+        if not samples:
+            continue
+        for name, value in coords.items():
+            cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
+            if not set(cols).issubset(df.columns) or not is_range(value):
+                continue
+            lo_idx, hi_idx = value
+            if not (_usable_index(lo_idx) and _usable_index(hi_idx)):
+                continue
+            mins, maxs, steps = (df[c] for c in cols)
+            new_min = mins if lo_idx is None else mins + lo_idx * steps
+            new_max = maxs if hi_idx is None else mins + hi_idx * steps
+            df[cols[0]] = new_min.where(new_min <= maxs, other=maxs)
+            df[cols[1]] = new_max.where(new_max <= maxs, other=maxs)
+            # rows whose window starts past their end contribute nothing
+            df = df[df[cols[0]] <= df[cols[1]]]
+    return df
 
 
 def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:
@@ -453,7 +490,10 @@ def build_chunk_plan(
                     g_stop,
                     value_c,
                     overlap=overlap_c,
-                    step=part_step,
+                    # interval arithmetic is over (direction-free) envelope
+                    # values; a descending coordinate's negative step would
+                    # invert the final partial interval
+                    step=abs(part_step),
                     keep_partials=keep_partial,
                 )
             except ChunkError:  # partition too short; skip (D8)
@@ -467,9 +507,14 @@ def build_chunk_plan(
         outputs["output_id"] = np.arange(next_id, next_id + len(outputs))
         next_id += len(outputs)
         members = _build_members(sub, outputs, name)
+        # Plan invariant: every published output has at least one member.
+        # An advertised row that cannot assemble is never surfaced as a
+        # runtime error; it is not surfaced at all.
+        fed = set(members["output_id"]) if not members.empty else set()
+        outputs = outputs[outputs["output_id"].isin(fed)]
         out_frames.append(outputs)
         member_frames.append(members)
-    if not out_frames:
+    if not out_frames or all(x.empty for x in out_frames):
         msg = "Could not chunk. No segments with sufficient length found."
         raise ChunkError(msg)
     outputs = pd.concat(out_frames, ignore_index=True)

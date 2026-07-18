@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import weakref
 from contextlib import suppress
 from pathlib import Path
@@ -84,6 +85,12 @@ class SQLiteBackend(SQLIndexBackend):
         # cleanup to *its* collection is safe (close() stays idempotent
         # for explicit use). The finalizer tolerates cross-thread firing.
         self._finalizer = weakref.finalize(self, _safe_close, self._con)
+        # Catalog views share this backend across threads (e.g. a
+        # thread-pool Spool.map over split windows). SQLite serializes
+        # individual statements, but a pandas fetch spans many cursor
+        # calls; interleaving them corrupts result frames, so statement
+        # execution is exclusive per backend.
+        self._lock = threading.RLock()
         try:
             super().__init__()
         except Exception:
@@ -112,21 +119,24 @@ class SQLiteBackend(SQLIndexBackend):
         self.__init__(state["_path"])
 
     def _execute(self, sql: str, params=()) -> None:
-        self._con.execute(sql, _adapt(params))
+        with self._lock:
+            self._con.execute(sql, _adapt(params))
 
     def _executemany(self, sql: str, seq_of_params) -> None:
         # sqlite3.executemany consumes an iterator, so adapt lazily rather
         # than materializing a second copy of each already-built batch.
-        self._con.executemany(sql, (_adapt(p) for p in seq_of_params))
+        with self._lock:
+            self._con.executemany(sql, (_adapt(p) for p in seq_of_params))
 
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
         # numpy_nullable assembly keeps nullable INTEGER columns exact;
         # the default path rounds them through float64, corrupting ns
         # epochs (>2**53). A dtype= hint does NOT prevent that: pandas
         # builds float64 first and casts after.
-        df = pd.read_sql_query(
-            sql, self._con, params=_adapt(params), dtype_backend="numpy_nullable"
-        )
+        with self._lock:
+            df = pd.read_sql_query(
+                sql, self._con, params=_adapt(params), dtype_backend="numpy_nullable"
+            )
         return _classic_dtypes(df)
 
     def _begin(self) -> None:

@@ -225,8 +225,8 @@ class TestLoadPatchFastPath:
         assert patch.attrs["tag"] == "second"
 
 
-class TestSelectKwargs:
-    """The select_kwargs constructor parameter restricts contents."""
+class TestSelectedDirectorySpools:
+    """Selection on directory spools (select_kwargs constructor removed)."""
 
     @pytest.fixture(scope="class")
     def spool_dir(self, random_spool, tmp_path_factory):
@@ -245,9 +245,7 @@ class TestSelectKwargs:
 
     def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
         """Rows outside the requested range must not appear (regression)."""
-        spool = Spool.from_directory(
-            spool_dir, select_kwargs={"time": first_patch_range}
-        ).update()
+        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
         assert 1 <= len(spool) < len(random_spool)
         contents = spool.get_contents()
         assert (contents["time_min"] <= first_patch_range[1]).all()
@@ -257,30 +255,20 @@ class TestSelectKwargs:
             assert time.min() >= first_patch_range[0]
             assert time.max() <= first_patch_range[1]
 
-    def test_restriction_survives_select_and_update(
+    def test_selected_spool_refuses_update(
         self, spool_dir, random_spool, first_patch_range
     ):
-        """Derived spools keep the constructor restriction."""
-        spool = Spool.from_directory(
-            spool_dir, select_kwargs={"time": first_patch_range}
-        ).update()
-        expected = len(spool)
-        assert len(spool.update()) == expected
-        distance = random_spool[0].get_coord("distance")
-        sub = spool.select(distance=(distance.min(), distance.max()))
-        assert len(sub) == expected
+        """D1: any operation severs update()."""
+        from dascore.exceptions import InvalidSpoolError
 
-    def test_attr_select_kwargs(self, spool_dir, random_spool):
-        """Attr-valued select_kwargs filter rows and load cleanly."""
-        spool = Spool.from_directory(
-            spool_dir, select_kwargs={"tag": "random"}
-        ).update()
-        assert len(spool) == len(random_spool)
-        assert isinstance(spool[0], dc.Patch)
-        empty = Spool.from_directory(
-            spool_dir, select_kwargs={"tag": "no_such"}
-        ).update()
-        assert len(empty) == 0
+        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
+        with pytest.raises(InvalidSpoolError, match="root spool"):
+            spool.update()
+
+    def test_select_kwargs_parameter_removed(self, spool_dir):
+        """The constructor no longer accepts select_kwargs."""
+        with pytest.raises(TypeError, match="select_kwargs"):
+            Spool.from_directory(spool_dir, select_kwargs={"tag": "x"})
 
 
 class TestDirectoryIndex:

@@ -81,8 +81,11 @@ class TestChunk:
         new_content = new_spool.get_contents()
         # these should be (nearly) identical.
         common = set(chunk_df.columns) & set(new_content.columns)
-        # len fields may differ by ±1 between summary-based and data-based counts
-        skip = {"history"} | {c for c in common if c.endswith("_len")}
+        # len fields may differ by ±1 between summary-based and data-based
+        # counts; identity/provenance columns legitimately differ between
+        # plan rows and re-scanned live patches
+        skip = {"history", "path", "file_format", "file_version", "source_patch_id"}
+        skip |= {c for c in common if c.endswith("_len")}
         cols = sorted(common - skip)
         comp1, comp2 = chunk_df[cols], new_content[cols]
         equal_cols = (comp1 == comp2) | (pd.isnull(comp1) & pd.isnull(comp2))

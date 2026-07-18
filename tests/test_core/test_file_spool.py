@@ -83,4 +83,4 @@ class TestBasic:
         file_spool = Spool.from_file(path)
         kwargs = {"path": str(path), "file_format": "DASDAE", "file_version": "1"}
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            file_spool._load_patch(kwargs)
+            file_spool._catalog.resolver.resolve(kwargs)

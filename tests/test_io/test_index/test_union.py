@@ -50,11 +50,8 @@ class TestMemoryUnion:
         """A planned (materialized but catalog-backed) member unions by ids."""
         sp = dc.get_example_spool("random_das")
         other = dc.get_example_spool("diverse_das")
-        # force the planned state; sort/slice are lazy specs now
-        materialized = sp.new_from_df(
-            sp._df, source_df=sp._source_df, instruction_df=sp._instruction_df
-        )
-        assert not materialized._catalog_native
+        # a content-preserving derived catalog (concat groups of one)
+        materialized = sp.concatenate(time=1)
         combined = materialized + other
         assert len(combined) == len(sp) + len(other)
 
@@ -129,13 +126,13 @@ class TestFileUnion:
         assert len(combined) == len(dir_spool)
 
     def test_constructor_select_kwargs_restrict_union(self, tmp_path):
-        """A select_kwargs-restricted directory spool unions only its rows."""
+        """A selection-restricted directory spool unions only its rows."""
         base = dc.get_example_spool("random_das")
         dc.examples.spool_to_directory(base, path=tmp_path)
         full = dc.spool(tmp_path).update()
         df = full.get_contents().sort_values("time_min")
         window = (df["time_min"].iloc[0], df["time_max"].iloc[0])  # first patch
-        restricted = dc.spool(tmp_path, select_kwargs={"time": window})
+        restricted = full.select(time=window)
         assert 0 < len(restricted) < len(full)
         combined = restricted + dc.spool([dc.get_example_patch(tag="mem")])
         # the union must not reintroduce the rows the constructor excluded

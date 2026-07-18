@@ -601,17 +601,23 @@ class SQLIndexBackend(AbstractIndexBackend):
         deterministic tiebreak.
         """
         with self._transaction():
+            # the WHERE clause skips rows whose ordinal is already
+            # correct, so a one-file sync of a large archive rewrites
+            # one row instead of churning the whole table through WAL
             self._execute(
+                "WITH ranked AS ("
+                " SELECT s2.source_id AS sid, ROW_NUMBER() OVER ("
+                "  ORDER BY t.min_time IS NULL, t.min_time, s2.source_path"
+                " ) - 1 AS rn"
+                " FROM sources s2 LEFT JOIN ("
+                "  SELECT source_id, MIN(time_min) AS min_time"
+                "  FROM patches GROUP BY source_id"
+                " ) t ON t.source_id = s2.source_id"
+                ")"
                 "UPDATE sources SET ordinal = ("
-                " SELECT rn - 1 FROM ("
-                "  SELECT s2.source_id AS sid, ROW_NUMBER() OVER ("
-                "   ORDER BY t.min_time IS NULL, t.min_time, s2.source_path"
-                "  ) AS rn"
-                "  FROM sources s2 LEFT JOIN ("
-                "   SELECT source_id, MIN(time_min) AS min_time"
-                "   FROM patches GROUP BY source_id"
-                "  ) t ON t.source_id = s2.source_id"
-                " ) WHERE sid = sources.source_id"
+                " SELECT rn FROM ranked WHERE sid = sources.source_id"
+                ") WHERE ordinal IS NOT ("
+                " SELECT rn FROM ranked WHERE sid = sources.source_id"
                 ")"
             )
 

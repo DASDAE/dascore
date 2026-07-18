@@ -65,19 +65,36 @@ class TestUpdateContract:
         spool = dc.spool(patches)
         assert spool.update() is spool
 
-    def test_union_of_live_spools_is_noop(self, patches):
-        """Combining live spools yields a still-sourceless, current spool."""
+    def test_union_raises(self, patches):
+        """Combining spools is a computation; the result cannot update."""
         combined = dc.spool(patches[:1]) + dc.spool(patches[1:])
-        assert combined.update() is combined
+        with pytest.raises(InvalidSpoolError, match="root spool"):
+            combined.update()
 
     def test_union_with_file_rows_raises(self, patches, tmp_path):
-        """A combined spool with file rows has no update source."""
+        """A combined spool with file rows cannot update either."""
         directory = dc.examples.spool_to_directory(
             dc.spool(patches), path=tmp_path / "dir_a"
         )
         combined = dc.spool(directory).update(progress=None) + dc.spool(patches[:1])
-        with pytest.raises(InvalidSpoolError, match="no update source"):
+        with pytest.raises(InvalidSpoolError, match="root spool"):
             combined.update()
+
+    def test_selected_spool_raises(self, patches):
+        """Any operation severs update: a selected spool refuses it."""
+        selected = dc.spool(patches).select(tag="random")
+        with pytest.raises(InvalidSpoolError, match="root spool"):
+            selected.update()
+
+    def test_selected_file_spool_raises(self, patches, tmp_path):
+        """A selected single-file spool refuses update instead of
+        silently widening back to the whole file (review P1).
+        """
+        path = tmp_path / "sel_file.h5"
+        dc.write(patches[0], path, "dasdae")
+        selected = dc.spool(path).select(distance=(0, 10), samples=True)
+        with pytest.raises(InvalidSpoolError, match="root spool"):
+            selected.update()
 
     def test_directory_update_picks_up_new_files(self, patches, tmp_path):
         """The syncer case: new files appear after update()."""
@@ -114,15 +131,13 @@ class TestChunkPlanContract:
         assert time.max() == max(maxs)
 
     def test_planned_state_is_derived(self, patches):
-        """A planned spool reports non-native; identity views native."""
+        """A chunked spool is a fresh derived catalog, not a mode flag."""
+        from dascore.io.index.planned import PlanResolver
+
         spool = dc.spool(patches)
-        assert spool._catalog_native
         chunked = spool.chunk(time=2)
-        assert not chunked._catalog_native
-        assert chunked._plan is not None
-        # the flag cannot be assigned; the plan is the state
-        with pytest.raises(AttributeError):
-            chunked._catalog_native = True
+        assert chunked._catalog is not spool._catalog
+        assert isinstance(chunked._catalog.resolver, PlanResolver)
 
 
 class TestTypeSurface:

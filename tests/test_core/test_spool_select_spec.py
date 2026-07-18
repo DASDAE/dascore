@@ -17,16 +17,16 @@ from dascore.exceptions import InvalidSpoolQueryError
 
 @pytest.fixture(
     scope="module",
-    params=("memory", "directory", "memory_df", "directory_df"),
+    params=("memory", "directory", "memory_derived", "directory_derived"),
 )
 def spool(request, tmp_path_factory):
     """
-    The same patches served by each spool type and select-path state.
+    The same patches served by each spool type and catalog state.
 
-    The ``*_df`` params force the materialized (dataframe) state via a
-    content-preserving sort, so every spec test runs over both select
-    implementations (catalog-native and dataframe) — the parity net for
-    collapsing the dual-state spool internals.
+    The ``*_derived`` params run every spec test over a derived
+    (plan-backed) catalog via a content-preserving concatenate — the
+    parity net proving one selector engine serves identity and
+    restructured spools alike.
     """
     base = dc.get_example_spool("random_das")
     if request.param.startswith("memory"):
@@ -36,13 +36,11 @@ def spool(request, tmp_path_factory):
             base, path=tmp_path_factory.mktemp("select_spec")
         )
         out = dc.spool(path).update(progress=None)
-    if request.param.endswith("_df"):
-        # force the planned (dataframe) state explicitly: sort/slice are
-        # lazy catalog specs now, so only a plan materializes the frames
-        out = out.new_from_df(
-            out._df, source_df=out._source_df, instruction_df=out._instruction_df
-        )
-        assert not out._catalog_native, "planned state expected"
+    if request.param.endswith("_derived"):
+        from dascore.io.index.planned import PlanResolver
+
+        out = out.concatenate(time=1)
+        assert isinstance(out._catalog.resolver, PlanResolver)
     return out
 
 
@@ -90,8 +88,6 @@ class TestCatalogPushdown:
 
     def test_coord_predicate_reaches_backend(self, spool, monkeypatch):
         """Selection does not query all rows before applying its predicate."""
-        if not spool._catalog_native:
-            pytest.skip("query pushdown only applies to catalog-native spools")
         catalog = spool._catalog
         backend = catalog.backend
         calls = []
@@ -145,7 +141,7 @@ class TestLazySelection:
         fresh = dc.spool(path)
         forbid_realization()
         selected = fresh.select(time=("2020-01-03", "2020-01-04"))
-        assert selected._catalog_native
+        assert selected._catalog.is_view
 
     def test_cold_memory_select(self, forbid_realization):
         """A fresh patch-list spool selects via the catalog, lazily."""
@@ -153,7 +149,7 @@ class TestLazySelection:
         forbid_realization()
         fresh = dc.spool(patches)
         selected = fresh.select(tag="random")
-        assert selected._catalog_native
+        assert selected._catalog.is_view
 
 
 class TestSamples:
@@ -183,9 +179,7 @@ class TestSamples:
 
     def test_samples_on_materialized_spool(self, spool):
         """Samples select works after chunk (the dataframe select path)."""
-        # chunk first so the derived spool is materialized, not catalog-native
         materialized = spool.chunk(time=None)
-        assert not materialized._catalog_native
         out = materialized.select(distance=(0, 10), samples=True)
         assert len(out) == len(materialized)
         assert len(out[0].get_coord("distance")) == 10
@@ -225,7 +219,6 @@ class TestRelative:
     def test_relative_on_materialized_spool(self, spool):
         """Relative select works after chunk (the dataframe select path)."""
         materialized = spool.chunk(time=None)
-        assert not materialized._catalog_native
         gmin = materialized.get_contents()["time_min"].min()
         gmax = materialized.get_contents()["time_max"].max()
         out = materialized.select(time=(1, -1), relative=True)
@@ -241,7 +234,6 @@ class TestMaterializedNamespaces:
     def test_namespaces_and_unknown_names(self, spool):
         """Namespaced selects and unknown-name errors on a chunked spool."""
         materialized = spool.chunk(time=None)
-        assert not materialized._catalog_native
         assert len(materialized.select(_attrs={"tag": "random"})) == len(materialized)
         # a valid _coords range narrows the materialized spool
         df = materialized.get_contents()
@@ -262,7 +254,6 @@ class TestMaterializedNamespaces:
     def test_duplicate_namespace_raises(self, spool):
         """A name in both explicit namespaces raises on either path."""
         materialized = spool.chunk(time=None)
-        assert not materialized._catalog_native
         for target in (spool, materialized):
             with pytest.raises(InvalidSpoolQueryError, match="both _attrs and _coords"):
                 target.select(_attrs={"time": (None, None)}, _coords={"time": (1, 2)})
@@ -270,7 +261,6 @@ class TestMaterializedNamespaces:
     def test_slice_range_form(self, spool):
         """Slice selectors resolve the same on either path (#435 spec)."""
         materialized = spool.chunk(time=None)
-        assert not materialized._catalog_native
         t0 = spool.get_contents()["time_min"].min()
         window = slice(t0, t0 + np.timedelta64(2, "s"))
         for target in (spool, materialized):
@@ -464,7 +454,7 @@ class TestLazyOrderAndWindow:
         patches = list(dc.get_example_spool("random_das"))
         spool = dc.spool(list(reversed(patches)))
         out = spool.sort("time")
-        assert out._catalog_native  # no plan materialized
+        assert not out._catalog.is_view or out._catalog._order is not None
         df = out.get_contents()
         assert df["time_min"].is_monotonic_increasing
         assert list(out) == patches
@@ -474,7 +464,7 @@ class TestLazyOrderAndWindow:
         patches = list(dc.get_example_spool("random_das"))
         spool = dc.spool(patches)
         part = spool[1:]
-        assert part._catalog_native
+        assert part._catalog._ids is not None  # lazy id membership
         assert len(part) == len(patches) - 1
         assert list(part) == patches[1:]
 

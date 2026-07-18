@@ -294,10 +294,14 @@ class DBDirectoryIndexer(AbstractIndexer):
                 )
             if records:
                 self._backend.write_sources(records)
-        if stale or changed:
+        if stale or changed or not self._initial_update_done:
             # Directory archives present in time order; ingest assigns
             # walk-order ordinals, so each sync renumbers to keep the
-            # contract (iterate by ordinal) aligned with time.
+            # contract (iterate by ordinal) aligned with time. The
+            # not-yet-marked-done case covers a process killed between
+            # write_sources committing and this renumber: the retry sees
+            # no stale/changed files but must still fix walk-order
+            # ordinals before marking the initial update complete.
             self._backend.renumber_ordinals_by_time()
         if not self._initial_update_done:
             self._backend.mark_initial_update_done()

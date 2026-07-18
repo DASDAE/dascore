@@ -1,0 +1,387 @@
+"""
+Derived catalogs: chunk/concat plans as first-class catalog rows.
+
+A restructuring operation materializes the current view's membership
+into a fresh in-memory catalog whose *patch rows are the plan outputs*;
+a `PlanResolver` turns an output row back into a Patch by loading the
+member source patches through the parent's resolver and trimming or
+merging them (the existing assembly engine). Every catalog operation —
+select, order, window, union, equality, serialization — then runs the
+identical code path for planned and identity spools.
+
+Single-writer rule: derived catalogs are always fresh in-memory
+databases; the on-disk index is only ever written by the directory
+syncer, and views never write.
+"""
+
+from __future__ import annotations
+
+import secrets
+from collections.abc import Mapping
+
+import numpy as np
+import pandas as pd
+
+import dascore as dc
+from dascore.io.index.backend import get_backend
+from dascore.io.index.catalog import (
+    CompositeResolver,
+    PatchCatalog,
+    PatchResolver,
+    _row_source_patch_id,
+    apply_exact_residuals,
+)
+from dascore.io.index.ingest import (
+    CoordRecord,
+    PatchRecord,
+    SourceRecord,
+    typed_value,
+)
+from dascore.utils.misc import is_range
+from dascore.utils.pd import adjust_segments
+from dascore.utils.time import to_int
+
+PLAN_SCHEME = "plan://"
+# columns that are structural/positional rather than patch attributes
+_NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
+
+
+def _ns(value) -> int | None:
+    """Convert a datetime/timedelta-like envelope value to ns int."""
+    if value is None or pd.isnull(value):
+        return None
+    if isinstance(value, pd.Timestamp | pd.Timedelta):
+        return int(value.value)
+    return int(to_int(value))
+
+
+def _num(value) -> float | None:
+    """Convert a numeric envelope value to float."""
+    if value is None or pd.isnull(value):
+        return None
+    return float(value)
+
+
+def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
+    """
+    Build the envelope coord record for one output dimension.
+
+    Delegates to the ingest converter through a range CoordSummary so
+    virtual outputs carry the same identities real patches would: a
+    carried ``fp:`` def key survives for non-planned dims, and the
+    planned dim's range fingerprint is reconstructed exactly.
+    """
+    from dascore.core.coords import CoordSummary
+    from dascore.io.index.ingest import _coord_record
+
+    lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
+    if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
+        return None
+    step = row.get(f"{name}_step")
+    step = None if step is None or pd.isnull(step) else step
+    if isinstance(lo, pd.Timestamp):
+        lo, hi = lo.to_datetime64(), pd.Timestamp(hi).to_datetime64()
+        dtype = "datetime64[ns]"
+    elif isinstance(lo, np.datetime64):
+        dtype = "datetime64[ns]"
+    elif isinstance(lo, pd.Timedelta | np.timedelta64):
+        lo, hi = pd.Timedelta(lo).to_timedelta64(), pd.Timedelta(hi).to_timedelta64()
+        dtype = "timedelta64[ns]"
+    else:
+        lo, hi = float(lo), float(hi)
+        step = None if step is None else abs(float(step))
+        dtype = "float64"
+    if isinstance(step, pd.Timedelta):
+        step = step.to_timedelta64()
+    units = row.get(f"{name}_units")
+    # numeric envelope values are stored canonical-SI; attaching the
+    # original unit string would make ingest re-convert them
+    if dtype != "float64" or units == "" or (units is not None and pd.isnull(units)):
+        units = None
+    length = None
+    if step is not None:
+        try:
+            length = int(round((hi - lo) / step)) + 1
+        except (TypeError, ZeroDivisionError):
+            length = None
+    key = row.get(f"_{name}_def_key")
+    fingerprint = None
+    if isinstance(key, str) and key.startswith("fp:"):
+        fingerprint = key[3:]
+    summary = CoordSummary(
+        dtype=dtype,
+        min=lo,
+        max=hi,
+        step=step,
+        units=units,
+        dims=(name,),
+        len=length,
+        fingerprint=fingerprint,
+    )
+    return _coord_record(name, summary)
+
+
+def _output_records(outputs: pd.DataFrame, token: str) -> list[SourceRecord]:
+    """Convert plan output rows into ingestible source records."""
+    records = []
+    envelope_suffixes = ("_min", "_max", "_step", "_units")
+    for row in outputs.to_dict("records"):
+        output_id = int(row["output_id"])
+        dims = str(row.get("dims") or "")
+        dim_names = [d for d in dims.split(",") if d]
+        coords = []
+        for name in dim_names:
+            record = _coord_record_from_row(row, name)
+            if record is not None:
+                coords.append(record)
+        attrs = {}
+        for key, value in row.items():
+            if (
+                key in _NON_ATTR
+                or key.startswith("_")
+                or any(key.endswith(sfx) for sfx in envelope_suffixes)
+                or value is None
+                or (np.isscalar(value) and pd.isnull(value))
+            ):
+                continue
+            typed = typed_value(value)
+            if typed is not None:
+                attrs[key] = typed
+        patch = PatchRecord(
+            source_patch_id=str(output_id),
+            dims=dims,
+            shape="",
+            n_dims=len(dim_names),
+            sample_count_total=None,
+            time_min=_ns(row.get("time_min")),
+            time_max=_ns(row.get("time_max")),
+            time_step=_ns(row.get("time_step")),
+            distance_min=_num(row.get("distance_min")),
+            distance_max=_num(row.get("distance_max")),
+            distance_step=_num(row.get("distance_step")),
+            attrs=attrs,
+            coords=tuple(coords),
+        )
+        records.append(
+            SourceRecord(
+                source_path=f"{PLAN_SCHEME}{token}/{output_id}",
+                source_format="plan",
+                format_version="",
+                patches=(patch,),
+            )
+        )
+    return records
+
+
+class PlanResolver(PatchResolver):
+    """
+    Assemble plan-output rows from their member source patches.
+
+    ``member_rows`` carries, per output, the full source row (path,
+    format, identity, attrs) with the planned dimension's envelope
+    replaced by the member's trim range; loading goes through ``loader``
+    (live registry, files, and nested plan rows), applies the parent
+    view's residual selections, then trims/merges via the assembly
+    engine ("chunk" mode) or concatenates in order ("concat" mode).
+    """
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        dim: str,
+        member_rows: pd.DataFrame,
+        loader: PatchResolver,
+        merge_kwargs: Mapping,
+        parent_residuals: tuple = (),
+        mode: str = "chunk",
+        check_behavior: str = "warn",
+        origin_path=None,
+    ):
+        if "output_id" not in member_rows.columns:
+            msg = "member_rows must carry an output_id column."
+            raise ValueError(msg)
+        # plan invariant: outputs without members must never be published
+        self.token = token
+        self.dim = dim
+        self.member_rows = member_rows.reset_index(drop=True)
+        self.loader = loader
+        self.merge_kwargs = dict(merge_kwargs)
+        self.parent_residuals = tuple(parent_residuals)
+        self.mode = mode
+        self.check_behavior = check_behavior
+        # informational only: the directory/file the plan derived from
+        self.origin_path = origin_path
+
+    def live_entries(self) -> Mapping[str, dc.Patch]:
+        """Expose the loader's live registry (for absorption/transfer)."""
+        return self.loader.live_entries()
+
+    def plan_entries(self) -> Mapping[str, PlanResolver]:
+        """Route plan:// paths with this resolver's token to it."""
+        nested = dict(getattr(self.loader, "plan_entries", dict)())
+        nested[f"{PLAN_SCHEME}{self.token}/"] = self
+        return nested
+
+    def _assembler(self):
+        from dascore.utils.patch_assembly import PatchAssembler
+
+        return PatchAssembler(
+            df=None,
+            source_df=None,
+            instruction_df=None,
+            load_patch=self._load_member,
+            merge_kwargs=self.merge_kwargs,
+            post_selects=(),
+            drop_columns=(
+                "patch",
+                "path",
+                "file_format",
+                "file_version",
+                "source_patch_id",
+            ),
+        )
+
+    def _load_member(self, kwargs: Mapping) -> dc.Patch:
+        """Load one member source patch, applying parent residuals."""
+        trim = {}
+        if kwargs.get("_modified"):
+            trim = {
+                k: v
+                for k, v in kwargs.items()
+                if not str(k).startswith("_")
+                and k not in ("path", "file_format", "file_version", "source_patch_id")
+            }
+        patch = self.loader.resolve(kwargs, **trim)
+        return apply_exact_residuals(patch, self.parent_residuals)
+
+    def resolve(self, row: Mapping, **trim) -> dc.Patch:
+        """Assemble the output patch a plan row describes."""
+        output_id = int(_row_source_patch_id(row))
+        members = self.member_rows[self.member_rows["output_id"] == output_id]
+        assert len(members), "no plan members found for output row"
+        if self.mode == "concat":
+            from dascore.utils.patch import concatenate_patches
+
+            patches = [
+                self._load_member(kwargs) for kwargs in members.to_dict("records")
+            ]
+            out = concatenate_patches(
+                patches, check_behavior=self.check_behavior, **{self.dim: None}
+            )
+            assert len(out) == 1
+            return out[0]
+        joined = members.assign(current_index=output_id)
+        patches = self._assembler()._patch_from_instruction_df(joined)
+        assert len(patches) == 1
+        return patches[0]
+
+
+def _residual_ranges(residuals) -> dict:
+    """Envelope-applicable value ranges from a residual tuple."""
+    out = {}
+    for coords, samples in residuals:
+        if samples:
+            continue
+        for name, value in coords.items():
+            magnitudes = getattr(value, "magnitudes", None)
+            if magnitudes is not None:
+                out[name] = magnitudes
+            elif is_range(value) and not any(
+                hasattr(b, "units") for b in value if b is not None
+            ):
+                out[name] = value
+    return out
+
+
+def derived_catalog(
+    *,
+    source_rows: pd.DataFrame,
+    plan,
+    parent: PatchCatalog | None,
+    merge_kwargs: Mapping,
+    mode: str = "chunk",
+    check_behavior: str = "warn",
+    origin_path=None,
+) -> PatchCatalog:
+    """
+    Materialize a plan into a fresh in-memory catalog.
+
+    ``source_rows`` are the full member source rows (path/format/
+    identity plus envelopes and attrs) keyed by ``_patch_id`` matching
+    ``plan.members``; ``parent`` supplies the resolver (live registry,
+    file root, nested plans) and the residual selections its view
+    carried, which member loading re-applies.
+    """
+    token = secrets.token_hex(8)
+    name = plan.dim
+    trims = plan.members
+    trim_cols = [c for c in trims.columns if c not in ("_patch_id",)]
+    sources = source_rows.copy(deep=False)
+    if "_patch_id" not in sources.columns:
+        from dascore.utils.chunk_plan import _ensure_patch_id
+
+        sources = _ensure_patch_id(sources)
+    member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
+        sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
+        on="_patch_id",
+        how="left",
+    )
+    # the member's trimmed range replaces the source envelope for loading
+    member_rows = member_rows.drop(columns=["_patch_id"])
+    parent_residuals = () if parent is None else parent._residuals
+    # resolve stored-relative paths once; the derived catalog is
+    # root-independent afterwards
+    root = getattr(parent.resolver, "_root", None) if parent is not None else None
+    if root is not None and "path" in member_rows.columns:
+        member_rows = member_rows.assign(
+            path=[
+                str(p)
+                if "://" in str(p) or str(p).startswith("/")
+                else str(root / str(p))
+                for p in member_rows["path"]
+            ]
+        )
+    loader = CompositeResolver()
+    if parent is not None:
+        member_paths = set(member_rows.get("path", pd.Series(dtype=str)).astype(str))
+        loader.absorb(parent.resolver, paths=member_paths)
+    resolver = PlanResolver(
+        token=token,
+        dim=name,
+        member_rows=member_rows,
+        loader=loader,
+        merge_kwargs=merge_kwargs,
+        parent_residuals=parent_residuals,
+        mode=mode,
+        check_behavior=check_behavior,
+        origin_path=origin_path,
+    )
+    backend = get_backend(":memory:")
+    backend.write_sources(_output_records(plan.outputs, token))
+    return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
+    """
+    Return the re-planning frame for a derived catalog, or None.
+
+    Plans collapse (never nest): re-chunking a planned spool plans over
+    the current view's *members* — the trimmed source rows — restricted
+    to outputs the view still presents, with the view's value residuals
+    applied to the envelopes.
+    """
+    resolver = catalog.resolver
+    if not isinstance(resolver, PlanResolver):
+        return None
+    members = resolver.member_rows
+    if catalog.is_view:
+        present = {
+            int(_row_source_patch_id(row)) for row in catalog.to_df().to_dict("records")
+        }
+        members = members[members["output_id"].isin(present)]
+    ranges = _residual_ranges(catalog._residuals)
+    working = members.drop(columns=["output_id", "_modified"], errors="ignore")
+    if ranges:
+        working = adjust_segments(working, ignore_bad_kwargs=True, **ranges)
+    return working.reset_index(drop=True)
