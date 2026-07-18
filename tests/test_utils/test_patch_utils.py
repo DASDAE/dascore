@@ -1133,3 +1133,22 @@ class TestGetWindowAxisStep:
             random_patch, distance=self.window * step, overlap=None
         )
         assert out == (self.window, random_patch.get_axis("distance"), None)
+
+
+class TestForcePatchMergeOverlap:
+    """_force_patch_merge tolerates complete-envelope overlap (keep first)."""
+
+    def test_complete_overlap_keeps_first(self, random_patch):
+        """Identical envelopes merge to the first patch."""
+        from dascore.utils.patch import _force_patch_merge
+
+        twin = random_patch.new()
+        infos = []
+        for patch in (random_patch, twin):
+            info = patch.coords._get_dim_summary()
+            info["patch"] = patch
+            info["dims"] = ",".join(patch.dims)
+            infos.append(info)
+        out = _force_patch_merge(infos, merge_kwargs={})
+        assert len(out) == 1
+        assert out[0]["patch"] is random_patch

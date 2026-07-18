@@ -466,16 +466,6 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     return sorted(out)
 
 
-def get_column_names_from_dim(dims: Sequence[str]) -> list:
-    """Get column names from a sequence of dimensions."""
-    out = []
-    for name in dims:
-        out.append(f"{name}_min")
-        out.append(f"{name}_max")
-        out.append(f"{name}_step")
-    return out
-
-
 def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
     """
     Fill missing columns in dataframe with defaults from base_model.

@@ -13,7 +13,7 @@ becomes a Patch.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -88,59 +88,16 @@ def _coord_only_kwargs(patch, kwargs) -> dict:
 @dataclass
 class PatchAssembler:
     """
-    Assemble patches for one spool view.
+    Assemble output patches from joined member rows.
 
-    The frames define the view (presented rows, member instructions,
-    source rows); ``load_patch`` resolves one joined row to its source
-    patch; policy fields carry the merge behavior and patch-local
-    post-selections. Instances cache the instruction-row index and are
-    themselves cached per spool view.
+    ``load_patch`` resolves one member row to its source patch (residual
+    selections included); ``merge_kwargs`` carries the merge behavior.
+    The plan resolver hands this the joined member frame for one output
+    at a time.
     """
 
-    df: pd.DataFrame
-    source_df: pd.DataFrame
-    instruction_df: pd.DataFrame
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
-    post_selects: tuple = ()
-    drop_columns: tuple = ()
-    _indices: dict | None = field(default=None, repr=False)
-
-    def get_patch(self, df_ind: int) -> dc.Patch:
-        """Assemble the single patch presented at a row index."""
-        patches = self.get_patches_from_index(df_ind)
-        assert len(patches) == 1
-        return patches[0]
-
-    def get_patches_from_index(self, df_ind):
-        """Given an index (from current df), return the corresponding patch."""
-        source = self.source_df
-        instruction = self.instruction_df
-        # handle negative index; a still-negative value after
-        # normalization is out of bounds and must never wrap around
-        requested = df_ind
-        if df_ind < 0:
-            df_ind = len(self.df) + df_ind
-        if not 0 <= df_ind < len(self.df):
-            msg = f"index of [{requested}] is out of bounds for spool."
-            raise IndexError(msg)
-        inds = self.df.index[df_ind]
-        # Group positional instruction rows by current index (and cache) to
-        # avoid a full instruction df scan for each requested patch.
-        if self._indices is None:
-            self._indices = instruction.groupby("current_index").indices
-        positions = self._indices.get(inds)
-        assert positions is not None and len(positions), "no instructions found"
-        df1 = instruction.iloc[positions]
-        joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
-        # Occasionally, duplicates can creep into the source_df,
-        # but it costs a bit to check for duplicates, so only check and drop
-        # duplicates on large joined dataframes where performance might be
-        # affected.
-        if len(joined) > 10:
-            cols = set(joined.columns) - set(self.drop_columns)
-            joined = joined.drop_duplicates(subset=list(cols), keep="first")
-        return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -183,10 +140,6 @@ class PatchAssembler:
         # are valid patch selections.
         if select_kwargs := _coord_only_kwargs(patch, source_kwargs):
             patch = patch.select(**select_kwargs)
-        # patch-local selections (samples=True) recorded by spool.select
-        for post_kwargs, samples in self.post_selects:
-            if usable := _coord_only_kwargs(patch, post_kwargs):
-                patch = patch.select(**usable, samples=samples)
         return patch
 
     def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):

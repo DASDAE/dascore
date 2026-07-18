@@ -39,7 +39,6 @@ from dascore.io.index.ingest import (
 )
 from dascore.utils.misc import is_range
 from dascore.utils.pd import adjust_segments
-from dascore.utils.time import to_int
 
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
@@ -50,9 +49,9 @@ def _ns(value) -> int | None:
     """Convert a datetime/timedelta-like envelope value to ns int."""
     if value is None or pd.isnull(value):
         return None
-    if isinstance(value, pd.Timestamp | pd.Timedelta):
-        return int(value.value)
-    return int(to_int(value))
+    if isinstance(value, pd.Timedelta | np.timedelta64):
+        return int(pd.Timedelta(value).value)
+    return int(pd.Timestamp(value).value)
 
 
 def _num(value) -> float | None:
@@ -79,10 +78,8 @@ def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
         return None
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
-    if isinstance(lo, pd.Timestamp):
-        lo, hi = lo.to_datetime64(), pd.Timestamp(hi).to_datetime64()
-        dtype = "datetime64[ns]"
-    elif isinstance(lo, np.datetime64):
+    if isinstance(lo, pd.Timestamp | np.datetime64):
+        lo, hi = pd.Timestamp(lo).to_datetime64(), pd.Timestamp(hi).to_datetime64()
         dtype = "datetime64[ns]"
     elif isinstance(lo, pd.Timedelta | np.timedelta64):
         lo, hi = pd.Timedelta(lo).to_timedelta64(), pd.Timedelta(hi).to_timedelta64()
@@ -93,6 +90,10 @@ def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
         dtype = "float64"
     if isinstance(step, pd.Timedelta):
         step = step.to_timedelta64()
+    if step is not None and not step:
+        # a degenerate (zero) step is not a range; drop it rather than
+        # letting range reconstruction divide by it
+        step = None
     units = row.get(f"{name}_units")
     # numeric envelope values are stored canonical-SI; attaching the
     # original unit string would make ingest re-convert them
@@ -100,10 +101,7 @@ def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
         units = None
     length = None
     if step is not None:
-        try:
-            length = int(round((hi - lo) / step)) + 1
-        except (TypeError, ZeroDivisionError):
-            length = None
+        length = int(round((hi - lo) / step)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = None
     if isinstance(key, str) and key.startswith("fp:"):
@@ -227,19 +225,8 @@ class PlanResolver(PatchResolver):
         from dascore.utils.patch_assembly import PatchAssembler
 
         return PatchAssembler(
-            df=None,
-            source_df=None,
-            instruction_df=None,
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
-            post_selects=(),
-            drop_columns=(
-                "patch",
-                "path",
-                "file_format",
-                "file_version",
-                "source_patch_id",
-            ),
         )
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:

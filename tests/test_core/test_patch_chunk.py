@@ -694,13 +694,7 @@ def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
     from dascore.utils.patch_assembly import PatchAssembler
 
-    return PatchAssembler(
-        df=None,
-        source_df=None,
-        instruction_df=None,
-        load_patch=None,
-        merge_kwargs={},
-    )
+    return PatchAssembler(load_patch=None, merge_kwargs={})
 
 
 class TestStreamingMerge:
