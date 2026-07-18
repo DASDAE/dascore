@@ -645,23 +645,26 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     # --- queries -----------------------------------------------------
 
-    def _query_context(self, query):
+    def _query_context(self, query, order_by=None):
         """
         Normalize a query (or several) and fetch the metadata SQL needs.
 
         Returns ``(queries, attr_meta, coord_meta)``; coord metadata is
-        only consulted for coord predicates, so the (whole-relation
-        DISTINCT) scan is skipped for attr-only/empty queries.
+        only consulted for coord predicates and coord ordering, so the
+        (whole-relation DISTINCT) scan is skipped for attr-only/empty
+        queries.
         """
         queries = _as_query_list(query if query is not None else Query())
         attr_meta = self._attr_meta()
         coord_names = {name for q in queries for name in q.coords}
+        if order_by is not None and order_by[0] == "coord":
+            coord_names.add(order_by[1])
         coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
         return queries, attr_meta, coord_meta
 
     def query(self, query=None, order_by=None, patch_ids=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
-        queries, attr_meta, coord_meta = self._query_context(query)
+        queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
             self.dialect,
@@ -679,7 +682,7 @@ class SQLIndexBackend(AbstractIndexBackend):
 
     def query_ids(self, query=None, order_by=None, patch_ids=None) -> list[int]:
         """Return matching patch ids in presentation order (ids only)."""
-        queries, attr_meta, coord_meta = self._query_context(query)
+        queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
             self.dialect,
@@ -966,6 +969,14 @@ class SQLIndexBackend(AbstractIndexBackend):
         """Return coord names known to the index."""
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
+
+    def coord_dims_map(self) -> dict[str, str]:
+        """Return each coord name's dims string (first observed wins)."""
+        df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
+        out: dict[str, str] = {}
+        for name, dims in zip(df["coord_name"], df["coord_dims"]):
+            out.setdefault(str(name), str(dims))
+        return out
 
 
 def resolve_query(

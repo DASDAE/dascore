@@ -97,14 +97,41 @@ def resolve_selector_namespaces(
 
     Bare kwargs resolve against attributes first, then coordinates;
     `_attrs`/`_coords` name their namespace explicitly and validate
-    against that side only. Unknown names, and names supplied in more
-    than one namespace, raise (see #435).
+    against that side only. Each accepts either a mapping of
+    ``name -> selector`` (the fully general form — required when a name
+    cannot be a Python keyword, e.g. it collides with a select parameter
+    or is not an identifier) or a name/collection of names tagging which
+    *bare kwargs* to interpret in that namespace. Unknown names, and
+    names supplied in more than one namespace, raise (see #435).
 
     Both the catalog (which pushes predicates into SQL) and the generic
     dataframe select path resolve names here, so the two agree on which
     names are valid, what a bare name means, and which range forms are
     accepted — the paths differ only in how they *apply* a predicate.
     """
+
+    def _tag_form(spec, kwargs, label):
+        """Normalize a tag-form spec (names of bare kwargs) to a dict."""
+        if spec is None or isinstance(spec, Mapping):
+            return spec, kwargs
+        names = [spec] if isinstance(spec, str) else list(spec)
+        if not all(isinstance(n, str) for n in names):
+            msg = (
+                f"{label} must be a mapping of name -> selector, or a "
+                "name/collection of names tagging bare keyword arguments."
+            )
+            raise InvalidSpoolQueryError(msg)
+        kwargs = dict(kwargs or {})
+        out = {}
+        for n in names:
+            if n not in kwargs:
+                msg = f"{label}={n!r} names no bare keyword argument."
+                raise InvalidSpoolQueryError(msg)
+            out[n] = kwargs.pop(n)
+        return out, kwargs
+
+    _attrs, kwargs = _tag_form(_attrs, kwargs, "_attrs")
+    _coords, kwargs = _tag_form(_coords, kwargs, "_coords")
     known_attrs, known_coords = set(known_attrs), set(known_coords)
     # A name in both explicit namespaces is a caller error whether or not
     # it is valid in either, so this precedes the membership checks.

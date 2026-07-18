@@ -795,3 +795,23 @@ class TestStreamingMerge:
         with pytest.raises(CoordMergeError, match=msg):
             samples = p1.data.shape[p1.get_axis("time")] * 2
             assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
+
+
+class TestDescendingChunk:
+    """Public chunk behavior for descending coordinates (2026-07-18 F5)."""
+
+    def test_contiguous_descending_patches_merge(self):
+        """Two contiguous descending patches chunk into one patch."""
+        p = dc.get_example_patch()
+        flipped = p.flip("time")
+        t = p.get_coord("time")
+        span = t.max() - t.min() + t.step
+        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
+        merged = dc.spool([shifted, flipped]).chunk(time=None, conflict="drop")
+        assert len(merged) == 1
+        patch = merged[0]
+        time = patch.get_coord("time")
+        assert time.reverse_sorted
+        n_time = p.shape[p.get_axis("time")]
+        assert patch.shape[patch.get_axis("time")] == 2 * n_time
+        assert time.min() == t.min()

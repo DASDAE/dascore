@@ -381,25 +381,46 @@ def _build_where(
     return where, residuals
 
 
-def _order_clause(order_by, dialect: BaseDialect, attr_meta: pd.DataFrame) -> str:
+# typed coord_defs envelope-minimum column per value kind
+_COORD_MIN_COLUMNS = {"num": "min_num", "time": "min_ns", "str": "min_str"}
+# the two conventional dims cached as columns on the patches table
+_HOT_COORDS = ("time", "distance")
+
+
+def _order_clause(
+    order_by, dialect: BaseDialect, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
+) -> tuple[str, list]:
     """
-    Resolve an order spec into an ORDER BY clause.
+    Resolve an order spec into an ORDER BY clause and its parameters.
 
     ``order_by`` is ``(kind, name, ascending)`` where kind is "attr"
     (an attrs-table column ordered by its typed column) or "coord"
-    (ordered by the coordinate's envelope minimum). The ordinal contract
-    supplies the deterministic tiebreak.
+    (ordered by the coordinate's envelope minimum — the hot patches
+    column when cached, otherwise the linked coord_defs typed minimum).
+    The ordinal contract supplies the deterministic tiebreak.
     """
     kind, name, ascending = order_by
     direction = "ASC" if ascending else "DESC"
-    if kind == "coord":
+    params: list = []
+    if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{dialect.quote(f'{name}_min')}"
+    elif kind == "coord":
+        rows = coord_meta[coord_meta["coord_name"] == name]
+        # a coord observed under several kinds orders by its first kind
+        value_kind = str(rows["value_kind"].iloc[0])
+        min_col = _COORD_MIN_COLUMNS[value_kind]
+        column = (
+            f"(SELECT cd.{min_col} FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ?)"
+        )
+        params.append(name)
     else:
         rows = attr_meta[attr_meta["attr_name"] == name]
         columns = [dialect.quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
         column = f"a.{columns[0]}"
-    return f"ORDER BY {column} {direction}, s.ordinal, p.patch_id"
+    return f"ORDER BY {column} {direction}, s.ordinal, p.patch_id", params
 
 
 def build_sql(
@@ -444,15 +465,15 @@ def build_sql(
         # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
         sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
         return sql, where.params, residuals
-    order = (
-        _order_clause(order_by, dialect, attr_meta)
-        if order_by is not None
+    if order_by is not None:
+        order, order_params = _order_clause(order_by, dialect, attr_meta, coord_meta)
+    else:
         # the ordering contract: source ordinal, then file-internal order
-        else "ORDER BY s.ordinal, p.patch_id"
-    )
+        order, order_params = "ORDER BY s.ordinal, p.patch_id", []
+    params = [*where.params, *order_params]
     if ids_only:
         sql = f"SELECT p.patch_id {_FROM}WHERE {where.sql} {order}"
-        return sql, where.params, residuals
+        return sql, params, residuals
     # attr columns selected explicitly: `a.*` would duplicate patch_id and
     # engines disagree on how to dedupe result column names.
     attr_cols = "".join(
@@ -465,7 +486,7 @@ def build_sql(
         f"WHERE {where.sql} "
         f"{order}"
     )
-    return sql, where.params, residuals
+    return sql, params, residuals
 
 
 def apply_residuals(

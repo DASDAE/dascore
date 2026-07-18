@@ -4,7 +4,7 @@ title: Spool Selection
 
 `Spool.select` uses one selector model for memory and directory spools. Patch-list and directory spools compose selections in a `PatchCatalog`; ordinary metadata predicates are pushed into SQLite and remain lazy until contents, length, indexing, or iteration requires rows.
 
-Bare selector names resolve to attributes first and then coordinates. `_attrs={...}` and `_coords={...}` provide explicit namespaces when needed. Unknown names raise immediately instead of being ignored.
+Bare selector names resolve to attributes first and then coordinates. `_attrs` and `_coords` provide explicit namespaces when needed: either a `name -> selector` mapping (the fully general form, required when a name cannot be a Python keyword) or a name/collection of names tagging which bare keyword arguments belong to that namespace (e.g. `select(sensor=(1, 10), _coords="sensor")`). Unknown names raise immediately instead of being ignored.
 
 Attribute equality, membership, ranges, and glob predicates are evaluated by the index. Regular expressions use a SQL candidate predicate and an exact residual filter; chained regular expressions are combined with AND. Quantities are converted to the canonical unit recorded by the index, and dimensionally incompatible queries raise rather than silently returning incorrect matches. Values stored without units can never be proven incompatible, so they remain candidates for quantity selectors rather than being silently excluded.
 

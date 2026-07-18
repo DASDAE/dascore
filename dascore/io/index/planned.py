@@ -61,23 +61,45 @@ def _num(value) -> float | None:
     return float(value)
 
 
-def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
+def _coord_record_from_row(
+    row: Mapping, name: str, dims: tuple[str, ...] | None = None
+) -> CoordRecord | None:
     """
-    Build the envelope coord record for one output dimension.
+    Build the envelope coord record for one output coordinate.
 
     Delegates to the ingest converter through a range CoordSummary so
     virtual outputs carry the same identities real patches would: a
     carried ``fp:`` def key survives for non-planned dims, and the
-    planned dim's range fingerprint is reconstructed exactly.
+    planned dim's range fingerprint is reconstructed exactly. ``dims``
+    names the dimensions the coordinate rides (itself by default).
     """
     from dascore.core.coords import CoordSummary
     from dascore.io.index.ingest import _coord_record
 
+    dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
     if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
         return None
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
+    if isinstance(lo, str):
+        # string coords have no range representation; store the
+        # lexicographic envelope directly
+        key = row.get(f"_{name}_def_key")
+        fingerprint = (
+            key[3:] if isinstance(key, str) and key.startswith("fp:") else None
+        )
+        return CoordRecord(
+            coord_name=name,
+            value_kind="str",
+            dtype="str",
+            coord_dims=",".join(dims),
+            length=None,
+            units=None,
+            min_str=str(lo),
+            max_str=None if hi is None or pd.isnull(hi) else str(hi),
+            coord_hash=fingerprint,
+        )
     if isinstance(lo, pd.Timestamp | np.datetime64):
         lo, hi = pd.Timestamp(lo).to_datetime64(), pd.Timestamp(hi).to_datetime64()
         dtype = "datetime64[ns]"
@@ -112,16 +134,82 @@ def _coord_record_from_row(row: Mapping, name: str) -> CoordRecord | None:
         max=hi,
         step=step,
         units=units,
-        dims=(name,),
+        dims=dims,
         len=length,
         fingerprint=fingerprint,
     )
     return _coord_record(name, summary)
 
 
-def _output_records(outputs: pd.DataFrame, token: str) -> list[SourceRecord]:
+def _aux_coord_info(
+    source_rows: pd.DataFrame,
+    members: pd.DataFrame,
+    plan_dim: str,
+    coord_dims_map: Mapping[str, str],
+    trimmed_dims: frozenset[str] = frozenset(),
+) -> dict[int, dict[str, dict]]:
+    """
+    Aggregate per-output envelope info for auxiliary coordinates.
+
+    Aggregated from the *member source rows* (authoritative, unlike the
+    planner's carried columns). Structural identity (def key and step,
+    which permit fingerprint claims) is kept only when every member
+    shares one def key and the values provably survive assembly: a
+    coordinate riding the planned dimension is trimmed/merged with it,
+    so only a lone unmodified member keeps identity there. Envelopes
+    always aggregate — the catalog contract is candidacy, with exact
+    values re-established at load.
+    """
+    out: dict[int, dict[str, dict]] = {}
+    if not len(members) or not coord_dims_map:
+        return out
+    cols = [c for c in ("output_id", "_patch_id", "_modified") if c in members.columns]
+    joined = members[cols].merge(source_rows, on="_patch_id", how="left")
+    for name, dims_str in coord_dims_map.items():
+        cmin, cmax = f"{name}_min", f"{name}_max"
+        if cmin not in joined.columns:
+            continue
+        dims = tuple(d for d in str(dims_str).split(",") if d)
+        rides = plan_dim in dims
+        # a residual selection trims the dims it rides at load, changing
+        # the values of every coordinate on those dims
+        trimmed = bool(set(dims) & trimmed_dims)
+        key_col, step_col = f"_{name}_def_key", f"{name}_step"
+        for output_id, sub in joined.groupby("output_id"):
+            lo, hi = sub[cmin].min(), sub[cmax].max()
+            if pd.isnull(lo) and pd.isnull(hi):
+                continue
+            keys = set(sub[key_col].dropna()) if key_col in sub.columns else set()
+            modified = bool(sub["_modified"].any()) if "_modified" in sub else False
+            keep = (
+                len(keys) == 1
+                and not trimmed
+                and (not rides or (len(sub) == 1 and not modified))
+            )
+            steps = (
+                set(sub[step_col].dropna())
+                if keep and step_col in sub.columns
+                else set()
+            )
+            info = {
+                cmin: lo,
+                cmax: hi,
+                step_col: steps.pop() if len(steps) == 1 else None,
+                key_col: keys.pop() if keep else None,
+                "dims": dims,
+            }
+            out.setdefault(int(output_id), {})[name] = info
+    return out
+
+
+def _output_records(
+    outputs: pd.DataFrame,
+    token: str,
+    aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+) -> list[SourceRecord]:
     """Convert plan output rows into ingestible source records."""
     records = []
+    aux_info = aux_info or {}
     envelope_suffixes = ("_min", "_max", "_step", "_units")
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
@@ -130,6 +218,14 @@ def _output_records(outputs: pd.DataFrame, token: str) -> list[SourceRecord]:
         coords = []
         for name in dim_names:
             record = _coord_record_from_row(row, name)
+            if record is not None:
+                coords.append(record)
+        # auxiliary (non-dimension) coordinates remain on the assembled
+        # patches, so the catalog must keep describing them
+        for name, info in aux_info.get(output_id, {}).items():
+            if name in dim_names:
+                continue
+            record = _coord_record_from_row(info, name, dims=info["dims"])
             if record is not None:
                 coords.append(record)
         attrs = {}
@@ -247,6 +343,10 @@ class PlanResolver(PatchResolver):
         output_id = int(_row_source_patch_id(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         assert len(members), "no plan members found for output row"
+        if self.mode == "identity":
+            # one untouched member per output; residuals apply at load
+            assert len(members) == 1
+            return self._load_member(members.iloc[0].to_dict())
         if self.mode == "concat":
             from dascore.utils.patch import concatenate_patches
 
@@ -345,7 +445,24 @@ def derived_catalog(
         origin_path=origin_path,
     )
     backend = get_backend(":memory:")
-    backend.write_sources(_output_records(plan.outputs, token))
+    coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
+    # residual selections trim at load; identity claims (def keys) for
+    # coordinates on the trimmed dims would describe the untrimmed values
+    residual_names = {n for coords, _ in parent_residuals for n in coords}
+    trimmed_dims = frozenset(
+        d for n in residual_names for d in str(coord_dims_map.get(n, n)).split(",") if d
+    )
+    outputs = plan.outputs
+    stale_keys = [
+        f"_{c}_def_key"
+        for c, dims_str in coord_dims_map.items()
+        if set(str(dims_str).split(",")) & trimmed_dims
+        and f"_{c}_def_key" in outputs.columns
+    ]
+    if stale_keys:
+        outputs = outputs.drop(columns=stale_keys)
+    aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
+    backend.write_sources(_output_records(outputs, token, aux_info=aux_info))
     return PatchCatalog(backend=backend, resolver=resolver)
 
 

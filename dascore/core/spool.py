@@ -226,11 +226,13 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         Parameters
         ----------
         _attrs
-            A dict of attribute selections; names validate as attributes
-            only (disambiguates names shared with coordinates).
+            Attribute selections: a dict of ``name -> selector`` (the
+            general form — required when a name cannot be a Python
+            keyword) or a name/collection of names tagging bare kwargs
+            as attributes (disambiguates names shared with coordinates).
         _coords
-            A dict of coordinate selections; names validate as
-            coordinates only.
+            Coordinate selections; same forms as ``_attrs``, validating
+            names as coordinates only.
         samples
             If True, selections are coordinate-only and given in sample
             indices; they never exclude patches, but are applied to each
@@ -584,8 +586,61 @@ class Spool(BaseSpool):
         return new
 
     def _as_catalog_member(self):
-        """Return (catalog, patch_ids) describing this spool for a union."""
-        return self._catalog, None
+        """
+        Return (catalog, patch_ids) describing this spool for a union.
+
+        Row membership (attr predicates, windows, id arrays) survives a
+        table union as-is, but residual trims and order specs live
+        Python-side and would silently vanish; a spool carrying those
+        first bakes them into a derived catalog (tables only — no patch
+        data is loaded).
+        """
+        catalog = self._catalog
+        if catalog._residuals or catalog._order is not None:
+            return self._materialize_lossy(), None
+        return catalog, None
+
+    def _materialize_lossy(self):
+        """
+        Bake residual trims and presentation order into a derived catalog.
+
+        An identity plan over the view's presented rows: one output per
+        row (in presentation order, so ordinals record the order spec),
+        with trimmed envelopes as the output envelopes and the trims
+        themselves re-applied at load through the plan resolver.
+        """
+        from dascore.io.index.planned import derived_catalog
+        from dascore.utils.chunk_plan import (
+            _SOURCE_COLUMNS,
+            ChunkPlan,
+            samples_adjusted_envelopes,
+        )
+
+        rows = self._df.reset_index(drop=True)
+        working = samples_adjusted_envelopes(rows, self._catalog._residuals)
+        working = working.reset_index(drop=True)
+        ids = np.arange(len(working), dtype=np.int64)
+        # outputs are not file rows: source bookkeeping stays on the
+        # members (where loading needs it), never on the derived rows
+        outputs = working.drop(
+            columns=["_patch_id", *_SOURCE_COLUMNS], errors="ignore"
+        ).assign(output_id=ids)
+        members = pd.DataFrame(
+            {
+                "output_id": ids,
+                "_patch_id": working.get("_patch_id", pd.Series(dtype=object)).values,
+                "_modified": False,
+            }
+        )
+        plan = ChunkPlan(outputs, members, "", None, {})
+        return derived_catalog(
+            source_rows=working,
+            plan=plan,
+            parent=self._catalog,
+            merge_kwargs={},
+            mode="identity",
+            origin_path=self.spool_path,
+        )
 
     # --- restructuring (materializing) operations -----------------------
 
@@ -745,7 +800,16 @@ class Spool(BaseSpool):
             first.pop("_patch_id", None)
             output_rows.append(first)
         outputs = pd.DataFrame(output_rows)
-        members = pd.concat(member_frames, ignore_index=True)
+        if member_frames:
+            members = pd.concat(member_frames, ignore_index=True)
+        else:  # nothing to concatenate: an empty spool stays empty
+            members = pd.DataFrame(
+                {
+                    "output_id": pd.Series(dtype=np.int64),
+                    "_patch_id": pd.Series(dtype=object),
+                    "_modified": pd.Series(dtype=bool),
+                }
+            )
         plan = ChunkPlan(outputs, members, dim, None, {})
         catalog = derived_catalog(
             source_rows=source_rows,

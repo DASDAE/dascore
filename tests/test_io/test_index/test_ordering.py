@@ -144,3 +144,55 @@ class TestIndexVersionRebuild:
         spool = dc.spool(tmp_path).update(progress=None)
         assert copy.deepcopy(spool.indexer) is spool.indexer
         spool.indexer.close()
+
+
+class TestSortNonHotCoords:
+    """Sorting by coords without patches-table columns (2026-07-18 F3)."""
+
+    @pytest.fixture()
+    def renamed_spool(self):
+        """Two patches whose time coord is renamed (not a hot column)."""
+        p = dc.get_example_patch().rename_coords(time="event_time")
+        t = p.get_coord("event_time")
+        span = t.max() - t.min() + t.step
+        p2 = p.update_coords(event_time=t.data + span)
+        return dc.spool([p2, p])  # deliberately out of order
+
+    @pytest.mark.parametrize("key", ["event_time", "event_time_min"])
+    def test_sort_renamed_datetime_coord(self, renamed_spool, key):
+        """A renamed datetime coord sorts through coord_defs."""
+        srt = renamed_spool.sort(key)
+        mins = [x.get_coord("event_time").min() for x in srt]
+        assert mins == sorted(mins)
+        # the realized relation agrees
+        contents = srt.get_contents()
+        assert contents["event_time_min"].is_monotonic_increasing
+
+    def test_sort_non_hot_numeric_coord(self):
+        """A numeric aux coord sorts through coord_defs."""
+        p = dc.get_example_patch()
+        n = p.shape[p.get_axis("distance")]
+        lo = p.update_coords(sensor=("distance", np.arange(n, dtype=float)))
+        hi = p.update_coords(sensor=("distance", np.arange(n, dtype=float) + 1000))
+        srt = dc.spool([hi, lo]).sort("sensor")
+        mins = [x.get_coord("sensor").min() for x in srt]
+        assert mins == sorted(mins)
+
+    def test_sort_string_coord(self):
+        """A string coord sorts lexicographically through coord_defs."""
+        p = dc.get_example_patch()
+        n = p.shape[p.get_axis("distance")]
+        pa = p.update_coords(station=("distance", np.array(["a"] * n)))
+        pb = p.update_coords(station=("distance", np.array(["b"] * n)))
+        srt = dc.spool([pb, pa]).sort("station")
+        firsts = [x.get_coord("station").values[0] for x in srt]
+        assert firsts == ["a", "b"]
+
+    def test_hot_coords_still_sort(self):
+        """time/distance keep the cached patches-column path."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        p2 = p.update_coords(time_min=t.max() + t.step)
+        srt = dc.spool([p2, p]).sort("time")
+        mins = [x.get_coord("time").min() for x in srt]
+        assert mins == sorted(mins)

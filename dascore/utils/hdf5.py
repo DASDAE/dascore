@@ -314,10 +314,6 @@ class H5Writer(H5Reader):
         return super().get_handle(resource)
 
 
-# These are left here for backward compatibility, but should not be
-# used in new code.
-
-
 def unpack_scalar_h5_dataset(dataset):
     """
     Unpack a scalar H5Py dataset.

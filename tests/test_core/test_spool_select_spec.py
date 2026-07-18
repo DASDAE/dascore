@@ -504,3 +504,53 @@ class TestLazyOrderAndWindow:
         payload = len(pickle.dumps(parts[0]))
         baseline = len(pickle.dumps(dc.spool([patches[0]])))
         assert payload < 2 * baseline
+
+
+class TestNamespaceTagForm:
+    """_attrs/_coords accept names of bare kwargs (tag form)."""
+
+    @pytest.fixture()
+    def sensor_spool(self):
+        """One patch with an aux coord whose name is not an attr."""
+        patch = dc.get_example_patch()
+        n = patch.shape[patch.get_axis("distance")]
+        return dc.spool(
+            [patch.update_coords(sensor=("distance", np.arange(n, dtype=float)))]
+        )
+
+    def test_coords_tag_string(self, sensor_spool):
+        """A single name tags one bare kwarg as a coordinate."""
+        out = sensor_spool.select(sensor=(10, 20), _coords="sensor")
+        coord = out[0].get_coord("sensor")
+        assert coord.min() == 10.0
+        assert coord.max() == 20.0
+
+    def test_coords_tag_collection(self, sensor_spool):
+        """A collection of names tags several bare kwargs."""
+        out = sensor_spool.select(sensor=(10, 20), _coords=["sensor"])
+        assert len(out) == 1
+
+    def test_attrs_tag_string(self, sensor_spool):
+        """The attr side accepts the same tag form."""
+        out = sensor_spool.select(tag="random", _attrs="tag")
+        assert len(out) == 1
+
+    def test_dict_form_unchanged(self, sensor_spool):
+        """The general mapping form keeps working."""
+        out = sensor_spool.select(_coords={"sensor": (10, 20)})
+        assert len(out) == 1
+
+    def test_tag_without_kwarg_raises(self, sensor_spool):
+        """Tagging a name with no matching bare kwarg is an error."""
+        with pytest.raises(InvalidSpoolQueryError, match="names no bare keyword"):
+            sensor_spool.select(_coords="sensor")
+
+    def test_non_string_tag_raises(self, sensor_spool):
+        """Tag collections must contain strings."""
+        with pytest.raises(InvalidSpoolQueryError, match="mapping of name"):
+            sensor_spool.select(sensor=(1, 2), _coords=[3])
+
+    def test_tagged_name_validates_namespace(self, sensor_spool):
+        """A tagged name must belong to the claimed namespace."""
+        with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
+            sensor_spool.select(sensor=(1, 2), _attrs="sensor")

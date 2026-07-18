@@ -349,6 +349,107 @@ class TestSameFileUnion:
         assert len(narrowed) == 1
         other = dc.get_example_patch(time_min="2030-01-01")
         combined = narrowed + dc.spool([other])
+        # the trimmed operand materializes into a plan, so its live
+        # member rides inside the plan's loader, not the top registry
         registry = combined._catalog.resolver.live_entries()
-        assert len(registry) == 2  # p1 and other; p2 stayed home
+        assert len(registry) == 1  # other
+        plans = combined._catalog.resolver.plan_entries()
+        nested_live = {k for p in plans.values() for k in p.live_entries()}
+        assert len(nested_live) == 1  # p1; p2 stayed home
         assert len(combined) == 2
+
+
+class TestLossyStateUnion:
+    """Residual trims and order specs survive combining (2026-07-18 F1)."""
+
+    def test_value_trim_survives_union(self):
+        """A coordinate-range selection's trim is baked in, not dropped."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        lo, hi = t.min() + 10 * t.step, t.min() + 20 * t.step
+        selected = dc.spool([p]).select(time=(lo, hi))
+        combined = selected + dc.spool([])
+        assert len(combined) == 1
+        got, want = combined[0], selected[0]
+        assert got.shape == want.shape
+        assert got.get_coord("time").min() == want.get_coord("time").min()
+        assert got.get_coord("time").max() == want.get_coord("time").max()
+
+    def test_samples_trim_survives_union(self):
+        """A samples window's trim is baked in, not dropped."""
+        p = dc.get_example_patch()
+        selected = dc.spool([p]).select(time=(0, 10), samples=True)
+        combined = selected + dc.spool([])
+        assert combined[0].shape == selected[0].shape
+
+    def test_file_backed_value_trim_survives_union(self, dir_spool):
+        """The same guarantee holds for file-backed catalogs."""
+        patch = dir_spool[0]
+        t = patch.get_coord("time")
+        lo, hi = t.min() + 10 * t.step, t.min() + 20 * t.step
+        selected = dir_spool.select(time=(lo, hi))
+        combined = selected + dc.spool([])
+        assert combined[0].shape == selected[0].shape
+
+    def test_sort_order_survives_union(self):
+        """A sort spec bakes into ordinals instead of silently reverting."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        early = p.update_attrs(tag="early")
+        late = p.update_coords(time_min=t.max() + t.step).update_attrs(tag="late")
+        srt = dc.spool([late, early]).sort("time")
+        combined = srt + dc.spool([])
+        assert [x.attrs.tag for x in combined] == [x.attrs.tag for x in srt]
+
+    def test_membership_selections_still_dedup(self):
+        """Row-membership state unions as rows: identity dedup preserved."""
+        p = dc.get_example_patch()
+        spool = dc.spool([p.update_attrs(tag=f"t{i}") for i in range(4)])
+        combined = spool.select(tag="t2") + spool
+        assert len(combined) == 4
+
+    def test_windows_still_union_by_rows(self):
+        """Slice windows survive as membership without materializing."""
+        p = dc.get_example_patch()
+        spool = dc.spool([p.update_attrs(tag=f"t{i}") for i in range(4)])
+        combined = spool[1:3] + dc.spool([])
+        assert [x.attrs.tag for x in combined] == ["t1", "t2"]
+
+    def test_two_selected_operands(self):
+        """Different trims on each operand both survive as new contents."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        lo = t.min() + 10 * t.step
+        a = dc.spool([p]).select(time=(lo, t.min() + 20 * t.step))
+        b = dc.spool([p]).select(time=(t.min(), lo))
+        combined = a + b
+        assert len(combined) == 2
+        assert {x.shape for x in combined} == {a[0].shape, b[0].shape}
+
+    def test_sorted_derived_union(self):
+        """A derived (chunked) catalog with an order spec also survives."""
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        early = p.update_attrs(tag="z_early")
+        # the gap keeps two outputs; distinct tags survive unmerged
+        late = p.update_coords(time_min=t.max() + 10 * t.step).update_attrs(
+            tag="a_late"
+        )
+        chunked = dc.spool([early, late]).chunk(time=None)
+        srt = chunked.sort("tag")
+        want = [x.attrs.tag for x in srt]
+        assert want == ["a_late", "z_early"]  # tag order != time order
+        combined = srt + dc.spool([])
+        assert [x.attrs.tag for x in combined] == want
+
+    def test_combined_pickles(self):
+        """A union holding a materialized operand round-trips pickling."""
+        import pickle
+
+        p = dc.get_example_patch()
+        t = p.get_coord("time")
+        lo, hi = t.min() + 10 * t.step, t.min() + 20 * t.step
+        combined = dc.spool([p]).select(time=(lo, hi)) + dc.spool([])
+        loaded = pickle.loads(pickle.dumps(combined))
+        assert len(loaded) == 1
+        assert loaded[0].shape == combined[0].shape

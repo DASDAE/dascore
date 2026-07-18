@@ -426,3 +426,111 @@ class TestChunkPlanCoverageEdges:
 
         monkeypatch.setattr(_inspect, "stack", lambda: [_Frame()] * 3)
         assert cp._user_stacklevel() == 1
+
+
+class TestSamplingGroups:
+    """Sampling-group partitioning invariants (2026-07-18 F5)."""
+
+    def test_close_steps_group(self):
+        """Steps within tolerance of the anchor share a group."""
+        from dascore.utils.chunk_plan import _sampling_group
+
+        labels = _sampling_group(pd.Series([1.0, 1.04]), 0.05)
+        assert labels.nunique() == 1
+
+    def test_chain_does_not_drift_past_tolerance(self):
+        """Adjacent-close steps cannot chain past the group anchor."""
+        from dascore.utils.chunk_plan import _sampling_group
+
+        labels = _sampling_group(pd.Series([1.00, 1.04, 1.08]), 0.05)
+        assert list(labels) == [0, 0, 1]
+
+    def test_negative_steps_group_by_magnitude(self):
+        """Widely different negative steps never share a group."""
+        from dascore.utils.chunk_plan import _sampling_group
+
+        labels = _sampling_group(pd.Series([-1.0, -5.0]), 0.05)
+        assert labels.nunique() == 2
+
+    def test_mixed_orientation_never_groups(self):
+        """Equal magnitudes with opposite signs stay separate."""
+        from dascore.utils.chunk_plan import _sampling_group
+
+        labels = _sampling_group(pd.Series([1.0, -1.0]), 0.05)
+        assert labels.nunique() == 2
+
+    def test_unknown_steps_share_one_group(self):
+        """NaN steps keep their historical single-group behavior."""
+        from dascore.utils.chunk_plan import _sampling_group
+
+        labels = _sampling_group(pd.Series([1.0, np.nan, np.nan]), 0.05)
+        assert labels.nunique() == 2
+        assert labels.iloc[1] == labels.iloc[2]
+
+    def test_descending_contiguous_merges(self):
+        """Contiguous descending patches produce a single merge output."""
+        p = dc.get_example_patch()
+        flipped = p.flip("time")
+        t = p.get_coord("time")
+        span = t.max() - t.min() + t.step
+        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
+        plan = dc.spool([shifted, flipped]).chunk_plan(time=None)
+        assert len(plan.outputs) == 1
+        assert len(plan.members) == 2
+
+
+class TestSamplesAdjustedEnvelopes:
+    """Samples residual envelope adjustment (2026-07-18 F4)."""
+
+    @staticmethod
+    def _frame():
+        """One ascending row: 10 samples at step 1 spanning [0, 9]."""
+        return pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [1.0]})
+
+    def test_exclusive_stop(self):
+        """The stop index is exclusive: (0, 5) ends at sample 4."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (0, 5)}, True),))
+        assert out["time_max"].iloc[0] == 4.0
+
+    def test_empty_window_drops_row(self):
+        """A zero-length window contributes nothing."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (3, 3)}, True),))
+        assert len(out) == 0
+
+    def test_start_past_end_drops_row(self):
+        """A window beyond the patch contributes nothing."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (50, 60)}, True),))
+        assert len(out) == 0
+
+    def test_stop_clamps(self):
+        """A stop past the end clamps to the envelope max."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        out = samples_adjusted_envelopes(self._frame(), (({"time": (2, 99)}, True),))
+        assert out["time_min"].iloc[0] == 2.0
+        assert out["time_max"].iloc[0] == 9.0
+
+    def test_descending_orientation(self):
+        """On a descending coord, sample 0 sits at the envelope max."""
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [-1.0]})
+        out = samples_adjusted_envelopes(df, (({"time": (0, 5)}, True),))
+        assert out["time_max"].iloc[0] == 9.0
+        assert out["time_min"].iloc[0] == 5.0
+
+    def test_public_same_dim_envelope_matches_patch(self):
+        """The chunked catalog's envelope matches the loaded patch (F4)."""
+        p = dc.get_example_patch()
+        out = dc.spool([p]).select(time=(0, 10), samples=True).chunk(time=None)
+        patch = out[0]
+        want = pd.Timestamp(patch.get_coord("time").max())
+        got = out.get_contents()["time_max"].iloc[0]
+        assert got == want
+        assert patch.shape[patch.get_axis("time")] == 10

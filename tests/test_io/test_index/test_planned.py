@@ -222,3 +222,97 @@ class TestRemainingEdges:
         residuals = (({"depth": (0, 5)}, True),)
         out = samples_adjusted_envelopes(df, residuals)
         assert out.equals(df)
+
+
+class TestAuxiliaryCoords:
+    """Derived catalogs keep non-dimension coords (2026-07-18 F2)."""
+
+    @pytest.fixture()
+    def sensor_spool(self):
+        """Two contiguous patches carrying an aux coord on distance."""
+        p = dc.get_example_patch()
+        sensor = np.arange(p.shape[p.get_axis("distance")], dtype=float)
+        p = p.update_coords(sensor=("distance", sensor))
+        t = p.get_coord("time")
+        p2 = p.update_coords(time_min=t.max() + t.step)
+        return dc.spool([p, p2])
+
+    @pytest.mark.parametrize("op", ["chunk", "concatenate"])
+    def test_aux_coord_survives(self, sensor_spool, op):
+        """Chunk and concat outputs keep describing the aux coord."""
+        if op == "chunk":
+            derived = sensor_spool.chunk(time=None, conflict="drop")
+        else:
+            derived = sensor_spool.concatenate(time=None)
+        contents = derived.get_contents()
+        assert "sensor_min" in contents.columns
+        assert "sensor_max" in contents.columns
+        # and it stays selectable
+        out = derived.select(sensor=(10, 20))
+        assert len(out) == 1
+        coord = out[0].get_coord("sensor")
+        assert coord.min() == 10.0
+        assert coord.max() == 20.0
+
+    def test_aux_identity_preserved_when_unchanged(self, sensor_spool):
+        """Members sharing one def key off the planned dim keep identity."""
+        derived = sensor_spool.chunk(time=None, conflict="drop")
+        source_key = sensor_spool._catalog.to_df()["_sensor_def_key"].iloc[0]
+        derived_key = derived._catalog.to_df()["_sensor_def_key"].iloc[0]
+        assert derived_key == source_key
+        assert str(derived_key).startswith("fp:")
+
+    def test_aux_identity_dropped_when_riding_trimmed_dim(self, sensor_spool):
+        """A residual trim on distance voids sensor's identity claim."""
+        d = sensor_spool[0].get_coord("distance")
+        lo, hi = d.min() + 5 * d.step, d.min() + 50 * d.step
+        selected = sensor_spool.select(distance=(lo, hi))
+        derived = selected.chunk(time=None, conflict="drop")
+        key = derived._catalog.to_df()["_sensor_def_key"].iloc[0]
+        assert not str(key).startswith("fp:")
+        # loading still yields the trimmed coord
+        assert derived[0].get_coord("sensor").min() == 5.0
+
+    def test_string_aux_coord(self):
+        """String-valued aux coords survive with a lexicographic envelope."""
+        p = dc.get_example_patch()
+        n = p.shape[p.get_axis("distance")]
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        p = p.update_coords(station=("distance", labels))
+        derived = dc.spool([p]).chunk(time=None)
+        contents = derived.get_contents()
+        assert contents["station_min"].iloc[0] == "s000"
+        assert contents["station_max"].iloc[0] == f"s{n - 1:03d}"
+        assert "station" in derived[0].coords.coord_map
+
+
+class TestAuxInfoEdges:
+    """Edge branches of the aux-coord aggregation helpers."""
+
+    def test_coord_record_missing_envelope_returns_none(self):
+        """A row without envelope values yields no coord record."""
+        from dascore.io.index.planned import _coord_record_from_row
+
+        assert _coord_record_from_row({}, "time") is None
+
+    def test_absent_envelope_columns_skipped(self):
+        """A mapped coord with no envelope columns contributes nothing."""
+        from dascore.io.index.planned import _aux_coord_info
+
+        members = pd.DataFrame(
+            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+        )
+        sources = pd.DataFrame({"_patch_id": [1]})
+        assert _aux_coord_info(sources, members, "time", {"ghost": "distance"}) == {}
+
+    def test_all_null_group_skipped(self):
+        """An output whose members carry no values for a coord is skipped."""
+        from dascore.io.index.planned import _aux_coord_info
+
+        members = pd.DataFrame(
+            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+        )
+        sources = pd.DataFrame(
+            {"_patch_id": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
+        )
+        assert _aux_coord_info(sources, members, "time", {"sensor": "distance"}) == {}

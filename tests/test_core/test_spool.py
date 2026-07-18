@@ -991,3 +991,14 @@ class TestSpoolCoverageEdges:
         assert len(empty) == 0
         assert list(empty) == []
         assert "Spool" in str(empty)
+
+
+class TestEmptyConcatenate:
+    """Concatenating an empty spool returns an empty spool (F7)."""
+
+    @pytest.mark.parametrize("kwargs", [{"time": None}, {"time": 2}, {"new_dim": None}])
+    def test_empty_returns_empty(self, kwargs):
+        """Empty in, empty out — matching chunk's behavior."""
+        out = dc.spool([]).concatenate(**kwargs)
+        assert len(out) == 0
+        assert list(out) == []

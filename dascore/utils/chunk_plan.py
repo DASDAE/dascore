@@ -123,12 +123,27 @@ def samples_adjusted_envelopes(df: pd.DataFrame, residuals) -> pd.DataFrame:
             if not (_usable_index(lo_idx) and _usable_index(hi_idx)):
                 continue
             mins, maxs, steps = (df[c] for c in cols)
-            new_min = mins if lo_idx is None else mins + lo_idx * steps
-            new_max = maxs if hi_idx is None else mins + hi_idx * steps
-            df[cols[0]] = new_min.where(new_min <= maxs, other=maxs)
-            df[cols[1]] = new_max.where(new_max <= maxs, other=maxs)
-            # rows whose window starts past their end contribute nothing
-            df = df[df[cols[0]] <= df[cols[1]]]
+            # Positions are patch-local sample indices with a stop-exclusive
+            # hi, so the last included position is hi - 1. Sample 0 sits at
+            # the envelope min for ascending coords and at the max for
+            # descending ones.
+            abs_steps = steps.abs()
+            descending = to_float(steps.values) < 0
+            lo_off = None if lo_idx is None else lo_idx * abs_steps
+            hi_off = None if hi_idx is None else (hi_idx - 1) * abs_steps
+            new_min = mins if lo_off is None else mins + lo_off
+            new_max = maxs if hi_off is None else mins + hi_off
+            desc_min = maxs if hi_off is None else maxs - hi_off
+            desc_max = maxs if lo_off is None else maxs - lo_off
+            new_min = new_min.where(~descending, other=desc_min)
+            new_max = new_max.where(~descending, other=desc_max)
+            # rows whose window is empty or lies entirely outside the
+            # patch contribute nothing; test before clipping so such
+            # windows are not resurrected as one-sample envelopes
+            keep = (new_min <= new_max) & (new_min <= maxs) & (new_max >= mins)
+            df[cols[0]] = new_min.clip(lower=mins, upper=maxs)
+            df[cols[1]] = new_max.clip(lower=mins, upper=maxs)
+            df = df[keep]
     return df
 
 
@@ -150,16 +165,36 @@ def _dim_def_key_columns(df: pd.DataFrame, name: str) -> list[str]:
 
 
 def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
-    """Label rows whose steps are within relative tolerance (spec 2.3)."""
+    """
+    Label rows whose steps are within relative tolerance (spec 2.3).
+
+    Steps group by orientation (sign) first, then by magnitude against a
+    stable group anchor: a group opens at its smallest magnitude and
+    admits members up to ``anchor * (1 + tolerance)``, so a chain of
+    individually-close steps can never drift a group's endpoints past
+    the tolerance. Unknown (NaN) steps share one group.
+    """
     col = to_float(step.values)
-    order = np.argsort(col)
-    sorted_col = col[order]
-    prev = np.roll(sorted_col, 1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        diff = (sorted_col - prev) / sorted_col
-    out_of_threshold = diff > tolerance
-    group = np.cumsum(out_of_threshold)
-    return pd.Series(group[np.argsort(order)], index=step.index)
+    sign = np.sign(col)
+    mag = np.abs(col)
+    # orientation-major, magnitude-minor; NaNs sort to the end of both keys
+    order = np.lexsort((mag, sign))
+    sorted_sign, sorted_mag = sign[order], mag[order]
+    labels = np.zeros(len(col), dtype=np.int64)
+    label, i, n = 0, 0, len(col)
+    while i < n:
+        if np.isnan(sorted_mag[i]):
+            # NaN keys sort last, so everything from here on is unknown
+            j = n
+        else:
+            block_end = np.searchsorted(sorted_sign, sorted_sign[i], side="right")
+            bound = sorted_mag[i] * (1 + tolerance)
+            j = np.searchsorted(sorted_mag[:block_end], bound, side="right")
+            j = max(j, i + 1)
+        labels[order[i:j]] = label
+        label += 1
+        i = j
+    return pd.Series(labels, index=step.index)
 
 
 def _continuity_group(start, stop, step, tolerance) -> pd.Series:
@@ -167,7 +202,9 @@ def _continuity_group(start, stop, step, tolerance) -> pd.Series:
     args = np.argsort(start.to_numpy())
     start_sorted = start.iloc[args]
     stop_sorted = stop.iloc[args]
-    step_sorted = step.iloc[args]
+    # envelopes are value-ordered regardless of coordinate orientation,
+    # so the continuity margin uses the step magnitude
+    step_sorted = step.iloc[args].abs()
     stop_cum_max = stop_sorted.cummax()
     end_markers = stop_cum_max.shift() + step_sorted * tolerance
     has_gap = start_sorted > end_markers
