@@ -891,6 +891,19 @@ class TestReloadableSourcePath:
         with pytest.raises(TypeError, match="missing required keys"):
             dc.scan_payloads(terra15_v6_path)
 
+    def test_scan_payloads_non_mapping_raises(self, monkeypatch, terra15_v6_path):
+        """Raw payload scans should reject unsupported result types."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def return_non_mapping(*args, **kwargs):
+            return ["not a payload"]
+
+        monkeypatch.setattr(fiber_io, "scan", return_non_mapping)
+
+        with pytest.raises(TypeError, match="must return ScanPayload mappings"):
+            dc.scan_payloads(terra15_v6_path)
+
     def test_scan_payloads_requires_coord_manager(self, monkeypatch, terra15_v6_path):
         """Raw payload scans should reject collapsed coordinate summaries."""
         fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
