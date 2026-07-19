@@ -5,6 +5,8 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from matplotlib.collections import QuadMesh
+from matplotlib.image import AxesImage
 
 import dascore as dc
 from dascore.exceptions import ParameterError
@@ -64,6 +66,141 @@ class TestWaterfall:
         old_coord = random_patch.get_coord("time")
         new_time = to_timedelta64(np.arange(len(old_coord)))
         return random_patch.update_coords(time=new_time)
+
+    @pytest.fixture()
+    def distance_gap_patch(self, random_patch):
+        """Create a patch with one large gap in its distance coordinate."""
+        coord = random_patch.get_coord("distance")
+        values = np.asarray(coord).copy()
+        split = len(values) // 2
+        values[split:] += coord.step * 10
+        return random_patch.update_coords(distance=values), split
+
+    @pytest.fixture()
+    def time_gap_patch(self, random_patch):
+        """Create a patch with one large gap in its time coordinate."""
+        coord = random_patch.get_coord("time")
+        values = np.asarray(coord).copy()
+        split = len(values) // 2
+        values[split:] += coord.step * 10
+        return random_patch.update_coords(time=values), split
+
+    def test_even_coordinates_use_image(self, random_patch):
+        """Evenly sampled coordinates retain the fast image renderer."""
+        ax = random_patch.viz.waterfall(cbar=False)
+        assert isinstance(ax.images[0], AxesImage)
+        assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+
+    def test_irregular_timedelta_coordinates_use_mesh(self, timedelta_patch):
+        """Irregular timedelta coordinates are converted to seconds for meshes."""
+        values = np.asarray(timedelta_patch.get_coord("time")).copy()
+        split = len(values) // 2
+        values[split:] += np.timedelta64(10, "s")
+        patch = timedelta_patch.update_coords(time=values)
+        ax = patch.viz.waterfall(cbar=False)
+        mesh = ax.collections[0]
+        assert isinstance(mesh, QuadMesh)
+        assert np.all(np.isfinite(mesh.get_coordinates()))
+
+    def test_singleton_irregular_coordinate_uses_mesh(self, random_patch):
+        """A singleton irregular coordinate receives finite cell edges."""
+        patch = random_patch.select(distance=0, samples=True)
+        distance = np.asarray(patch.get_coord("distance"))
+        patch = patch.update_coords(distance=distance)
+        assert not patch.get_coord("distance").evenly_sampled
+        with pytest.warns(UserWarning, match="Singleton coordinate"):
+            ax = patch.viz.waterfall(cbar=False)
+        mesh = ax.collections[0]
+        assert isinstance(mesh, QuadMesh)
+        assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)
+
+    def test_nonmonotonic_coordinate_uses_image(self, random_patch):
+        """Nonmonotonic coordinates retain the image-rendering fallback."""
+        distance = np.asarray(random_patch.get_coord("distance")).copy()
+        distance[[1, 2]] = distance[[2, 1]]
+        patch = random_patch.update_coords(distance=distance)
+        ax = patch.viz.waterfall(cbar=False)
+        assert isinstance(ax.images[0], AxesImage)
+        assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+
+    def test_gap_uses_masked_mesh(self, distance_gap_patch):
+        """A gap color adds one masked mesh band."""
+        patch, split = distance_gap_patch
+        ax = patch.viz.waterfall(gap_color="white", cbar=False)
+        mesh = ax.collections[0]
+        array = mesh.get_array()
+        mask = np.ma.getmaskarray(array)
+        assert isinstance(mesh, QuadMesh)
+        assert not ax.images
+        assert array.shape == (patch.shape[0] + 1, patch.shape[1])
+        assert np.all(mask[split, :])
+        assert mesh.get_coordinates().shape[:2] == (
+            patch.shape[0] + 2,
+            patch.shape[1] + 1,
+        )
+        assert np.allclose(mesh.cmap.get_bad(), [1, 1, 1, 1])
+
+    def test_gap_mesh_colorbar_and_scale(self, distance_gap_patch):
+        """Mesh plots retain waterfall colorbar and scaling behavior."""
+        patch, _ = distance_gap_patch
+        ax = patch.viz.waterfall(
+            scale=(-1, 1), scale_type="absolute", gap_color="white"
+        )
+        mesh = ax.collections[0]
+        assert mesh.colorbar is not None
+        assert mesh.get_clim() == (-1, 1)
+
+    def test_bridge_gap_doesnt_expand_data(self, distance_gap_patch):
+        """The default extends cells across a gap without adding a band."""
+        patch, _ = distance_gap_patch
+        ax = patch.viz.waterfall(cbar=False)
+        mesh = ax.collections[0]
+        assert mesh.get_array().shape == patch.shape
+        assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)
+
+    def test_gap_color(self, distance_gap_patch):
+        """A specified gap color is assigned to masked mesh cells."""
+        patch, _ = distance_gap_patch
+        ax = patch.viz.waterfall(gap_color="white", cbar=False)
+        assert np.allclose(ax.collections[0].cmap.get_bad(), [1, 1, 1, 1])
+
+    def test_gaps_in_both_axes(self, distance_gap_patch):
+        """Gap bands can be inserted along both dimensions."""
+        patch, distance_split = distance_gap_patch
+        time = patch.get_coord("time")
+        values = np.asarray(time).copy()
+        time_split = len(values) // 2
+        values[time_split:] += time.step * 10
+        patch = patch.update_coords(time=values)
+        ax = patch.viz.waterfall(gap_color="white", cbar=False)
+        mesh_array = ax.collections[0].get_array()
+        mask = np.ma.getmaskarray(mesh_array)
+        assert mesh_array.shape == tuple(x + 1 for x in patch.shape)
+        assert np.all(mask[distance_split, :])
+        assert np.all(mask[:, time_split])
+
+    def test_time_gap_keeps_regular_ticks(self, time_gap_patch):
+        """Time-axis ticks remain monotonic and evenly spaced across gaps."""
+        patch, split = time_gap_patch
+        ax = patch.viz.waterfall(gap_color="white", cbar=False)
+        mask = np.ma.getmaskarray(ax.collections[0].get_array())
+        ax.get_figure().canvas.draw()
+        tick_diffs = np.diff(ax.get_xticks())
+        assert np.all(mask[:, split])
+        assert np.all(tick_diffs > 0)
+        assert np.allclose(tick_diffs, tick_diffs[0])
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"gap_factor": 1}, "gap_factor"),
+            ({"gap_factor": np.inf}, "gap_factor"),
+        ],
+    )
+    def test_bad_gap_options_raise(self, random_patch, kwargs, match):
+        """Invalid gap display options raise an informative error."""
+        with pytest.raises(ParameterError, match=match):
+            random_patch.viz.waterfall(**kwargs)
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""

@@ -12,6 +12,7 @@ import numpy as np
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
@@ -28,7 +29,14 @@ def _validate_scale_type(scale_type):
     """Validate that scale_type is either 'relative' or 'absolute'."""
     valid_types = {"absolute", "relative"}
     if scale_type not in valid_types:
-        msg = f"scale_type must be one of {valid_types}, " f"but got '{scale_type}'"
+        msg = f"scale_type must be one of {valid_types}, but got '{scale_type}'"
+        raise ParameterError(msg)
+
+
+def _validate_gap_factor(gap_factor):
+    """Validate the factor used to identify coordinate gaps."""
+    if not np.isfinite(gap_factor) or gap_factor <= 1:
+        msg = "gap_factor must be a finite number greater than 1"
         raise ParameterError(msg)
 
 
@@ -157,6 +165,49 @@ def _get_waterfall_colormap(patch, cmap=None):
     return _get_cmap(cmap)
 
 
+def _insert_gap_bands(data, gap_mask, axis):
+    """Insert masked bands into an array at each coordinate gap."""
+    if not np.any(gap_mask):
+        return data
+    old_size = data.shape[axis]
+    new_size = old_size + np.count_nonzero(gap_mask)
+    new_shape = list(data.shape)
+    new_shape[axis] = new_size
+    out = np.ma.masked_all(new_shape, dtype=data.dtype)
+    new_indices = np.arange(old_size) + np.cumsum(
+        np.concatenate(([0], gap_mask.astype(int)))
+    )
+    indexer = [slice(None)] * data.ndim
+    indexer[axis] = new_indices
+    out[tuple(indexer)] = data
+    return out
+
+
+def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
+    """Plot irregularly sampled data using a quadrilateral mesh."""
+    mesh_data = np.ma.asarray(data)
+    edges = {}
+    mesh_gap_factor = gap_factor if gap_color is not None else None
+    for axis, dim in enumerate(dims):
+        dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
+        if gap_color is not None:
+            mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
+        edges[dim] = dim_edges
+
+    if gap_color is not None:
+        cmap = cmap.with_extremes(bad=gap_color)
+    return ax.pcolormesh(
+        edges[dims[1]],
+        edges[dims[0]],
+        mesh_data,
+        cmap=cmap,
+        shading="flat",
+        edgecolors="none",
+        linewidth=0,
+        antialiased=False,
+    )
+
+
 @patch_function()
 def waterfall(
     patch: PatchType,
@@ -166,12 +217,20 @@ def waterfall(
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
     interpolation_stage: str = "auto",
+    gap_color: str | Sequence[float] | None = None,
+    gap_factor: float = 1.5,
     log: bool = False,
     cbar: bool = True,
     show: bool = False,
 ) -> plt.Axes:
     """
     Create a waterfall plot of the Patch data.
+
+    Evenly sampled dimension coordinates are rendered with ``imshow`` for
+    efficient display and image interpolation. Finite, monotonic irregular
+    coordinates are rendered with ``pcolormesh`` so cell geometry follows the
+    coordinate values. Incomplete or nonmonotonic coordinates fall back to
+    ``imshow`` with index-based or minimum/maximum extents.
 
     Parameters
     ----------
@@ -199,12 +258,33 @@ def waterfall(
         which is relevant for DAS. Usually, "antialiased" works well, but if the
         data look smeared disabling interpolation with None might help. Other
         options are available, see matplotlib's documentation for more details.
+        This option does not apply when irregular coordinates select the
+        ``pcolormesh`` renderer.
     interpolation_stage
         If 'data', interpolation is carried out on the data provided by the user.
         If 'rgba', the interpolation is carried out after the colormapping has
         been applied (visual interpolation).
         'auto' (default) selects a suitable interpolation stage automatically.
-        See matplotlib's imshow documentation for more details.
+        See matplotlib's imshow documentation for more details. This option
+        does not apply when ``pcolormesh`` is used.
+    gap_color
+        Matplotlib color used to display gaps in irregular dimension
+        coordinates. When a color is provided, a masked row or column is
+        inserted for each detected gap and displayed with this color. The
+        default of None bridges gaps by extending adjacent cells across them
+        without expanding the data matrix. This option only applies when
+        ``pcolormesh`` is used. Existing masked or NaN data receive the same
+        color as coordinate gaps.
+    gap_factor
+        When ``gap_color`` is provided, coordinate intervals larger than this
+        factor times the median interval are displayed as gaps. With the
+        default ``gap_color=None``, cells bridge intervals and this parameter
+        has no visual effect. Gap detection assumes the median interval
+        represents the sampling interval, so coordinates containing contiguous
+        regions with different sampling rates may classify the more coarsely
+        sampled region as gaps. For such data, use the default
+        ``gap_color=None``, increase ``gap_factor``, or plot/resample the
+        regions separately. Must be greater than 1.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
@@ -272,6 +352,7 @@ def waterfall(
     """
     # Validate inputs
     patch = _validate_patch_dims(patch)
+    _validate_gap_factor(gap_factor)
     # Setup axes and data
     ax = _get_ax(ax)
     if log:
@@ -280,20 +361,32 @@ def waterfall(
         data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    coords = {dim: patch.coords.get_array(dim) for dim in dims}
-    # Plot using imshow and set colorbar limits
-    extents = _get_extents(dims_r, coords)
+    dim_coords = {dim: patch.get_coord(dim) for dim in dims}
+    coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
-    with mpl.rc_context({"image.resample": True}):
-        im = ax.imshow(
+    use_image = all(coord.evenly_sampled for coord in dim_coords.values())
+    if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
+        extents = _get_extents(dims_r, coords)
+        with mpl.rc_context({"image.resample": True}):
+            im = ax.imshow(
+                data,
+                extent=extents,
+                aspect="auto",
+                cmap=cmap,
+                origin="lower",
+                interpolation=interpolation,
+                interpolation_stage=interpolation_stage,
+            )
+    else:
+        im = _plot_with_mesh(
+            ax,
             data,
-            extent=extents,
-            aspect="auto",
-            cmap=cmap,
-            origin="lower",
-            interpolation=interpolation,
-            interpolation_stage=interpolation_stage,
+            dims,
+            coords,
+            cmap,
+            gap_color=gap_color,
+            gap_factor=gap_factor,
         )
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
