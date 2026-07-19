@@ -11,7 +11,6 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES, max_lens
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
-from dascore.exceptions import PatchAttributeError
 
 
 @pytest.fixture(scope="class")
@@ -223,14 +222,15 @@ class TestUpdateAttrs:
         attrs = PatchAttrs.from_dict(random_attrs).update(tag="miles")
         assert attrs.tag == "miles"
 
-    def test_update_rejects_coord_like_fields(self, random_attrs):
-        """Flat coordinate-like fields should go through update_coords instead."""
-        with pytest.raises(PatchAttributeError, match="update_coords"):
-            PatchAttrs.from_dict(random_attrs).update(time_min=1)
+    def test_update_accepts_coord_like_fields(self, random_attrs):
+        """Coord-shaped names are ordinary attrs; update never touches coords."""
+        out = PatchAttrs.from_dict(random_attrs).update(time_min=1, channel_step=3)
+        assert out["time_min"] == 1
+        assert out["channel_step"] == 3
 
     def test_update_rejects_nested_coords(self, random_patch):
         """Passing coords directly should fail."""
-        with pytest.raises(PatchAttributeError, match="coordinate metadata"):
+        with pytest.raises(ValueError, match="coordinate metadata"):
             PatchAttrs.from_dict(random_patch.attrs).update(coords=random_patch.coords)
 
     def test_update_ignores_dims(self, random_attrs):

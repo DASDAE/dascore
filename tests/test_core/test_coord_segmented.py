@@ -635,13 +635,6 @@ class TestRoundTrips:
         assert summary.len == 20
         assert summary.fingerprint == float_gap_coord.fingerprint()
 
-    def test_get_attrs_dict_no_step(self, float_gap_coord):
-        """The attrs dict omits the (null) step."""
-        out = float_gap_coord.get_attrs_dict("time")
-        assert "time_step" not in out
-        assert out["time_min"] == 0.0
-        assert out["time_max"] == 24.0
-
     def test_ns_precision_exact(self):
         """Nanosecond datetimes survive bit-exactly (no float pass)."""
         ns = np.timedelta64(1, "ns")

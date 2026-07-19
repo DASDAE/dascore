@@ -4,7 +4,7 @@ Utils for working with attributes.
 
 from __future__ import annotations
 
-from collections import ChainMap, defaultdict
+from collections import ChainMap
 from collections.abc import Sequence
 from functools import reduce
 from typing import Literal
@@ -13,11 +13,10 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import attr_conflict_description
-from dascore.exceptions import AttributeMergeError, PatchAttributeError
+from dascore.exceptions import AttributeMergeError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _dict_list_diffs,
-    is_valid_coord_str,
     iterate,
 )
 
@@ -118,168 +117,3 @@ def combine_patch_attrs(
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
     return cls(**mod_dict_list[0])
-
-
-def _raise_if_coord_attr_updates(update_map) -> None:
-    """Reject flat coord-summary keys in attr update calls."""
-    if update_map is None:
-        return
-    coord_info, _ = separate_coord_info(update_map)
-    bad_keys = []
-    for coord_name, info in coord_info.items():
-        for field in info:
-            bad_keys.append(f"{coord_name}_{field}")
-    if bad_keys:
-        names = ", ".join(sorted(bad_keys))
-        msg = (
-            "PatchAttrs.update does not accept coordinate metadata. "
-            f"Received: {names}. Use update_coords(...) instead."
-        )
-        raise PatchAttributeError(msg)
-
-
-def separate_coord_info(
-    obj,
-    dims: tuple[str, ...] | None = None,
-    required: Sequence[str] | None = None,
-    cant_be_alone: tuple[str, ...] = ("units", "dtype"),
-) -> tuple[dict, dict]:
-    """
-    Separate coordinate information from mixed attr-like metadata.
-
-    This helper is still needed because DASCore still accepts a few mixed
-    metadata shapes internally and in legacy IO paths. In particular, it is
-    used to:
-
-    - normalize flat scan/index-style keys such as ``time_min`` and
-      ``distance_step`` into coordinate summary payloads
-    - split coordinate updates from pure attrs in coord-manager code
-    - unpack older nested ``{"coords": {...}}`` metadata payloads
-
-    Supported input shapes include flat coord-style fields such as
-    ``{time_min, time_max, time_step, ...}`` and nested coord dictionaries
-    such as ``{coords: {time: {min, max, step}}}``.
-
-    Parameters
-    ----------
-    obj
-        The object or model to split.
-    dims
-        Optional dimension names used to recognize flat coord-style keys.
-    required
-        If provided, the required attributes (e.g., min, max, step).
-    cant_be_alone
-        Names which cannot be treated as coord info on their own.
-
-    Returns
-    -------
-    A tuple of ``(coord_dict, attrs_dict)`` where coordinate-like metadata has
-    been separated from the remaining pure attrs.
-    """
-    coord_summary_fields = tuple(dc.core.CoordSummary.model_fields)
-
-    def _split_coord_key(key, prefixes=None):
-        """Split flat coord summary key into coord name and field."""
-        prefixes = tuple(iterate(prefixes)) if prefixes is not None else ()
-        if prefixes:
-            for prefix in sorted(prefixes, key=len, reverse=True):
-                prefix_str = f"{prefix}_"
-                if key.startswith(prefix_str):
-                    field = key[len(prefix_str) :]
-                    if field in coord_summary_fields:
-                        return prefix, field
-            return None
-        parts = key.rsplit("_", 1)
-        return tuple(parts)
-
-    def _meets_required(coord_dict, strict=True):
-        """
-        Return True coord dict meets the minimum required keys.
-
-        coord_dict represents potential coordinate fields.
-
-        Strict ensures all required values exist.
-        """
-        if not coord_dict:
-            return False
-        if not required and (set(coord_dict) - cant_be_alone):
-            return True
-        if required or not strict:
-            return set(coord_dict).issuperset(required)
-        return False
-
-    def _get_dims(obj):
-        """Try to ascertain dims from keys in obj."""
-        # check first for coord manager
-        if isinstance(obj, dict) and hasattr(obj.get("coords", None), "dims"):
-            return obj["coords"].dims
-
-        # This object already has dims, just honor it.
-        if dims := obj.get("dims", None):
-            return tuple(dims.split(",")) if isinstance(dims, str) else dims
-
-        potential_keys = defaultdict(set)
-        for key in obj:
-            if not is_valid_coord_str(key):
-                continue
-            coord_name, field = _split_coord_key(key)
-            potential_keys[coord_name].add(field)
-        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
-
-    def _get_coords_from_top_level(obj, out, dims):
-        """First get coord info from top level."""
-        for dim in iterate(dims):
-            potential_coord = {}
-            for key, value in obj.items():
-                split = _split_coord_key(key, prefixes=(dim,))
-                if split is None:
-                    continue
-                _, field = split
-                potential_coord[field] = value
-            if _meets_required(potential_coord, strict=False):
-                out[dim] = potential_coord
-
-    def _get_coords_from_coord_level(obj, out):
-        """Get coords from coordinate level."""
-        coords = obj.get("coords", {})
-        if hasattr(coords, "to_summary_dict"):
-            coords = coords.to_summary_dict()
-        for key, value in coords.items():
-            if hasattr(value, "to_summary"):
-                value = value.to_summary()
-            if hasattr(value, "model_dump"):
-                value = value.model_dump()
-            if _meets_required(value, strict=False):
-                out[key] = value
-
-    def _pop_keys(obj, out):
-        """Pop out old keys for attrs, and unused keys from out."""
-        # first coord subdict
-        obj.pop("coords", None)
-        # then top-level
-        for coord_name, sub_dict in out.items():
-            for thing_name in sub_dict:
-                obj.pop(f"{coord_name}_{thing_name}", None)
-            if "step" in sub_dict:
-                obj.pop(f"d_{coord_name}", None)
-
-    # sequence of short-circuit checks
-    coord_dict = {}
-    required = set(required) if required is not None else set()
-    cant_be_alone = set(cant_be_alone)
-    if obj is None:
-        return coord_dict, {}
-    if hasattr(obj, "model_dump"):
-        obj = obj.model_dump()
-    obj = dict(obj)
-    # Check if dims need to be updated.
-    new_dims = _get_dims(obj)
-    if new_dims and new_dims != dims:
-        dims = new_dims
-    # this is already a dict of coord info.
-    if dims and set(dims).issubset(set(obj)):
-        return obj, {}
-    _get_coords_from_coord_level(obj, coord_dict)
-    _get_coords_from_top_level(obj, coord_dict, dims)
-    _pop_keys(obj, coord_dict)
-    return coord_dict, obj

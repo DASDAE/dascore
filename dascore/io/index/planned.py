@@ -215,7 +215,6 @@ def _output_records(
     """Convert plan output rows into ingestible source records."""
     records = []
     aux_info = aux_info or {}
-    envelope_suffixes = ("_min", "_max", "_step", "_units")
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
@@ -233,12 +232,27 @@ def _output_records(
             record = _coord_record_from_row(info, name, dims=info["dims"])
             if record is not None:
                 coords.append(record)
+        # Envelope columns belong to coordinates actually present in the
+        # row; an attr that merely looks envelope-shaped (channel_step with
+        # no channel coord) is ordinary metadata and must be preserved.
+        coord_names = set(dim_names) | set(aux_info.get(output_id, {}))
+        coord_names |= {
+            key[1 : -len("_def_key")]
+            for key in row
+            if key.startswith("_") and key.endswith("_def_key")
+        }
+        coord_names |= {"time", "distance"}  # fixed patches-table envelopes
+        envelope_keys = {
+            f"{name}_{sfx}"
+            for name in coord_names
+            for sfx in ("min", "max", "step", "units")
+        }
         attrs = {}
         for key, value in row.items():
             if (
                 key in _NON_ATTR
                 or key.startswith("_")
-                or any(key.endswith(sfx) for sfx in envelope_suffixes)
+                or key in envelope_keys
                 or value is None
                 or (np.isscalar(value) and pd.isnull(value))
             ):

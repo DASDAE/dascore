@@ -22,7 +22,6 @@ import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
-import dascore as dc
 from dascore.compat import UPath, is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
@@ -627,12 +626,6 @@ def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
     """Determine if a string matches given prefixes_suffixes."""
     regex = _get_compiled_suffix_prefix_regex(suffixes, prefixes)
     return bool(re.match(regex, input_str))
-
-
-def is_valid_coord_str(input_str, prefixes=None):
-    """Return True if an input string is valid for representing coord info."""
-    _valid_keys = tuple(dc.core.CoordSummary.model_fields)
-    return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
 
 
 def cached_method(func):

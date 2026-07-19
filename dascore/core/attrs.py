@@ -13,7 +13,6 @@ from dascore.constants import (
     VALID_DATA_TYPES,
     max_lens,
 )
-from dascore.utils.attrs import _raise_if_coord_attr_updates
 from dascore.utils.misc import (
     to_str,
 )
@@ -148,7 +147,6 @@ class PatchAttrs(DascoreBaseModel):
 
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""
-        _raise_if_coord_attr_updates(kwargs)
         out = self.model_dump(exclude_unset=True)
         out.update(kwargs)
         return self.from_dict(out)

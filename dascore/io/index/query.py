@@ -495,11 +495,21 @@ def build_sql(
 
 
 def apply_residuals(
-    df: pd.DataFrame, residuals: list[tuple[str, re.Pattern]]
+    df: pd.DataFrame,
+    residuals: list[tuple[str, re.Pattern]],
+    attr_columns: dict[str, pd.Series] | None = None,
 ) -> pd.DataFrame:
-    """Apply regex residual filters to the flat relation."""
+    """
+    Apply regex residual filters to the flat relation.
+
+    Residuals are produced only for attr predicates, so when `attr_columns`
+    is given the original attr series is preferred over the flat column of
+    the same name — the flat column can instead hold a coordinate envelope
+    when the attr name collided with one.
+    """
+    attr_columns = attr_columns or {}
     for name, pattern in residuals:
-        col = df[name]
+        col = attr_columns[name].loc[df.index] if name in attr_columns else df[name]
         keep = col.map(
             lambda x: bool(pattern.search(x)) if isinstance(x, str) else False
         )

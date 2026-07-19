@@ -1253,25 +1253,21 @@ class TestReservedAttrNames:
         assert spool.get_contents()["experiment"].iloc[0] == "exp42"
         assert len(spool.select(experiment="exp42")) == 1
 
-    def test_cross_patch_envelope_attr_reserved(self):
-        """An envelope-shaped attr is reserved even against another patch's coord."""
+    def test_cross_patch_envelope_attr_clobbered_not_reserved(self):
+        """An envelope-shaped attr indexes normally; the coord wins the column."""
         import dascore as dc
 
         base = dc.get_example_patch()
-        # construction-time attrs bypass the update_attrs coord-name guard.
-        p1 = dc.Patch(
-            data=base.data,
-            coords=base.coords,
-            dims=base.dims,
-            attrs=dict(base.attrs) | {"event_time_min": 123.0},
-        )
+        p1 = base.update_attrs(event_time_min=123.0)
         p2 = dc.get_example_patch().rename_coords(time="event_time")
-        with pytest.warns(UserWarning, match="reserved attr name 'event_time_min'"):
+        with pytest.warns(UserWarning, match="collide with coordinate envelope"):
             spool = dc.spool([p1, p2])
             df = spool.get_contents()
         backend = spool._catalog.backend
-        assert "event_time_min" not in backend.attr_names()
-        # the column is the coordinate envelope, not the stray attr value.
+        # the attr is indexed and stays queryable via the _attrs namespace.
+        assert "event_time_min" in backend.attr_names()
+        assert len(spool.select(_attrs={"event_time_min": 123.0})) == 1
+        # the flat column is the coordinate envelope, not the attr value.
         assert "event_time_min" in df.columns
         assert 123.0 not in set(df["event_time_min"].dropna())
 
