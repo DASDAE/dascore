@@ -33,3 +33,13 @@ class TestScanSintelaBinary:
         fiber_io = SintelaBinaryV3()
         with pytest.raises(InvalidFiberFileError):
             fiber_io.scan(extra_bytes_file)
+
+
+class TestLegacyImportPath:
+    """The pre-rename import path must keep working."""
+
+    def test_sintela_binary_module_alias(self):
+        """`dascore.io.sintela_binary` shipped in v0.1.18 and must still work."""
+        import dascore.io.sintela_binary as legacy
+
+        assert legacy.SintelaBinaryV3 is SintelaBinaryV3

@@ -71,6 +71,8 @@ _TAG_TO_PACKET = {
     **dict.fromkeys(BAND_TAGS, "BandPacket"),
     **dict.fromkeys(FFT_TAGS, "FFTPacket"),
 }
+# sample_count is a uint32 field; contiguity checks wrap at this bound.
+_SAMPLE_COUNT_MODULUS = 2**32
 DIMS_TS = ("time", "distance")
 DIMS_BAND = ("time", "distance", "band")
 DIMS_FFT = ("time", "distance", "frequency")
@@ -92,6 +94,17 @@ _FFT_ATTR_DEFAULTS = {
     "data_type": "power_spectral_density",
     "data_units": "",
 }
+# Complex packets carry raw Fourier coefficients, not real power per
+# frequency, so they must not inherit the power-spectral-density label.
+_FFT_COMPLEX_ATTRS = {
+    "data_type": "fourier_transform",
+    "data_units": "",
+}
+
+
+def _get_fft_data_type(has_complex: bool) -> dict[str, str]:
+    """Return the data_type/data_units attrs matching the FFT representation."""
+    return dict(_FFT_COMPLEX_ATTRS if has_complex else _FFT_ATTR_DEFAULTS)
 
 
 class SintelaProtobufAttrs(PatchAttrs):
@@ -107,10 +120,7 @@ class SintelaProtobufAttrs(PatchAttrs):
     fiber_id: int | None = None
     serial_number: str = ""
     start_channel: int | None = None
-    # Named "stride" rather than the wire field's "channel_step" because the
-    # index reserves any {name}_{min,max,step} attr as a coordinate envelope
-    # column, which would make "channel_step" unqueryable.
-    channel_stride: int | None = None
+    channel_step: int | None = None
     demod_data_type: str = ""
 
 
@@ -472,6 +482,13 @@ def _parse_records(
         except decode_error as exc:
             out = f"Failed to parse Sintela protobuf {tag} payload: {exc}"
             raise InvalidFiberFileError(out) from exc
+        if scan_mode:
+            # Omitting the sample fields from the scan descriptor stops them
+            # being *decoded*, but protobuf still retains their raw bytes as
+            # unknown fields, so a metadata-only scan would otherwise hold the
+            # whole recording in memory (~99% of the payload for a typical
+            # file). Drop them now that the header fields are parsed.
+            msg.DiscardUnknownFields()
         parsed.append((tag, msg))
     if not parsed:
         if first_unsupported_tag is not None:
@@ -548,7 +565,7 @@ def _base_attrs(
         serial_number=meta.serial_number,
         fiber_id=meta.fiber_id,
         start_channel=int(getattr(common_header, "start_channel", 0)),
-        channel_stride=None,
+        channel_step=None,
     )
     if extra:
         attrs.update(extra)
@@ -732,7 +749,10 @@ class TimeseriesMetadata(_PacketMetadata):
             num_samples_per_packet[:-1],
             strict=False,
         ):
-            if current + count != nxt:
+            # sample_count is a uint32 on the wire, so a long acquisition (or a
+            # recorder-wide counter) can wrap to zero mid-file. Compare modulo
+            # 2**32 so a wrapped-but-contiguous packet is not read as a gap.
+            if (current + count) % _SAMPLE_COUNT_MODULUS != nxt:
                 raise InvalidFiberFileError(
                     "Non-contiguous Sintela protobuf sample counts."
                 )
@@ -752,7 +772,7 @@ class TimeseriesMetadata(_PacketMetadata):
             meta=meta,
             extra=dict(
                 gauge_length=gauge_length,
-                channel_stride=channel_step,
+                channel_step=channel_step,
                 data_type=mapping[0],
                 data_units=mapping[1],
                 demod_data_type=str(demod_data_type),
@@ -776,10 +796,20 @@ class TimeseriesMetadata(_PacketMetadata):
         """Decode timeseries packets into data, coords, and attrs."""
         data = np.empty(self.shape, dtype=self.dtype)
         index = 0
-        for _tag, msg in parsed:
+        for tag, msg in parsed:
             packet = np.asarray(msg.samples, dtype=np.float32)
             rows = int(msg.header.num_samples)
             expected = rows * self.num_channels
+            if not packet.size and msg.raw_frames:
+                # Timeseries packets may carry samples in the packed
+                # `raw_frames` blob instead of the repeated `samples` field.
+                # That encoding is undocumented here, so fail with a specific
+                # message rather than a confusing payload-size mismatch.
+                msg_ = (
+                    f"Sintela protobuf {tag} packets store samples in "
+                    "raw_frames, which DASCore cannot yet decode."
+                )
+                raise InvalidFiberFileError(msg_)
             if packet.size != expected:
                 raise InvalidFiberFileError(
                     "Unexpected Sintela protobuf TS sample payload size."
@@ -955,8 +985,8 @@ class FFTMetadata(_PacketMetadata):
             meta=meta,
             extra=dict(
                 gauge_length=gauge_length,
-                channel_stride=channel_step,
-                **_FFT_ATTR_DEFAULTS,
+                channel_step=channel_step,
+                **_get_fft_data_type(has_complex),
             ),
         )
         return cls(

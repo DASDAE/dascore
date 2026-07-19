@@ -5,12 +5,14 @@ Tests for Sintela protobuf format.
 from __future__ import annotations
 
 import struct
+import warnings
 from functools import cache
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
 from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
@@ -90,6 +92,13 @@ def _get_test_proto_messages():
         package_name="test_sintela_common",
         file_name="test_sintela_common.proto",
     )
+
+
+def _get_num_samples(payload: bytes) -> int:
+    """Return the num_samples header field of a serialized TS packet."""
+    msg = _get_test_proto_messages()["TimeseriesPacket"]()
+    msg.ParseFromString(payload)
+    return int(msg.header.num_samples)
 
 
 def _build_ts_payloads():
@@ -270,17 +279,23 @@ class TestSintelaProtobuf:
         assert patch.attrs.fiber_id == 2
         assert patch.attrs.data_type == "strain"
 
-    def test_channel_stride_attr_is_indexable(
+    def test_channel_step_attr_survives_indexing(
         self, fiber_io, write_sintela_file, ts_records
     ):
         """
-        The channel stride attr must avoid the reserved {name}_{min,max,step}
-        shape, else the index drops it (and warns) as an envelope column.
+        The vendor's channel_step attr keeps its name through the spool index.
+
+        Attrs and coords are independent, so a coord-shaped attr name is an
+        ordinary attr; the patch has no "channel" coord, so nothing collides
+        and no warning should be emitted.
         """
         path = write_sintela_file("ts.pb", ts_records)
-        attrs = fiber_io.read(path)[0].attrs
-        assert attrs.channel_stride == 1
-        assert not hasattr(attrs, "channel_step")
+        patch = fiber_io.read(path)[0]
+        assert patch.attrs.channel_step == 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            contents = dc.spool([patch]).get_contents()
+        assert contents["channel_step"].iloc[0] == 1
 
     def test_band_read_returns_expected_dims(
         self, fiber_io, write_sintela_file, band_records
@@ -332,6 +347,75 @@ class TestSintelaProtobuf:
         path = write_sintela_file("fft.pb", complex_fft_records)
         scan_summary = _payload_to_summary(fiber_io.scan(path)[0])
         assert scan_summary == fiber_io.read(path)[0].summary
+
+    def test_complex_fft_not_labeled_power_spectral_density(
+        self, fiber_io, write_sintela_file, complex_fft_records, fft_records
+    ):
+        """Complex coefficients are not real power per frequency."""
+        complex_path = write_sintela_file("fft_complex.pb", complex_fft_records)
+        real_path = write_sintela_file("fft_real.pb", fft_records)
+        assert fiber_io.read(complex_path)[0].attrs.data_type == "fourier_transform"
+        # real packets keep the power-spectral-density label
+        assert fiber_io.read(real_path)[0].attrs.data_type == "power_spectral_density"
+
+    def test_scan_memory_independent_of_sample_count(self, ts_records):
+        """
+        Metadata-only scans must not hold the sample bytes in memory.
+
+        Protobuf keeps undeclared wire fields as unknown fields, so omitting
+        the sample declarations is not by itself enough. The invariant is
+        that scan-retained size does not grow with the sample payload.
+        """
+
+        def _retained(pad_samples: int) -> int:
+            packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
+            records = []
+            for tag, payload in ts_records:
+                msg = packet_cls()
+                msg.ParseFromString(payload)
+                msg.samples.extend([0.0] * pad_samples)
+                records.append(_envelope((tag, msg.SerializeToString())))
+            parsed, _ = sintela_utils._parse_records(records, scan_mode=True)
+            return sum(msg.ByteSize() for _tag, msg in parsed)
+
+        assert _retained(0) == _retained(5_000)
+
+    def test_raw_frame_packets_raise_clear_error(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """Samples carried in raw_frames get a specific, actionable error."""
+        packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
+        records = []
+        for tag, payload in ts_records:
+            msg = packet_cls()
+            msg.ParseFromString(payload)
+            msg.ClearField("samples")
+            msg.raw_frames = b"\x00\x01\x02\x03"
+            records.append((tag, msg.SerializeToString()))
+        path = write_sintela_file("ts_raw_frames.pb", records)
+        with pytest.raises(InvalidFiberFileError, match="raw_frames"):
+            fiber_io.read(path)
+
+    def test_sample_count_rollover_is_contiguous(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """A uint32 sample_count wrap is not a gap."""
+        packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
+        modulus = sintela_utils._SAMPLE_COUNT_MODULUS
+        records = []
+        for index, (tag, payload) in enumerate(ts_records):
+            msg = packet_cls()
+            msg.ParseFromString(payload)
+            # first packet ends exactly on the boundary; the next wraps to 0
+            msg.header.sample_count = (
+                modulus - msg.header.num_samples if index == 0 else 0
+            )
+            records.append((tag, msg.SerializeToString()))
+        path = write_sintela_file("ts_rollover.pb", records)
+        patch = fiber_io.read(path)[0]
+        assert patch.shape[0] == sum(
+            _get_num_samples(payload) for _tag, payload in ts_records
+        )
 
     def test_time_coords_keep_datetime_dtype(
         self, fiber_io, write_sintela_file, ts_records, fft_records
