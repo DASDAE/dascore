@@ -20,3 +20,20 @@ Documentation [[stable](https://dascore.org), [development](https://dascore.netl
 > Chambers, D., Jin, G., Tourei, A., Issah, A. H. S., Lellouch, A., Martin, E., Zhu, D., Girard, A., Yuan, S., Cullison, T., Snyder, T., Kim, S., Danes, N., Pnithan, N., Boltz, M. S. & Mendoza, M. M. (2024). DASCore: a Python Library for Distributed Fiber Optic Sensing. Seismica, 3(2).
 
 [![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)
+
+## WebAssembly
+
+DASCore's universal wheel runs in browsers and Node.js through [Pyodide](https://pyodide.org/). Install it from PyPI with `micropip`:
+
+```python
+import micropip
+
+await micropip.install("dascore")
+
+import dascore as dc
+
+patch = dc.get_example_patch(shape=(10, 100))
+processed = patch.detrend("time")
+```
+
+Core patch processing, h5py-backed formats, and SQLite-backed directory spools work under Pyodide. Browser file access uses Pyodide's virtual filesystem and is subject to browser security rules. Optional extras with native extensions are available only when Pyodide provides compatible builds.
