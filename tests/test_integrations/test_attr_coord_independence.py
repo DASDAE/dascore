@@ -118,13 +118,12 @@ class TestDasdaeRoundTrip:
 
     def test_shadowing_attr_round_trips(self, random_patch, tmp_path_factory):
         """An attr shadowing the patch's own coord envelope still survives."""
-        dim = random_patch.dims[0]
-        name = f"{dim}_step"
-        patch = random_patch.update_attrs(**{name: 999})
+        patch = random_patch.rename_coords(distance="channel")
+        patch = patch.update_attrs(channel_step=999)
         path = tmp_path_factory.mktemp("dasdae_shadow") / "patch.h5"
         patch.io.write(path, "dasdae")
         read_back = dc.spool(path)[0]
-        assert read_back.attrs[name] == 999
+        assert read_back.attrs["channel_step"] == 999
         assert read_back.coords == patch.coords
 
 
@@ -156,18 +155,17 @@ class TestGetContentsClobberWarning:
     @pytest.fixture()
     def shadowing_patch(self, random_patch):
         """A patch with an attr equal to one of its own envelope columns."""
-        dim = random_patch.dims[0]
-        return random_patch.update_attrs(**{f"{dim}_step": 999})
+        patch = random_patch.rename_coords(distance="channel")
+        return patch.update_attrs(channel_step=999)
 
     def test_warns_and_coord_wins(self, shadowing_patch):
         """Genuine collision warns; the coord envelope owns the column."""
-        dim = shadowing_patch.dims[0]
-        name = f"{dim}_step"
+        name = "channel_step"
         spool = dc.spool([shadowing_patch])
         with pytest.warns(UserWarning, match="collide with coordinate envelope"):
             df = spool.get_contents()
         # the flat column holds the coord step, not the attr value
-        step = shadowing_patch.get_coord(dim).step
+        step = shadowing_patch.get_coord("channel").step
         assert df[name].iloc[0] == step
         # the attr remains queryable through the explicit namespace
         assert len(spool.select(_attrs={name: 999})) == 1
@@ -190,6 +188,51 @@ class TestGetContentsClobberWarning:
             warnings.simplefilter("error")
             df = spool.get_contents()
         assert df["channel_step"].iloc[0] == 1
+
+    def test_regex_query_reads_attr_under_collision(self, random_patch):
+        """A regex _attrs query evaluates the attr, not the coord column."""
+        import re
+
+        # one patch carrying both the coord and a same-named string attr:
+        # the flat column is the (numeric) envelope even in the filtered
+        # frame, so the residual must fall back to the real attr values
+        patch = random_patch.rename_coords(distance="channel")
+        patch = patch.update_attrs(channel_min="vendor-a7")
+        spool = dc.spool([patch])
+        with pytest.warns(UserWarning, match="collide with coordinate envelope"):
+            df = spool.get_contents()
+        assert "vendor-a7" not in set(df["channel_min"].astype(str))
+        hits = spool.select(_attrs={"channel_min": re.compile("vendor-.*")})
+        assert len(hits) == 1
+        misses = spool.select(_attrs={"channel_min": re.compile("nope")})
+        assert len(misses) == 0
+
+
+class TestFixedEnvelopeColumnsReserved:
+    """time/distance envelopes are patches-table columns, reserved at ingest."""
+
+    def test_fixed_envelope_attr_warns_and_skips(self, random_patch):
+        """An attr named like a fixed envelope column warns and is skipped."""
+        patch = random_patch.update_attrs(time_step=123.0)
+        with pytest.warns(UserWarning, match="reserved attr name"):
+            spool = dc.spool([patch])
+            df = spool.get_contents()
+        # the column keeps structural values; the attr stays on the patch
+        assert df["time_step"].iloc[0] != 123.0
+        assert spool[0].attrs["time_step"] == 123.0
+
+
+class TestDerivedCatalogKeepsAttrs:
+    """Chunk/concat derived records must preserve coord-shaped attrs."""
+
+    def test_chunk_preserves_coord_shaped_attr(self, random_patch):
+        """A channel_step attr (no channel coord) survives spool.chunk."""
+        patch = random_patch.update_attrs(channel_step=3)
+        chunked = dc.spool([patch]).chunk(time=1)
+        df = chunked.get_contents()
+        assert "channel_step" in df.columns
+        assert (df["channel_step"] == 3).all()
+        assert len(chunked.select(_attrs={"channel_step": 3})) == len(chunked)
 
 
 class TestCompatStaysInDasdae:

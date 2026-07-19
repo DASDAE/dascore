@@ -909,7 +909,7 @@ class TestRenameDims:
 class TestUpdateFlatCoordKwargs:
     """Coord updates via {dim}_{field} kwargs against the manager's own dims."""
 
-    def test_update_min(self, cm_basic):
+    def test_update_max(self, cm_basic):
         """Ensure a {dim}_max kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
@@ -918,7 +918,7 @@ class TestUpdateFlatCoordKwargs:
             assert len(new_coord) == len(coord)
             assert new_coord.max() == coord.min()
 
-    def test_update_max(self, cm_basic):
+    def test_update_min(self, cm_basic):
         """Ensure a {dim}_min kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]

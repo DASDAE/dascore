@@ -153,6 +153,8 @@ class SQLIndexBackend(AbstractIndexBackend):
     dialect: BaseDialect
 
     def __init__(self):
+        # collision name-sets already warned about (see _apply_attr_columns)
+        self._warned_attr_clobber: set[frozenset] = set()
         self._ensure_schema()
 
     # --- hooks each engine provides ---------------------------------
@@ -688,7 +690,10 @@ class SQLIndexBackend(AbstractIndexBackend):
         df = self._pivot_coords(df)
         df = self._apply_attr_columns(df, attr_columns)
         if residuals:
-            df = apply_residuals(df, residuals)
+            # Residuals only ever come from attr predicates, so they must
+            # evaluate against the attr values even when a collision kept
+            # the attr column out of the flat frame.
+            df = apply_residuals(df, residuals, attr_columns)
         return df.reset_index(drop=True)
 
     def query_ids(self, query=None, order_by=None, patch_ids=None) -> list[int]:
@@ -864,16 +869,15 @@ class SQLIndexBackend(AbstractIndexBackend):
         # The flat frame is also materialized internally (patch naming,
         # chunking); warn once per backend per colliding name set so users
         # learn about the shadowing without a warning on every access.
-        already_warned = getattr(self, "_warned_attr_clobber", set())
-        if clobbered and clobbered not in already_warned:
-            self._warned_attr_clobber = already_warned | {clobbered}
+        if clobbered and clobbered not in self._warned_attr_clobber:
+            self._warned_attr_clobber.add(clobbered)
             names = ", ".join(sorted(clobbered))
             msg = (
                 f"Attr(s) {names} collide with coordinate envelope columns "
                 "and are omitted from the flat contents; query them via the "
                 "_attrs namespace."
             )
-            warnings.warn(msg, UserWarning)
+            warnings.warn(msg, UserWarning, stacklevel=2)
         for name, series in new_columns.items():
             if name in out.columns:
                 continue

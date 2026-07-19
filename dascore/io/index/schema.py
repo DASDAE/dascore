@@ -206,6 +206,18 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "sample_count_total",
         "coord_def_id",
         "def_key",
+        # fixed time/distance envelope columns on the patches table: these
+        # exist for every row regardless of the patch's coords, so an attr
+        # with one of these names could not be told apart from structural
+        # metadata downstream (unlike other coords' envelope columns, which
+        # only exist when the coord does and are handled by the flat-view
+        # collision warning).
+        "time_min",
+        "time_max",
+        "time_step",
+        "distance_min",
+        "distance_max",
+        "distance_step",
         # flat-relation (spool-facing) names
         "path",
         "file_format",

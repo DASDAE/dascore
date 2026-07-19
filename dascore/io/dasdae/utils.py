@@ -60,6 +60,16 @@ def _is_legacy_file(h5) -> bool:
     return not h5.attrs.get(_SEPARATE_ATTRS_KEY, False)
 
 
+def _is_legacy_group(patch_group, file_legacy: bool) -> bool:
+    """
+    Return True if a patch group may mix flat coord metadata into attrs.
+
+    New patch groups appended to a legacy file carry their own marker, so
+    they keep exact attr round-trips even though the file stays unmarked.
+    """
+    return file_legacy and not patch_group.attrs.get(_SEPARATE_ATTRS_KEY, False)
+
+
 def _get_group_coord_names(patch_group) -> set[str]:
     """Get names of all dims/coords stored in a patch group."""
     names = set(_get_dims(patch_group))
@@ -132,6 +142,9 @@ def _save_patch(patch, wave_group, name):
         # Replace the entire patch group so stale datasets/attrs can't survive.
         del wave_group[name]
     patch_group = wave_group.create_group(name)
+    # Per-group marker: groups appended to a legacy file are still written
+    # in the separated-attrs form and must not be legacy-stripped on read.
+    patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
     _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group)
     # add data
@@ -416,8 +429,8 @@ def _get_contents_from_patch_groups_generic(h5):
     waveforms = h5.get("waveforms")
     if waveforms is None:
         return []
-    legacy = _is_legacy_file(h5)
+    file_legacy = _is_legacy_file(h5)
     return [
-        _get_scan_payload_from_group(group, legacy=legacy)
+        _get_scan_payload_from_group(group, legacy=_is_legacy_group(group, file_legacy))
         for group in waveforms.values()
     ]

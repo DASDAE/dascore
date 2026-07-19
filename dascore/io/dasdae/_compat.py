@@ -24,6 +24,10 @@ from dascore.exceptions import InvalidFiberFileError
 
 # Every flat coord-summary key an old file may contain ({name}_{field}).
 _LEGACY_COORD_FIELDS = tuple(CoordSummary.model_fields)
+# The subset legacy writers actually flattened into attrs; dims/fingerprint
+# never appeared as flat keys, so translate re-emits only these while the
+# strip above removes the full (superset) field family.
+_LEGACY_FLAT_FIELDS = ("min", "max", "step", "units", "dtype", "len")
 
 
 def strip_legacy_coord_fields(attrs: dict, coord_names: Iterable[str]) -> dict:
@@ -52,8 +56,17 @@ def translate_legacy_attrs(attrs):
     coords = out.pop("coords", {})
     if isinstance(coords, str):
         # Older DASDAE files stored the coord-summary payload as a pickled
-        # string attr. Decode only this legacy coord metadata so scan/read can
-        # recover units and steps without reviving general legacy attr unpickling.
+        # string attr. Unpickling runs arbitrary code, so the opt-in gate
+        # must come before any decode attempt — a malicious payload executes
+        # during pickle.loads itself, not when the result is used.
+        if not get_config().allow_dasdae_format_unpickle:
+            msg = (
+                "This DASDAE file contains legacy pickled coordinate metadata. "
+                "Unpickling DASDAE format metadata is disabled by default for "
+                "security. If you trust this file, enable legacy compatibility "
+                "with dc.set_config(allow_dasdae_format_unpickle=True)."
+            )
+            raise InvalidFiberFileError(msg)
         with contextlib.suppress(
             AttributeError,
             EOFError,
@@ -63,19 +76,7 @@ def translate_legacy_attrs(attrs):
             UnicodeError,
             ValueError,
         ):
-            decoded = pickle.loads(coords.encode("latin1"))
-            if (
-                hasattr(decoded, "items")
-                and not get_config().allow_dasdae_format_unpickle
-            ):
-                msg = (
-                    "This DASDAE file contains legacy pickled coordinate metadata. "
-                    "Unpickling DASDAE format metadata is disabled by default for "
-                    "security. If you trust this file, enable legacy compatibility "
-                    "with dc.set_config(allow_dasdae_format_unpickle=True)."
-                )
-                raise InvalidFiberFileError(msg)
-            coords = decoded
+            coords = pickle.loads(coords.encode("latin1"))
     if hasattr(coords, "to_summary_dict"):
         coords = coords.to_summary_dict()
     if not hasattr(coords, "items"):
@@ -87,7 +88,7 @@ def translate_legacy_attrs(attrs):
             summary = summary.model_dump()
         if not isinstance(summary, dict):
             continue
-        for field in ("min", "max", "step", "units", "dtype", "len"):
+        for field in _LEGACY_FLAT_FIELDS:
             key = f"{name}_{field}"
             value = summary.get(field)
             if key not in out and value not in (None, ""):

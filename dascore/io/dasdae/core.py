@@ -18,6 +18,7 @@ from .utils import (
     _get_contents_from_patch_groups_generic,
     _get_patch_attrs,
     _is_legacy_file,
+    _is_legacy_group,
     _kwargs_empty,
     _matches_attr_filters,
     _read_patch,
@@ -119,11 +120,12 @@ class DASDAEV1(FiberIO):
             waveform_group = resource["waveforms"]
         except (KeyError, IndexError):
             return dc.spool([])
-        legacy = _is_legacy_file(resource)
+        file_legacy = _is_legacy_file(resource)
         for patch_group in waveform_group.values():
             patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
             if source_patch_ids and patch_name not in source_patch_ids:
                 continue
+            legacy = _is_legacy_group(patch_group, file_legacy)
             attrs = _get_patch_attrs(patch_group, legacy)
             if not _matches_attr_filters(attrs, kwargs):
                 continue
