@@ -7,7 +7,6 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Literal
 
-import numpy as np
 import pooch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -28,7 +27,6 @@ class DascoreConfig(BaseModel):
     model_config = ConfigDict(
         frozen=True,
         validate_default=True,
-        arbitrary_types_allowed=True,
     )
 
     # General behavior.
@@ -89,10 +87,6 @@ class DascoreConfig(BaseModel):
         default_factory=lambda: _get_cache_root() / "indexes" / "cache_paths.json",
         description="Path to the cache that records external index-file locations.",
     )
-    index_query_buffer: np.timedelta64 = Field(
-        default=np.timedelta64(1, "s"),
-        description="Time buffer applied when querying cached directory indexes.",
-    )
 
     # Progress display.
     progress_basic_refresh_per_second: float = Field(
@@ -143,12 +137,6 @@ class DascoreConfig(BaseModel):
     def _coerce_path(cls, value):
         """Normalize configured path values."""
         return Path(value).expanduser()
-
-    @field_validator("index_query_buffer", mode="before")
-    @classmethod
-    def _coerce_timedelta(cls, value):
-        """Normalize timedelta-like config values."""
-        return np.timedelta64(value)
 
 
 # The active runtime config is a process-global singleton. A scoped override

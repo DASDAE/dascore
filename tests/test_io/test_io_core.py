@@ -25,7 +25,6 @@ from dascore.exceptions import (
 )
 from dascore.io.core import (
     FiberIO,
-    PatchFileSummary,
     _get_reloadable_source_path,
     _make_scan_payload,
     _scan_result_to_summary,
@@ -182,26 +181,6 @@ class _MissingOptionalFormatter(FiberIO):
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
             return self.name, self.version
         return False
-
-
-class TestPatchFileSummary:
-    """Tests for getting patch file information."""
-
-    def test_d_translates(self):
-        """Ensure d_{whatever} translates to step_{whatever}."""
-        out = PatchFileSummary(d_time=10)
-        assert out.time_step == dc.to_timedelta64(10)
-
-    def test_dim_tuple(self):
-        """Ensure patch file summaries can be converted to tuples."""
-        out = PatchFileSummary(d_time=10, dims="time,distance")
-        assert out.dim_tuple == ("time", "distance")
-
-    def test_flat_dump(self):
-        """Simple test to show summary can be flat dumped."""
-        # flat dump is just here for compatibility with dc.PatchAttrs
-        out = PatchFileSummary(d_time=10, dims="time,distance")
-        assert isinstance(out.flat_dump(), dict)
 
 
 class TestGetExactCoord:

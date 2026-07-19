@@ -24,7 +24,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.index.dialect import BaseDialect
+from dascore.io.index.dialect import SQLiteDialect
 from dascore.io.index.ingest import SourceRecord, attr_column_name
 from dascore.io.index.query import (
     Query,
@@ -91,66 +91,16 @@ def adapt_params(params) -> list:
     return out
 
 
-class AbstractIndexBackend(abc.ABC):
-    """Interface every index backend must implement."""
+class SQLIndexBackend(abc.ABC):
+    """
+    The index backend: persists the schema and answers flat-relation queries.
 
-    @abc.abstractmethod
-    def write_sources(self, records: list[SourceRecord]) -> None:
-        """Insert or replace sources (and dependents) transactionally."""
+    Everything above this layer (catalog, indexer) talks to this
+    interface; the abstract methods below are the per-engine hooks the
+    concrete backend (`dascore.io.index.lite.SQLiteBackend`) supplies.
+    """
 
-    @abc.abstractmethod
-    def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
-        """Remove sources (identified by base_uri + path) and dependents."""
-
-    @abc.abstractmethod
-    def query(self, query: Query, order_by=None, patch_ids=None) -> pd.DataFrame:
-        """Return the flat patch-row relation matching a query."""
-
-    @abc.abstractmethod
-    def query_ids(self, query: Query, order_by=None, patch_ids=None) -> list[int]:
-        """Return matching patch ids in presentation order."""
-
-    @abc.abstractmethod
-    def count(self, query: Query, patch_ids=None) -> int:
-        """Return how many patches match a query, without projecting rows."""
-
-    @abc.abstractmethod
-    def export_records(self, patch_ids=None) -> list:
-        """Reconstruct source records (optionally for a subset of patches)."""
-
-    @abc.abstractmethod
-    def get_sources(self) -> pd.DataFrame:
-        """Return the sources table."""
-
-    @abc.abstractmethod
-    def source_stats(self) -> pd.DataFrame:
-        """Return only (source_path, mtime_ns, size_bytes) for change checks."""
-
-    @abc.abstractmethod
-    def get_metadata(self) -> dict:
-        """Return index-level metadata."""
-
-    @abc.abstractmethod
-    def mark_initial_update_done(self) -> None:
-        """Persist that the directory index completed its first update."""
-
-    @abc.abstractmethod
-    def attr_names(self) -> set[str]:
-        """Return original attr names known to the index."""
-
-    @abc.abstractmethod
-    def coord_names(self) -> set[str]:
-        """Return coord names known to the index."""
-
-    @abc.abstractmethod
-    def close(self) -> None:
-        """Release resources."""
-
-
-class SQLIndexBackend(AbstractIndexBackend):
-    """Shared implementation for SQL-speaking backends."""
-
-    dialect: BaseDialect
+    dialect: SQLiteDialect
 
     def __init__(self):
         # collision name-sets already warned about (see _apply_attr_columns)
@@ -196,6 +146,10 @@ class SQLIndexBackend(AbstractIndexBackend):
     @abc.abstractmethod
     def _table_columns(self, table: str) -> set[str]:
         """Return persisted columns for one table."""
+
+    @abc.abstractmethod
+    def close(self) -> None:
+        """Release resources (the connection and anything holding it)."""
 
     @contextmanager
     def _transaction(self):
@@ -1038,7 +992,7 @@ class SQLIndexBackend(AbstractIndexBackend):
 
 
 def resolve_query(
-    backend: AbstractIndexBackend, _attrs=None, _coords=None, **kwargs
+    backend: SQLIndexBackend, _attrs=None, _coords=None, **kwargs
 ) -> Query:
     """
     Resolve bare kwargs into a Query: attrs first, then coords.
@@ -1107,7 +1061,7 @@ def resolve_query(
     return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))
 
 
-def get_backend(path: str | Path) -> AbstractIndexBackend:
+def get_backend(path: str | Path) -> SQLIndexBackend:
     """Create the SQLite spool-index backend at path."""
     from dascore.io.index.lite import SQLiteBackend
 

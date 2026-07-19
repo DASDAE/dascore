@@ -1,16 +1,19 @@
 """
 A directory indexer backed by the generic spool index.
 
-Drop-in alternative to `dascore.io.indexer.DirectoryIndexer`: it walks a
-directory, detects new/changed/removed sources by per-source
+It walks a directory, detects new/changed/removed sources by per-source
 (mtime, size) comparison, scans only what changed, and answers content
-queries from the index backend.
+queries from the index backend. Also holds the machinery for tracking
+index locations when the data directory itself is not writable (e.g.
+read-only archives).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import suppress
+from functools import cache
 from pathlib import Path
 
 import pandas as pd
@@ -24,16 +27,45 @@ from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, summaries_to_records
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
-from dascore.io.indexer import (
-    AbstractIndexer,
-    _get_index_map,
-    _update_index_map,
-)
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
 
 
-class DBDirectoryIndexer(AbstractIndexer):
+@cache
+def _get_index_map(cache_path) -> dict:
+    """
+    Get a dict of index locations.
+
+    Note: this is purposefully mutable; handle with care.
+    """
+    path = Path(cache_path)
+    out = {}
+    successful_read = True
+    if path.exists():
+        try:
+            with path.open("r") as fi:
+                out = json.load(fi)
+        # On rare occasions, the file can become corrupt. See #508.
+        except (OSError, json.JSONDecodeError):
+            successful_read = False
+    if not isinstance(out, dict) or not successful_read:
+        out = {}
+        with suppress(FileNotFoundError, PermissionError):
+            path.unlink(missing_ok=True)
+    return out
+
+
+def _update_index_map(updates, cache_path) -> dict:
+    """Update index map to track new index."""
+    data = _get_index_map(cache_path=cache_path)
+    data.update(updates)
+    Path(cache_path).parent.mkdir(exist_ok=True, parents=True)
+    with open(cache_path, "w") as fi:
+        json.dump(data, fi)
+    return data
+
+
+class DBDirectoryIndexer:
     """
     Index a directory of fiber files with a database backend.
 

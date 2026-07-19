@@ -44,7 +44,7 @@ Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.P
 
 ## Summaries are envelopes, not full coordinates
 
-[`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction paths are `coord.to_summary()` and `coord_summary_from_data(...)`, both of which start from a live coordinate or full value array.
+[`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 
 The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
 

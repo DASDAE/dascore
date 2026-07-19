@@ -405,17 +405,6 @@ class BaseSpool(NamespaceOwner, abc.ABC):
     # Add method for stacking (adding the data arrays) patches in spool.
     stack = stack_patches
 
-    @property
-    def viz(self):
-        """Raise AttributeError when Spool.viz is accessed."""
-        msg = (
-            "'Spool' has no 'viz' namespace. "
-            "Apply 'viz' on a Patch object. "
-            "(you can merge a subset of the spool into a single patch using "
-            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
-        )
-        raise AttributeError(msg)
-
 
 class Spool(BaseSpool):
     """
@@ -858,10 +847,10 @@ class Spool(BaseSpool):
         the catalog; ``path`` may also be an existing directory indexer.
         """
         from dascore.io.index.catalog import FileResolver, PatchCatalog
-        from dascore.io.indexer import AbstractIndexer
+        from dascore.io.index.indexer import DBDirectoryIndexer
 
         out = cls()
-        if isinstance(path, AbstractIndexer):
+        if isinstance(path, DBDirectoryIndexer):
             from dascore.io.index.catalog import _DIRECTORY_ORDER
 
             out._catalog = PatchCatalog(
@@ -1067,8 +1056,6 @@ class Spool(BaseSpool):
                         f"{get_nice_text(t1)} to {get_nice_text(t2)}"
                     )
         return base
-
-    get_patch_names = get_patch_names
 
 
 @singledispatch

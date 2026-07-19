@@ -12,25 +12,21 @@ from collections.abc import Generator, Mapping
 from functools import cache, cached_property, wraps
 from numbers import Integral
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, get_type_hints
+from typing import Any, Literal, NotRequired, TypedDict, get_type_hints
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
-    VALID_DATA_CATEGORIES,
-    VALID_DATA_TYPES,
     PatchType,
     SpoolType,
-    max_lens,
     path_types,
     timeable_types,
 )
-from dascore.core.attrs import PatchAttrs, str_validator
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
@@ -48,66 +44,10 @@ from dascore.exceptions import (
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
-from dascore.utils.models import (
-    CommaSeparatedStr,
-    DascoreBaseModel,
-    DateTime64,
-    TimeDelta64,
-)
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
-
-
-class PatchFileSummary(DascoreBaseModel):
-    """
-    The necessary attributes for indexing a fiber file.
-
-    A subset of [PatchAttributes](`dascore.core.attrs.PatchAttrs`).
-    """
-
-    model_config = ConfigDict(
-        title="Patch File Summary",
-        extra="ignore",
-    )
-
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    experiment_id: str = Field("", max_length=max_lens["experiment_id"])
-    tag: str = Field("", max_length=max_lens["tag"])
-    station: str = Field("", max_length=max_lens["station"])
-    network: str = Field("", max_length=max_lens["network"])
-    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
-    time_min: DateTime64 = np.datetime64("NaT", "ns")
-    time_max: DateTime64 = np.datetime64("NaT", "ns")
-    time_step: TimeDelta64 = np.timedelta64("NaT", "ns")
-    # the attributes to index on
-    file_version: str = ""
-    file_format: str = ""
-    path: str | Path = ""
-    source_patch_id: str = ""
-
-    @property
-    def dim_tuple(self):
-        """Return a tuple of dimensions (eg ("time", "distance"))."""
-        return tuple(self.dims.split(","))
-
-    @model_validator(mode="before")
-    @classmethod
-    def translate_d_to_step(cls, data):
-        """Translate d_time and d_distance to time_step, distance_step."""
-        if isinstance(data, dict):
-            for name in ["time", "distance"]:
-                step_name, d_name = f"{name}_step", f"d_{name}"
-                if step_name not in data and d_name in data:
-                    data[step_name] = data.pop(d_name)
-        return data
-
-    def flat_dump(self):
-        """Alias for dump, for compatibility with PatchAttrs.flat_dump."""
-        return self.model_dump()
 
 
 class ScanPayload(TypedDict):
@@ -408,28 +348,6 @@ def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
         return spool[0]
     msg = "Patch could not be uniquely resolved after applying load filters."
     raise PatchAttributeError(msg)
-
-
-def _load_patch_summary(summary: PatchSummary, **kwargs) -> dc.Patch:
-    """Internal helper for reloading a patch from a PatchSummary."""
-    source_patch_id = summary.source_patch_id
-    read_kwargs = {
-        "path": summary.source_path,
-        "file_format": summary.source_format or None,
-        "file_version": summary.source_version or None,
-        "source_patch_id": source_patch_id or None,
-    }
-    read_kwargs.update(kwargs)
-    path = read_kwargs.pop("path", None)
-    if path in (None, ""):
-        msg = "PatchSummary cannot load data because it has no source path."
-        raise PatchAttributeError(msg)
-    spool = dc.read(path, **read_kwargs)
-    try:
-        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
-    except IndexError as exc:
-        msg = "Patch could not be resolved after applying load filters."
-        raise PatchAttributeError(msg) from exc
 
 
 def _get_reloadable_source_path(
