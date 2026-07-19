@@ -703,6 +703,29 @@ class TestNetCDFEdgeCases:
         np.testing.assert_array_equal(coord.values, Coord.values)
         assert coord.units == dc.get_quantity("m")
 
+    def test_snap_scan_coord_keeps_units(self):
+        """Snapped scan coords should also carry the stored units."""
+
+        class Coord:
+            values: ClassVar = np.arange(4.0)
+            attrs: ClassVar = {"units": "m"}
+
+        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=True)
+
+        np.testing.assert_array_equal(coord.values, Coord.values)
+        assert coord.units == dc.get_quantity("m")
+
+    def test_multidim_scan_coord_returns_raw_values(self):
+        """Non-1D coords cannot be segmented and pass through unchanged."""
+
+        class Coord:
+            values: ClassVar = np.arange(6.0).reshape(2, 3)
+            attrs: ClassVar = {"units": "m"}
+
+        out = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+
+        assert out is Coord.values
+
     @pytest.fixture
     def multi_patch_spool(self):
         """Create a spool with multiple patches for testing."""

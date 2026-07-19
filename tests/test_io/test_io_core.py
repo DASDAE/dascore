@@ -241,6 +241,15 @@ class TestGetExactCoord:
         np.testing.assert_array_equal(coord.values, values)
         assert not isinstance(coord, CoordSegmented)
 
+    def test_large_non_monotonic_array_preserved(self):
+        """A large non-monotonic array skips the segment guard and stays exact."""
+        rng = np.random.default_rng(1)
+        values = rng.permutation(2_000).astype(float)
+
+        coord = get_exact_coord(values, units="m")
+
+        np.testing.assert_array_equal(coord.values, values)
+
     def test_piecewise_uniform_array_stays_segmented(self):
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
         from dascore.core.coords import CoordSegmented
