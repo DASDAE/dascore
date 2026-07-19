@@ -18,6 +18,7 @@ from dascore.config import set_config
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import dasdae as dasdae_mod
+from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _decode_attr_value,
@@ -30,7 +31,6 @@ from dascore.io.dasdae.utils import (
     _get_scan_payload_from_group,
     _save_array,
     _save_patch,
-    _translate_legacy_attrs,
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -322,7 +322,7 @@ class TestLegacyFixtureCompatibility:
             def to_summary_dict(self):
                 return {"time": {"units": "s", "step": 1}}
 
-        out = _translate_legacy_attrs({"coords": CoordManagerLike()})
+        out = translate_legacy_attrs({"coords": CoordManagerLike()})
         assert out["time_units"] == "s"
         assert out["time_step"] == 1
 
@@ -333,7 +333,7 @@ class TestLegacyFixtureCompatibility:
             def to_summary(self):
                 return dc.core.CoordSummary(min=0, max=1, step=2, units="m")
 
-        out = _translate_legacy_attrs(
+        out = translate_legacy_attrs(
             {
                 "coords": {"distance": SummaryLike(), "time": object()},
                 "dims": "distance,time",
@@ -346,13 +346,13 @@ class TestLegacyFixtureCompatibility:
 
     def test_translate_legacy_attrs_ignores_non_mapping_coords(self):
         """Legacy stringified coord payloads should be ignored, not crash."""
-        out = _translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
+        out = translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
         assert "coords" not in out
 
     def test_translate_legacy_attrs_decodes_pickled_coord_payload(self):
         """Legacy pickled coord payloads should still restore coord metadata."""
         payload = pickle.dumps({"distance": {"min": 0, "max": 1, "units": "m"}})
-        out = _translate_legacy_attrs({"coords": payload.decode("latin1")})
+        out = translate_legacy_attrs({"coords": payload.decode("latin1")})
         assert out["distance_units"] == "m"
         assert out["distance_min"] == 0
         assert out["distance_max"] == 1

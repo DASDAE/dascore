@@ -6,26 +6,22 @@ coord serialization and string-serialization design notes used here.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import pickle
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.config import get_config
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import _make_scan_payload
+from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
-from dascore.utils.attrs import separate_coord_info
 from dascore.utils.misc import unbyte
 from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
@@ -34,6 +30,9 @@ from dascore.utils.time import to_int
 _KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_id"}
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
+# Root marker set on files whose patch attr namespace holds only true attrs.
+# Files without it may mix flat coord metadata into attrs (see _compat).
+_SEPARATE_ATTRS_KEY = "__attrs_coords_separate__"
 
 
 # --- Functions for writing DASDAE format
@@ -44,6 +43,30 @@ def _write_meta(hfile, file_version):
     hfile.attrs["__format__"] = "DASDAE"
     hfile.attrs["__DASDAE_version__"] = file_version
     hfile.attrs["__dascore__version__"] = dc.__version__
+    # Mark the file as holding only true attrs (no flat coord metadata),
+    # unless appending to a legacy file that already contains mixed patches.
+    waveforms = hfile.get("waveforms")
+    has_legacy_patches = (
+        waveforms is not None
+        and len(waveforms)
+        and not hfile.attrs.get(_SEPARATE_ATTRS_KEY, False)
+    )
+    if not has_legacy_patches:
+        hfile.attrs[_SEPARATE_ATTRS_KEY] = True
+
+
+def _is_legacy_file(h5) -> bool:
+    """Return True if the file may mix flat coord metadata into patch attrs."""
+    return not h5.attrs.get(_SEPARATE_ATTRS_KEY, False)
+
+
+def _get_group_coord_names(patch_group) -> set[str]:
+    """Get names of all dims/coords stored in a patch group."""
+    names = set(_get_dims(patch_group))
+    for key in patch_group:
+        if key.startswith("_coord_"):
+            names.add(key.removeprefix("_coord_"))
+    return names
 
 
 def _save_attrs_and_dims(patch, patch_group):
@@ -161,62 +184,6 @@ def _read_array_sample(table_array, index):
     return out
 
 
-def _translate_legacy_attrs(attrs):
-    """Normalize legacy DASDAE attr payloads to flat coord metadata."""
-    out = dict(attrs)
-    coords = out.pop("coords", {})
-    if isinstance(coords, str):
-        # Older DASDAE files stored the coord-summary payload as a pickled
-        # string attr. Decode only this legacy coord metadata so scan/read can
-        # recover units and steps without reviving general legacy attr unpickling.
-        with contextlib.suppress(
-            AttributeError,
-            EOFError,
-            KeyError,
-            pickle.PickleError,
-            TypeError,
-            UnicodeError,
-            ValueError,
-        ):
-            decoded = pickle.loads(coords.encode("latin1"))
-            if (
-                hasattr(decoded, "items")
-                and not get_config().allow_dasdae_format_unpickle
-            ):
-                msg = (
-                    "This DASDAE file contains legacy pickled coordinate metadata. "
-                    "Unpickling DASDAE format metadata is disabled by default for "
-                    "security. If you trust this file, enable legacy compatibility "
-                    "with dc.set_config(allow_dasdae_format_unpickle=True)."
-                )
-                raise InvalidFiberFileError(msg)
-            coords = decoded
-    if hasattr(coords, "to_summary_dict"):
-        coords = coords.to_summary_dict()
-    if not hasattr(coords, "items"):
-        coords = {}
-    for name, summary in coords.items():
-        if hasattr(summary, "to_summary"):
-            summary = summary.to_summary()
-        if hasattr(summary, "model_dump"):
-            summary = summary.model_dump()
-        if not isinstance(summary, dict):
-            continue
-        for field in ("min", "max", "step", "units", "dtype", "len"):
-            key = f"{name}_{field}"
-            value = summary.get(field)
-            if key not in out and value not in (None, ""):
-                out[key] = value
-    dims = out.get("dims", "")
-    dims = tuple(dims.split(",")) if isinstance(dims, str) else tuple(dims or ())
-    for name in dims:
-        old_name = f"d_{name}"
-        new_name = f"{name}_step"
-        if new_name not in out and old_name in out:
-            out[new_name] = out.pop(old_name)
-    return out
-
-
 def _get_coords(patch_group, dims, attrs2):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
@@ -286,18 +253,33 @@ def _matches_attr_filters(attrs, kwargs):
     }
     if not query:
         return True
-    attrs = _translate_legacy_attrs(attrs)
-    _, attr_info = separate_coord_info(attrs, dims=attrs.get("dims", ()))
-    attr_df = pd.DataFrame([attr_info])
+    attr_df = pd.DataFrame([attrs])
     return bool(filter_df(attr_df, ignore_bad_kwargs=True, **query)[0])
 
 
-def _read_patch(patch_group, attrs=None, **kwargs):
+def _get_patch_attrs(patch_group, legacy: bool) -> dict:
+    """Get the true patch attrs, cleaning legacy coord metadata if needed."""
+    attrs = _get_attrs(patch_group)
+    if legacy:
+        dims = _get_dims(patch_group)
+        attrs["dims"] = ",".join(dims)
+        attrs = translate_legacy_attrs(attrs)
+        attrs = strip_legacy_coord_fields(attrs, _get_group_coord_names(patch_group))
+    return attrs
+
+
+def _read_patch(patch_group, legacy: bool = True, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _translate_legacy_attrs(_get_attrs(patch_group)) if attrs is None else attrs
+    attrs = _get_attrs(patch_group)
     dims = _get_dims(patch_group)
-    coords = _get_coords(patch_group, dims, attrs)
-    _, attr_info = separate_coord_info(attrs, dims=dims)
+    if legacy:
+        attrs["dims"] = ",".join(dims)
+        attrs = translate_legacy_attrs(attrs)
+        coords = _get_coords(patch_group, dims, attrs)
+        attr_info = strip_legacy_coord_fields(attrs, set(coords.coord_map) | set(dims))
+    else:
+        coords = _get_coords(patch_group, dims, {})
+        attr_info = attrs
     attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
     attrs = PatchAttrs.from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
@@ -333,7 +315,7 @@ def _kwargs_empty(kwargs) -> bool:
     return not bool(out)
 
 
-def _get_scan_payload_from_group(group):
+def _get_scan_payload_from_group(group, legacy: bool = True):
     """Build one structured scan payload from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
@@ -347,14 +329,15 @@ def _get_scan_payload_from_group(group):
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
         out[new_key] = unbyte(value)
-    # rename dims
-    out["dims"] = unbyte(attrs["_dims"])
-    out = _translate_legacy_attrs(out)
-    dims_str = out["dims"]
-    dims = tuple(dims_str.split(",")) if dims_str else ()
-    # Split flattened coord metadata from the remaining patch attrs.
-    _, attr_info = separate_coord_info(out, dims=dims)
-    coords = _get_coords(group, dims, out)
+    dims = _get_dims(group)
+    if legacy:
+        out["dims"] = ",".join(dims)
+        out = translate_legacy_attrs(out)
+        coords = _get_coords(group, dims, out)
+        attr_info = strip_legacy_coord_fields(out, set(coords.coord_map) | set(dims))
+    else:
+        coords = _get_coords(group, dims, {})
+        attr_info = out
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
     dtype = str(data_node.dtype) if data_node is not None else ""
@@ -433,4 +416,8 @@ def _get_contents_from_patch_groups_generic(h5):
     waveforms = h5.get("waveforms")
     if waveforms is None:
         return []
-    return [_get_scan_payload_from_group(group) for group in waveforms.values()]
+    legacy = _is_legacy_file(h5)
+    return [
+        _get_scan_payload_from_group(group, legacy=legacy)
+        for group in waveforms.values()
+    ]

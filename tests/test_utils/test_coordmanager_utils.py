@@ -21,7 +21,7 @@ class TestMergeCoordManagers:
         coord = cm.coord_map[name]
         start = coord.max() if from_max else coord.min()
         attr_name = f"{name}_min"
-        new, _ = cm.update_from_attrs({attr_name: start + value})
+        new = cm.update(**{attr_name: start + value})
         return new
 
     @pytest.fixture(scope="class")

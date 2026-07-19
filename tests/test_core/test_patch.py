@@ -1022,10 +1022,12 @@ class TestUpdateAttrs:
         assert time_summary.min == new_start
         assert time_summary.max == new_start + duration
 
-    def test_update_attrs_rejects_coordinate_fields(self, random_patch):
-        """Flat coordinate-style attrs should go through update_coords."""
-        with pytest.raises(ValueError, match="update_coords"):
-            random_patch.update_attrs(time_step=10)
+    def test_update_attrs_accepts_coordinate_shaped_names(self, random_patch):
+        """Coord-shaped names are ordinary attrs; coords are never affected."""
+        out = random_patch.update_attrs(time_step=10, channel_step=3)
+        assert out.attrs["time_step"] == 10
+        assert out.attrs["channel_step"] == 3
+        assert out.coords == random_patch.coords
 
     def test_update_non_sorted_coord(self, wacky_dim_patch):
         """Ensure update_coords updates non-sorted coordinates."""

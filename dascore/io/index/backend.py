@@ -684,8 +684,9 @@ class SQLIndexBackend(AbstractIndexBackend):
             patch_ids=patch_ids,
         )
         df = self._fetch_df(sql, params)
-        df = self._flatten(df, attr_meta)
+        df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
+        df = self._apply_attr_columns(df, attr_columns)
         if residuals:
             df = apply_residuals(df, residuals)
         return df.reset_index(drop=True)
@@ -772,8 +773,17 @@ class SQLIndexBackend(AbstractIndexBackend):
             sources, patches, attrs, links, defs, self._attr_meta()
         )
 
-    def _flatten(self, df: pd.DataFrame, attr_meta: pd.DataFrame) -> pd.DataFrame:
-        """Post-process raw SQL output into the flat-relation contract."""
+    def _flatten(
+        self, df: pd.DataFrame, attr_meta: pd.DataFrame
+    ) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
+        """
+        Post-process raw SQL output into the flat-relation contract.
+
+        Returns the frame plus the dynamic attr columns keyed by original
+        attr name. The attr columns are applied by `_apply_attr_columns`
+        only after `_pivot_coords` has added the per-coord envelope columns,
+        so genuine name collisions can be detected against the full frame.
+        """
         out = df.copy()
         # structural time columns: ns ints -> numpy time types (exactly)
         for col, flavor in _TIME_COLS.items():
@@ -788,10 +798,11 @@ class SQLIndexBackend(AbstractIndexBackend):
         # Group the metadata once and drop every typed column in a single
         # pass: per-name refiltering plus one-drop-per-column was ~O(A^2)
         # metadata scans and frame copies for A dynamic attrs.
-        # Every name that could collide with a structural or envelope
-        # column (RESERVED_ATTR_COLUMNS and *_min/_max/_step) is refused at
-        # ingest, so a dynamic attr name never shadows an existing column
-        # here.
+        # Structural names (RESERVED_ATTR_COLUMNS) are refused at ingest,
+        # but an attr may legitimately share a name with a coordinate
+        # envelope column ({coord}_min/max/step) when another patch in the
+        # catalog has that coord; the coord column wins the flat name and
+        # the attr stays queryable through the _attrs namespace.
         cols_to_drop: list[str] = []
         new_columns: dict[str, pd.Series] = {}
         for name, rows in attr_meta.groupby("attr_name", sort=False):
@@ -821,8 +832,6 @@ class SQLIndexBackend(AbstractIndexBackend):
                 new_columns[name] = series
         if cols_to_drop:
             out = out.drop(columns=cols_to_drop)
-        for name, series in new_columns.items():
-            out[name] = series
         # flat-contract names for source columns
         renames = {
             "source_path": "path",
@@ -838,7 +847,38 @@ class SQLIndexBackend(AbstractIndexBackend):
                 + out.loc[has_base, "path"]
             )
             out = out.drop(columns=["base_uri"])
-        return out.drop(columns=["source_id"], errors="ignore")
+        return out.drop(columns=["source_id"], errors="ignore"), new_columns
+
+    def _apply_attr_columns(
+        self, out: pd.DataFrame, new_columns: dict[str, pd.Series]
+    ) -> pd.DataFrame:
+        """
+        Add dynamic attr columns to the flat frame, coord envelopes winning.
+
+        Runs after `_pivot_coords` so every coordinate envelope column
+        exists; an attr whose name equals one is a genuine collision — it is
+        omitted from the flat view (still queryable via the _attrs
+        namespace) with a warning.
+        """
+        clobbered = frozenset(name for name in new_columns if name in out.columns)
+        # The flat frame is also materialized internally (patch naming,
+        # chunking); warn once per backend per colliding name set so users
+        # learn about the shadowing without a warning on every access.
+        already_warned = getattr(self, "_warned_attr_clobber", set())
+        if clobbered and clobbered not in already_warned:
+            self._warned_attr_clobber = already_warned | {clobbered}
+            names = ", ".join(sorted(clobbered))
+            msg = (
+                f"Attr(s) {names} collide with coordinate envelope columns "
+                "and are omitted from the flat contents; query them via the "
+                "_attrs namespace."
+            )
+            warnings.warn(msg, UserWarning)
+        for name, series in new_columns.items():
+            if name in out.columns:
+                continue
+            out[name] = series
+        return out
 
     @staticmethod
     def _add_envelope_objects(coords: pd.DataFrame) -> pd.DataFrame:

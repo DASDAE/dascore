@@ -228,8 +228,6 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     )
     t_coord = _get_time_coord(out, numofsamples)
     out["coords"] = {"time": t_coord, "distance": d_coord}
-    out.update(t_coord.get_attrs_dict("time"))
-    out.update(d_coord.get_attrs_dict("distance"))
     return out, fileinfo
 
 

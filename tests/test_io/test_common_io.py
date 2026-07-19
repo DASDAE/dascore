@@ -459,6 +459,24 @@ class TestScan:
             for key, value in model.items():
                 assert not isinstance(value, bytes | np.bytes_)
 
+    def test_no_coord_mirroring_attrs(self, scanned_summaries):
+        """
+        Shipped readers must not mirror coord metadata into attrs.
+
+        Attrs and coords are fully independent; an attr named
+        ``{coord}_{field}`` for one of the patch's own coords would shadow a
+        coordinate envelope column in the flat spool contents. Vendor attrs
+        that merely look coord-shaped (e.g. ``channel_step`` without a
+        ``channel`` coord) are fine.
+        """
+        fields = tuple(dc.core.CoordSummary.model_fields)
+        for raw in scanned_summaries:
+            summary = _scan_summary(raw)
+            names = set(summary.coords) | set(summary.dims)
+            mirrored = {f"{c}_{f}" for c in names for f in fields}
+            bad = mirrored & set(summary.attrs.model_dump())
+            assert not bad, f"attrs mirror coord metadata: {sorted(bad)}"
+
 
 class TestWrite:
     """Tests for writing data to disk."""

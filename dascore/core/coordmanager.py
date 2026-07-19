@@ -44,14 +44,13 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import zip_longest
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, TypeVar
 
 import numpy as np
 from pydantic import field_validator, model_validator
 from rich.text import Text
 from typing_extensions import Self
 
-import dascore as dc
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.exceptions import (
@@ -61,7 +60,6 @@ from dascore.exceptions import (
     ParameterError,
     PatchBroadcastError,
 )
-from dascore.utils.attrs import separate_coord_info
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -305,35 +303,6 @@ class CoordManager(DascoreBaseModel):
 
     # we need this here to maintain backwards compatibility
     update_coords = update
-
-    def update_from_attrs(
-        self, attrs: Mapping | dc.PatchAttrs
-    ) -> tuple[Self, dc.PatchAttrs]:
-        """
-        Update coordinates from attrs.
-
-        This will also return a PatchAttrs which conforms to coords.
-
-        Parameters
-        ----------
-        attrs
-            The attribute source, either PatchAttrs instance or mapping.
-        """
-        coord_info, attr_info = separate_coord_info(attrs, dims=self.dims)
-        out = dict(self.coord_map)
-        for name in set(coord_info) & set(out):
-            maybe_updates = coord_info[name]
-            coord = self.coord_map[name]
-            # convert values to dict to determine which should be updated.
-            model_contents = coord.to_summary().model_dump(exclude_defaults=True)
-            # see what has changed.
-            diff = {
-                i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
-            }
-            out[name] = coord.update(**diff)
-        coords = self.new(coord_map=out)
-        attrs = dc.PatchAttrs.from_dict(attr_info)
-        return coords, attrs
 
     def sort(
         self, *coords, array: MaybeArray = None, reverse: bool = False
@@ -1147,7 +1116,6 @@ class CoordManager(DascoreBaseModel):
 def get_coord_manager(
     coords: CoordManagerInput | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
-    attrs: dc.PatchAttrs | dict[str, Any] | None = None,
     shape=None,
 ) -> CoordManager:
     """
@@ -1162,11 +1130,6 @@ def get_coord_manager(
         [`CoordManager`](`dascore.core.CoordManager`).
     dims
         Tuple specify dimension names
-    attrs
-        Attributes which can be used to create coordinates.
-        Cannot be used with coords argument.
-        If you want to update [`CoordManager`](`dascore.core.CoordManager`)
-        use [`update_from_attrs`](`dascore.core.CoordManager.update_from_attrs`).
     shape
         The data array shape which will be managed by coord manager. This
         allows non-coordinate dimensions to be initiated.
@@ -1193,12 +1156,6 @@ def get_coord_manager(
     >>> coords['quality'] = (("distance", "time"), quality)
     >>> cm = get_coord_manager(coords=coords, dims=dims)
     """
-    if coords is not None and attrs is not None:
-        msg = (
-            "Cannot use both attrs and coords in get_coord_manager. "
-            "Perhaps you want CoordManager.update_from_attrs?"
-        )
-        raise ParameterError(msg)
     # return coords if we already have a coord manager.
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.
@@ -1219,12 +1176,6 @@ def get_coord_manager(
     if shape and (missing_dims := (set(dims) - set(coord_map))):
         for name in missing_dims:
             coord_map[name] = get_coord(shape=shape[dims.index(name)])
-            dim_map[name] = (name,)
-    if attrs:
-        coord_updates, _ = separate_coord_info(attrs, dims)
-        updateable_coords = set(coord_updates) - set(coord_map)
-        for name in updateable_coords:
-            coord_map[name] = get_coord(**coord_updates[name])
             dim_map[name] = (name,)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
     return out
