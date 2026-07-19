@@ -19,6 +19,12 @@ from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
 
+# protobuf is an optional dependency and is not in the test extra, so the
+# min-deps job runs without it. Skipping here (rather than installing it
+# everywhere) keeps one CI environment genuinely protobuf-free, which is what
+# catches an accidental eager `import google.protobuf` in the reader.
+pytest.importorskip("google.protobuf")
+
 
 @pytest.fixture(scope="module")
 def sintela_protobuf_path():
@@ -379,6 +385,20 @@ class TestSintelaProtobuf:
             return sum(msg.ByteSize() for _tag, msg in parsed)
 
         assert _retained(0) == _retained(5_000)
+
+    def test_raw_frame_only_tags_are_not_detected(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """
+        RF01 must not be advertised while raw_frames cannot be decoded.
+
+        Header-derived coords would let such a file scan cleanly and only fail
+        at read, so it is better left undetected.
+        """
+        records = [("RF01", payload) for _tag, payload in ts_records]
+        path = write_sintela_file("rf01.pb", records)
+        assert fiber_io.get_format(path) is False
+        assert "RF01" not in sintela_utils._TAG_TO_PACKET
 
     def test_raw_frame_packets_raise_clear_error(
         self, fiber_io, write_sintela_file, ts_records

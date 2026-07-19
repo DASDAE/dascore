@@ -61,7 +61,12 @@ from dascore.utils.models import DascoreBaseModel, PositiveFiniteFloat, Positive
 
 PBUF_MAGIC = 0x46554250
 META_TAG = "META"
-TS_TAGS = frozenset({"TS05", "RF01"})
+# "RF01" is deliberately absent: those packets are understood to carry their
+# samples in the packed `raw_frames` blob, which has no decoder here. Since a
+# file's shape and coords come from the headers, advertising the tag would let
+# such a file scan cleanly and only fail once a patch was actually read, so it
+# is left undetected until raw_frames can be decoded.
+TS_TAGS = frozenset({"TS05"})
 FFT_TAGS = frozenset({"FFT", "FFT-"})
 BAND_TAGS = frozenset({"BAND"})
 # Maps each data tag to the packet message class (built by
