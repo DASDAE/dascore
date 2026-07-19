@@ -33,8 +33,18 @@ pytestmark = [
     ),
 ]
 
-REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
-REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
+# Sintela protobuf walks its MTLV envelope with three small sequential reads
+# per record (magic, header, payload), so a modest file issues hundreds of
+# reads. That is fine locally and over memory://, but each read becomes a
+# request on the localhost-HTTP range-streaming path, which blows the timeouts
+# below. Remote coverage for this format stays at the memory:// level.
+REMOTE_COMMON_IO_READ_TESTS = {
+    io: fetch_names
+    for io, fetch_names in COMMON_IO_READ_TESTS.items()
+    if io.name != "Sintela_Protobuf"
+}
+REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
+REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)
 
 # The localhost HTTP/fsspec/h5py streaming path can intermittently stall while
 # probing remote HDF5 metadata (see the TODO in test_remote_http.py). Bound each
