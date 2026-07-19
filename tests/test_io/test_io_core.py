@@ -20,6 +20,7 @@ from dascore.constants import SpoolType
 from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
+    MissingPatchError,
     RemoteCacheError,
     UnknownFiberFormatError,
 )
@@ -1277,6 +1278,19 @@ class TestIOCoreCoverageEdges:
         spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             _select_patch_from_spool(spool, source_patch_id="neither-id-nor-index")
+
+    @pytest.mark.parametrize("source_patch_id", ["", "node-1"])
+    def test_empty_read_raises_missing_patch(self, source_patch_id):
+        """A read trimmed to nothing raises MissingPatchError, not IndexError.
+
+        MissingPatchError subclasses IndexError so spool iteration can skip
+        these (see #583); the guard must fire before any identity matching,
+        with or without a requested source id.
+        """
+        from dascore.io.core import _select_patch_from_spool
+
+        with pytest.raises(MissingPatchError, match="No patch remained"):
+            _select_patch_from_spool(dc.spool([]), source_patch_id=source_patch_id)
 
     def test_single_patch_resolved_by_name(self):
         """A one-patch read resolves when the id matches the patch name."""
