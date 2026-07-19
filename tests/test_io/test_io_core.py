@@ -224,6 +224,35 @@ class TestGetExactCoord:
 
         np.testing.assert_array_equal(coord.values, values)
 
+    def test_jittery_array_does_not_over_segment(self):
+        """Sub-step jitter must not explode into a per-sample segmented coord."""
+        from dascore.core.coords import CoordSegmented
+
+        rng = np.random.default_rng(0)
+        n = 5_000
+        values = np.maximum.accumulate(
+            np.arange(n) * 1000 + rng.integers(-3, 4, size=n)
+        ).astype("datetime64[ns]")
+
+        coord = get_exact_coord(values)
+
+        # Values are preserved exactly, but the degenerate segmented form is
+        # avoided (it would hold roughly n / 2 short segments).
+        np.testing.assert_array_equal(coord.values, values)
+        assert not isinstance(coord, CoordSegmented)
+
+    def test_piecewise_uniform_array_stays_segmented(self):
+        """Genuinely piecewise-uniform arrays keep their queryable seams."""
+        from dascore.core.coords import CoordSegmented
+
+        values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
+
+        coord = get_exact_coord(values, units="m")
+
+        assert isinstance(coord, CoordSegmented)
+        np.testing.assert_array_equal(coord.values, values)
+        assert len(coord.get_discontinuities("gaps")) == 1
+
 
 class TestScanResultToSummary:
     """Tests for converting scan metadata into summaries."""

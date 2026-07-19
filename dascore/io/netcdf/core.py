@@ -156,11 +156,14 @@ class NetCDFCFV18(FiberIO):
 
     @staticmethod
     def _get_scan_coord(coord, snap=True):
-        """Return raw xarray values or an exact monotonic coordinate."""
+        """Return a coordinate for scanning; snap only controls exactness."""
         values = coord.values
-        if snap or np.ndim(values) != 1:
+        if np.ndim(values) != 1:
             return values
-        return get_exact_coord(values, units=coord.attrs.get("units"))
+        units = coord.attrs.get("units")
+        if snap:
+            return dc.core.get_coord(data=values, units=units)
+        return get_exact_coord(values, units=units)
 
     def _get_source_patch_id(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

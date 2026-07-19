@@ -1567,7 +1567,9 @@ def is_directory_format(path) -> bool:
         return False
     try:
         get_format(path)
-    except UnknownFiberFormatError:
+    except (UnknownFiberFormatError, OSError):
+        # An unreadable directory (e.g. PermissionError) is simply not a
+        # scan unit; it should not abort a directory index traversal.
         return False
     return True
 

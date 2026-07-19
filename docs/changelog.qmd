@@ -24,6 +24,7 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - Added `dc.scan_payloads(...)` for retrieving raw scan payloads with full coordinate managers and source provenance without loading data arrays.
 - `FiberIO.scan(...)` now standardizes `snap: bool = True`; `snap=False` requests exact stored coordinate values from formats that expose per-sample coordinate arrays.
 - `ScanPayload` now includes optional `source_path`, `source_format`, and `source_version` keys, which are populated by `dc.scan_payloads(...)` rather than format implementations.
+- Exact coordinate scans (`snap=False`) preserve stored values without exploding jittery per-sample arrays into per-sample segments; such arrays fall back to a plain monotonic coordinate. Some formats also gained coordinate units on their default (`snap=True`) scan/read output for consistency (e.g. Terra15 exact times, OptoDAS and NetCDF distances).
 - DASCore file I/O now accepts `UPath` resources across the main read, scan, spool, and write workflows. Remote file backends such as `memory://` can be used directly for supported formats, and remote directory-based formats such as `XMLBinary` now work when the backend supports listing and file reads. See the file I/O and spool tutorials for examples and current limitations.
 - `dc.scan(...)` now returns [`PatchSummary`](`dascore.PatchSummary`) objects rather than `PatchAttrs`.
 - Scan results carry metadata, coordinates, and source information without loading data. File-backed summaries contain enough source information for lazy reloads.
