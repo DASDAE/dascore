@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from contextlib import suppress
-from functools import cache
 from pathlib import Path
 
 import pandas as pd
@@ -31,12 +32,13 @@ from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
 
 
-@cache
 def _get_index_map(cache_path) -> dict:
     """
-    Get a dict of index locations.
+    Return a fresh dict of index locations read from disk.
 
-    Note: this is purposefully mutable; handle with care.
+    Read (not cached): another process may have updated the map, and a
+    per-process cache would dump this process's stale copy on the next
+    write, erasing entries others added.
     """
     path = Path(cache_path)
     out = {}
@@ -56,12 +58,25 @@ def _get_index_map(cache_path) -> dict:
 
 
 def _update_index_map(updates, cache_path) -> dict:
-    """Update index map to track new index."""
+    """Update the index map to track a new index, writing atomically."""
     data = _get_index_map(cache_path=cache_path)
     data.update(updates)
-    Path(cache_path).parent.mkdir(exist_ok=True, parents=True)
-    with open(cache_path, "w") as fi:
-        json.dump(data, fi)
+    path = Path(cache_path)
+    path.parent.mkdir(exist_ok=True, parents=True)
+    # Write to a sibling temp file and os.replace() it into place. A direct
+    # write is not atomic: a concurrent reader hitting a half-written file
+    # raises JSONDecodeError, which _get_index_map treats as corruption and
+    # deletes the whole map (see #508). replace() is atomic on the same
+    # filesystem, so readers only ever see a complete file.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fi:
+            json.dump(data, fi)
+        os.replace(tmp, path)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
     return data
 
 
@@ -153,7 +168,11 @@ class DBDirectoryIndexer:
             if not self._is_legacy_or_foreign_index(mapped):
                 return mapped
         if not directory_writable(self.path):
-            name = f"_dascore_index_{abs(hash(self.path))}.sqlite3"
+            # A stable digest, not hash(): str/Path hashing is randomized
+            # per process (PYTHONHASHSEED), so hash() would name a new
+            # index file every session and orphan the previous one.
+            digest = hashlib.sha256(str(self.path).encode()).hexdigest()[:16]
+            name = f"_dascore_index_{digest}.sqlite3"
             index_path = self.index_map_path.parent / name
             _update_index_map(
                 {map_key: str(index_path.absolute())},
@@ -249,7 +268,13 @@ class DBDirectoryIndexer:
                     signature = self._directory_signature(path)
                     files[self._rel(path)] = (*signature, path)
                 continue
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except OSError:
+                # The file vanished between the walk yielding it and this
+                # stat (a concurrent deletion); skip it rather than
+                # crashing the whole index update.
+                continue
             files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
         return files
 
