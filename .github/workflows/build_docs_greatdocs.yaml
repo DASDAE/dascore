@@ -31,7 +31,10 @@ jobs:
 
       - name: Install dascore and great-docs
         run: |
-          python -m pip install -e ".[docs]" great-docs
+          # docs: doc-build helpers; test: pytest (used by some notes pages);
+          # extras: optional format/processing deps imported by example cells
+          # (findiff, xarray, obspy, ...).
+          python -m pip install -e ".[docs,test,extras]" great-docs
 
       - name: Prepare test data
         run: |

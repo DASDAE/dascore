@@ -23,10 +23,15 @@ logo:
   alt: "DASCore logo"
   show_title: true
 
-# Pre-render hook: add alias entries (Patch methods, re-export paths,
-# module links) to the interlink inventory so alias-style cross references
-# keep resolving.
-pre_render: scripts/greatdocs_alias_inventory.py
+# Pre-render hooks:
+#  - greatdocs_build_fixups.py patches generated index.qmd/changelog.qmd
+#    (undo code-comment heading bump, drop duplicate changelog version headings).
+#  - greatdocs_alias_inventory.py adds alias entries (Patch methods, re-export
+#    paths, module links) to the interlink inventory so alias-style cross
+#    references keep resolving.
+pre_render:
+  - scripts/greatdocs_build_fixups.py
+  - scripts/greatdocs_alias_inventory.py
 
 # Branding: colors derived from the DASCore logo (navy #002868,
 # red #D0002A, gold #FFC934).
@@ -73,6 +78,38 @@ include_in_header:
       .navbar .navbar-brand-container { flex-shrink: 0; }
       body:has(.gd-hero) main > header#title-block-header h1.title { display: none; }
       .sidebar nav[role="doc-toc"] a.active { font-weight: 600; }
+      /* Wrap long sidebar entries at word boundaries, not mid-word. */
+      #quarto-sidebar .sidebar-item-text,
+      #quarto-sidebar .sidebar-item .menu-text {
+        overflow-wrap: break-word;
+        word-break: normal;
+        hyphens: none;
+      }
+      /* great-docs styles Notes docstring sections as a blue box for
+         h2/h3, but shift-heading-level-by promotes them to h1 on API
+         pages, dropping the box. Restore it for the h1 case. */
+      section:has(> h1.doc-notes) {
+        border-left: 4px solid #3B82F6;
+        background-color: #EFF6FF;
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
+        color: #1f2937;
+      }
+      section:has(> h1.doc-notes) > h1.doc-notes {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin: 0 0 0.25rem 0;
+      }
+      section:has(> h1.doc-notes) > h1.doc-notes::before { content: "\2139\FE0F\00a0"; }
+      section:has(> h1.doc-notes) > p { margin-bottom: 0; color: #1f2937; }
+      .quarto-dark section:has(> h1.doc-notes) {
+        background-color: rgba(59, 130, 246, 0.12);
+        color: #dbe4f0;
+      }
+      .quarto-dark section:has(> h1.doc-notes) > h1.doc-notes,
+      .quarto-dark section:has(> h1.doc-notes) > p { color: #dbe4f0; }
       </style>
 
 # Bibliography so citations (e.g. @lindsey2020broadband) in docstrings and
@@ -163,16 +200,17 @@ reference:
     desc: The central data structures of DASCore
     contents:
       - name: Patch
-        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, assign_coords, get_patch_name, iresample, iselect, tran, T]
+        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, get_patch_name, T]
       - name: BaseSpool
         members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, update, viz]
-      - clients.dirspool.DirectorySpool
+      - name: Spool
+        members: [from_directory, from_file, chunk_plan, stack, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
-        members: [coords_from_dims, dim_tuple, drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, parse_coord_attributes, rename_dimension, update]
+        members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, update]
       - name: CoordManager
-        members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, update_from_attrs, validate_data]
+        members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, validate_data]
       - name: proc.BaseCoord
-        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_attrs_dict, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
+        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
       - get_coord
       - get_coord_manager
 
@@ -252,10 +290,8 @@ reference:
     contents:
       - transform.dft
       - transform.idft
-      - transform.rfft
       - transform.stft
       - transform.istft
-      - transform.spectrogram
       - transform.envelope
       - transform.differentiate
       - transform.fbe
@@ -338,10 +374,15 @@ reference:
       - io.patch_to_xarray
       - io.BinaryReader
       - io.BinaryWriter
-      - io.H5Reader
-      - io.H5Writer
-      - io.PyTablesReader
-      - io.PyTablesWriter
+      # Restrict to the public method: documenting the `constructor` class
+      # attribute (h5py.File) makes griffe's dynamic introspection fail while
+      # resolving h5py internals, which would drop the whole API reference to
+      # static analysis (mis-framing module-shadowing functions like
+      # proc.correlate as modules).
+      - name: io.H5Reader
+        members: [get_handle]
+      - name: io.H5Writer
+        members: [get_handle]
 
   - title: Utilities
     desc: Assorted helper utilities
