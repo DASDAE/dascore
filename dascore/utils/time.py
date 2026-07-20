@@ -127,7 +127,7 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
         if not array.shape:  # dealing with degenerate (0-D( array
-            out = np.datetime64(array)
+            out = np.datetime64(array, "ns")
         else:
             out = array.astype("datetime64[ns]")
     # dealing with numerical data
@@ -169,7 +169,7 @@ def _datetime_to_datetime64(dt: datetime):
     # if this is nullish and return NaT if so.
     if pd.isnull(dt):
         return _NAT_DATETIME64
-    return to_datetime64(np.datetime64(dt))
+    return to_datetime64(np.datetime64(dt, "ns"))
 
 
 @to_datetime64.register(pd.Timestamp)
@@ -239,7 +239,7 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
         array = array.astype(np.float64)
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
         if not array.shape:  # unpack degenerate array
-            return np.timedelta64(array)
+            return np.timedelta64(array, "ns")
         else:
             return array.astype("timedelta64[ns]")
     # Need to just get the ns form datetime64
@@ -284,7 +284,7 @@ def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
 @to_timedelta64.register(timedelta)
 def _timedelta_to_timedelta64(td):
     """Return timedelta64."""
-    return to_timedelta64(np.timedelta64(td))
+    return to_timedelta64(np.timedelta64(td, "ns"))
 
 
 @to_timedelta64.register(str)

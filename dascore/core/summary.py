@@ -70,7 +70,7 @@ def _get_null_step_value(summary: CoordSummary):
     """Return the historical flat-dump sentinel for missing step values."""
     start = summary.min
     if isinstance(start, np.datetime64 | np.timedelta64):
-        return np.timedelta64("NaT")
+        return np.timedelta64("NaT", "ns")
     if isinstance(start, float | np.floating):
         return np.nan
     return None
