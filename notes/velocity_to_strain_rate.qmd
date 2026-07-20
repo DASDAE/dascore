@@ -1,5 +1,6 @@
 ---
 title: "Velocity to Strain Rate"
+description: "Subtleties of converting velocity-format patches to strain rate."
 execute:
   warn: false
 ---

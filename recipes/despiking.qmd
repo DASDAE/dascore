@@ -1,5 +1,6 @@
 ---
 title: "Despiking"
+description: "Remove spikes from DAS data."
 execute:
   warning: false
 ---

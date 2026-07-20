@@ -1,4 +1,7 @@
-# Fourier Transforms in DASCore
+---
+title: Fourier Transforms in DASCore
+description: "The reasoning behind DASCore's Fourier transform implementation."
+---
 
 These notes provide the reasoning for DASCore's [fourier](/reference/index.qmd#transforms) module implementation.
 

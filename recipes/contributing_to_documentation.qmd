@@ -1,5 +1,6 @@
 ---
 title: Contributing to Documentation
+description: "Build the docs locally and make changes to DASCore's documentation."
 ---
 
 Here, we elaborate on how you can build new documentation or make changes to existing DASCore documentation.

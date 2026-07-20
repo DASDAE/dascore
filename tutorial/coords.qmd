@@ -10,7 +10,7 @@ This page covers advanced DASCore features. Most users will be fine with only th
 
 In order to manage coordinate labels and array manipulations, DASCore implements two classes, [`BaseCoord`](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
 
-# Coordinates
+## Coordinates
 
 Coordinates usually keep track of labels along an associated dimension of an array, but they can also be independent of array data. They provide methods for slicing, re-ordering, filtering etc. and are used internally by DASCore for such operations.
 
@@ -21,9 +21,9 @@ Much like DASCore's [`Spool`](`dascore.core.spool.BaseSpool`), Coordinates are a
 Coordinates are very similar (in concept) to Pandas' indices, with some significant differences in implementation.
 :::
 
-## Coordinate Creation
+### Coordinate Creation
 
-### Get Coord
+#### Get Coord
 
 [`get_coord`](`dascore.core.coords.get_coord`) returns an instance of a subclass of [`BaseCoord`](`dascore.core.coords.BaseCoord`) appropriate for the input values. Here are a few examples:
 
@@ -62,7 +62,7 @@ print(type(coord).__name__)
 print(coord.values)
 ```
 
-### Segmented Coordinates
+#### Segmented Coordinates
 
 [`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic coordinate blocks and the discontinuities between them. It is useful when a logical coordinate contains dropped samples, acquisition gaps, or a sampling-rate change but the corresponding data should remain in one in-memory patch.
 
@@ -95,7 +95,7 @@ assert len(exact_coord.get_discontinuities("gaps")) == 1
 
 Segmented coordinates have `step=None` because one step cannot describe the entire coordinate. `coord.simplify(tolerance=...)` may replace segments with a simpler fit while bounding how far values move; `coord.snap()` always forces one evenly sampled range and can move interior values without a bound. Use `patch.split_gaps()` to turn a patch with segmented dimensional coordinates into contiguous patches before writing it to a format that cannot store gaps.
 
-### Update
+#### Update
 
 Update uses the existing coordinate as a template and returns a coordinate with some part modified. 
 
@@ -122,7 +122,7 @@ coord_new_max = coord.update(max=stop + 10 * step)
 ```
 
 
-## Coordinate Attributes
+### Coordinate Attributes
 
 The following tables shows some of the commonly used coordinate attributes:
 
@@ -140,11 +140,11 @@ The following tables shows some of the commonly used coordinate attributes:
 
 : Coordinate attributes {.striped .hover}
 
-## Coordinate Methods
+### Coordinate Methods
 This section highlights some of the coordinate methods. The methods which would cause changes to a data array return a new coordinate and an object that can be used for indexing an array. This can either be a `slice` instance or another array which uses numpy's advanced indexing features for sorting or selection.
 
 
-### Sort
+#### Sort
 [`sort`](`dascore.core.coords.BaseCoord.sort`) sorts the values of the coordinate. 
 
 ```{python}
@@ -164,7 +164,7 @@ data = np.random.rand(10, 20)
 sorted_data = data[indexer, :] 
 ```
 
-### Snap
+#### Snap
 
 [`snap`](`dascore.core.coords.BaseCoord.snap`) replaces coordinate values with an evenly sampled range spanning the same minimum and maximum. This intentionally loses interior precision and should be used only when that idealization is acceptable. Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), it returns only a new coordinate and no indexer, because it replaces the values rather than permuting them, so for an unsorted coordinate the snapped values no longer label the samples they used to. When data alignment matters, use [`CoordManager.snap`](`dascore.core.coordmanager.CoordManager.snap`), which sorts the coordinate and its associated array together before snapping, or [`Patch.snap_coords(...)`](`dascore.Patch.snap_coords`), which does the same across the selected dimensions of a patch.
 
@@ -185,7 +185,7 @@ assert snapped_coord.max() == irregular_coord.max()
 Use `simplify(tolerance=...)` instead when the maximum allowed coordinate movement must be explicit. Most coordinate types are already in their simplest form; this distinction is most useful for segmented coordinates.
 
 
-### Select
+#### Select
 [`select`](`dascore.core.coords.BaseCoord.select`) is used for slicing/sub-selecting.
 
 ```{python}
@@ -215,7 +215,7 @@ new_coord, indexer = coord.select((14*ft, 50 * ft))
 print(new_coord) 
 ```
 
-## String Coordinates
+### String Coordinates
 
 String coordinates support exact matching, wildcard matching with `*` and `?`,
 compiled regular expressions, boolean-mask selection, and sorting. They are
@@ -260,7 +260,7 @@ compiled regular expressions, or boolean masks. Strings containing `*` or `?`
 are treated as wildcard patterns, so avoid those characters in labels you
 intend to select literally.
 
-### Units
+#### Units
 
 [`convert_units`](`dascore.core.coords.BaseCoord.convert_units`) and [`set_units`](`dascore.core.coords.BaseCoord.set_units`) are used to change/set the units associated with a coordinate.
 
@@ -288,7 +288,7 @@ print(f"Simplified units are: {simple_coord.units}")
 print(f"New coord lims are: {simple_coord.limits}") 
 ```
 
-### Get Next Index
+#### Get Next Index
 [`get_next_index`](`dascore.core.coords.BaseCoord.get_next_index`) returns the index value (an integer) for where a value would be inserted into the coordinate. It can only be used on a sorted coordinate.
 
 ```{python}
@@ -300,12 +300,12 @@ assert coord.get_next_index(1) == 1
 assert coord.get_next_index(2.000001) == 3
 ```
 
-# CoordManager
+## CoordManager
 
 The [`CoordManager`](`dascore.core.coordmanager.CoordManager`) handles a group of coordinates and provides methods for updating managed data arrays. 
 
 
-## Coordinate Manager Creation
+### Coordinate Manager Creation
 [`CoordManager`](`dascore.core.coordmanager.CoordManager`) instances can be created from a dictionary of coordinates via the [`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) function.
 
 ```{python}
@@ -349,7 +349,7 @@ cm_many_coords = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
 print(cm_many_coords)
 ```
 
-### Update
+#### Update
 
 [`update`](`dascore.core.coordmanager.CoordManager.update`) uses an existing `CoordinateManager` as a template and updates some aspect in the returned coordinate. 
 
@@ -400,11 +400,11 @@ new_cm_5 = cm.update(time=None)
 assert "time" not in new_cm_5.dims
 ```
 
-## Coordinate Manager Methods
+### Coordinate Manager Methods
 Much like `BaseCoord`, the `CoordinateManager` class implements a variety of methods for filtering, sorting, modifying units, etc. However, there are some difference. Unlike coordinates, when an operation would change the data array associated with the coordinates, the `CoordManager` method accepts the array as an argument and returns a new array. Like the `Patch` methods, `CoordManager` methods use keyword arguments to specify coordinates by name.
 
 
-### Select
+#### Select
 
 [select](`dascore.core.coordmanager.CoordManager.select`) trims the coordinate manager and, optionally, an associated array.
 
@@ -418,7 +418,7 @@ new_cm, new_data = cm.select(data=data, distance=(..., 100))
 ```
 
 
-### Sort
+#### Sort
 
 [sort](`dascore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
 
@@ -432,7 +432,7 @@ cm, data = patch.coords, patch.data
 new_cm, new_data = cm.sort("time", "distance", reverse=True)
 ```
 
-### Rename Coord
+#### Rename Coord
 
 [rename_coord](`dascore.core.coordmanager.CoordManager.rename_coord`) renames a coordinate or dimension.
 

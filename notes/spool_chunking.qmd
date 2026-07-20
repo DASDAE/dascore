@@ -1,5 +1,6 @@
 ---
 title: Spool Chunking
+description: "How Spool.chunk plans and assembles chunked patch data."
 ---
 
 `Spool.chunk` runs in two stages: a **planner** decides everything from metadata alone, and **assembly** loads, trims, and combines patch data only when a patch is requested. The code cells below execute against the real machinery, so this note fails the doc build if it drifts from the implementation.

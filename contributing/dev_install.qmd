@@ -1,17 +1,18 @@
 ---
 title: DASCore Development Installation
+description: "Set up DASCore for local development."
 ---
 
 The following steps are needed to set up `DASCore` for development:
 
-## 1. Clone DASCore
+### 1. Clone DASCore
 
 ```bash
 git clone https://github.com/dasdae/dascore
 cd dascore
 ```
 
-## 2. Pull tags
+### 2. Pull tags
 
 Make sure to pull all of the latest git tags.
 
@@ -20,7 +21,7 @@ Make sure to pull all of the latest git tags.
 git pull origin master --tags
 ```
 
-## 3. Create a virtual environment (optional)
+### 3. Create a virtual environment (optional)
 
 Create and activate a virtual environment so DASCore will not mess with the base (or system) python installation.
 
@@ -38,7 +39,7 @@ conda env create -f environment.yml
 conda activate dascore
 ```
 
-## 4. Install DASCore in development mode
+### 4. Install DASCore in development mode
 
 ```bash
 pip install -e ".[dev]"
@@ -50,7 +51,7 @@ If you created the environment with `uv venv`, use `uv pip` instead. A uv virtua
 uv pip install -e ".[dev]"
 ```
 
-## 5. Setup pre-commit hooks
+### 5. Setup pre-commit hooks
 
 dascore uses several [pre-commit](https://pre-commit.com/) hooks to ensure the code stays tidy. Please install and use them!
 
@@ -58,7 +59,7 @@ dascore uses several [pre-commit](https://pre-commit.com/) hooks to ensure the c
 pre-commit install -f
 ```
 
-# Refresh
+## Refresh
 
 If you have already installed dascore but it has been a while, please do the following before creating a new branch:
 

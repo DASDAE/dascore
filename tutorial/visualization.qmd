@@ -4,11 +4,11 @@ execute:
   warning: false
 ---
 
-# Viz
+## Viz
 The following provides some examples of patch visualization.
 See the [viz module documentation](/reference/index.qmd#visualization) for a list of visualization functions
 
-## Waterfall
+### Waterfall
 The [`waterfall patch function`](`dascore.viz.waterfall`) creates a waterfall plot of the patch data.
 
 ```{python}
@@ -20,7 +20,7 @@ patch = dc.get_example_patch('example_event_2')
 patch.viz.waterfall(show=True);
 ```
 
-### Controlling color scaling
+#### Controlling color scaling
 
 The `scale` parameter controls the colorbar saturation. By default, waterfall uses a statistical fence (1.5×IQR) to exclude outliers and show the majority of the data clearly.
 
@@ -44,7 +44,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-## Wiggle
+### Wiggle
 The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
 
 ```{python}

@@ -1,5 +1,6 @@
 ---
 title: Coordinate Internals
+description: "The internal coordinate model, including string-coordinate handling."
 ---
 
 This note explains the current internal coordinate model in DASCore, with particular attention to exact values, segmented coordinates, summaries, and scan payloads.

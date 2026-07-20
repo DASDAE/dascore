@@ -6,11 +6,11 @@ execute:
 The following shows some simple examples of patch processing. See the
 [proc module](/reference/index.qmd#patch-processing) for a list of all processing functions.
 
-# Basic
+## Basic
 
 There are several "basic" processing functions which manipulate the patch metadata, shape, etc. Many of these are covered in the [patch tutorial](patch.qmd), but here are a few that aren't:
 
-## Transpose
+### Transpose
 The [`transpose` patch function](`dascore.proc.transpose`) patch function simply transposes the dimensions of the patch, either by rotating the dimensions or to a new specified dimension.
 
 ```{python}
@@ -26,7 +26,7 @@ print(f"dims after transpose: {transposed.dims}")
 transposed = patch.transpose("time", "distance")
 ```
 
-## Squeeze
+### Squeeze
 [`squeeze`](`dascore.proc.squeeze`) removes dimensions which have a single value (see also `numpy.squeeze`).
 
 ```{python}
@@ -42,7 +42,7 @@ squeezed = flat_patch.squeeze()
 print(f"Post-squeeze shape: {squeezed.shape}")
 ```
 
-## Dropna
+### Dropna
 
 The [`dropna` patch function](`dascore.proc.dropna`) patch function drops "nullish" values from a given label.
 
@@ -66,11 +66,11 @@ assert not np.any(np.isnan(no_na_patch.data))
 ```
 
 
-# Decimate
+## Decimate
 
 [decimate](`dascore.proc.decimate`) decimates a `Patch` along a given axis while by default performing low-pass filtering to avoid [aliasing](https://en.wikipedia.org/wiki/Aliasing).
 
-## Data creation
+### Data creation
 
 First, we create a patch composed of two sine waves; one above the new
 decimation frequency and one below.
@@ -87,7 +87,7 @@ patch = dc.examples.get_example_patch(
 patch.viz.wiggle(show=True);
 ```
 
-## IIR filter
+### IIR filter
 
 Next we decimate by 10x using IIR filter
 
@@ -99,7 +99,7 @@ decimated_iir.viz.wiggle(show=True);
 Notice the lowpass filter removed the 200 Hz signal and only
 the 10Hz wave remains.
 
-## FIR filter
+### FIR filter
 
 Next we decimate by 10x using FIR filter.
 
@@ -108,7 +108,7 @@ decimated_fir = patch.decimate(time=10, filter_type='fir')
 decimated_fir.viz.wiggle(show=True);
 ```
 
-## No Filter
+### No Filter
 
 Next, we decimate without a filter to purposely induce aliasing.
 
@@ -117,7 +117,7 @@ decimated_no_filt = patch.decimate(time=10, filter_type=None)
 decimated_no_filt.viz.wiggle(show=True);
 ```
 
-# Taper
+## Taper
 
 [taper](`dascore.proc.taper`) is used to taper the edges of a patch dimension to zero. To see this, let's create a patch of all 1s and apply the taper function
 
@@ -152,7 +152,7 @@ patch_ones.taper(distance=(None, 0.1)).viz.waterfall();
 
 See also the [edge effects recipe](../recipes/edge_effects.qmd) for using tapering to help filtering.
 
-# Rolling
+## Rolling
 The [rolling patch function](`dascore.proc.rolling`) implements moving window operators similar to [pandas rolling](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html). It is useful for smoothing, calculating aggregated statistics, etc.
 
 Here is an example of using a rolling mean to smooth along the time axis:
@@ -171,7 +171,7 @@ smoothed.viz.waterfall();
 Notice the nan values at the start of the time axis. These can be trimmed with [`Patch.dropna`](`dascore.proc.dropna`).
 
 
-# Whiten
+## Whiten
 
 The [`Patch.whiten`](`dascore.proc.whiten`) function performs spectral whitening by balancing the amplitude spectra of the patch while leaving the phase (largely) unchanged. Spectral whitening is often a pre-processing step in ambient noise correlation workflows.
 

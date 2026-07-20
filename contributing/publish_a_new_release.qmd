@@ -1,5 +1,6 @@
 ---
 title: "Publish a new release"
+description: "The maintainer workflow for publishing a DASCore release."
 ---
 
 This page describes the maintainer workflow for publishing a DASCore release. DASCore's package version is derived from git tags, so the release tag is the source of truth and no version file needs to be edited by hand.

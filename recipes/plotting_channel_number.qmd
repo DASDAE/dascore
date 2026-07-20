@@ -1,5 +1,6 @@
 ---
 title: Plot Channel Number
+description: "Plot channel number instead of distance or depth."
 execute:
   warning: false
 ---

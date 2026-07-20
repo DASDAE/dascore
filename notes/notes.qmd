@@ -1,5 +1,6 @@
 ---
 title: Notes
+description: "Understanding-oriented explanations of DASCore's design and implementation."
 ---
 
 This section provides understanding-oriented explanations of DASCore implementation and design decisions.

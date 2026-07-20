@@ -1,10 +1,11 @@
 ---
 title: Adding Test Data
+description: "How to add small test files and generated patches to DASCore."
 ---
 
 There are a few different way to add test data to dascore. The key, however, is to ensure test files and generated patches are small (a few mb at most) so the documentation and test suite still run quickly.
 
-# Adding functions which create example data
+## Adding functions which create example data
 
 The [examples module](`dascore.examples`) contains several functions for creating example `Patch` and `Spool` instances. You can add a new function in that module which creates a new patch or spool, then just register the function so it can be called from `dc.get_example_patch` or `dc.get_example_spool`. These should be simple objects which can be generated within python. If you need to download a file see
 [adding a data file](#adding_a_data_file).
@@ -41,7 +42,7 @@ spool_example = dc.get_example_spool("new_das_spool")
 
 If, in the test code, the example patch or spool is used only once, just call the get_example function in the test. If it is needed multiple times, consider putting it in a fixture. See [testing](./testing.qmd) for more on fixtures.
 
-# Adding a data file
+## Adding a data file
 
 Of course, not all data can easily be generated in python. For example, testing [support for new file formats](./new_format.qmd) typically requires a test file.
 

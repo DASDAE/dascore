@@ -1,7 +1,8 @@
 ---
 title: Profiling and Benchmarks
+description: "Run and write DASCore's CodSpeed benchmark suite."
 ---
-# Benchmarks
+## Benchmarks
 
 DASCore uses [codspeed](https://codspeed.io/) to create and run a simple benchmark suite. The benchmarks are found in the benchmarks folder at the top level of the repository.
 
@@ -14,7 +15,7 @@ However, when you create a pull request, the benchmarks will be run in the CI/CD
 
 If you add significant new functionality, you should probably add a benchmark.
 
-# Profiling
+## Profiling
 
 If you find a significant issue, you can profile the problematic benchmark(s) to see *why* their performance degraded. This can be done with the [pytest profile plugin](https://pypi.org/project/pytest-profiling/). 
 

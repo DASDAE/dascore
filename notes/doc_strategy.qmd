@@ -1,5 +1,6 @@
 ---
 title: DASCore Documentation Strategy
+description: "How DASCore's documentation follows the Diataxis framework."
 ---
 
 DASCore's documentation follows the [Diátaxis](https://diataxis.fr/) approach. In this system, developed by Daniele Procida, there are four types of documentation with different goals:

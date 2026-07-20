@@ -1,5 +1,6 @@
 ---
 title: F-K Transform and Filtering
+description: "Apply frequency-wavenumber (F-K) transforms and filtering."
 execute:
     warning: False
 ---

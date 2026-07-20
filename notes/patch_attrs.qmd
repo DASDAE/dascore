@@ -1,5 +1,6 @@
 ---
 title: PatchAttrs
+description: "How PatchAttrs stores identity, coordinate, and data metadata for a patch."
 ---
 
 [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) stores non-coordinate metadata about a [`Patch`](`dascore.Patch`), including measurement labels, instrument identity, data units, processing history, and format-specific fields. Coordinate values and summaries are deliberately owned elsewhere.

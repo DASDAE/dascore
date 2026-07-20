@@ -1,12 +1,13 @@
 ---
 title: "Parallel Processing"
+description: "Strategies for parallelizing embarrassingly parallel spool workflows."
 execute:
   eval: false
 ---
 
 This recipe shows a few strategies to parallelize "embarrassingly parallel" spool processing workflows.
 
-# Processes and Threads
+## Processes and Threads
 [`Spool.map`](`dascore.core.spool.BaseSpool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
 
 ```{python}
@@ -29,11 +30,11 @@ The `ThreadPoolExecutor` from the same module also works. On a free-threaded (no
 
 There are two downsides to this approach. First, if the patches aren't chunked adequately it may exhaust the available memory. Second, it will only work on a single machine. The next section presents a more scalable option.
 
-# Thread Safety
+## Thread Safety
 
 DASCore's core test suite — no optional dependencies, no network tests — runs on a free-threaded CPython build with the GIL disabled. The guarantees below are what that supports; they apply equally to threads on a standard build.
 
-## What threads may share
+### What threads may share
 
 Patches are immutable, so any number of threads may read the same patch. Spools may also be read concurrently: iterating, selecting, chunking, indexing and taking their length are safe from several threads at once, because the underlying metadata caches are synchronized internally.
 
@@ -43,7 +44,7 @@ The process-wide registries take care of themselves. The file-format (`FiberIO`)
 
 Remote files are cached per resource. Threads asking for the same remote file take turns, so it downloads once and the rest use the result; different files download at the same time.
 
-## What threads may not share
+### What threads may not share
 
 State-changing calls follow a single-writer model. Updating a directory spool, adding patches to an in-memory spool and [`clear_remote_file_cache`](`dascore.utils.remote_io.clear_remote_file_cache`) should each run from one thread, with no other thread reading the same object meanwhile. DASCore keeps its own structures consistent through such a change, but it does not make a reader see a coherent before-or-after snapshot of it.
 
@@ -51,17 +52,17 @@ An open file handle belongs to one IO operation. DASCore opens each resource onc
 
 Third-party `FiberIO` plugins are responsible for their own thread safety. DASCore synchronizes the registry that holds them and serializes their import, but a plugin which keeps mutable state of its own must guard it.
 
-## Configuration in threads
+### Configuration in threads
 
 Configuration has two tiers, described in [runtime configuration](../tutorial/configuration.qmd). `set_config` changes the process-wide base and is visible from every thread. `config_context` overrides the config for the current context only, and a newly started thread begins with a fresh context, so a scoped override does not automatically reach threads started inside it.
 
 [`Spool.map`](`dascore.core.spool.BaseSpool.map`) handles this for you: it binds the configuration active when `map` is called and re-applies it inside each worker, for thread pools and process pools alike. When starting threads yourself, either set the configuration permanently before starting them or re-apply the scoped override inside each thread.
 
-# MPI4Py
+## MPI4Py
 
 This section shows how to use the "mpi4py" library to parallelize dascore code.
 
-## Installation
+### Installation
 
 First, make sure you have installed DASCore on your machine. See [DASCore Installation](https://dascore.org/#:~:text=0.2%29%3B-,Installation). Secondly, you need to properly install the mpi4py library. After installing and loading the [Open MPI](https://docs.open-mpi.org/en/v5.0.x/installing-open-mpi/quickstart.html) module on your machine (e.g., on Linux: `load module to/mpi/openmpi/gcc/compiler/path`), install [mpi4py](https://pypi.org/project/mpi4py/). It might be easier to install using conda-forge as below:
 
@@ -72,7 +73,7 @@ conda install -c conda-forge mpi4py openmpi
 Please note that this procedure is tested for Python 3.11 and Open MPI GCC 3.1.3
 
 
-## Parallel script
+### Parallel script
 
 Here is an example for parallelization of Patches over processors:
 
@@ -110,7 +111,7 @@ comm.barrier()
 sys.exit(0)
 ```
 
-## Run the script
+### Run the script
 
 If you like to run the `mpi_spool.py` script using `n = 4` processors (which means each processor will run the script separately), you can use:
 

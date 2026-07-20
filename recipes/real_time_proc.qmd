@@ -1,5 +1,6 @@
 ---
 title: "Real-Time Processing"
+description: "Process streaming DAS data in near real time."
 execute:
   eval: false
 ---

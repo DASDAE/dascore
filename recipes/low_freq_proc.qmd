@@ -1,5 +1,6 @@
 ---
 title: "Low-Frequency Processing"
+description: "Apply efficient low-frequency (LF) processing to a spool of DAS data."
 ---
 
 This recipe demonstrates how DASCore can be used to apply low-frequency (LF) processing to a spool of DAS data. LF processing helps efficiently downsample the entire spool.
