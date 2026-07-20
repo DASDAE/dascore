@@ -6,7 +6,7 @@ execute:
 
 This page highlights some concepts helpful for working with DASCore.
 
-# Data structures
+## Data structures
 
 For most uses of DASCore, only two data structures are directly involved.
 These are the [Patch](patch.qmd) and the [Spool](spool.qmd).
@@ -19,7 +19,7 @@ disk, or a remote resource.
 
 You will read more about Patches and Spools later on in the tutorial.
 
-# Time
+## Time
 
 Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time constructs, which include [datetime64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.datetime64) and [timedelta64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.timedelta64).
 
@@ -56,7 +56,7 @@ time_2 = dc.to_datetime64(610243200)
 ```
 
 
-# Dimension Selection
+## Dimension Selection
 
 Most of DASCore's processing methods can be applied along any dimension. Typically, the dimension is selected with keyword, and the method specific data are passed as values. For example, applying [pass_filter](`dascore.proc.filter.pass_filter`) to a patch with `distance` and `time` dimensions works like this:
 
@@ -70,7 +70,7 @@ filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
 
 However, the meaning of the values depends on the function, e.g. both frequency and period might make sense in the example above. Being explicit with units helps, but be sure to read the docs!
 
-# Units
+## Units
 
 DASCore provides first class support for units through the [`units`](`dascore.units`) module. Units (or rather quantities) can be imported directly or can be created with the [get_quantity](`dascore.units.get_quantity`) function.
 

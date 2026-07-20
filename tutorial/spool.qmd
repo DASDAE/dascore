@@ -8,11 +8,11 @@ Spools are containers/managers of [patches](patch.qmd). The spool interface is d
 
 For file-backed spools, DASCore first scans metadata and coordinate summaries, then loads patch data only when you access a patch from the spool. This means methods like `get_contents()` work from patch summary metadata, while `spool[0]` or iteration materializes loaded patches.
 
-# Data Sources
+## Data Sources
 
 The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns an appropriate [`BaseSpool`](`dascore.core.spool.BaseSpool`) subclass instance.
 
-## Patches (in-memory)
+### Patches (in-memory)
 
 ```{python}
 import dascore as dc
@@ -22,7 +22,7 @@ patch_list = [dc.get_example_patch()]
 spool1 = dc.spool(patch_list)
 ```
 
-## A Single file
+### A Single file
 
 ```{python}
 import dascore as dc
@@ -42,7 +42,7 @@ dc.write(dc.get_example_patch(), remote_file, "DASDAE")
 spool2_remote = dc.spool(remote_file)
 ```
 
-## A directory of DAS files
+### A directory of DAS files
 
 ```{python}
 import dascore as dc
@@ -98,7 +98,7 @@ from full reads. See the [Working with Remote Patches](remote_patches.qmd)
 tutorial for the remote-cache policy, spool implications, and examples.
 :::
 
-# Accessing patches
+## Accessing patches
 
 Patches are extracted from the spool via simple iteration or indexing. New
 spools are returned via slicing.
@@ -152,7 +152,7 @@ bool_array = np.array([2, 0])
 new = spool[bool_array]
 ```
 
-# get_contents
+## get_contents
 
 The [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) method returns a dataframe listing the spool contents. This method may not be supported on all spools, especially those interfacing with large remote resources.
 
@@ -175,7 +175,7 @@ display(contents.drop(columns=[c for c in contents.columns if c.startswith('_')]
 
 The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `path`, `file_format`, and `source_patch_id` are also available for file-backed spools.
 
-# select
+## select
 
 The [select](`dascore.core.spool.BaseSpool.select`) method selects a subset of a spool and returns a new spool. [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) will now reflect a subset of the original data requested by the select operation.
 
@@ -202,7 +202,7 @@ subspool = spool.select(network={'das2', 'das3'})
 subspool = spool.select(tag='some*')
 ```
 
-# chunk
+## chunk
 
 The [`chunk`](`dascore.core.spool.BaseSpool.chunk`) method controls how data are grouped together in patches within the spool. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous patches, etc.
 
@@ -218,7 +218,7 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 merged_spool = spool.chunk(time=None)
 ```
 
-# concatenate
+## concatenate
 Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it is available on every spool and produces a lazy, plan-backed result.
 
 ```python 
@@ -237,7 +237,7 @@ merged = spool.concatenate(time=None)
 print(merged[0].coords)
 ```
 
-# map
+## map
 
 The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
 

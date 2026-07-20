@@ -1,15 +1,16 @@
 ---
 title: Documentation
+description: "The levels of DASCore documentation and how they fit together."
 ---
 There are several levels of documentation in DASCore. These include: code comments (which are primarily for developers), docstrings (which are used to generate the API docs), and markdown documentation pages like this one which have a .qmd extension.
 
-# Code comments
+## Code comments
 
 Code comments are primarily for developers. They should describe useful information and not just restate obvious parts of the code. Consider refactoring with better named variables or smaller, well named functions if you find yourself making lots of these types of comments.
 
 Don't be afraid to make multi-line comments if needed.
 
-# Doc-Strings
+## Doc-Strings
 
 Use [numpy style docstrings](https://numpydoc.readthedocs.io/en/latest/format.html). All public code (doesn't start with a `_`) should have a "full" docstring but private code (starts with a `_`) can have an abbreviated docstring.
 
@@ -73,7 +74,7 @@ def _recombobulate(df, arg1, arg2):
 
 ```
 
-## Examples in docstrings
+### Examples in docstrings
 
 Examples in docstrings can be done using the standard [doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto.org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
 
@@ -99,7 +100,7 @@ would produce the following code in the examples section:
 ````raw
 ```{{python}}
 #| code-fold: true
-# This is a base example
+## This is a base example
 print(1 + 2)
 ```
 ### This is a sub-section
@@ -109,7 +110,7 @@ print("cool beans")
 ```
 ````
 
-# Generating Documentation
+## Generating Documentation
 
 DASCore's documentation is built with [great-docs](https://posit-dev.github.io/great-docs/), which is based on [quarto](https://quarto.org/). In order to build the documentation, you must first [install DASCore in development mode](dev_install.qmd), [install quarto](https://quarto.org/docs/get-started/), then install great-docs:
 
@@ -136,7 +137,7 @@ The site structure, the curated API reference, and everything else about the bui
 The great-docs/ directory is an ephemeral build directory; do not edit or commit it.
 :::
 
-# Cross references
+## Cross references
 
 Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes, functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded by backticks like so:
 
@@ -158,7 +159,7 @@ See the [patch tutorial](/tutorial/patch.qmd) for examples.
 
 Cross references can be used in both docstrings and the qmd documentation pages.
 
-# Referencing publications
+## Referencing publications
 
 New references should be added to the references.bib file in the docs folder.
 
@@ -173,7 +174,7 @@ Citing @lindsey2021fiber or [@lindsey2021fiber]
 
 References then show up at the bottom of the page, or if the mouse pointer hovers over the link.
 
-# Equations
+## Equations
 
 Equations use standard LaTeX. Inline equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline equations start and end with double dollar signs (`$$`) and can be given a referenceable label. For example:
 
@@ -199,6 +200,6 @@ $${#eq-rotations}
 
 and @eq-rotations is referenced by `@eq-rotations`.
 
-# Additional Tips
+## Additional Tips
 
 For more information about figure alignment, code blocks, formatting, etc. checkout the excellent [quarto docs](https://quarto.org/).

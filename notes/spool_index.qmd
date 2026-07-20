@@ -1,5 +1,6 @@
 ---
 title: Spool Index
+description: "The shared metadata model and SQLite directory index behind spools."
 ---
 
 Directory and in-memory spools use the same metadata model. The persisted directory index is one SQLite file named `.dascore_index.sqlite3`; in-memory spools use the same schema in an in-memory SQLite database. The index stores summaries and source identities, not patch data.

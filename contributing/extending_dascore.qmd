@@ -1,5 +1,6 @@
 ---
 title: Extending DASCore
+description: "Add custom Patch and Spool namespaces via plugins."
 ---
 
 This page explains how to extend DASCore with `Patch` and `Spool` namespaces. Use it when you want users to write code like `patch.my_plugin.some_method()` or `spool.my_plugin.some_method()` from a separate package.

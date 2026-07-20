@@ -1,5 +1,6 @@
 ---
 title: PatchAttrs
+description: "How PatchAttrs stores identity, coordinate, and data metadata for a patch."
 ---
 
 [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) stores metadata about a [`Patch`](`dascore.Patch`). Some attributes describe identity or provenance, some summarize coordinates, and some describe the data array itself.

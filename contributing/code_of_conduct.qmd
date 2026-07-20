@@ -1,5 +1,7 @@
-
-# Contributor Covenant Code of Conduct
+---
+title: Contributor Covenant Code of Conduct
+description: "The Contributor Covenant standards for our community."
+---
 
 ## Our Pledge
 

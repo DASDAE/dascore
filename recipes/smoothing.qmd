@@ -1,5 +1,6 @@
 ---
 title: "Patch Smoothing"
+description: "Compare several patch smoothing strategies."
 execute:
   warn: false
 ---

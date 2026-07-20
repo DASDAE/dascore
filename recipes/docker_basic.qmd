@@ -1,5 +1,6 @@
 ---
 title: Using DASCore with Docker
+description: "Run DASCore inside a Docker container."
 execute:
   warning: false
 ---

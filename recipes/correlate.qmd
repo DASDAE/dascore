@@ -1,5 +1,6 @@
 ---
 title: Correlate
+description: "Cross-correlate a channel/time sample against all others with the correlate module."
 execute:
   warning: false
 ---

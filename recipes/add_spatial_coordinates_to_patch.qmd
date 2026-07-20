@@ -1,5 +1,6 @@
 ---
 title: Add Spatial Coordinates
+description: "Attach tabulated spatial coordinates (e.g. from a tap test) to a patch dimension."
 execute:
   warning: false
 ---

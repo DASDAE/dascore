@@ -1,5 +1,6 @@
 ---
 title: Adding a New Format
+description: "Add IO support for a new file format."
 ---
 
 This page details how to add IO support for a new format to DASCore. The steps are:

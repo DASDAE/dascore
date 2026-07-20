@@ -1,5 +1,6 @@
 ---
 title: Spool Selection
+description: "How Spool.select filters memory and directory spools."
 ---
 
 `Spool.select` uses one selector model for memory and directory spools. Patch-list and directory spools compose selections in a `PatchCatalog`; ordinary metadata predicates are pushed into SQLite and remain lazy until contents, length, indexing, or iteration requires rows.

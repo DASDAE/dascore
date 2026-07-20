@@ -1,5 +1,6 @@
 ---
 title: Taper Edge Effects
+description: "Use tapering to manage edge effects from filtering and other processing."
 execute:
     warning: false
 ---

@@ -6,7 +6,7 @@ execute:
 
 In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or accessed as `Patch` methods.
 
-# Discrete Fourier Transforms
+## Discrete Fourier Transforms
 
 The [Discrete Fourier Transform](https://en.wikipedia.org/wiki/Discrete_Fourier_transform) (dft) is commonly used in many signal processing workflows. DASCore implements this as the [dft](`dascore.transform.fourier.dft`) patch method.
 
@@ -42,7 +42,7 @@ print(real_transform.get_coord("ft_distance"))
 
 The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
 
-# Short Time Fourier Transform
+## Short Time Fourier Transform
 
 Related to the Discrete Fourier Transform, the [Short Term Fourier Transform](https://en.wikipedia.org/wiki/Short-time_Fourier_transform) is useful for analyzing the time-dependent frequency content. DASCore implements this as [stft](`dascore.transform.fourier.stft`) and the corresponding [istft](`dascore.transform.fourier.istft`).
 
