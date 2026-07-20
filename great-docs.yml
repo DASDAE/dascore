@@ -33,84 +33,25 @@ pre_render:
   - scripts/greatdocs_build_fixups.py
   - scripts/greatdocs_alias_inventory.py
 
-# Branding: colors derived from the DASCore logo (navy #002868,
-# red #D0002A, gold #FFC934).
+# Site styling. `yeti` is the Bootswatch theme the previous doc build used, so
+# fonts, colors and spacing carry over unchanged; great-docs.scss is listed
+# explicitly (great-docs appends it otherwise) so assets/dascore.scss can layer
+# on top of it. That last file replaces docs/styles.css.
+site:
+  theme:
+    - yeti
+    - great-docs.scss
+    - assets/dascore.scss
+
+# yeti's $primary, so great-docs' accent matches the theme's link color.
 accent_color:
-  light: "#00306E"
-  dark: "#8FB4F2"
+  light: "#008cba"
+  dark: "#5bc0de"
 
-# Solid navy navbar (text color is auto-picked for contrast).
+# Light navbar, as on the old site (text color is auto-picked for contrast).
 navbar_color:
-  light: "#002868"
-  dark: "#0B1730"
-
-# Lucide icons for the top navigation.
-nav_icons:
-  navbar:
-    Tutorial: graduation-cap
-    Recipes: chef-hat
-    Notes: notebook-pen
-    Contributing: git-pull-request
-    About: info
-    Reference: library
-    Changelog: history
-
-# Small brand stylesheet: gold keyline under the navbar, navy headings,
-# slightly softened code blocks.
-include_in_header:
-  - text: |
-      <style>
-      .navbar { border-bottom: 3px solid #FFC934; }
-      h1, h2, h3 { letter-spacing: -0.01em; }
-      h1, h2 { color: #002868; }
-      h2 { border-bottom: 1px solid rgba(0, 40, 104, 0.15); padding-bottom: 0.3rem; }
-      .quarto-dark h1, .quarto-dark h2 { color: #AFC8F5; }
-      .quarto-dark h2 { border-bottom-color: rgba(175, 200, 245, 0.2); }
-      div.sourceCode, pre.sourceCode {
-        border: 1px solid rgba(0, 40, 104, 0.12);
-        border-radius: 8px;
-      }
-      .quarto-dark div.sourceCode, .quarto-dark pre.sourceCode {
-        border-color: rgba(175, 200, 245, 0.15);
-      }
-      .gd-hero { padding-top: 1.5rem; }
-      .navbar .navbar-title { max-width: none; }
-      .navbar .navbar-brand-container { flex-shrink: 0; }
-      body:has(.gd-hero) main > header#title-block-header h1.title { display: none; }
-      .sidebar nav[role="doc-toc"] a.active { font-weight: 600; }
-      /* Wrap long sidebar entries at word boundaries, not mid-word. */
-      #quarto-sidebar .sidebar-item-text,
-      #quarto-sidebar .sidebar-item .menu-text {
-        overflow-wrap: break-word;
-        word-break: normal;
-        hyphens: none;
-      }
-      /* great-docs styles Notes docstring sections as a blue box for
-         h2/h3, but shift-heading-level-by promotes them to h1 on API
-         pages, dropping the box. Restore it for the h1 case. */
-      section:has(> h1.doc-notes) {
-        border-left: 4px solid #3B82F6;
-        background-color: #EFF6FF;
-        padding: 0.75rem 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-        color: #1f2937;
-      }
-      section:has(> h1.doc-notes) > h1.doc-notes {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: #1f2937;
-        margin: 0 0 0.25rem 0;
-      }
-      section:has(> h1.doc-notes) > h1.doc-notes::before { content: "\2139\FE0F\00a0"; }
-      section:has(> h1.doc-notes) > p { margin-bottom: 0; color: #1f2937; }
-      .quarto-dark section:has(> h1.doc-notes) {
-        background-color: rgba(59, 130, 246, 0.12);
-        color: #dbe4f0;
-      }
-      .quarto-dark section:has(> h1.doc-notes) > h1.doc-notes,
-      .quarto-dark section:has(> h1.doc-notes) > p { color: #dbe4f0; }
-      </style>
+  light: "#eeeeee"
+  dark: "#222222"
 
 # Bibliography so citations (e.g. @lindsey2020broadband) in docstrings and
 # narrative pages resolve instead of hanging pandoc.

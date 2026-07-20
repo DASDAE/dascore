@@ -1,0 +1,215 @@
+/*
+ * DASCore theme layer.
+ *
+ * Layered after `yeti` (the base Bootswatch theme the previous doc build used)
+ * and `great-docs.scss`, so this file only has to restore the handful of places
+ * where great-docs' own styling diverges from the old site, plus the custom
+ * rules that used to live in `docs/styles.css`.
+ *
+ * Quarto applies `scss:defaults` blocks in reverse theme order, so variables
+ * set here win over `great-docs.scss` and `yeti` -- but only where those files
+ * declare them with `!default`. great-docs assigns some outright (notably the
+ * heading sizes), and those can only be overridden from `scss:rules`.
+ */
+
+/*-- scss:defaults --*/
+
+// Code blocks. Quarto derives their background from `$progress-bg`, which has
+// drifted lighter since the old site was built; pin it to the grey that site
+// rendered so code cells keep the same weight on the page.
+$code-block-bg: rgba(204, 204, 204, 0.65);
+
+/*-- scss:rules --*/
+
+// Body copy: the old site set this literally in docs/styles.css, on top of an
+// unchanged 16px root. Keeping it a plain rule (rather than raising
+// `$font-size-base`) reproduces that exactly: prose grows, while Bootstrap's
+// rem-based sizing and great-docs' components are left alone.
+body {
+   font-size: 18px;
+}
+
+// great-docs shrinks h2/h3 to 1.5rem/1.3rem and drops the h2 underline Quarto
+// uses to separate major sections; the old site had Quarto's defaults for both.
+//
+// These are rules rather than `$h2-font-size` overrides because great-docs
+// assigns those variables without `!default`, so a defaults block cannot win
+// regardless of theme order.
+// The sizes are the responsive pair Bootstrap's RFS emitted for the old site,
+// not flat rem values: h1 stays fluid (`calc(1.325rem + 0.9vw)`), so a fixed h2
+// would overtake it on narrow screens and invert the heading hierarchy.
+h2,
+.h2 {
+   font-size: calc(1.29rem + 0.48vw);
+   // `--bs-border-color` is #dee2e6 in light mode, which is exactly what the
+   // old site drew, and Bootstrap darkens it under `data-bs-theme="dark"`.
+   border-bottom: 1px solid var(--bs-border-color);
+   padding-bottom: 0.5rem;
+}
+
+h3,
+.h3 {
+   font-size: calc(1.27rem + 0.24vw);
+}
+
+@include media-breakpoint-up(xl) {
+   h2,
+   .h2 {
+      font-size: 1.65rem;
+   }
+
+   h3,
+   .h3 {
+      font-size: 1.45rem;
+   }
+}
+
+// ---------------------------------------------------------------------------
+// Content tables (ported from docs/styles.css)
+//
+// Scoped to prose tables so great-docs' own components -- API summary tables
+// and Great Tables output -- keep their styling.
+// ---------------------------------------------------------------------------
+
+main.content {
+   // docs/styles.css only ever ran in light mode; these tokens give its colors
+   // a dark-mode counterpart so the ported rules below work in both themes.
+   --dascore-table-border: #{$gray-400};
+   --dascore-table-stripe: #{rgba(210, 209, 209, 0.35)};
+
+   table:not(.gt_table):not(.gd-summary-table) {
+      border-collapse: collapse;
+      border: 2px solid var(--dascore-table-border);
+      letter-spacing: 1px;
+      font-size: 0.8rem;
+      width: 100%;
+
+      caption {
+         padding: 10px;
+         caption-side: top;
+         color: $gray-600;
+         text-align: center;
+         letter-spacing: 1px;
+         font-size: small;
+      }
+
+      th,
+      td {
+         border: 0.5px solid var(--dascore-table-border);
+         padding: 10px 20px;
+      }
+
+      th {
+         text-align: center;
+      }
+
+      td {
+         text-align: left;
+         vertical-align: middle;
+      }
+
+      // Keep the first column (usually a name or format) on one line.
+      td:first-child {
+         white-space: nowrap;
+      }
+
+      tbody tr:nth-child(odd) {
+         background-color: var(--dascore-table-stripe);
+      }
+   }
+}
+
+body.quarto-dark main.content {
+   --dascore-table-border: #{$gray-700};
+   --dascore-table-stripe: #{rgba(255, 255, 255, 0.05)};
+}
+
+// ---------------------------------------------------------------------------
+// Fixes for great-docs rendering under `shift-heading-level-by: -1`
+// ---------------------------------------------------------------------------
+
+// great-docs styles docstring "Notes" sections as an info box for h2/h3, but
+// the heading shift promotes them to h1 on API pages, which loses the box.
+$doc-notes-accent: #3b82f6;
+
+section:has(> h1.doc-notes) {
+   border-left: 4px solid $doc-notes-accent;
+   background-color: rgba($doc-notes-accent, 0.08);
+   padding: 0.75rem 1rem;
+   margin: 1rem 0;
+
+   > h1.doc-notes {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin: 0 0 0.25rem 0;
+      border-bottom: none;
+      padding-bottom: 0;
+
+      &::before {
+         content: "\2139\FE0F\00a0";
+      }
+   }
+
+   > p:last-child {
+      margin-bottom: 0;
+   }
+}
+
+// Long entries in the left nav should wrap at word boundaries, not mid-word.
+#quarto-sidebar {
+   .sidebar-item-text,
+   .sidebar-item .menu-text {
+      overflow-wrap: break-word;
+      word-break: normal;
+      hyphens: none;
+   }
+}
+
+// Navbar. great-docs brands it with a hard-coded font, bold weight and a boxed
+// outline around the title; the old site showed plain navbar text in the theme
+// font, so undo the branding and let the title use its full width.
+.navbar {
+   .navbar-title {
+      max-width: none;
+      font-family: inherit;
+      font-weight: normal;
+      border: none;
+      padding-left: 0;
+      padding-right: 0;
+   }
+
+   .navbar-brand-container {
+      flex-shrink: 0;
+   }
+}
+
+// Matching great-docs' own selector so the weight override actually applies.
+#navbarCollapse > ul.navbar-nav.navbar-nav-scroll.me-auto > li > a {
+   font-weight: normal;
+}
+
+// The active sidebar entry is orange in great-docs, which clashes with the
+// palette the rest of the site inherits from yeti. Keep the underline
+// affordance, but draw it in the theme color. Light mode hard-codes the orange
+// on this selector; dark mode reads the `--gd-active-link` token, so recolor
+// the token there and anything else bound to it follows.
+#quarto-sidebar a.sidebar-item-text.sidebar-link.active {
+   color: $primary;
+   text-decoration-color: rgba($primary, 0.5);
+}
+
+body.quarto-dark {
+   --gd-active-link: #{tint-color($primary, 45%)};
+}
+
+// The landing page hero already shows the project name, so drop the duplicate
+// document title Quarto emits below it.
+body:has(.gd-hero) {
+   .gd-hero {
+      padding-top: 1.5rem;
+   }
+
+   main > header#title-block-header h1.title {
+      display: none;
+   }
+}
