@@ -135,7 +135,7 @@ class DASDAEV1(FiberIO):
             patches.append(patch)
         return dc.spool(patches)
 
-    def scan(self, resource: H5Reader, **kwargs):
+    def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """
         Get patch info by iterating waveform groups in the file.
 
@@ -144,4 +144,4 @@ class DASDAEV1(FiberIO):
         resource
             A path to the file.
         """
-        return _get_contents_from_patch_groups_generic(resource)
+        return _get_contents_from_patch_groups_generic(resource, snap=snap)

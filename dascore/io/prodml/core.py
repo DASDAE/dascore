@@ -43,10 +43,14 @@ class ProdMLV2_0(FiberIO):  # noqa
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a prodml file, return summary information about the file's contents."""
         out = []
-        for attr, coords, source_patch_id in _yield_prodml_attrs_coords(resource):
+        for attr, coords, source_patch_id in _yield_prodml_attrs_coords(
+            resource, snap=snap
+        ):
             attrs = attr.update(_source_patch_id=source_patch_id)
             out.append(
                 {

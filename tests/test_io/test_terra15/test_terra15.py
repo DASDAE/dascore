@@ -58,6 +58,18 @@ class TestTerra15:
         assert time_summary.min >= t1
         assert time_summary.max <= t2
 
+    def test_scan_payload_snap_contract(self, terra15_v6_path):
+        """Raw payload scans should expose exact stored times on request."""
+        snapped = dc.scan_payloads(terra15_v6_path, snap=True)[0]["coords"]
+        exact = dc.scan_payloads(terra15_v6_path, snap=False)[0]["coords"]
+        read_exact = dc.read(terra15_v6_path, snap_dims=False)[0].coords
+
+        assert snapped.get_coord("time").evenly_sampled
+        np.testing.assert_array_equal(
+            exact.get_coord("time").values,
+            read_exact.get_coord("time").values,
+        )
+
     def test_units(self, terra15_das_patch):
         """All units should be defined on terra15 patch."""
         patch = terra15_das_patch

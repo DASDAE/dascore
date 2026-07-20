@@ -10,6 +10,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Generator, Mapping
 from functools import cache, cached_property, wraps
+from numbers import Integral
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired, TypedDict, get_type_hints
 
@@ -118,6 +119,9 @@ class ScanPayload(TypedDict):
     shape: tuple[int, ...]
     dtype: str
     source_patch_id: NotRequired[str]
+    source_path: NotRequired[str | Path | UPath]
+    source_format: NotRequired[str]
+    source_version: NotRequired[str]
 
 
 def _make_scan_payload(
@@ -140,6 +144,109 @@ def _make_scan_payload(
     }
 
 
+_SCAN_PAYLOAD_REQUIRED = ("attrs", "coords", "dims", "shape", "dtype")
+
+
+def _validate_scan_payload(result, require_coord_manager: bool = False):
+    """
+    Validate one FiberIO.scan() result against the ScanPayload contract.
+
+    Shared by the `dc.scan` summary path and `dc.scan_payloads` so both
+    public boundaries enforce the same requirements; only the payload
+    API additionally requires `coords` to be a full CoordManager (the
+    summary path also accepts already-collapsed coordinate mappings) and
+    requires `dims` and `shape` to match it exactly.
+    """
+    if isinstance(result, dc.PatchAttrs):
+        msg = (
+            "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
+            "Return a structured scan payload instead. "
+            "See docs/contributing/new_format.qmd."
+        )
+        raise ValueError(msg)
+    if not isinstance(result, Mapping):
+        msg = (
+            "FiberIO.scan() must return ScanPayload mappings; got "
+            f"{type(result).__name__}. See docs/contributing/new_format.qmd."
+        )
+        raise TypeError(msg)
+    missing = sorted(set(_SCAN_PAYLOAD_REQUIRED) - set(result))
+    if missing:
+        msg = (
+            f"scan payload is missing required keys {missing}; a ScanPayload "
+            "requires a mapping with `coords`, `attrs`, and `dtype` as well "
+            "as `dims` and `shape`. See docs/contributing/new_format.qmd."
+        )
+        raise TypeError(msg)
+    if require_coord_manager and not isinstance(result["coords"], CoordManager):
+        msg = (
+            "scan payload `coords` must be a CoordManager holding the full "
+            f"coordinates; got {type(result['coords']).__name__}."
+        )
+        raise TypeError(msg)
+    if not isinstance(result["coords"], CoordManager | Mapping):
+        msg = "scan payload `coords` must be a CoordManager or coordinate mapping."
+        raise TypeError(msg)
+    attrs = result["attrs"]
+    if not isinstance(attrs, PatchAttrs | Mapping):
+        msg = "scan payload `attrs` must be PatchAttrs or an attribute mapping."
+        raise TypeError(msg)
+    try:
+        PatchAttrs.from_dict(attrs)
+    except (TypeError, ValueError) as exc:
+        msg = "scan payload `attrs` contains invalid attribute values."
+        raise TypeError(msg) from exc
+    dims = result["dims"]
+    valid_dims = (
+        isinstance(dims, tuple)
+        and all(isinstance(x, str) and x for x in dims)
+        and len(set(dims)) == len(dims)
+    )
+    if not valid_dims:
+        msg = "scan payload `dims` must be a tuple of unique, non-empty strings."
+        raise TypeError(msg)
+    shape = result["shape"]
+    valid_shape = (
+        isinstance(shape, tuple)
+        and len(shape) == len(dims)
+        and all(
+            isinstance(x, Integral) and not isinstance(x, bool) and x >= 0
+            for x in shape
+        )
+    )
+    if not valid_shape:
+        msg = "scan payload `shape` must contain one non-negative integer per dim."
+        raise TypeError(msg)
+    dtype = result["dtype"]
+    if not isinstance(dtype, str):
+        msg = "scan payload `dtype` must be a string."
+        raise TypeError(msg)
+    try:
+        np.dtype(dtype)
+    except (TypeError, ValueError) as exc:
+        msg = f"scan payload `dtype` is invalid: {dtype!r}."
+        raise TypeError(msg) from exc
+    optional_types = {
+        "source_patch_id": str,
+        "source_path": (str, Path, UPath),
+        "source_format": str,
+        "source_version": str,
+    }
+    for name, expected_type in optional_types.items():
+        if name in result and not isinstance(result[name], expected_type):
+            msg = f"scan payload `{name}` has an invalid type."
+            raise TypeError(msg)
+    if require_coord_manager:
+        coords = result["coords"]
+        if dims != coords.dims:
+            msg = "scan payload `dims` must exactly match `coords.dims`."
+            raise ValueError(msg)
+        if shape != coords.shape:
+            msg = "scan payload `shape` must exactly match `coords.shape`."
+            raise ValueError(msg)
+    return result
+
+
 def _scan_payload_to_summary(
     payload: ScanPayload | Mapping[str, Any],
     *,
@@ -149,12 +256,7 @@ def _scan_payload_to_summary(
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert one structured FiberIO scan payload into a PatchSummary."""
-    if "coords" not in payload or "attrs" not in payload or "dtype" not in payload:
-        msg = (
-            "_scan_payload_to_summary requires a mapping with `coords`, "
-            "`attrs`, and `dtype`."
-        )
-        raise TypeError(msg)
+    _validate_scan_payload(payload)
     coords = payload["coords"]
     if hasattr(coords, "to_summary_dict"):
         coords = coords.to_summary_dict()
@@ -770,7 +872,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, **kwargs) -> list[ScanPayload]:
+    def scan(self, resource, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Return patch-local metadata and exact coords for a resource.
 
@@ -781,12 +883,29 @@ class FiberIO:
 
         Multi-patch formats should set `source_patch_id` when needed so
         DASCore can reload the same logical patch later.
+
+        Parameters
+        ----------
+        resource
+            The resource to scan.
+        snap
+            If True (the default), formats may represent stored sample times
+            as an idealized uniform range. If False, returned coords must
+            represent stored coordinate values exactly. This is a documented
+            no-op for formats whose coordinates are defined by start, step,
+            and sample count metadata.
         """
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
         # when possible.
+        read_params = inspect.signature(self.read).parameters
+        read_kwargs = dict(kwargs)
+        if "snap" in read_params:
+            read_kwargs["snap"] = snap
+        elif "snap_dims" in read_params:
+            read_kwargs["snap_dims"] = snap
         try:
-            spool = self.read(resource)
+            spool = self.read(resource, **read_kwargs)
         except NotImplementedError:
             msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
@@ -1101,7 +1220,7 @@ def _count_generator(generator):
     return entity_count
 
 
-def _handle_missing_optionals(outputs, optional_dep_dict):
+def _handle_missing_optionals(output_count, optional_dep_dict):
     """
     Inform the user there are files that can be read but the proper
     dependencies are not installed.
@@ -1118,58 +1237,23 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
         msg,
         exception=MissingOptionalDependencyError,
         warning=UserWarning,
-        behavior="warn" if len(outputs) else "raise",
+        behavior="warn" if output_count else "raise",
     )
 
 
-def scan(
+def _iter_scan_results(
     path: path_types | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
-) -> list[PatchSummary]:
-    """
-    Scan a potential patch source, return a list of patch summaries.
-
-    Parameters
-    ----------
-    path
-        A resource containing Fiber data.
-    file_format
-        Format of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
-    file_version
-        Version of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
-    ext : str or None
-        The extensions to map.
-    timestamp : int or float
-        Time stamp indicating the minimum mtime.
-    progress
-        The type of progress bar to use. None disables progress bar and
-        "basic" is best for low latency scenarios. Can also acceted a subclass
-        of rich.progress.Progress.
-
-    Returns
-    -------
-    A list of [`PatchSummary`](`dascore.PatchSummary`) instances.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
-    >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>>
-    >>> summary_list = dc.scan(file_path)
-    >>> summary = summary_list[0]
-
-    See also [`iter_fs_contents`](`dascore.utils.misc.iter_fs_contents`)
-    """
-    out = []
+    *,
+    snap: bool | None = None,
+    payloads: bool = False,
+) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any]], None, None]:
+    """Yield raw scan results with dispatcher-owned source information."""
+    output_count = 0
     fiber_io_hint: dict[str, FiberIO] = {}
     # A dict for keeping track of missing optional dependencies.
     missing_optional_deps = defaultdict(lambda: 0)
@@ -1194,14 +1278,26 @@ def scan(
             for patch_source in tracker:
                 # Normalize direct patch inputs to summary objects.
                 if isinstance(patch_source, dc.Patch):
-                    out.append(
-                        _patch_to_summary(
+                    if payloads:
+                        summary = patch_source.summary
+                        source_info = {
+                            "source_path": _get_reloadable_source_path(
+                                summary.source_path
+                            ),
+                            "source_format": summary.source_format,
+                            "source_version": summary.source_version,
+                        }
+                        result = _patch_to_scan_payload(patch_source)
+                    else:
+                        source_info = {}
+                        result = _patch_to_summary(
                             patch_source,
                             source_path=_get_reloadable_source_path(
                                 patch_source.summary.source_path
                             ),
                         )
-                    )
+                    output_count += 1
+                    yield result, source_info
                     continue
                 with IOResourceManager(patch_source) as man:
                     try:
@@ -1226,12 +1322,16 @@ def scan(
                             continue
                         # Directory FiberIO may need to know the time after which
                         # contents should be returned.
-                        source = fiber_io.scan(
-                            resource, timestamp=timestamp, _pre_cast=True
-                        )
+                        scan_kwargs = {"timestamp": timestamp, "_pre_cast": True}
+                        if snap is not None:
+                            scan_kwargs["snap"] = snap
+                        source = fiber_io.scan(resource, **scan_kwargs)
                     else:
                         try:
-                            source = fiber_io.scan(resource, _pre_cast=True)
+                            scan_kwargs = {"_pre_cast": True}
+                            if snap is not None:
+                                scan_kwargs["snap"] = snap
+                            source = fiber_io.scan(resource, **scan_kwargs)
                         except MissingOptionalDependencyError as ex:
                             missing_optional_deps[ex.msg.split(" ")[0]] += 1
                             continue
@@ -1255,21 +1355,150 @@ def scan(
                     source_path = _get_reloadable_source_path(
                         resource, fallback=man.source
                     )
-                    for attr in source:
-                        out.append(
-                            _scan_result_to_summary(
-                                attr,
-                                source_path=source_path,
-                                source_format=fiber_io.name,
-                                source_version=fiber_io.version,
-                            )
-                        )
+                    source_info = {
+                        "source_path": source_path,
+                        "source_format": fiber_io.name,
+                        "source_version": fiber_io.version,
+                    }
+                    for result in source:
+                        output_count += 1
+                        yield result, source_info
     # Ensure ctl + c exists scan.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
         raise
     if missing_optional_deps:
-        _handle_missing_optionals(out, missing_optional_deps)
+        _handle_missing_optionals(output_count, missing_optional_deps)
+
+
+def scan_payloads(
+    path: path_types | PatchType | SpoolType | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
+    ext: str | None = None,
+    timestamp: float | None = None,
+    progress: PROGRESS_LEVELS | Progress = "standard",
+    snap: bool = True,
+) -> list[ScanPayload]:
+    """
+    Scan a potential patch source and return full coordinate payloads.
+
+    Parameters
+    ----------
+    path
+        A resource containing fiber data.
+    file_format
+        Format of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
+    file_version
+        Version of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
+    ext
+        The extensions to map.
+    timestamp
+        Time stamp indicating the minimum mtime.
+    progress
+        The type of progress bar to use. None disables the progress bar.
+    snap
+        If True (the default), formats may represent stored sample times as an
+        idealized uniform range. If False, returned coords represent stored
+        coordinate values exactly when the format exposes them.
+
+    Returns
+    -------
+    A list of [`ScanPayload`](`dascore.io.core.ScanPayload`) dictionaries with
+    full coordinate managers and source provenance.
+
+    Notes
+    -----
+    Scan payloads retain real coordinate arrays and can use substantially more
+    memory than [`scan`](`dascore.scan`) summaries. Prefer scanning specific
+    files and discard payloads promptly when probing many resources.
+    """
+    out = []
+    iterator = _iter_scan_results(
+        path=path,
+        file_format=file_format,
+        file_version=file_version,
+        ext=ext,
+        timestamp=timestamp,
+        progress=progress,
+        snap=snap,
+        payloads=True,
+    )
+    for result, source_info in iterator:
+        _validate_scan_payload(result, require_coord_manager=True)
+        payload = dict(result)
+        payload["attrs"] = PatchAttrs.from_dict(payload["attrs"])
+        payload.update(
+            {
+                "source_path": source_info.get("source_path") or "",
+                "source_format": source_info.get("source_format") or "",
+                "source_version": source_info.get("source_version") or "",
+            }
+        )
+        out.append(payload)
+    return out
+
+
+def scan(
+    path: path_types | PatchType | SpoolType | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
+    ext: str | None = None,
+    timestamp: float | None = None,
+    progress: PROGRESS_LEVELS | Progress = "standard",
+) -> list[PatchSummary]:
+    """
+    Scan a potential patch source, return a list of patch summaries.
+
+    Parameters
+    ----------
+    path
+        A resource containing Fiber data.
+    file_format
+        Format of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
+    file_version
+        Version of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
+    ext
+        The extensions to map.
+    timestamp
+        Time stamp indicating the minimum mtime.
+    progress
+        The type of progress bar to use. None disables progress bar and
+        "basic" is best for low latency scenarios. Can also accept a subclass
+        of rich.progress.Progress.
+
+    Returns
+    -------
+    A list of [`PatchSummary`](`dascore.PatchSummary`) instances.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
+    >>> summary = dc.scan(file_path)[0]
+
+    See Also
+    --------
+    [`scan_payloads`](`dascore.scan_payloads`)
+        Return full coordinate managers instead of envelope summaries.
+    """
+    out = []
+    iterator = _iter_scan_results(
+        path=path,
+        file_format=file_format,
+        file_version=file_version,
+        ext=ext,
+        timestamp=timestamp,
+        progress=progress,
+    )
+    for result, source_info in iterator:
+        out.append(_scan_result_to_summary(result, **source_info))
     return out
 
 
@@ -1338,7 +1567,9 @@ def is_directory_format(path) -> bool:
         return False
     try:
         get_format(path)
-    except Exception:
+    except (UnknownFiberFormatError, OSError):
+        # An unreadable directory (e.g. PermissionError) is simply not a
+        # scan unit; it should not abort a directory index traversal.
         return False
     return True
 

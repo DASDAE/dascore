@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.io import patch_to_xarray, xarray_to_patch
 from dascore.utils.misc import optional_import
@@ -114,7 +117,9 @@ class NetCDFCFV18(FiberIO):
             encoding={"data": encoding} if encoding else None,
         )
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan NetCDF file metadata without loading the full payload array.
 
         Remote resources are streamed via the ``h5netcdf`` engine over the
@@ -127,7 +132,7 @@ class NetCDFCFV18(FiberIO):
             # payload is stored under a None variable name.
             data_array = dataset[data_var_name]
             coords = {
-                name: (coord.dims, coord.values)
+                name: (coord.dims, self._get_scan_coord(coord, snap=snap))
                 for name, coord in data_array.coords.items()
             }
             attrs = dict(data_array.attrs)
@@ -148,6 +153,17 @@ class NetCDFCFV18(FiberIO):
                 source_patch_id=source_patch_id,
             )
         ]
+
+    @staticmethod
+    def _get_scan_coord(coord, snap=True):
+        """Return a coordinate for scanning; snap only controls exactness."""
+        values = coord.values
+        if np.ndim(values) != 1:
+            return values
+        units = coord.attrs.get("units")
+        if snap:
+            return dc.core.get_coord(data=values, units=units)
+        return get_exact_coord(values, units=units)
 
     def _get_source_patch_id(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

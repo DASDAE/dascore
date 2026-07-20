@@ -9,6 +9,7 @@ from dascore.io.core import (
     ScanPayload,
     read,
     scan,
+    scan_payloads,
     scan_to_df,
     write,
 )

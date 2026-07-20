@@ -5,6 +5,7 @@ from __future__ import annotations
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
 from dascore.utils.misc import unbyte
 
@@ -27,7 +28,7 @@ def _get_opto_das_version_str(hdf_fi) -> str:
     return version_str
 
 
-def _get_coord_manager(fi):
+def _get_coord_manager(fi, snap=True):
     """Get the distance ranges and spacing."""
     header = fi["header"]
     dims = tuple(unbyte(x) for x in header["dimensionNames"])
@@ -47,7 +48,10 @@ def _get_coord_manager(fi):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            coord = get_coord(data=distance)
+            if snap:
+                coord = get_coord(data=distance, units=unit)
+            else:
+                coord = get_exact_coord(distance, units=unit)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out
@@ -70,9 +74,9 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_opto_das_attrs(fi) -> tuple[dict, dascore.core.CoordManager]:
+def _get_opto_das_attrs(fi, snap=True) -> tuple[dict, dascore.core.CoordManager]:
     """Scan a OptoDAS file, return metadata and coordinates."""
-    cm = _get_coord_manager(fi)
+    cm = _get_coord_manager(fi, snap=snap)
     attrs = _get_attr_dict(fi["header"])
     return attrs, cm
 

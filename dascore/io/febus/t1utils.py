@@ -8,6 +8,7 @@ import dascore as dc
 from dascore import get_coord_manager
 from dascore.constants import timeable_types
 from dascore.io.core import _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader
 
 _DATA = "Data"
@@ -24,22 +25,26 @@ def _is_t1_file(fi: H5Reader) -> bool:
     return required.issubset(present)
 
 
-def _get_distance_coord(fi):
+def _get_distance_coord(fi, snap=True):
     """Get the distances from the T1 file"""
     dist = fi["Data/Distance"][()]
-    return dc.get_coord(values=dist, units="m")
+    if snap:
+        return dc.get_coord(values=dist, units="m")
+    return get_exact_coord(dist, units="m")
 
 
-def _get_time_coord(fi):
+def _get_time_coord(fi, snap=True):
     """Get the times from the T1 file"""
     ts = fi["Data/Time"][()].squeeze()
     times = (ts * 1e9).astype("datetime64[ns]")
-    return dc.get_coord(values=times, units="s")
+    if snap:
+        return dc.get_coord(values=times, units="s")
+    return get_exact_coord(times, units="s")
 
 
-def _get_coords(fi) -> dc.CoordManager:
-    time_coord = _get_time_coord(fi)
-    distance_coord = _get_distance_coord(fi)
+def _get_coords(fi, snap=True) -> dc.CoordManager:
+    time_coord = _get_time_coord(fi, snap=snap)
+    distance_coord = _get_distance_coord(fi, snap=snap)
     dims = ("time", "distance")
     return get_coord_manager(
         {"time": time_coord, "distance": distance_coord},
@@ -61,9 +66,9 @@ def _get_attrs(path, format, version):
     )
 
 
-def _scan_t1(fi: H5Reader, format, version):
+def _scan_t1(fi: H5Reader, snap=True):
     """Get the coordinates and attributes for a T1 data patch"""
-    coords = _get_coords(fi)
+    coords = _get_coords(fi, snap=snap)
     attrs = _get_attrs(path="", format="", version="")
     for name in ("path", "file_format", "file_version"):
         attrs.pop(name)

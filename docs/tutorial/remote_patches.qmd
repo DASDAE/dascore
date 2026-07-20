@@ -9,6 +9,7 @@ DASCore can work directly with remote resources exposed through [`UPath`](https:
 The main distinction is simple:
 
 - metadata operations such as [`dc.scan(...)`](`dascore.scan`) and public [`dc.get_format(...)`](`dascore.get_format`) stay conservative by default
+- [`dc.scan_payloads(...)`](`dascore.scan_payloads`) uses the metadata cache policy too, but may read complete coordinate arrays and retain more memory than `dc.scan(...)`
 - data-loading operations such as [`dc.read(...)`](`dascore.read`) and patch access through [`dc.spool(...)`](`dascore.spool`) are allowed to do heavier IO when needed
 
 ## Basic Remote Example
@@ -25,10 +26,12 @@ remote_path = UPath("memory://dascore/tutorial/remote_patch.h5")
 dc.write(patch, remote_path, "DASDAE")
 
 summary = dc.scan(remote_path)[0]
+payload = dc.scan_payloads(remote_path, snap=False)[0]
 loaded = dc.read(remote_path)[0]
 spool = dc.spool(remote_path)
 
 print(summary.source_path)
+print(payload["coords"].dims)
 print(loaded.dims)
 print(len(spool))
 ```
@@ -67,12 +70,15 @@ with set_config(
 
 ## Metadata By Default
 
-When a backend can satisfy metadata access directly, `dc.scan(...)` and `dc.get_format(...)` work as usual.
+When a backend can satisfy metadata access directly, `dc.scan(...)`, `dc.scan_payloads(...)`, and `dc.get_format(...)` work as usual.
 
 ```{python}
 print(dc.get_format(remote_path))
 print(dc.scan(remote_path)[0].source_format)
+print(dc.scan_payloads(remote_path, snap=False)[0]["source_format"])
 ```
+
+`scan_payloads` does not load the patch data array, but exact scans can still transfer every stored coordinate value. Use it for targeted coordinate probes rather than broad remote directory listings.
 
 If answering a metadata query would require downloading the file first, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`) instead of silently materializing it.
 
@@ -103,9 +109,11 @@ http_path = UPath("http://example.com/data/prodml_2.1.h5")
 with set_config(allow_remote_cache_for_metadata=True):
     fmt = dc.get_format(http_path)
     summary = dc.scan(http_path)[0]
+    payload = dc.scan_payloads(http_path, snap=False)[0]
 
 print(fmt)
 print(summary.source_path)
+print(payload["coords"].dims)
 ```
 
 When metadata-time caching is enabled, DASCore may warn on the first download if `warn_on_remote_cache=True`.

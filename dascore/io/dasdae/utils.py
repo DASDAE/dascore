@@ -17,6 +17,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.io.core import _make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
+from dascore.io.utils import get_exact_coord
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -197,7 +198,7 @@ def _read_array_sample(table_array, index):
     return out
 
 
-def _get_coords(patch_group, dims, attrs2):
+def _get_coords(patch_group, dims, attrs2, snap=True):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
     coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
@@ -226,7 +227,10 @@ def _get_coords(patch_group, dims, attrs2):
             coord = get_coord(start=start, stop=stop, step=node_step, units=units)
         else:
             array = _read_array(coord)
-            coord = get_coord(data=array, units=units, step=step)
+            if snap or np.ndim(array) != 1:
+                coord = get_coord(data=array, units=units, step=step)
+            else:
+                coord = get_exact_coord(array, units=units)
         coord_dict[name] = coord
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
@@ -328,7 +332,7 @@ def _kwargs_empty(kwargs) -> bool:
     return not bool(out)
 
 
-def _get_scan_payload_from_group(group, legacy: bool = True):
+def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     """Build one structured scan payload from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
@@ -346,10 +350,10 @@ def _get_scan_payload_from_group(group, legacy: bool = True):
     if legacy:
         out["dims"] = ",".join(dims)
         out = translate_legacy_attrs(out)
-        coords = _get_coords(group, dims, out)
+        coords = _get_coords(group, dims, out, snap=snap)
         attr_info = strip_legacy_coord_fields(out, set(coords.coord_map) | set(dims))
     else:
-        coords = _get_coords(group, dims, {})
+        coords = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
@@ -424,13 +428,17 @@ def _get_file_version(h5):
     return unbyte(h5.attrs.get("__DASDAE_version__", ""))
 
 
-def _get_contents_from_patch_groups_generic(h5):
+def _get_contents_from_patch_groups_generic(h5, snap=True):
     """Get DASDAE scan summaries from a generic HDF5 handle."""
     waveforms = h5.get("waveforms")
     if waveforms is None:
         return []
     file_legacy = _is_legacy_file(h5)
     return [
-        _get_scan_payload_from_group(group, legacy=_is_legacy_group(group, file_legacy))
+        _get_scan_payload_from_group(
+            group,
+            legacy=_is_legacy_group(group, file_legacy),
+            snap=snap,
+        )
         for group in waveforms.values()
     ]

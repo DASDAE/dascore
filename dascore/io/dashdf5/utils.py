@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.core import get_coord
+from dascore.io.utils import get_exact_coord
 
 # --- Getting format/version
 
@@ -29,7 +32,7 @@ def _get_cf_version_str(hdf_fi) -> str | bool:
     return das_hdf_str[0].replace("DAS-HDF5-", "")
 
 
-def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
+def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
     """
     Get a coordinate manager of full file range.
 
@@ -40,17 +43,21 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
 
     """
 
+    def _coord(values, units=None):
+        """Return a tolerant or exact coordinate from stored values."""
+        values = np.asarray(values)
+        if snap:
+            return get_coord(data=values, units=units)
+        return get_exact_coord(values, units=units)
+
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
-        return get_coord(
-            data=hdf_fi[code],
-            units=hdf_fi[code].attrs["units"],
-        )
+        return _coord(hdf_fi[code], units=hdf_fi[code].attrs["units"])
 
     coords_map = {
-        "channel": get_coord(data=hdf_fi["channel"][:]),
-        "trace": get_coord(data=hdf_fi["trace"][:]),
-        "time": get_coord(data=dc.to_datetime64(hdf_fi["t"][:])),
+        "channel": _coord(hdf_fi["channel"][:]),
+        "trace": _coord(hdf_fi["trace"][:]),
+        "time": _coord(dc.to_datetime64(hdf_fi["t"][:])),
         "x": _get_spatialcoord(hdf_fi, "x"),
         "y": _get_spatialcoord(hdf_fi, "y"),
         "z": _get_spatialcoord(hdf_fi, "z"),
