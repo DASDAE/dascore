@@ -208,6 +208,49 @@ assert coord.get_next_index(1) == 1
 assert coord.get_next_index(2.000001) == 3
 ```
 
+## Coordinate Arithmetic
+
+Coordinates behave much like numpy arrays; python operators, numpy ufuncs, and
+numpy functions all work on them and return new coordinates. Units are tracked
+through the operation, so multiplying two coordinates with units of `m` returns
+a coordinate with units of `m**2`.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+coord = get_coord(data=np.array([1., 4., 9.]), units="m")
+
+# Values without units are assumed to be in the coordinate's units.
+assert (coord + 1).units == coord.units
+
+# But units are otherwise tracked through the operation.
+assert (coord * coord).unit_str == "m ** 2"
+assert np.sqrt(coord).unit_str == "m ** 0.5"
+
+# Coordinates (or quantities) with other units are first converted.
+from dascore.units import get_quantity
+
+assert np.allclose((coord + 100 * get_quantity("cm")).values, coord.values + 1)
+```
+
+Two exceptions to the "operations return coordinates" rule keep results useful:
+operations which return a single value (eg `np.mean`) return a scalar, and
+operations which return booleans (eg `np.greater`) return arrays which can be
+used to index other arrays.
+
+```{python}
+# Reductions return a scalar (with units, when the coord has them).
+print(np.mean(coord))
+
+# Comparisons return boolean arrays.
+print(np.greater(coord, 2 * get_quantity("m")))
+```
+
+Operations which don't make sense for the coordinate's units, such as adding
+seconds to meters, raise a [`UnitError`](`dascore.exceptions.UnitError`).
+
 # CoordManager
 
 The [`CoordManager`](`dascore.core.coordmanager.CoordManager`) handles a group of coordinates and provides methods for updating managed data arrays. 

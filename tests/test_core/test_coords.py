@@ -26,7 +26,7 @@ from dascore.core.coords import (
     CoordSummary,
     get_coord,
 )
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, UnitError
 from dascore.units import get_quantity, percent
 from dascore.utils.misc import all_close, register_func
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
@@ -2006,88 +2006,194 @@ class TestChangeLength:
             BaseCoord.change_length(coord, 10)
 
 
-
-
 class TestCoordinateArithmetic:
-    """Tests for coordinate arithmetic behavior (issue #566)."""
+    """Tests for treating coordinates like arrays (see issue #566)."""
+
+    @pytest.fixture()
+    def coord(self):
+        """A simple coordinate with units for testing arithmetic."""
+        return get_coord(data=np.array([2.0, 4.0, 8.0]), units="m")
+
+    @pytest.fixture()
+    def unitless_coord(self, coord):
+        """The same coordinate without units."""
+        return get_coord(data=coord.values)
 
     @pytest.mark.parametrize(
-        "func, expected, other",
+        "op",
         [
-            (lambda coord, val: coord + val, lambda vals, val: vals + val, 2),
-            (lambda coord, val: coord - val, lambda vals, val: vals - val, 2),
-            (lambda coord, val: coord * val, lambda vals, val: vals * val, 2),
-            (lambda coord, val: coord / val, lambda vals, val: vals / val, 2),
-            (lambda coord, val: coord // val, lambda vals, val: vals // val, 2),
-            (lambda coord, val: coord**val, lambda vals, val: vals**val, 2),
-            (lambda coord, val: coord % val, lambda vals, val: vals % val, 3),
-            (lambda coord, val: val + coord, lambda vals, val: val + vals, 2),
-            (lambda coord, val: val - coord, lambda vals, val: val - vals, 10),
-            (lambda coord, val: val * coord, lambda vals, val: val * vals, 2),
-            (lambda coord, val: val / coord, lambda vals, val: val / vals, 10),
-            (lambda coord, val: val // coord, lambda vals, val: val // vals, 10),
-            (lambda coord, val: val**coord, lambda vals, val: val**vals, 2),
-            (lambda coord, val: val % coord, lambda vals, val: val % vals, 10),
+            lambda x, y: x + y,
+            lambda x, y: x - y,
+            lambda x, y: x * y,
+            lambda x, y: x / y,
+            lambda x, y: x // y,
+            lambda x, y: x % y,
+            lambda x, y: x**y,
         ],
     )
-    def test_all_dunder_binary_ops(self, func, expected, other):
-        """Ensure all new arithmetic dunder paths return coordinates."""
-        coord = get_coord(data=[2, 4, 8], units="m")
-
-        out = func(coord, other)
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_binary_ops_match_arrays(self, unitless_coord, op, reverse):
+        """Binary operators should return coords with the array's values."""
+        coord, other = unitless_coord, 3.0
+        args = (other, coord) if reverse else (coord, other)
+        out = op(*args)
+        expected = op(*((other, coord.values) if reverse else (coord.values, other)))
         assert isinstance(out, BaseCoord)
-        assert out.units == coord.units
-        np.testing.assert_allclose(out.values, expected(coord.values, other))
+        np.testing.assert_allclose(out.values, expected)
 
-    def test_numpy_ufunc_call_returns_coord(self):
-        """Ensure numpy ufunc __call__ dispatch returns coordinates."""
-        coord = get_coord(data=[1, 4, 9], units="m")
-        out = np.sqrt(coord)
-
+    @pytest.mark.parametrize(
+        "op", [lambda x: -x, lambda x: +x, lambda x: abs(x), np.sign]
+    )
+    def test_unary_ops(self, coord, op):
+        """Unary operators should also return coordinates."""
+        out = op(coord)
         assert isinstance(out, BaseCoord)
-        assert out.units == coord.units
-        np.testing.assert_allclose(out.values, np.array([1.0, 2.0, 3.0]))
+        np.testing.assert_allclose(out.values, op(coord.values))
 
-    def test_numpy_ufunc_accumulate_returns_coord(self):
-        """Ensure numpy ufunc method dispatch (e.g. accumulate) returns coordinates."""
-        coord = get_coord(data=[1, 2, 3], units="m")
+    def test_scalars_assume_coord_units(self, coord):
+        """Scalars added to a coord are assumed to have the coord's units."""
+        out = coord + 1
+        assert out.units == coord.units
+        np.testing.assert_allclose(out.values, coord.values + 1)
+
+    def test_units_converted(self, coord):
+        """Quantities/coords with other units should be converted."""
+        out = coord + 100 * get_quantity("cm")
+        assert out.units == coord.units
+        np.testing.assert_allclose(out.values, coord.values + 1)
+        out = coord + get_coord(data=coord.values * 100, units="cm")
+        np.testing.assert_allclose(out.values, coord.values * 2)
+
+    def test_incompatible_units_raise(self, coord):
+        """Adding coords with incompatible units should raise."""
+        with pytest.raises(UnitError):
+            coord + get_coord(data=coord.values, units="s")
+
+    @pytest.mark.parametrize(
+        "op, units",
+        [
+            (lambda x: x * x, "m ** 2"),
+            (lambda x: x**2, "m ** 2"),
+            (lambda x: np.sqrt(x), "m ** 0.5"),
+            (lambda x: x / 2, "m"),
+            (lambda x: x + x, "m"),
+            (lambda x: 1 / x, "1 / m"),
+        ],
+    )
+    def test_units_track_operation(self, coord, op, units):
+        """Units should reflect the operation performed, not simply persist."""
+        out = op(coord)
+        assert out.units == get_quantity(units)
+
+    def test_dimensionless_output_drops_units(self, coord):
+        """Operations which cancel units should return a unitless coord."""
+        out = coord / coord
+        assert isinstance(out, BaseCoord)
+        assert out.units is None
+
+    @pytest.mark.parametrize("op", [np.exp, np.sin, lambda x: 2**x])
+    def test_ops_requiring_dimensionless_raise(self, coord, op):
+        """Ops which need dimensionless inputs raise for coords with units."""
+        with pytest.raises(UnitError):
+            op(coord)
+
+    def test_no_units_coord(self):
+        """Coords without units should behave like plain arrays."""
+        coord = get_coord(data=np.array([1.0, 2.0, 3.0]))
+        out = np.exp(coord * 2)
+        assert isinstance(out, BaseCoord)
+        assert out.units is None
+        np.testing.assert_allclose(out.values, np.exp(coord.values * 2))
+
+    def test_time_coords(self, random_patch):
+        """Time coords should support arithmetic with timedeltas."""
+        coord = random_patch.get_coord("time")
+        out = coord + dc.to_timedelta64(1)
+        assert isinstance(out, BaseCoord)
+        assert np.all(out.values == coord.values + dc.to_timedelta64(1))
+        # Subtracting two time coords should yield a timedelta coord.
+        diff = coord - coord.min()
+        assert dtype_time_like(diff.dtype)
+
+    def test_array_operands(self, coord):
+        """Arrays should work on either side of the operation."""
+        array = np.array([1.0, 2.0, 3.0])
+        out1, out2 = coord + array, array + coord
+        assert isinstance(out1, BaseCoord) and isinstance(out2, BaseCoord)
+        np.testing.assert_allclose(out1.values, out2.values)
+
+    def test_comparison_ufunc_returns_array(self, coord):
+        """Boolean output are masks, not coordinates."""
+        out = np.greater(coord, 4 * get_quantity("m"))
+        assert isinstance(out, np.ndarray)
+        np.testing.assert_array_equal(out, coord.values > 4)
+
+    def test_ufunc_method(self, coord):
+        """Ufunc methods (eg accumulate) should also return coords."""
         out = np.add.accumulate(coord)
-
         assert isinstance(out, BaseCoord)
         assert out.units == coord.units
-        np.testing.assert_array_equal(out.values, np.array([1, 3, 6]))
+        np.testing.assert_allclose(out.values, np.add.accumulate(coord.values))
 
-    def test_numpy_array_function_returns_coord(self):
-        """Ensure numpy array functions return coordinates where possible."""
-        coord = get_coord(data=[3, 4], units="m")
+    def test_reduction_returns_quantity(self, coord):
+        """Reductions to scalars return quantities rather than coords."""
         out = np.linalg.norm(coord)
-
-        assert isinstance(out, BaseCoord)
+        assert not isinstance(out, BaseCoord)
         assert out.units == coord.units
-        np.testing.assert_allclose(out.values, np.array([5.0]))
+        assert np.isclose(out.magnitude, np.linalg.norm(coord.values))
 
-    def test_tuple_list_dict_conversions(self):
-        """Ensure tuple/list/dict conversion paths are exercised."""
-        coord1 = get_coord(data=[1, 2], units="m")
-        coord2 = get_coord(data=[3, 4], units="m")
+    def test_array_function_nested_inputs(self, coord):
+        """Array functions should handle coords nested in args and kwargs."""
+        expected = np.concatenate([coord.values, coord.values])
+        for arg in (tuple([coord, coord]), [coord, coord]):
+            out = np.concatenate(arg)
+            assert isinstance(out, BaseCoord)
+            assert out.units == coord.units
+            np.testing.assert_allclose(out.values, expected)
+        out = np.mean(a=coord)
+        assert np.isclose(out.magnitude, np.mean(coord.values))
 
-        out_tuple = np.concatenate((coord1, coord2))
-        assert isinstance(out_tuple, BaseCoord)
-        np.testing.assert_array_equal(out_tuple.values, np.array([1, 2, 3, 4]))
+    def test_unsupported_type_raises_type_error(self, coord):
+        """Unsupported operands should raise a normal TypeError."""
+        with pytest.raises(TypeError):
+            coord + "bob"
+        assert coord._operate(np.add, coord, "bob") is NotImplemented
 
-        out_list = np.concatenate([coord1, coord2])
-        assert isinstance(out_list, BaseCoord)
-        np.testing.assert_array_equal(out_list.values, np.array([1, 2, 3, 4]))
+    def test_out_kwarg_raises(self, coord):
+        """Coords are immutable so the out parameter should raise."""
+        array = np.empty(len(coord))
+        with pytest.raises(ParameterError, match="immutable"):
+            np.add(coord, 1, out=array)
 
-        out_kwargs = np.mean(a=coord1)
-        assert isinstance(out_kwargs, BaseCoord)
-        np.testing.assert_allclose(out_kwargs.values, np.array([1.5]))
+    def test_multiple_outputs(self, unitless_coord):
+        """Ufuncs with multiple outputs should return multiple coords."""
+        out = np.divmod(unitless_coord, 2)
+        assert isinstance(out, tuple) and len(out) == 2
+        assert all(isinstance(x, BaseCoord) for x in out)
+        expected = np.divmod(unitless_coord.values, 2)
+        for coord_out, array_out in zip(out, expected):
+            np.testing.assert_allclose(coord_out.values, array_out)
 
-    def test_array_function_returns_not_implemented_for_non_coord_types(self):
-        """Ensure non-coordinate array_function dispatch returns NotImplemented."""
-        coord = get_coord(data=[1, 2, 3], units="m")
-        out = coord.__array_function__(np.mean, (np.ndarray,), (coord,), {})
+    def test_unsupported_op_with_units_raises(self, coord):
+        """Ops pint doesn't support should still raise a sensible error."""
+        with pytest.raises(TypeError):
+            np.divmod(coord, 2)
+
+    def test_unitless_reduction(self, unitless_coord):
+        """Reductions of unitless coords should return plain scalars."""
+        out = np.mean(unitless_coord)
+        assert np.isclose(out, np.mean(unitless_coord.values))
+
+    def test_ufunc_unknown_type_defers(self, coord):
+        """The ufunc protocol should defer on types it doesn't know."""
+        out = coord.__array_ufunc__(np.add, "__call__", coord, "bob")
         assert out is NotImplemented
+
+    def test_array_function_not_implemented_for_unknown_types(self, coord):
+        """Unknown types in the array function protocol should defer."""
+        out = coord.__array_function__(np.mean, (str,), (coord,), {})
+        assert out is NotImplemented
+
 
 class TestIssues:
     """Tests for special issues related to coords."""
