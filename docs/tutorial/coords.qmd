@@ -254,9 +254,8 @@ same as the call above.
 Operations which don't make sense for the coordinate's units, such as adding
 seconds to meters, raise a [`UnitError`](`dascore.exceptions.UnitError`). So do
 ufunc methods whose units can't be determined, such as `np.multiply.reduce`.
-Since coordinates are immutable, operations which modify an input (eg
-`np.copyto` or the `out` parameter) raise a
-[`ParameterError`](`dascore.exceptions.ParameterError`).
+Coordinate values are read-only, so numpy raises a `ValueError` for operations
+which would write into them.
 
 # CoordManager
 

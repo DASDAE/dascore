@@ -94,12 +94,6 @@ _UNIT_MATCHED_UFUNCS = frozenset(
     }
 )
 
-# Numpy functions which modify one of their inputs in place. The read-only
-# array flag already stops these, but a ParameterError explains why.
-_MUTATING_ARRAY_FUNCS = frozenset(
-    {np.copyto, np.place, np.put, np.put_along_axis, np.putmask, np.fill_diagonal}
-)
-
 # Numpy functions which reduce an array to a single value. Time-like coords
 # need special handling for these (see _reduce_time_like).
 _REDUCING_ARRAY_FUNCS = frozenset(
@@ -650,12 +644,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """Implement numpy's ufunc protocol (eg np.sqrt(coord), coord + 1)."""
-        # Coord arrays are read-only, which numpy enforces for out= but
-        # not for ufunc.at, so these have to be rejected explicitly.
-        if kwargs.get("out") is not None or method == "at":
+        # Coord data is read-only, so numpy raises for operations which
+        # write into it, but ufunc.at ignores the flag and must be rejected.
+        if method == "at":
             msg = (
-                "Since coordinates are immutable, operations which modify "
-                "an input (eg the 'out' parameter) are not supported."
+                "Coordinates are immutable, so ufunc.at is not supported. "
+                "Apply the operation to the coordinate's values instead."
             )
             raise ParameterError(msg)
         if any(not isinstance(x, (BaseCoord, *_ARRAY_OP_TYPES)) for x in inputs):
@@ -685,12 +679,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Implement numpy's array protocol (eg np.concatenate([coord1]))."""
         if any(not issubclass(x, (BaseCoord, *_ARRAY_OP_TYPES)) for x in types):
             return NotImplemented
-        if func in _MUTATING_ARRAY_FUNCS or kwargs.get("out") is not None:
-            msg = (
-                f"{func.__name__} modifies an input but coordinates are "
-                f"immutable. Apply it to the coordinate's values instead."
-            )
-            raise ParameterError(msg)
         # Numpy can't reduce absolute times so dascore's logic is used.
         if dtype_time_like(self.dtype) and func in _REDUCING_ARRAY_FUNCS:
             out = _reduce_time_like(func, self.data)

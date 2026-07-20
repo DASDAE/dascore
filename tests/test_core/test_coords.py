@@ -2159,12 +2159,6 @@ class TestCoordinateArithmetic:
             coord + "bob"
         assert coord._operate(np.add, coord, "bob") is NotImplemented
 
-    def test_out_kwarg_raises(self, coord):
-        """Coords are immutable so the out parameter should raise."""
-        array = np.empty(len(coord))
-        with pytest.raises(ParameterError, match="immutable"):
-            np.add(coord, 1, out=array)
-
     def test_multiple_outputs(self, unitless_coord):
         """Ufuncs with multiple outputs should return multiple coords."""
         out = np.divmod(unitless_coord, 2)
@@ -2219,19 +2213,25 @@ class TestCoordinateArithmetic:
         out = np.multiply.reduce(get_coord(data=coord.values))
         assert np.isclose(out, np.multiply.reduce(coord.values))
 
+    def test_ufunc_at_raises(self, coord):
+        """Ufunc.at ignores numpy's read-only flag so it must be rejected."""
+        with pytest.raises(ParameterError, match="immutable"):
+            np.add.at(coord, [0], 1)
+        np.testing.assert_allclose(coord.values, [2.0, 4.0, 8.0])
+
     @pytest.mark.parametrize(
         "op",
         [
-            lambda x: np.add.at(x, [0], 1),
             lambda x: np.copyto(x, 0),
-            lambda x: np.add(x, 1, out=np.empty(len(x))),
+            lambda x: np.put(x, [0], 1),
+            lambda x: np.add(x, 1, out=x.values),
         ],
     )
-    def test_mutating_operations_raise(self, coord, op):
-        """Coords are immutable so in-place operations should raise."""
-        with pytest.raises(ParameterError, match="immutable"):
-            op(coord)
-        np.testing.assert_allclose(coord.values, [2.0, 4.0, 8.0])
+    def test_operations_writing_to_coord_raise(self, unitless_coord, op):
+        """Coord data is read-only, so numpy rejects writing into it."""
+        with pytest.raises(ValueError, match="read-only"):
+            op(unitless_coord)
+        np.testing.assert_allclose(unitless_coord.values, [2.0, 4.0, 8.0])
 
     def test_array_function_returning_list(self, unitless_coord):
         """Array functions which return lists should return coords."""
