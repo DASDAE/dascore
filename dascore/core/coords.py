@@ -124,8 +124,6 @@ def _wrap_array_op_output(out, units=None):
     """
     if isinstance(out, tuple):  # Some ufuncs (eg np.divmod) return tuples.
         return tuple(_wrap_array_op_output(x, units) for x in out)
-    if out is None or out is NotImplemented:
-        return out
     if isinstance(out, Quantity):
         out, units = out.magnitude, out.units
         units = None if units.dimensionless else units
