@@ -42,19 +42,11 @@ DIMS = ("time", "distance")
 class TestGetCoordManager:
     """Test suite for `get_coord_manager` helper function."""
 
-    def test_coords_and_attrs_raise(self, random_patch):
-        """Ensure using coords and attrs raises."""
-        msg = "Cannot use both attrs and coords"
-        coords, attrs = random_patch.coords, random_patch.attrs
-        with pytest.raises(ParameterError, match=msg):
-            get_coord_manager(coords=coords, attrs=attrs)
-
-    def test_coords_from_attrs(self, random_patch):
-        """Patch attrs no longer reconstruct coordinates."""
-        attrs = random_patch.attrs
-        out = get_coord_manager(attrs=attrs)
-        assert out.dims == ()
-        assert not out.coord_map
+    def test_attrs_not_accepted(self, random_patch):
+        """Coordinates are never built from attrs; the param is gone."""
+        attrs = {"time_min": 0, "time_max": 10, "time_step": 1}
+        with pytest.raises(TypeError, match="attrs"):
+            get_coord_manager(None, dims=("time",), attrs=attrs)
 
     def test_non_coord_dims(self):
         """Ensure non coordinate dimensions can be created using shape."""
@@ -320,16 +312,6 @@ class TestCoordManagerInputs:
         cm = cm_non_coord_dim
         assert isinstance(cm, CoordManager)
         assert cm.shape == (10, 5)
-
-
-class TestCoordManagerWithAttrs:
-    """Tests for initing coord managing with attribute dict."""
-
-    def test_missing_dim(self):
-        """Coord manager should be able to pull missing info from attributes."""
-        attrs = dict(distance_min=1, distance_max=100, distance_step=10)
-        new = get_coord_manager(None, ("distance",), attrs=attrs)
-        assert "distance" in new.coord_map
 
 
 class TestDrop:
@@ -924,26 +906,24 @@ class TestRenameDims:
         assert set(out.dim_map) == set(cm.dim_map)
 
 
-class TestUpdateFromAttrs:
-    """Tests to ensure updating attrs can update coordinates."""
+class TestUpdateFlatCoordKwargs:
+    """Coord updates via {dim}_{field} kwargs against the manager's own dims."""
 
-    def test_update_min(self, cm_basic):
-        """Ensure min time in attrs updates appropriate coord."""
+    def test_update_max(self, cm_basic):
+        """Ensure a {dim}_max kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_max": coord.min()}
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_max": coord.min()})
             new_coord = new.coord_map[dim]
             assert len(new_coord) == len(coord)
             assert new_coord.max() == coord.min()
 
-    def test_update_max(self, cm_basic):
-        """Ensure max time in attrs updates appropriate coord."""
+    def test_update_min(self, cm_basic):
+        """Ensure a {dim}_min kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_min": coord.max()}
             dist = coord.max() - coord.min()
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_min": coord.max()})
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert dist == new_dist
@@ -954,35 +934,13 @@ class TestUpdateFromAttrs:
         """Ensure the step can be updated which changes endtime."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_step": coord.step * 10}
             dist = coord.max() - coord.min()
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_step": coord.step * 10})
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert (dist * 10) == new_dist
             assert len(new_coord) == len(coord)
             assert new_coord.min() == coord.min()
-
-    def test_attrs_as_dict(self, cm_basic):
-        """Returned attrs should stay pure metadata."""
-        coord = cm_basic.coord_map["time"]
-        attrs = {"time_max": coord.min()}
-        cm, attrs = cm_basic.update_from_attrs(attrs)
-        assert "dims" not in attrs.model_dump()
-        assert cm.dims == cm_basic.dims
-
-    def test_attrs_as_patch_attr(self, cm_basic):
-        """Ensure pure PatchAttrs inputs are still accepted."""
-        attrs = dc.PatchAttrs(tag="example")
-        cm, new_attrs = cm_basic.update_from_attrs(attrs)
-        assert new_attrs == attrs
-        assert cm.dims == cm_basic.dims
-
-    def test_consistent_attrs_leaves_coords_unchanged(self, random_patch):
-        """Attrs which are already consistent should leave coord unchanged."""
-        attrs, coords = random_patch.attrs, random_patch.coords
-        new_coords, new_attrs = coords.update_from_attrs(attrs)
-        assert new_coords == coords
 
 
 class TestUpdate:

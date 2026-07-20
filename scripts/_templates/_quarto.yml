@@ -211,6 +211,9 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
+        - text: Coordinate Internals
+          href: notes/coordinate_internals.qmd
+
         - text: PatchAttrs
           href: notes/patch_attrs.qmd
 
@@ -219,6 +222,12 @@ website:
 
         - text: Velocity to Strain Rate
           href: notes/velocity_to_strain_rate.qmd
+
+        - text: Spool Index
+          href: notes/spool_index.qmd
+
+        - text: Spool Selection
+          href: notes/spool_selection.qmd
 
     - id: API
       title: "API"

@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from dascore.io.core import (
     FiberIO,
-    PatchFileSummary,
     ScanPayload,
     read,
     scan,
+    scan_payloads,
     scan_to_df,
     write,
 )

@@ -45,14 +45,12 @@ patch = spool[0]
 ```{python}
 #| output: false
 import dascore as dc
-# Import fetch to read DASCore example files 
-from dascore.utils.downloader import fetch
 
-# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
-directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
-# To read a directory of DAS data stored locally on your machine, 
-# simply replace the above line with:
+# Write example DAS files to a local directory just to get a usable path.
+# To read a directory of DAS data stored on your machine,
+# simply replace the line below with:
 # directory_path = "/path/to/data/directory/"
+directory_path = dc.examples.spool_to_directory(dc.get_example_spool())
 
 spool = (
     # Create a spool to interact with directory data
@@ -60,9 +58,9 @@ spool = (
     # Index the directory contents
     .update()
     # Sub-select a specific time range
-    .select(time_min=('2020-01-01', ...))
+    .select(time=('2020-01-01', ...))
     # Specify chunk of the output patches
-    .chunk(time=60, overlap=10)
+    .chunk(time=2, overlap=0.5)
 )
 ```
 

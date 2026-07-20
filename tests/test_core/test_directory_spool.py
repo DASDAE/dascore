@@ -1,9 +1,8 @@
-"""Tests for FileSpool."""
+"""Tests for directory-backed spools."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch as upatch
 
 import numpy as np
 import pandas as pd
@@ -11,11 +10,9 @@ import pytest
 
 import dascore as dc
 import dascore.examples
-from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
+from dascore.core.spool import Spool
 from dascore.exceptions import MissingPatchError, ParameterError
-from dascore.io.core import PatchFileSummary
-from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func, suppress_warnings
 
 DIRECTORY_SPOOLS = []
@@ -43,7 +40,7 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
 @register_func(DIRECTORY_SPOOLS)
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = DirectorySpool(one_file_dir)
+    spool = Spool.from_directory(one_file_dir)
     return spool.update()
 
 
@@ -101,7 +98,7 @@ class TestDirectorySpoolBasics:
 
     def test_isinstance(self, directory_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(directory_spool, DirectorySpool)
+        assert isinstance(directory_spool, Spool)
 
     def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
@@ -116,7 +113,7 @@ class TestDirectorySpoolBasics:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
-        spool = DirectorySpool(path).update().sort("time")
+        spool = Spool.from_directory(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -147,66 +144,131 @@ class TestMultiPatchFile:
 
 
 class TestLoadPatchFastPath:
-    """Tests for the direct FiberIO read path used by _load_patch."""
+    """FileResolver reads each row's patch through a single dc.read call."""
 
-    def test_requires_concrete_format_and_version(self, one_directory_spool):
-        """
-        Without a concrete format and version the fast path must defer to
-        dc.read, which detects them from the file; get_fiberio with a None
-        version would return the newest reader, not the file's version.
-        """
-        spool = one_directory_spool
-        assert spool._read_patches({"file_format": "", "file_version": ""}) is None
-        assert spool._read_patches({"file_format": "DASDAE"}) is None
-        assert spool._read_patches({"file_version": "1"}) is None
-
-    def test_unusual_fiberio_spool_defers_to_generic_read(
+    def test_forwards_recorded_format_and_version(
         self, one_directory_spool, monkeypatch
     ):
-        """Fast path should defer if the reader returns a non-memory spool."""
+        """The recorded format/version are forwarded so dc.read skips probing."""
+        resolver = one_directory_spool._catalog.resolver
+        calls = []
 
-        class _Reader:
-            def read(self, *args, **kwargs):
-                return ()
+        def _fake_read(**kwargs):
+            calls.append(kwargs)
+            return object()
 
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda format, version: _Reader(),
-        )
-        kwargs = {
-            "path": one_directory_spool.get_contents()["path"].iloc[0],
-            "file_format": "DASDAE",
-            "file_version": "1",
-        }
-        assert one_directory_spool._read_patches(kwargs) is None
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        resolver._read("path", {"file_format": "DASDAE", "file_version": "1"}, {}, "")
+        assert calls[-1]["file_format"] == "DASDAE"
+        assert calls[-1]["file_version"] == "1"
+        # empty format/version are simply omitted (dc.read detects them)
+        resolver._read("path", {"file_format": ""}, {}, "")
+        assert "file_format" not in calls[-1]
 
-    def test_multi_patch_selection_defers_to_generic_read(
+    def test_reads_file_once(self, one_directory_spool, monkeypatch):
+        """A row's patch is read exactly once regardless of the reader's return."""
+        calls = []
+
+        def _fake_read(**kwargs):
+            calls.append(kwargs)
+            return ()  # an unusual (empty) reader return
+
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        row = {"file_format": "DASDAE", "file_version": "1"}
+        resolver = one_directory_spool._catalog.resolver
+        resolver._read("path", row, {}, "")
+        assert len(calls) == 1
+
+    def test_multi_patch_resolves_identity_with_single_read(
         self, one_directory_spool, random_patch, monkeypatch
     ):
-        """Fast path should not choose the first patch from multi-patch reads."""
+        """Multi-patch reads resolve source identity from one dc.read call."""
+        patch_1 = random_patch.update_attrs(_source_patch_id="first")
+        patch_2 = random_patch.update_attrs(_source_patch_id="second")
+        reads = []
 
-        class _Reader:
-            def read(self, *args, **kwargs):
-                patch_2 = random_patch.update_attrs(tag="second")
-                return dc.spool([random_patch, patch_2])
+        def _fake_read(**kwargs):
+            reads.append(kwargs)
+            return dc.spool([patch_1, patch_2])
 
-        monkeypatch.setattr(
-            dc.io.FiberIO.manager,
-            "get_fiberio",
-            lambda format, version: _Reader(),
-        )
-        path = one_directory_spool.get_contents()["path"].iloc[0]
-        monkeypatch.setattr(one_directory_spool, "_select_kwargs", {"tag": "second"})
-        kwargs = {
-            "path": path,
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        row = {
+            "path": "path",
             "file_format": "DASDAE",
             "file_version": "1",
-            "_modified": True,
-            "tag": "second",
+            "source_patch_id": "second",
         }
+        resolver = one_directory_spool._catalog.resolver
+        patch = resolver.resolve(row)
+        assert patch.attrs["_source_patch_id"] == "second"
+        assert len(reads) == 1  # the file is read exactly once
 
-        assert one_directory_spool._read_patches(kwargs) is None
+    def test_positional_id_reads_whole_source(
+        self, one_directory_spool, random_patch, monkeypatch
+    ):
+        """Positional ids must ignore trim hints; a trimmed read would shift them."""
+        patch_2 = random_patch.update_attrs(tag="second")
+
+        def _fake_read(**kwargs):
+            assert "time" not in kwargs, "positional ids must read untrimmed"
+            return dc.spool([random_patch, patch_2])
+
+        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        row = {
+            "path": "path",
+            "file_format": "DASDAE",
+            "file_version": "1",
+            "source_patch_id": "1",
+        }
+        resolver = one_directory_spool._catalog.resolver
+        patch = resolver.resolve(row, time=(None, None))
+        assert patch.attrs["tag"] == "second"
+
+
+class TestSelectedDirectorySpools:
+    """Selection on directory spools (select_kwargs constructor removed)."""
+
+    @pytest.fixture(scope="class")
+    def spool_dir(self, random_spool, tmp_path_factory):
+        """A directory holding the random spool, one file per patch."""
+        path = tmp_path_factory.mktemp("select_kwargs_dir")
+        for num, patch in enumerate(random_spool):
+            patch.io.write(path / f"patch_{num}.h5", "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def first_patch_range(self, random_spool):
+        """The time range of the chronologically first patch."""
+        patch = sorted(random_spool, key=lambda x: x.get_coord("time").min())[0]
+        time = patch.get_coord("time")
+        return (time.min(), time.max())
+
+    def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
+        """Rows outside the requested range must not appear (regression)."""
+        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
+        assert 1 <= len(spool) < len(random_spool)
+        contents = spool.get_contents()
+        assert (contents["time_min"] <= first_patch_range[1]).all()
+        assert (contents["time_max"] >= first_patch_range[0]).all()
+        for patch in spool:
+            time = patch.get_coord("time")
+            assert time.min() >= first_patch_range[0]
+            assert time.max() <= first_patch_range[1]
+
+    def test_selected_spool_refuses_update(
+        self, spool_dir, random_spool, first_patch_range
+    ):
+        """D1: any operation severs update()."""
+        from dascore.exceptions import InvalidSpoolError
+
+        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
+        with pytest.raises(InvalidSpoolError, match="root spool"):
+            spool.update()
+
+    def test_select_kwargs_parameter_removed(self, spool_dir):
+        """The constructor no longer accepts select_kwargs."""
+        with pytest.raises(TypeError, match="select_kwargs"):
+            Spool.from_directory(spool_dir, select_kwargs={"tag": "x"})
 
 
 class TestDirectoryIndex:
@@ -222,19 +284,36 @@ class TestDirectoryIndex:
         """An index should be returned."""
         assert basic_file_spool.indexer.index_path.exists()
 
-    def test_index_len(self, basic_index_df, two_patch_directory):
-        """An index should be returned."""
-        spool = dc.spool(two_patch_directory)
+    def test_index_len(self, random_patch, tmp_path):
+        """Deleting and rebuilding the index reproduces the contents."""
+        # own directory so no other spool holds the index file open
+        dc.write(random_patch, tmp_path / "a.hdf5", "dasdae")
+        dc.write(random_patch.update_attrs(tag="b"), tmp_path / "b.hdf5", "dasdae")
+        spool = dc.spool(tmp_path)
+        spool.get_contents()  # build the index
+        # close the connection so the index file can be replaced (Windows
+        # cannot delete a file with an open handle), then rebuild fresh.
+        spool.indexer.close()
         spool.indexer.index_path.unlink()
-        df = spool.update().get_contents()
-        bank_paths = list(Path(two_patch_directory).rglob("*hdf5"))
+        rebuilt = dc.spool(tmp_path).update()
+        df = rebuilt.get_contents()
+        rebuilt.indexer.close()
+        bank_paths = list(Path(tmp_path).rglob("*hdf5"))
         assert isinstance(df, pd.DataFrame)
         assert len(bank_paths) == len(df)
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = list(PatchFileSummary.model_fields)
-        assert set(basic_index_df).issuperset(schema_fields)
+        expected = {
+            "path",
+            "file_format",
+            "file_version",
+            "dims",
+            "time_min",
+            "time_max",
+            "time_step",
+        }
+        assert set(basic_index_df).issuperset(expected)
 
     def test_patches_extracted(self, basic_file_spool):
         """Ensure the patches can be extracted."""
@@ -483,10 +562,10 @@ class TestGetContents:
     """Tests for getting the contents of the spool."""
 
     def test_str_columns_in_dataframe(self, diverse_directory_spool):
-        """Ensure all the string columns are in index."""
+        """Ensure the conventional string columns are in the index."""
         df = diverse_directory_spool.get_contents()
-        expected = HDFPatchIndexManager._min_itemsize
-        assert set(df.columns).issuperset(set(expected))
+        expected = {"path", "file_format", "file_version", "dims", "station"}
+        assert set(df.columns).issuperset(expected)
 
 
 class TestIndexing:
@@ -535,7 +614,7 @@ class TestIndexing:
         assert all(isinstance(patch, dc.Patch) for patch in chunked)
 
 
-class TestFileSpoolIntegrations:
+class TestFileBackedSpoolIntegrations:
     """Small integration tests for the file spool."""
 
     @pytest.fixture(scope="class")
@@ -611,13 +690,15 @@ class TestFileSpoolIntegrations:
             assert coord.max() <= depth_tup[1]
 
     def test_differing_distances(self, dist_differ_spool):
-        """Ensure iteration still works with conditions described in #583."""
+        """Iteration works cleanly under the conditions described in #583.
+
+        The generic index stores per-file distance ranges, so the select
+        already excluded the short-distance file; no patch needs the
+        historic skip-with-warning workaround.
+        """
         assert len(dist_differ_spool)
-        # #583 would raise on iterating. Verify that a warning is issued when
-        # a patch is skipped due to coordinate mismatch.
-        with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
-            for patch in dist_differ_spool:
-                assert isinstance(patch, dc.Patch)
+        for patch in dist_differ_spool:
+            assert isinstance(patch, dc.Patch)
 
     def test_missing_patch_error_catchable_as_index_error(self, dist_differ_spool):
         """
@@ -632,26 +713,42 @@ class TestFileSpoolIntegrations:
                 except IndexError:
                     pass
 
-    @pytest.mark.xfail()
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):
-        """Selecting outside of distance range should reduce spool length."""
-        # Need to implement new indexing before this will pass.
-        with suppress_warnings(UserWarning):
-            assert len(dist_differ_spool) == 1
+        """Selecting outside of distance range reduces spool length (#583)."""
+        assert len(dist_differ_spool) == 1
 
-    def test_iteration_unexpected_index_error(self, basic_file_spool):
-        """
-        Ensure unexpected IndexErrors (not #583) are re-raised during iteration.
-        """
-        # TODO this can be deleted once the new indexing is implemented.
-        # Mock _get_patches_from_index to raise an IndexError with unexpected
-        # message
-        with upatch.object(
-            basic_file_spool,
-            "_get_patches_from_index",
-            side_effect=IndexError("unexpected error from pandas"),
-        ):
-            # The iteration should re-raise the unexpected IndexError
-            with pytest.raises(IndexError, match="unexpected error from pandas"):
-                for _ in basic_file_spool:
-                    pass
+
+def _patch_shape(patch):
+    """Module-level helper (process pools need picklable functions)."""
+    return patch.shape
+
+
+class TestDirectorySpoolSerialization:
+    """Directory spools must pickle (process-backed map depends on it)."""
+
+    def test_pickle_round_trip(self, basic_file_spool):
+        """A directory spool pickles and reopens its own connection."""
+        import pickle
+
+        loaded = pickle.loads(pickle.dumps(basic_file_spool))
+        assert len(loaded) == len(basic_file_spool)
+        assert loaded[0].shape == basic_file_spool[0].shape
+
+    def test_pickle_selected_view(self, basic_file_spool):
+        """Selected views keep their selection through pickling."""
+        import pickle
+
+        df = basic_file_spool.get_contents()
+        sub = basic_file_spool.select(time=(df["time_min"].min(), None))
+        loaded = pickle.loads(pickle.dumps(sub))
+        assert len(loaded) == len(sub)
+
+    def test_process_pool_map(self, basic_file_spool):
+        """Spool.map works with a process pool executor."""
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=1) as client:
+            out = list(
+                basic_file_spool.map(_patch_shape, client=client, progress=False)
+            )
+        assert len(out) == len(basic_file_spool)

@@ -6,7 +6,6 @@ import gc
 import operator
 import re
 import weakref
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,14 +17,9 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.core.summary import (
-    PatchSummary,
-    _normalize_coord_summary_dtype,
-    coord_summary_from_data,
-)
+from dascore.core.summary import PatchSummary
 from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
 from dascore.io.core import (
-    _load_patch_summary,
     _scan_result_to_summary,
     _select_patch_from_spool,
 )
@@ -318,72 +312,6 @@ class TestInit:
         new = dc.Patch(random_patch)
         assert new == random_patch
 
-    def test_load_patch_summary_with_filters_on_multi_patch_file(self, tmp_path):
-        """Filtered internal summary load should still resolve the correct patch."""
-        path = tmp_path / "multi_patch.h5"
-        spool = dc.examples.get_example_spool("random_das", length=2)
-        dc.write(spool, path, "DASDAE", file_version="1")
-        scanned = dc.scan(path)
-        target = scanned[1]
-        assert target.source_patch_id
-        time_summary = target.get_coord_summary("time")
-        loaded = _load_patch_summary(target, time=(time_summary.min, time_summary.max))
-        loaded_time_summary = loaded.summary.get_coord_summary("time")
-        assert loaded_time_summary.min == time_summary.min
-        assert loaded_time_summary.max == time_summary.max
-
-    def test_load_patch_summary_requires_path_for_in_memory_summary(self, random_patch):
-        """In-memory summaries cannot be reloaded without a source path."""
-        scanned = dc.scan(random_patch)[0]
-        with pytest.raises(PatchAttributeError, match="no source path"):
-            _load_patch_summary(scanned)
-
-    def test_load_patch_summary_requires_path(self, random_patch):
-        """Summaries without a source path should raise cleanly."""
-        scanned = dc.scan(random_patch)[0]
-        with pytest.raises(PatchAttributeError, match="no source path"):
-            _load_patch_summary(scanned)
-
-    def test_load_patch_summary_passes_source_patch_id_to_read(self, monkeypatch):
-        """Reload should forward source_patch_id before validating the result."""
-        patch = dc.get_example_patch()
-        summary = PatchSummary(
-            attrs=patch.attrs,
-            coords=patch.coords.to_summary_dict(),
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(np.dtype(patch.data.dtype)),
-            source_path=Path("/tmp/example.h5"),
-            source_format="PRODML",
-            source_version="2.1",
-            source_patch_id="node-1",
-        )
-        called = {}
-
-        def fake_read(path, **kwargs):
-            called["path"] = path
-            called["kwargs"] = kwargs
-            return dc.spool([patch])
-
-        monkeypatch.setattr(dc, "read", fake_read)
-        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _load_patch_summary(summary)
-        assert called["path"] == summary.source_path
-        assert called["kwargs"]["source_patch_id"] == "node-1"
-
-    def test_load_patch_summary_empty_filtered_read_raises(self, tmp_path):
-        """
-        Internal summary load should translate empty filtered reads to patch errors.
-        """
-        path = tmp_path / "single_patch.h5"
-        patch = dc.get_example_patch()
-        dc.write(patch, path, "DASDAE", file_version="1")
-        scanned = dc.scan(path)[0]
-        with pytest.raises(PatchAttributeError, match="could not be resolved"):
-            _load_patch_summary(
-                scanned, time=(np.datetime64("1900-01-01"), np.datetime64("1900-01-02"))
-            )
-
     def test_patch_summary_from_patch_copies_private_source_patch_id(
         self, random_patch
     ):
@@ -485,6 +413,16 @@ class TestPatchSummary:
         assert out["time"] == (patch.coords.min("time"), patch.coords.max("time"))
         assert "distance_min" not in out
         assert np.isnan(out["time_step"])
+
+    def test_flat_dump_null_datetime_step(self, random_patch):
+        """A datetime coord without a clean step flat-dumps a NaT sentinel."""
+        time = random_patch.coords.get_array("time").copy()
+        time[-1] += np.timedelta64(1, "s")  # break uniformity
+        patch = random_patch.update_coords(time=time)
+        out = patch.summary.flat_dump()
+        step = out["time_step"]
+        assert isinstance(step, np.timedelta64)
+        assert pd.isnull(step)
 
     def test_select_from_spool_by_integer_source_patch_id(self, random_patch):
         """Integer-like source ids should fall back to positional selection."""
@@ -623,59 +561,10 @@ class TestPatchSummary:
         summary = random_patch.summary
         assert summary.dim_tuple == summary.dims
 
-    def test_coord_summary_from_coord_object(self, random_patch):
-        """coord_summary_from_data should accept live coord instances."""
-        coord = random_patch.get_coord("distance")
-        out = coord_summary_from_data(coord, dims=("distance",))
-        assert out.dims == ("distance",)
-        assert out.min == coord.min()
-        assert out.max == coord.max()
-        assert out.fingerprint == coord.fingerprint()
-
-    def test_coord_summary_from_data_uses_full_data(self):
-        """coord_summary_from_data should build summaries from full coord data."""
-        out = coord_summary_from_data(
-            np.array([1, 4, 2, 3]),
-            dims=("distance",),
-            dtype="int64",
-        )
-        assert out.min == 1
-        assert out.max == 4
-        assert out.step is None
-        assert out.fingerprint is not None
-
-    def test_coord_summary_from_data_empty_sets_len(self):
-        """Empty coord summaries should preserve explicit zero length."""
-        out = coord_summary_from_data(
-            np.array([], dtype="float64"),
-            dims=("distance",),
-            units="m",
-        )
-        assert out.len == 0
-        assert out.dims == ("distance",)
-        assert dc.get_quantity(out.units) == dc.get_quantity("m")
-
     def test_flat_dump_includes_coord_fingerprint(self, random_patch):
         """Flattened summaries should preserve coord fingerprints."""
         out = random_patch.summary.flat_dump()
         assert out["time_fingerprint"] == random_patch.get_coord("time").fingerprint()
-
-    def test_normalize_coord_summary_dtype_empty_fallback(self):
-        """Missing dtype metadata should normalize to an empty summary dtype."""
-        assert _normalize_coord_summary_dtype() == ""
-
-    @pytest.mark.parametrize(
-        ("kwargs", "expected"),
-        [
-            ({"is_datetime": True}, "datetime64"),
-            ({"is_timedelta": True}, "timedelta64"),
-            ({"is_string": True, "original_dtype": "<U8"}, "<U8"),
-            ({"dtype": "int64"}, "int64"),
-        ],
-    )
-    def test_normalize_coord_summary_dtype_branches(self, kwargs, expected):
-        """Coord summary dtype normalization should cover metadata branches."""
-        assert _normalize_coord_summary_dtype(**kwargs) == expected
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""
@@ -1012,10 +901,12 @@ class TestUpdateAttrs:
         assert time_summary.min == new_start
         assert time_summary.max == new_start + duration
 
-    def test_update_attrs_rejects_coordinate_fields(self, random_patch):
-        """Flat coordinate-style attrs should go through update_coords."""
-        with pytest.raises(ValueError, match="update_coords"):
-            random_patch.update_attrs(time_step=10)
+    def test_update_attrs_accepts_coordinate_shaped_names(self, random_patch):
+        """Coord-shaped names are ordinary attrs; coords are never affected."""
+        out = random_patch.update_attrs(time_step=10, channel_step=3)
+        assert out.attrs["time_step"] == 10
+        assert out.attrs["channel_step"] == 3
+        assert out.coords == random_patch.coords
 
     def test_update_non_sorted_coord(self, wacky_dim_patch):
         """Ensure update_coords updates non-sorted coordinates."""

@@ -16,7 +16,6 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.utils.array import _apply_binary_ufunc
-from dascore.utils.attrs import _raise_if_coord_attr_updates
 from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
@@ -114,7 +113,6 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-    _raise_if_coord_attr_updates(attrs)
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)

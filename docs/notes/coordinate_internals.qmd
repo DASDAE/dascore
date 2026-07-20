@@ -2,68 +2,77 @@
 title: Coordinate Internals
 ---
 
-This note explains the current internal coordinate model in DASCore, especially the parts that are easy to misread when working on string coordinates, exact coord summaries, and DASDAE scan paths.
+This note explains the current internal coordinate model in DASCore, with particular attention to exact values, segmented coordinates, summaries, and scan payloads.
 
-## Coord families
+## Coordinate families
 
-`get_coord(...)` classifies inputs into a small set of internal coord families:
+[`get_coord(...)`](`dascore.core.coords.get_coord`) returns the simplest coordinate type that fits the supplied inputs:
 
-- empty coords
-- singleton coords
-- string coords
-- range-like coords
-- generic array coords
+| Type | Purpose |
+|---|---|
+| `CoordPartial` | Shape and optional range metadata when coordinate values are unknown, empty, or entirely missing. |
+| `CoordRange` | A monotonic, evenly sampled coordinate represented by start, stop, and step. |
+| `CoordMonotonicArray` | A strictly increasing or decreasing array that is not evenly sampled. |
+| `CoordSegmented` | An ordered composition of non-overlapping monotonic segments whose concatenated values are preserved exactly. |
+| `CoordArray` | Arbitrary numeric, datetime, or timedelta values, including non-monotonic arrays. |
+| `CoordString` | String or categorical labels. |
 
-That classification is used for construction and summary generation. It is intentionally narrower than a full capability system; behavior that is truly coord-specific still lives on the coord classes.
+Array construction through `get_coord(data=...)` deliberately uses tolerant uniformity inference. Differences within a relative tolerance of about 0.1% may be represented by a `CoordRange`, which is convenient for ordinary patch operations but can move interior coordinate values. Code that promises exact stored values must not rely on that inference.
+
+For a strictly monotonic one-dimensional array, [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) is the truth-preserving constructor. It returns a `CoordRange` when the values are exactly uniform, a `CoordSegmented` when repeated uniform runs are separated by sampling changes, or a `CoordMonotonicArray` when there are no useful uniform runs. It rejects missing, duplicate, non-monotonic, and multidimensional values; scan implementations use a shared fallback to an ordinary array coordinate for those cases.
+
+## Segmented coordinates
+
+`CoordSegmented` represents coordinate values as normal monotonic segments rather than flattening them into a single array or idealizing them as one range. Exact continuation points fuse automatically, while real sampling changes remain segment boundaries. The composite coordinate has `step=None` because no single step describes the whole coordinate.
+
+There are two primary construction paths:
+
+- [`concat_coords(...)`](`dascore.core.coords.concat_coords`) combines already-known coordinate blocks, normalizes their ordering, and records non-contiguous boundaries.
+- `CoordSegmented.from_array(...)` detects uniform runs in one stored monotonic array. A difference belongs to a run when it equals a neighboring difference; isolated differences become seams.
+
+[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate. `kind="all"` returns every boundary and `kind="gaps"` keeps only boundaries whose excess spacing is greater than the requested tolerance.
+
+[`simplify(...)`](`dascore.core.coords.BaseCoord.simplify`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `simplify` may refit segments only when no value moves more than the supplied tolerance; `snap` forces one uniform range and has no bound on interior movement. With `tolerance=None` or `0`, `simplify` performs lossless simplification only.
+
+A patch may carry segmented dimensional coordinates in memory. Most file formats require contiguous coordinates, so [`write(...)`](`dascore.write`) rejects such patches by default. Use `patch.split_gaps()` explicitly, or `write(..., split=True)` with a multi-patch format, before persistence.
 
 ## String coordinates
 
-`CoordString` is the dedicated coord type for string or categorical values.
+`CoordString` is the dedicated coordinate type for string or categorical values. String coordinates do not support units, numeric range operations, relative selection, or slice-style range selection. They do support exact matching, wildcard matching, compiled regular expressions, boolean-mask selection, ordering, and lossy lexicographic min/max summaries.
 
-String coords are intentionally different from numeric, datetime, and timedelta coords:
+Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.Pattern` instances provide explicit regular-expression matching. Any construction path for string coordinates should reject unit-bearing inputs explicitly rather than silently dropping units.
 
-- they do not support units
-- they do not support range operations
-- they do not support relative or slice-style range selection
-- they do support exact matching, wildcard matching, compiled regex matching, boolean-mask selection, ordering, and lossy min/max summaries
+## Summaries are envelopes, not full coordinates
 
-Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled
-`re.Pattern` instances provide explicit regex matching.
+[`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 
-This means any path that constructs string coords should reject unit-bearing inputs explicitly rather than silently dropping units.
+The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
 
-## Summary construction
+[`PatchSummary`](`dascore.PatchSummary`) keeps non-coordinate `PatchAttrs`, a mapping of coordinate summaries, patch dimensions/shape/dtype, and reload provenance. [`PatchSummary.flat_dump(...)`](`dascore.PatchSummary.flat_dump`) produces fields such as `time_min`, `time_max`, `time_step`, and `time_fingerprint` for dataframes and indexes. Those flattened fields are output records, not supported input for synthesizing a new structured `PatchSummary` or live coordinate.
 
-`CoordSummary` is now exact-only:
+## Scan payload and summary boundaries
 
-- `coord.to_summary()` is the canonical path
-- `coord_summary_from_data(...)` builds a summary from a live coord or full array
-- `coord_summary_from_full_data(...)` requires full coord data and does not reconstruct from metadata
+Every [`FiberIO.scan(...)`](`dascore.io.core.FiberIO.scan`) result is a `ScanPayload` containing patch-local attrs, a full `CoordManager`, dims, shape, dtype, and an optional source-patch identifier. Format implementations do not attach reload provenance.
 
-Flattened fields such as `time_min`, `time_max`, `time_step`, and `time_fingerprint` are persisted summary output, not a supported way to synthesize a new `CoordSummary`.
+[`dc.scan_payloads(...)`](`dascore.scan_payloads`) exposes those full coordinate managers and adds `source_path`, `source_format`, and `source_version`. With `snap=True`, a format may preserve its historical behavior and idealize stored sample values as a uniform range. With `snap=False`, stored coordinate values must be represented exactly when the format exposes them. Header-defined start/step/count grids are already exact, so the flag is a no-op for those formats.
 
-## DASDAE scan path
+[`dc.scan(...)`](`dascore.scan`) consumes the same formatter payloads but collapses their coordinates to `CoordSummary` envelopes. It deliberately does not expose a `snap` argument because exact interior values are no longer present in its output. `dc.scan_to_df(...)` flattens the same summaries for tabular/index use.
 
-DASDAE reading has two different goals:
+This separation keeps directory indexing compact while allowing targeted callers to probe a file's true coordinate values without loading its data array. Full payloads can still retain large coordinate arrays, so they should be requested for specific resources and discarded promptly.
 
-- full reads, where coord arrays are materialized into a `CoordManager`
-- scan reads, where DASCore still wants exact coord information for summary creation
+## DASDAE coordinate storage and scanning
 
-For scan reads, DASDAE should:
+DASDAE stores coordinate arrays separately from patch data. Full reads materialize those arrays into a `CoordManager`. Scans also construct a real `CoordManager`, but avoid loading the data array itself; `snap=False` uses the exact construction path for stored one-dimensional arrays, while explicit stored start/step metadata remains a range fast path.
 
-1. load stored coord arrays
-2. build a real `CoordManager`
-3. let DASCore create `CoordSummary` objects from those full coords
-
-String arrays are a separate storage concern from coord semantics. PyTables cannot store raw unicode arrays directly, so DASDAE uses a string-byte serialization path only for arrays that are actually string-like.
+String-array serialization is separate from coordinate semantics. HDF5 backends cannot all store NumPy unicode arrays directly, so DASDAE encodes only arrays that are actually string-like and restores them before coordinate construction.
 
 ## Practical guidance
 
-When changing coord internals:
+When changing coordinate or scan internals:
 
-- keep string coord rules explicit instead of relying on generic numeric logic
-- treat flat coord summary fields as persisted metadata, not coord reconstruction input
-- do not infer that `dtype=object` means “string” unless a caller explicitly says so
-- do not create `CoordSummary` without first materializing the coord
-
-If a change seems to need special handling in both core coords and DASDAE, it usually belongs in shared coord classification or summary helpers rather than in format-specific code.
+- choose tolerant `get_coord(data=...)` only when idealizing small jitter is acceptable
+- use truth-preserving construction for any `snap=False` or exact-value contract
+- keep segment boundaries in live coordinates rather than extending `CoordSummary` with partial structural metadata
+- treat flat coordinate-summary fields as persisted output, not coordinate reconstruction input
+- keep string-coordinate rules explicit instead of routing them through generic numeric logic
+- put shared exact-construction behavior in coordinate or IO helpers instead of duplicating it across formats

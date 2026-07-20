@@ -11,11 +11,34 @@ from dascore.exceptions import InvalidSpoolError
 from dascore.utils.paths import (
     coerce_to_local_path,
     coerce_to_upath,
+    directory_writable,
     get_path_protocol,
     is_local_path,
     is_pathlike,
     requires_local_directory,
 )
+
+
+class TestDirectoryWritable:
+    """directory_writable probes without leaking exceptions."""
+
+    def test_writable_directory(self, tmp_path):
+        """A normal writable directory returns True."""
+        assert directory_writable(tmp_path) is True
+
+    def test_unwritable_returns_false(self, tmp_path):
+        """A probe that can't create its parent returns False, not OSError."""
+        # a path *under a file* makes mkdir raise NotADirectoryError (OSError)
+        a_file = tmp_path / "a_file"
+        a_file.write_text("x")
+        assert directory_writable(a_file / "sub") is False
+
+    def test_existing_legacy_probe_is_preserved(self, tmp_path):
+        """The writability probe never truncates a predictable old sentinel."""
+        sentinel = tmp_path / "._dascore_write_test_delete_me"
+        sentinel.write_text("keep me")
+        assert directory_writable(tmp_path) is True
+        assert sentinel.read_text() == "keep me"
 
 
 class TestIsPathlike:

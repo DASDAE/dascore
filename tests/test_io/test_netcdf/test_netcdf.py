@@ -691,6 +691,41 @@ class TestNetCDFXarrayCompatibility:
 class TestNetCDFEdgeCases:
     """Test edge cases and error conditions."""
 
+    def test_exact_scan_coord_preserves_values(self):
+        """Exact NetCDF scan coords should retain irregular stored values."""
+
+        class Coord:
+            values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
+            attrs: ClassVar = {"units": "m"}
+
+        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+
+        np.testing.assert_array_equal(coord.values, Coord.values)
+        assert coord.units == dc.get_quantity("m")
+
+    def test_snap_scan_coord_keeps_units(self):
+        """Snapped scan coords should also carry the stored units."""
+
+        class Coord:
+            values: ClassVar = np.arange(4.0)
+            attrs: ClassVar = {"units": "m"}
+
+        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=True)
+
+        np.testing.assert_array_equal(coord.values, Coord.values)
+        assert coord.units == dc.get_quantity("m")
+
+    def test_multidim_scan_coord_returns_raw_values(self):
+        """Non-1D coords cannot be segmented and pass through unchanged."""
+
+        class Coord:
+            values: ClassVar = np.arange(6.0).reshape(2, 3)
+            attrs: ClassVar = {"units": "m"}
+
+        out = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+
+        assert out is Coord.values
+
     @pytest.fixture
     def multi_patch_spool(self):
         """Create a spool with multiple patches for testing."""

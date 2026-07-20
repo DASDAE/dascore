@@ -42,7 +42,7 @@ class TestGetExamplePatch:
         assert isinstance(patch, dc.Patch)
 
     def test_file_backed_examples_use_direct_read(self, monkeypatch):
-        """File-backed examples should not depend on FileSpool patch resolution."""
+        """File-backed examples should not depend on file-spool patch resolution."""
         patch = dc.get_example_patch()
 
         def _fetch(_name):

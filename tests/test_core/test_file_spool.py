@@ -6,7 +6,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.clients.filespool import FileSpool
+from dascore.core.spool import Spool
 from dascore.exceptions import PatchAttributeError
 
 
@@ -15,7 +15,7 @@ class TestBasic:
 
     def test_type(self, terra15_file_spool, terra15_v5_path):
         """Ensure a file spool was returned."""
-        assert isinstance(terra15_file_spool, FileSpool)
+        assert isinstance(terra15_file_spool, Spool)
         assert len(terra15_file_spool) == len(dc.scan_to_df(terra15_v5_path))
 
     def test_get_patch(self, terra15_file_spool):
@@ -24,14 +24,14 @@ class TestBasic:
         assert isinstance(patch, dc.Patch)
 
     def test_init_from_filespool(self, terra15_file_spool):
-        """Ensure FileSpool can init from FileSPool."""
-        new = FileSpool(terra15_file_spool)
-        assert isinstance(new, FileSpool)
+        """Ensure a spool can copy-construct from another spool."""
+        new = Spool(terra15_file_spool)
+        assert isinstance(new, Spool)
 
     def test_str(self, terra15_file_spool):
         """Ensure file spool works."""
         out = str(terra15_file_spool)
-        assert "FileSpool" in out
+        assert "Spool" in out
 
     def test_update(self, tmp_path_factory, random_patch):
         """Update should preserve contents even when a format index hook is a no-op."""
@@ -46,16 +46,16 @@ class TestBasic:
     def test_raises_bad_file(self):
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
-            FileSpool("/not/a/directory")
+            Spool.from_file("/not/a/directory")
 
     def test_local_upath_file(self, terra15_v5_path):
-        """Ensure FileSpool accepts local UPath inputs."""
-        spool = FileSpool(UPath(terra15_v5_path))
-        assert isinstance(spool, FileSpool)
+        """Ensure from_file accepts local UPath inputs."""
+        spool = Spool.from_file(UPath(terra15_v5_path))
+        assert isinstance(spool, Spool)
         assert len(spool)
 
     def test_chunk(self, terra15_file_spool):
-        """Ensure chunking along time axis works with FileSpool."""
+        """Ensure chunking along time axis works on a file spool."""
         spool = terra15_file_spool
         time_coord = spool[0].get_coord("time")
         duration = time_coord.max() - time_coord.min()
@@ -71,7 +71,7 @@ class TestBasic:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
-        spool = FileSpool(path).sort("time")
+        spool = Spool.from_file(path).sort("time")
         loaded_patch = spool[0]
         assert loaded_patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -80,7 +80,7 @@ class TestBasic:
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "dasdae", file_version="1")
-        file_spool = FileSpool(path)
+        file_spool = Spool.from_file(path)
         kwargs = {"path": str(path), "file_format": "DASDAE", "file_version": "1"}
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            file_spool._load_patch(kwargs)
+            file_spool._catalog.resolver.resolve(kwargs)

@@ -35,10 +35,12 @@ class Terra15FormatterV4(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a terra15 v2 file, return summary information."""
         _version, data_node = _get_version_data_node(resource)
-        return _scan_terra15(resource, data_node)
+        return _scan_terra15(resource, data_node, snap=snap)
 
     def read(
         self,

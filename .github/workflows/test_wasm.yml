@@ -1,0 +1,50 @@
+# Build the PyPI wheel and exercise it in a real Pyodide WebAssembly runtime.
+name: TestWasm
+on:
+  push:
+    branches:
+      - master
+      - dev
+      - wasm
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - 'dascore/**'
+      - 'scripts/test_wasm.mjs'
+      - 'pyproject.toml'
+      - '.github/workflows/test_wasm.yml'
+
+concurrency:
+  group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test_wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Install Pyodide
+        run: npm install --no-save pyodide@314.0.2
+
+      - name: Test wheel in WebAssembly
+        run: node scripts/test_wasm.mjs dist/*.whl

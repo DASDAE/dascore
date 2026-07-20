@@ -2,24 +2,24 @@
 title: DASCore Documentation Strategy
 ---
 
-DASCore's documentation strives to follows [diataxis](https://diataxis.fr/) approach. In this system (developed by Daniele Procida) there are four types of documentation, each with different goals:
+DASCore's documentation follows the [Diátaxis](https://diataxis.fr/) approach. In this system, developed by Daniele Procida, there are four types of documentation with different goals:
 
 ![](../_static/diataxis.png)
 
 The sections of DASCore's documentation can be classified as follows:
 
-**Tutorials**: Tutorial, Contributing
+**Tutorials**: Tutorial
 
-**How-to-Guides**: Recipes
+**How-to guides**: Recipes, Contributing
 
 **Explanation**: Notes
 
 **Reference**: API
 
-We should try to not mix these types of documentation, but rather provide links in relevant locations. A few implications:
+We should avoid mixing these types of documentation and instead provide links in relevant locations. A few implications:
 
-* Long explanations of theory don't belong in the tutorial section; put a link to a page in the notes section if long explanation is needed.
+* Long explanations of theory do not belong in the tutorial section; link to a page in the notes section when a longer explanation is needed.
 
 * Tutorial pages should only show basic usage of functions/methods/classes, then [cross reference](../contributing/documentation.qmd#cross-references) the API page.
 
-* Notes shouldn't spend much time teaching how to use the code, they should be theory-focused
+* Notes should focus on explanation and design reasoning rather than step-by-step instruction.

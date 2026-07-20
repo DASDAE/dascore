@@ -22,3 +22,13 @@ class TestOptoDASIssues:
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
         assert patch.data.shape
+
+    def test_scan_distance_units_preserved(self):
+        """Snapped and exact scan coordinates should retain header units."""
+        path = fetch("decimated_optodas.hdf5")
+        fiber_io = OptoDASV8()
+
+        for snap in (True, False):
+            payload = fiber_io.scan(path, snap=snap)[0]
+            distance = payload["coords"].get_coord("distance")
+            assert distance.units == dc.get_quantity("m")

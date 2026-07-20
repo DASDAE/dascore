@@ -81,8 +81,11 @@ class TestChunk:
         new_content = new_spool.get_contents()
         # these should be (nearly) identical.
         common = set(chunk_df.columns) & set(new_content.columns)
-        # len fields may differ by ±1 between summary-based and data-based counts
-        skip = {"history"} | {c for c in common if c.endswith("_len")}
+        # len fields may differ by ±1 between summary-based and data-based
+        # counts; identity/provenance columns legitimately differ between
+        # plan rows and re-scanned live patches
+        skip = {"history", "path", "file_format", "file_version", "source_patch_id"}
+        skip |= {c for c in common if c.endswith("_len")}
         cols = sorted(common - skip)
         comp1, comp2 = chunk_df[cols], new_content[cols]
         equal_cols = (comp1 == comp2) | (pd.isnull(comp1) & pd.isnull(comp2))
@@ -170,10 +173,13 @@ class TestChunk:
         assert spool1 == spool2
 
     def test_too_big_overlap_raises(self, diverse_spool):
-        """Overlap > chunk an error should raise."""
-        msg = "overlap is greater than chunk size"
+        """Overlap >= chunk size should raise a clear error."""
+        msg = "overlap is greater than or equal to chunk size"
         with pytest.raises(ParameterError, match=msg):
             diverse_spool.chunk(time=10, overlap=11)
+        # Equal overlap would mean zero-stride segments; also rejected.
+        with pytest.raises(ParameterError, match=msg):
+            diverse_spool.chunk(time=10, overlap=10)
 
     def test_issue_474(self, random_spool):
         """Ensure spools can be chunked with the duration reported by coord."""
@@ -304,9 +310,20 @@ class TestChunkMerge:
         return p1, p2
 
     def test_merge_unequal_other(self, distance_adjacent):
-        """When distance values are not equal time shouldn't be merge-able."""
-        with pytest.raises(CoordMergeError):
-            distance_adjacent.chunk(time=...)
+        """Unequal distance coords partition rather than raise (0.2 change).
+
+        Patches whose non-chunked dimension coordinates differ are never
+        combined; they simply land in separate output patches.
+        """
+        out = distance_adjacent.chunk(time=...)
+        assert len(out) == len(distance_adjacent)
+
+        # the differing distance envelopes are preserved, not merged/duplicated
+        def _distance_envelopes(spool):
+            df = spool.get_contents()
+            return sorted(zip(df["distance_min"], df["distance_max"], strict=True))
+
+        assert _distance_envelopes(out) == _distance_envelopes(distance_adjacent)
 
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
@@ -400,6 +417,34 @@ class TestChunkMerge:
         new_df = sp.get_contents()
         assert old_df["distance_min"].min() == new_df["distance_min"].min()
         assert old_df["distance_max"].max() == new_df["distance_max"].max()
+
+    def test_non_si_merge_tolerance_uses_coord_units(self, random_patch):
+        """Canonical index steps are not interpreted in native coord units."""
+        from dascore.utils.patch import _get_merged_coord
+
+        size = len(random_patch.get_coord("distance"))
+        first = dc.get_coord(data=np.arange(size, dtype=float), units="km")
+        second = dc.get_coord(
+            data=np.arange(size, dtype=float) + size + 8,
+            units="km",
+        )
+        patches = [
+            random_patch.update_coords(distance=first),
+            random_patch.update_coords(distance=second),
+        ]
+        # Index summaries store numeric dimension steps in canonical SI.
+        summaries = pd.DataFrame({"distance_step": [1000.0, 1000.0]})
+        manager = _get_merged_coord(
+            summaries,
+            "distance",
+            [patch.coords for patch in patches],
+            tolerance=1.5,
+        )
+        merged = manager.coord_map["distance"]
+        assert not merged.evenly_sampled
+        assert np.array_equal(
+            merged.values, np.concatenate([first.values, second.values])
+        )
 
     def test_merge_distance_no_order(self, distance_adjacent_no_order):
         """Ensure distance can be merged with unsorted coords."""
@@ -499,8 +544,11 @@ class TestChunkMerge:
         """Tests for chunking when some patches have non coordinate dimensions."""
         patches = [random_patch.mean("time") for _ in range(3)]
         spool = dc.spool(patches)
-        chunked = spool.chunk(time=None)
-        # Since the time dims are NaN, this can't work.
+        # Losing patches silently would be data loss; this raises by default
+        # (0.2 change) with missing_dim="drop" restoring the old behavior.
+        with pytest.raises(ChunkError, match="missing_dim"):
+            spool.chunk(time=None)
+        chunked = spool.chunk(time=None, missing_dim="drop")
         assert not len(chunked)
 
     def test_merge_with_conflicting_private_coords(
@@ -642,6 +690,13 @@ class TestChunkMerge:
         assert len(out) == 1
 
 
+def _bare_assembler():
+    """An assembler with no frames, for direct streaming-merge tests."""
+    from dascore.utils.patch_assembly import PatchAssembler
+
+    return PatchAssembler(load_patch=None, merge_kwargs={})
+
+
 class TestStreamingMerge:
     """
     Tests for the streaming merge path, which copies each patch into a
@@ -650,28 +705,28 @@ class TestStreamingMerge:
 
     def test_streaming_path_used(self, adjacent_spool_no_overlap, monkeypatch):
         """Ensure simple merges take the streaming path."""
-        from dascore.core.spool import DataFrameSpool
+        from dascore.utils.patch_assembly import PatchAssembler
 
         called = []
-        original = DataFrameSpool._merge_patches_streaming
+        original = PatchAssembler._merge_patches_streaming
 
         def wrapper(self, *args, **kwargs):
             called.append(True)
             return original(self, *args, **kwargs)
 
-        monkeypatch.setattr(DataFrameSpool, "_merge_patches_streaming", wrapper)
+        monkeypatch.setattr(PatchAssembler, "_merge_patches_streaming", wrapper)
         merged = adjacent_spool_no_overlap.chunk(time=None)
         assert isinstance(merged[0], dc.Patch)
         assert called
 
     def test_matches_materialized_merge(self, adjacent_spool_no_overlap, monkeypatch):
         """Streaming and concatenating merges must produce identical patches."""
-        import dascore.core.spool as spool_module
+        import dascore.utils.patch_assembly as assembly_module
 
         streamed = adjacent_spool_no_overlap.chunk(time=None)[0]
         # Disabling the sample estimate forces the materialized path.
         monkeypatch.setattr(
-            spool_module, "_estimate_merge_samples", lambda df, dim: None
+            assembly_module, "_estimate_merge_samples", lambda df, dim: None
         )
         materialized = adjacent_spool_no_overlap.chunk(time=None)[0]
         assert np.array_equal(streamed.data, materialized.data)
@@ -692,24 +747,24 @@ class TestStreamingMerge:
 
     def test_transposes_patch_to_first_patch_dims(self, random_patch, monkeypatch):
         """Streaming merge should tolerate patches with the same dims reordered."""
-        spool = dc.spool([])
+        assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         time = p1.get_coord("time")
         p2 = p1.update_coords(time_min=time.max() + time.step).update_attrs(history=[])
         p2 = p2.transpose(*reversed(p2.dims))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
         )
         time_axis = p1.get_axis("time")
         samples = p1.data.shape[time_axis] * 2
-        out = spool._merge_patches_streaming(None, [{}, {}], "time", samples)
+        out = assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
         assert out.dims == p1.dims
         assert out.data.shape[time_axis] == samples
 
     def test_incompatible_shapes_raise_merge_error(self, random_patch, monkeypatch):
         """Streaming merge should wrap non-merge-dimension shape mismatches."""
-        spool = dc.spool([])
+        assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         time = p1.get_coord("time")
         p2 = p1.update_coords(time_min=time.max() + time.step).update_attrs(history=[])
@@ -717,16 +772,16 @@ class TestStreamingMerge:
         p2 = p2.select(distance=(None, distance.max() - distance.step))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
         )
         msg = "their shapes are incompatible"
         with pytest.raises(CoordMergeError, match=msg):
             samples = p1.data.shape[p1.get_axis("time")] * 2
-            spool._merge_patches_streaming(None, [{}, {}], "time", samples)
+            assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
 
     def test_unexpected_merge_dimension_raises(self, random_patch, monkeypatch):
         """Streaming merge should validate the actual varying dimension."""
-        spool = dc.spool([])
+        assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         dist = p1.get_coord("distance")
         p2 = p1.update_coords(distance_min=dist.max() + dist.step).update_attrs(
@@ -734,9 +789,143 @@ class TestStreamingMerge:
         )
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            spool, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
         )
         msg = "expected them to vary along time"
         with pytest.raises(CoordMergeError, match=msg):
             samples = p1.data.shape[p1.get_axis("time")] * 2
-            spool._merge_patches_streaming(None, [{}, {}], "time", samples)
+            assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
+
+
+class TestDescendingChunk:
+    """Public chunk behavior for descending coordinates (2026-07-18 F5)."""
+
+    def test_contiguous_descending_patches_merge(self):
+        """Two contiguous descending patches chunk into one patch."""
+        p = dc.get_example_patch()
+        flipped = p.flip("time")
+        t = p.get_coord("time")
+        span = t.max() - t.min() + t.step
+        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
+        merged = dc.spool([shifted, flipped]).chunk(time=None, conflict="drop")
+        assert len(merged) == 1
+        patch = merged[0]
+        time = patch.get_coord("time")
+        assert time.reverse_sorted
+        n_time = p.shape[p.get_axis("time")]
+        assert patch.shape[patch.get_axis("time")] == 2 * n_time
+        assert time.min() == t.min()
+
+
+class TestMixedUnitChunk:
+    """Chunk partitioning and merging across unit differences."""
+
+    @staticmethod
+    def _shifted(patch, units=None):
+        """The example patch shifted to be distance-contiguous, in units."""
+        d = patch.get_coord("distance")
+        span = d.max() - d.min() + d.step
+        values = d.data + span
+        if units == "ft":
+            values = values / 0.3048
+        out = patch.update_coords(distance=values)
+        return out.set_units(distance=units) if units else out
+
+    def test_incompatible_dimensionality_splits(self):
+        """Metre and second patches with contiguous SI magnitudes stay apart."""
+        p = dc.get_example_patch()
+        pm = p.set_units(distance="m")
+        ps = self._shifted(p, "s")
+        sp = dc.spool([pm, ps])
+        plan = sp.chunk_plan(distance=None)
+        assert len(plan.outputs) == 2
+        out = sp.chunk(distance=None, conflict="drop")
+        assert {str(x.get_coord("distance").units) for x in out} == {"1 m", "1 s"}
+
+    def test_unitless_and_unitful_split(self):
+        """A unitless patch never merges with a unitful one."""
+        p = dc.get_example_patch()
+        sp = dc.spool([p.set_units(distance="m"), self._shifted(p)])
+        assert len(sp.chunk(distance=None, conflict="drop")) == 2
+
+    def test_compatible_units_convert_and_merge(self):
+        """Metres and feet (one dimensionality) merge, converted, unit-true."""
+        p = dc.get_example_patch()
+        pm = p.set_units(distance="m")
+        pf = self._shifted(p, "ft")
+        out = dc.spool([pm, pf]).chunk(distance=None, conflict="drop")
+        assert len(out) == 1
+        patch = out[0]
+        coord = patch.get_coord("distance")
+        assert str(coord.units) == "1 m"
+        n = p.shape[p.get_axis("distance")]
+        assert patch.shape[patch.get_axis("distance")] == 2 * n
+        assert float(coord.max()) == pytest.approx(2 * n - 1)
+
+    def test_same_units_unchanged(self):
+        """The ordinary same-unit merge keeps its behavior and units."""
+        p = dc.get_example_patch()
+        sp = dc.spool([p.set_units(distance="m"), self._shifted(p, "m")])
+        out = sp.chunk(distance=None, conflict="drop")
+        assert len(out) == 1
+        assert str(out[0].get_coord("distance").units) == "1 m"
+
+
+class TestChainedChunk:
+    """Chunking a derived spool along another dimension (round-4 F1)."""
+
+    def test_other_dim_keeps_prior_boundaries(self):
+        """Re-chunking distance must not undo a time concatenation."""
+        p1 = dc.get_example_patch()
+        t = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=t.max() + t.step)
+        merged = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        current = merged[0]
+        d = current.get_coord("distance")
+        size = (d.max() - d.min()) / 2
+        actual = merged.chunk(distance=size, keep_partial=True, conflict="drop")
+        expected = dc.spool([current]).chunk(
+            distance=size, keep_partial=True, conflict="drop"
+        )
+        assert sorted(x.shape for x in actual) == sorted(x.shape for x in expected)
+        got = {
+            (str(x.get_coord("time").min()), str(x.get_coord("time").max()))
+            for x in actual
+        }
+        want = {
+            (str(x.get_coord("time").min()), str(x.get_coord("time").max()))
+            for x in expected
+        }
+        assert got == want
+
+    def test_segment_then_segment(self):
+        """chunk(time=...) then chunk(distance=...) partitions both dims."""
+        p = dc.get_example_patch()  # (300, 2000), 8 s
+        out = dc.spool([p]).chunk(time=2).chunk(distance=100)
+        assert len(out) == 12
+        assert {x.shape for x in out} == {(100, 500)}
+
+    def test_same_dim_rechunk_still_collapses(self):
+        """Re-chunking the same dim re-plans from members (no nesting)."""
+        p1 = dc.get_example_patch()
+        t = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=t.max() + t.step)
+        merged = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        rechunk = merged.chunk(time=2)
+        assert len(rechunk) == 8
+        assert {x.shape for x in rechunk} == {(300, 500)}
+
+
+class TestMatchMergeUnits:
+    """The member unit normalizer's defensive paths."""
+
+    def test_incompatible_units_pass_through(self):
+        """Dimensionality mismatches pass through for the merge to police."""
+        from dascore.units import get_quantity
+        from dascore.utils.patch_assembly import _match_merge_units
+
+        patch = dc.get_example_patch().set_units(distance="m")
+        target = get_quantity("s").units
+        out, kept = _match_merge_units(patch, "distance", target)
+        assert out is patch  # unconverted
+        assert kept == target

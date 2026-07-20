@@ -11,6 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
+from dascore.io.utils import get_exact_coord
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 from dascore.utils.models import UnitQuantity, UTF8Str
@@ -128,7 +129,7 @@ def _get_distance_coord(acq):
     return get_coord(start=start, stop=stop, units=units, step=step)
 
 
-def _get_time_coord(node):
+def _get_time_coord(node, snap=True):
     """Get the time information from a Raw node."""
     time_names = [x for x in node.keys() if x.endswith("DataTime")]
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
@@ -136,6 +137,9 @@ def _get_time_coord(node):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
+    if not snap:
+        values = time_array[:].astype("datetime64[us]")
+        return get_exact_coord(values, units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
@@ -219,10 +223,10 @@ def _get_data_unit_and_type(node):
 
 
 @register_func(_NODE_ATTRS_PROCESSORS, key="raw")
-def _get_raw_node_attr_coords(node_info, d_coord, base_info):
+def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get the raw data information."""
     info = dict(base_info)
-    t_coord = _get_time_coord(node_info.node)
+    t_coord = _get_time_coord(node_info.node, snap=snap)
     info.update(_get_data_unit_and_type(node_info.node))
     info["dtype"] = str(node_info.node["RawData"].dtype)
     info["_source_patch_id"] = node_info.name
@@ -234,10 +238,10 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info):
 
 
 @register_func(_NODE_ATTRS_PROCESSORS, key="fbe")
-def _get_processed_node_attr_coords(node_info, d_coord, base_info):
+def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get information about the processed patches."""
     out = dict(base_info)
-    t_coord = _get_time_coord(node_info.parent_node)
+    t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     out.update(_get_data_unit_and_type(node_info.node))
     out["dtype"] = str(node_info.node.dtype)
     out["_source_patch_id"] = node_info.name
@@ -277,7 +281,7 @@ def _get_fbe_data(node_info):
 
 
 def _yield_prodml_attrs_coords(
-    fi, extras=None
+    fi, extras=None, snap=True
 ) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str]]:
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
@@ -288,7 +292,7 @@ def _yield_prodml_attrs_coords(
     # Iterate the raw and processed data and return results in a list.
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
-        attr, coords = func(node_info, d_coord, base_info)
+        attr, coords = func(node_info, d_coord, base_info, snap=snap)
         yield attr, coords, node_info.name
 
 

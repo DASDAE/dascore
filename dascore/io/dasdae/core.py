@@ -15,8 +15,10 @@ from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
-    _get_attrs,
     _get_contents_from_patch_groups_generic,
+    _get_patch_attrs,
+    _is_legacy_file,
+    _is_legacy_group,
     _kwargs_empty,
     _matches_attr_filters,
     _read_patch,
@@ -49,6 +51,7 @@ class DASDAEV1(FiberIO):
     name = "DASDAE"
     preferred_extensions = ("h5", "hdf5")
     version = "1"
+    multi_patch_write = True
 
     def write(
         self,
@@ -73,10 +76,18 @@ class DASDAEV1(FiberIO):
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
-        # write new patches to file
+        # write new patches to file, ensuring unique group names within this
+        # batch so same-named patches (e.g. gap-split siblings that differ
+        # only along a non-named dimension) don't overwrite each other.
+        # strict zip keeps streaming (no spool materialization) while failing
+        # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
-        for patch, name in zip(patches, patch_names):
-            _save_patch(patch, waveforms, name)
+        counts: dict[str, int] = {}
+        for patch, name in zip(patches, patch_names, strict=True):
+            num = counts.get(name, 0)
+            counts[name] = num + 1
+            unique_name = name if num == 0 else f"{name}__{num}"
+            _save_patch(patch, waveforms, unique_name)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""
@@ -109,20 +120,22 @@ class DASDAEV1(FiberIO):
             waveform_group = resource["waveforms"]
         except (KeyError, IndexError):
             return dc.spool([])
+        file_legacy = _is_legacy_file(resource)
         for patch_group in waveform_group.values():
             patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
             if source_patch_ids and patch_name not in source_patch_ids:
                 continue
-            attrs = _get_attrs(patch_group)
+            legacy = _is_legacy_group(patch_group, file_legacy)
+            attrs = _get_patch_attrs(patch_group, legacy)
             if not _matches_attr_filters(attrs, kwargs):
                 continue
-            patch = _read_patch(patch_group, **kwargs)
+            patch = _read_patch(patch_group, legacy=legacy, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)
         return dc.spool(patches)
 
-    def scan(self, resource: H5Reader, **kwargs):
+    def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """
         Get patch info by iterating waveform groups in the file.
 
@@ -131,4 +144,4 @@ class DASDAEV1(FiberIO):
         resource
             A path to the file.
         """
-        return _get_contents_from_patch_groups_generic(resource)
+        return _get_contents_from_patch_groups_generic(resource, snap=snap)

@@ -80,7 +80,7 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path, **kwargs) -> list[ScanPayload]:
+    def scan(self, path, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -92,7 +92,7 @@ class JingleV1(FiberIO):
             "coords": coord_manager,
             "dims": coord_manager.dims,
             "shape": coord_manager.shape,
-            "data_type": "...",
+            "dtype": "...",
             "source_patch_id": "...",  # when needed
         }
 
@@ -129,6 +129,23 @@ same logical patch. Otherwise the lazy planning done by `spool(...)` can be
 wrong.
 :::
 
+## Scan payloads and the `snap` contract
+
+[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects inside `ScanPayload` dictionaries. DASCore's public [`scan_payloads`](`dascore.scan_payloads`) function exposes those raw payloads and adds `source_path`, `source_format`, and `source_version` provenance. By contrast, [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce coordinates to envelope summaries and remain the appropriate APIs for indexing whole directories.
+
+The public payload boundary validates attrs, dimension names, shape, dtype, and provenance types. It also requires `dims` and `shape` to match the returned `CoordManager` exactly, so malformed formatter payloads fail immediately rather than entering indexing or lazy reload paths.
+
+Every `FiberIO.scan` implementation must accept `snap: bool = True`, either explicitly or through `**kwargs`. The contract is:
+
+- `snap=True` (the default) preserves existing behavior. Formats may represent stored sample times as an idealized uniform range.
+- `snap=False` means returned coords must represent stored coordinate values exactly. For header-defined formats whose coordinates are already specified by start, step, and sample count, this is a documented no-op.
+
+Formats that read stored per-sample coordinate arrays must not use bare `get_coord(array)` for the exact path because its tolerant uniformity inference can snap small jitter. Use the shared [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) helper, which builds a value-preserving coordinate via `CoordSegmented.from_array(values, tolerance=0, units=...)`: a truly uniform array becomes a `CoordRange`, a piecewise-uniform array exposes its internal sampling changes through `CoordSegmented`, and a non-monotonic array falls back to a plain array coordinate. The helper also guards against pathological input: an array whose sub-step jitter would produce roughly one segment per sample is returned as a plain monotonic coordinate rather than an over-segmented one, keeping every value exact without the memory and construction cost of per-sample seams.
+
+`snap=False` describes the coordinate values *stored* by the format, which are not necessarily what `read(...)` returns. A format whose `read` reconstructs coordinates from header start/step/count metadata (e.g. ProdML) will still return that idealized range from `read`, while `scan_payloads(..., snap=False)` reports the exact stored per-sample array. The common IO conformance test only compares scan and read coordinates for formats whose `read` also accepts `snap`/`snap_dims`.
+
+`scan_payloads` retains real coordinate arrays, so callers should scan specific files and discard payloads promptly rather than retaining payloads for an entire large directory.
+
 ## `source_patch_id`
 
 If a single file can produce more than one patch, your format should usually provide a `source_patch_id` for each scan payload returned by `scan`.
@@ -153,7 +170,7 @@ In implementation code, the simplest pattern is usually:
 
 1. Build normal `PatchAttrs` for one logical patch.
 2. Build the exact `CoordManager` you would use for `read()`.
-3. Return one payload with those values plus `dims`, `shape`, and `data_type`.
+3. Return one payload with those values plus `dims`, `shape`, and `dtype`.
 
 If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
 implementation will normalize it into the same structured payload shape. Format
@@ -163,7 +180,7 @@ loading the full data array.
 
 ## Support for Streams/Buffers
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` or `h5py.File` object. There are a few reasons for this:
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of an `h5py.File` object. There are a few reasons for this:
 
 * More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
 * It is usually more efficient since open-file handles can be automatically reused.

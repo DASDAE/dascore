@@ -11,7 +11,6 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
-import tables
 
 import dascore as dc
 from dascore.compat import random_state
@@ -19,6 +18,7 @@ from dascore.config import set_config
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import dasdae as dasdae_mod
+from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _decode_attr_value,
@@ -31,7 +31,6 @@ from dascore.io.dasdae.utils import (
     _get_scan_payload_from_group,
     _save_array,
     _save_patch,
-    _translate_legacy_attrs,
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -164,6 +163,32 @@ class TestReadDASDAE:
             spool = dc.read(path, file_format="DASDAE")
         assert len(spool) == 1
         assert spool[0].dims
+
+    def test_append_to_legacy_file_keeps_new_attrs(
+        self, random_patch, tmp_path_factory
+    ):
+        """New groups appended to a legacy file must not be legacy-stripped."""
+        from dascore.io.dasdae.utils import _SEPARATE_ATTRS_KEY
+
+        path = tmp_path_factory.mktemp("dasdae_legacy_append") / "mixed.h5"
+        old_patch = random_patch.update_attrs(tag="old")
+        old_patch.io.write(path, "dasdae")
+        # simulate a legacy file: strip the root and group markers
+        with h5py.File(path, "a") as h5:
+            del h5.attrs[_SEPARATE_ATTRS_KEY]
+            for group in h5["waveforms"].values():
+                del group.attrs[_SEPARATE_ATTRS_KEY]
+        # append a new patch carrying an attr shadowing its own coord envelope
+        dim = random_patch.dims[0]
+        new_patch = random_patch.update_attrs(tag="new", **{f"{dim}_step": 999})
+        new_patch.io.write(path, "dasdae")
+        with h5py.File(path, "r") as h5:
+            assert not h5.attrs.get(_SEPARATE_ATTRS_KEY, False)  # file stays legacy
+        patches = {p.attrs["tag"]: p for p in dc.read(path, file_format="DASDAE")}
+        assert set(patches) == {"old", "new"}
+        # the appended group round-trips exactly; the legacy one still reads
+        assert patches["new"].attrs[f"{dim}_step"] == 999
+        assert patches["old"].coords == old_patch.coords
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes."""
@@ -323,7 +348,7 @@ class TestLegacyFixtureCompatibility:
             def to_summary_dict(self):
                 return {"time": {"units": "s", "step": 1}}
 
-        out = _translate_legacy_attrs({"coords": CoordManagerLike()})
+        out = translate_legacy_attrs({"coords": CoordManagerLike()})
         assert out["time_units"] == "s"
         assert out["time_step"] == 1
 
@@ -334,7 +359,7 @@ class TestLegacyFixtureCompatibility:
             def to_summary(self):
                 return dc.core.CoordSummary(min=0, max=1, step=2, units="m")
 
-        out = _translate_legacy_attrs(
+        out = translate_legacy_attrs(
             {
                 "coords": {"distance": SummaryLike(), "time": object()},
                 "dims": "distance,time",
@@ -346,17 +371,33 @@ class TestLegacyFixtureCompatibility:
         assert out["time_step"] == 3
 
     def test_translate_legacy_attrs_ignores_non_mapping_coords(self):
-        """Legacy stringified coord payloads should be ignored, not crash."""
-        out = _translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
+        """Undecodable string coord payloads are ignored once opted in."""
+        with set_config(allow_dasdae_format_unpickle=True):
+            out = translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
         assert "coords" not in out
 
     def test_translate_legacy_attrs_decodes_pickled_coord_payload(self):
         """Legacy pickled coord payloads should still restore coord metadata."""
         payload = pickle.dumps({"distance": {"min": 0, "max": 1, "units": "m"}})
-        out = _translate_legacy_attrs({"coords": payload.decode("latin1")})
+        with set_config(allow_dasdae_format_unpickle=True):
+            out = translate_legacy_attrs({"coords": payload.decode("latin1")})
         assert out["distance_units"] == "m"
         assert out["distance_min"] == 0
         assert out["distance_max"] == 1
+
+    def test_translate_legacy_attrs_never_unpickles_without_opt_in(self):
+        """The opt-in gate must fire before any pickle.loads call runs."""
+        executed = []
+
+        class _Payload:
+            def __reduce__(self):
+                return (executed.append, ("pickle ran",))
+
+        payload = pickle.dumps(_Payload()).decode("latin1")
+        with set_config(allow_dasdae_format_unpickle=False):
+            with pytest.raises(InvalidFiberFileError, match="unpickle"):
+                translate_legacy_attrs({"coords": payload})
+        assert not executed, "pickle.loads ran before the security gate"
 
     def test_scan_preserves_legacy_coord_units_from_attr_payload(self):
         """Legacy attr coord units should backfill missing coord-node units."""

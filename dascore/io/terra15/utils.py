@@ -9,6 +9,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.io import ScanPayload
 from dascore.io.core import _make_scan_payload
+from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -81,12 +82,12 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(h5_fi, data_node, extras=None) -> list[ScanPayload]:
+def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[ScanPayload]:
     """Scan a terra15 file, return metadata."""
     out = {} if extras is None else dict(extras)
     out.update(_get_default_attrs(h5_fi.attrs))
     coords = {
-        "time": _get_time_coord(data_node, snap_dims=True),
+        "time": _get_time_coord(data_node, snap_dims=snap),
         "distance": _get_distance_coord(h5_fi),
     }
     coord_manager = get_coord_manager(coords=coords, dims=tuple(coords))
@@ -107,7 +108,8 @@ def _scan_terra15(h5_fi, data_node, extras=None) -> list[ScanPayload]:
 def _get_raw_time_coord(data_node):
     """Read the time from the data node and return it."""
     time = _get_time_node(data_node)[:]
-    return get_coord(data=to_datetime64(time))
+    values = to_datetime64(time)
+    return get_exact_coord(values, units="s")
 
 
 def _read_terra15(

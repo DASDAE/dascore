@@ -31,6 +31,10 @@ class ParameterError(ValueError, DASCoreError):
     """Raised when something is wrong with an input parameter."""
 
 
+class InvalidSpoolQueryError(ParameterError):
+    """Raised when a spool query references unknown names or bad values."""
+
+
 class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
@@ -105,7 +109,11 @@ class InvalidFileHandlerError(TypeError, DASCoreError):
     """Raised when a writable file handler is requested from a read handle."""
 
 
-class InvalidIndexVersionError(ValueError, DASCoreError):
+class InvalidIndexError(ValueError, DASCoreError):
+    """Raised when a persisted index is invalid or incompatible."""
+
+
+class InvalidIndexVersionError(InvalidIndexError):
     """Raised when a version mismatch occurs in index."""
 
 

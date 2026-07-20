@@ -30,6 +30,8 @@ license = { file="docs/LICENSE" }
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Environment :: WebAssembly",
+    "Environment :: WebAssembly :: Emscripten",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3.10",
@@ -53,8 +55,7 @@ dependencies = [
      "pooch>=1.2",
      "pydantic>2.1",
      "rich",
-     "tables>=3.7",
-     "typing_extensions>=4.12",
+      "typing_extensions>=4.12",
      "universal-pathlib",
      "pint>=0.24.4",
      "scipy>=1.15",
@@ -72,6 +73,7 @@ extras = [
     "segyio",
     "bottleneck",
     "pymseed[numpy]",
+    "protobuf",
 ]
 
 docs = [
@@ -88,7 +90,6 @@ test = [
     "pytest",
     "pytest-timeout",
     "pytest-codeblocks",
-    "pytest-cov",
     "s3fs",
     "starlette",
     "twine",
@@ -151,7 +152,8 @@ SEGY__V1_0 = "dascore.io.segy.core:SegyV1_0"
 SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
 SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
-SINTELA_BINARY__V3 = "dascore.io.sintela_binary.core:SintelaBinaryV3"
+SINTELA_BINARY__V3 = "dascore.io.sintela.core:SintelaBinaryV3"
+SINTELA_PROTOBUF__V1 = "dascore.io.sintela.core:SintelaProtobufV1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
@@ -242,8 +244,6 @@ norecursedirs = [
     "worktrees",
 ]
 filterwarnings = [
-    # Ignore hdf5 warnings from pytables, See pytables #1035
-    'ignore::Warning:tables:'
 ]
 markers = [
     "network: tests that require network-style filesystem access",

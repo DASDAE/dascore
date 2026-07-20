@@ -384,6 +384,17 @@ class TestAllDiffsCloseEnough:
         """An empty set of diffs should not be considered close enough."""
         assert not all_diffs_close_enough([])
 
+    @pytest.mark.parametrize(
+        "diffs",
+        [
+            np.array([np.nan, np.nan]),
+            np.array(["NaT", "NaT"], dtype="timedelta64[ns]"),
+        ],
+    )
+    def test_all_null_false(self, diffs):
+        """Diffs containing only null values are not close enough."""
+        assert not all_diffs_close_enough(diffs)
+
 
 class TestOptionalImport:
     """Ensure the optional import works."""

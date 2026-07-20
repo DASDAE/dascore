@@ -43,9 +43,11 @@ class DASHDF5(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Get metadata from file."""
-        coords = _get_cf_coords(resource)
+        coords = _get_cf_coords(resource, snap=snap)
         attrs = _get_cf_attrs(resource, coords)
         return [
             {

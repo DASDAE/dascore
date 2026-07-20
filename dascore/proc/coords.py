@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from dascore.constants import PatchType, select_values_description
+from dascore.constants import PatchType, SpoolType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import (
     CoordError,
@@ -810,3 +810,65 @@ def get_axis(self: PatchType, dim: str) -> int:
     >>> assert axis == patch.get_axis("time")
     """
     return self.coords.get_axis(dim)
+
+
+def split_gaps(self: PatchType, dim: str | None = None) -> SpoolType:
+    """
+    Split the patch into contiguous patches at coordinate gaps.
+
+    Dimensional coordinates that are segmented
+    ([`CoordSegmented`](`dascore.core.coords.CoordSegmented`), e.g. produced
+    by concatenating nearly-contiguous data) mark where the patch is not
+    contiguous. This splits the patch at every segment boundary so each
+    output patch has a plain, contiguous coordinate.
+
+    Parameters
+    ----------
+    self
+        The Patch object.
+    dim
+        The dimension to split along. If None (default), split along every
+        dimension with a segmented coordinate. Patches without segmented
+        coordinates come back unchanged (as a length 1 spool).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.core.coords import concat_coords, get_coord
+    >>>
+    >>> # A patch whose distance coordinate has a gap.
+    >>> dist = concat_coords(
+    ...     get_coord(start=0.0, stop=10.0, step=1.0),
+    ...     get_coord(start=15.0, stop=25.0, step=1.0),
+    ... )
+    >>> patch = dc.Patch(
+    ...     data=np.zeros((len(dist), 5)),
+    ...     coords={"distance": dist, "time": dc.to_datetime64(np.arange(5))},
+    ...     dims=("distance", "time"),
+    ... )
+    >>> spool = patch.split_gaps()
+    >>> assert len(spool) == 2
+    """
+    import dascore as dc
+    from dascore.core.coords import CoordSegmented
+
+    if dim is not None and dim not in self.dims:
+        msg = f"split_gaps dim must be one of {self.dims}, got {dim!r}."
+        raise ParameterError(msg)
+    dims = (dim,) if dim is not None else self.dims
+    patches = [self]
+    for dname in dims:
+        out = []
+        for patch in patches:
+            coord = patch.get_coord(dname)
+            if not isinstance(coord, CoordSegmented):
+                out.append(patch)
+                continue
+            offset = 0
+            for seg in coord.segments:
+                stop = offset + len(seg)
+                out.append(patch.select(**{dname: (offset, stop)}, samples=True))
+                offset = stop
+        patches = out
+    return dc.spool(patches)

@@ -22,7 +22,6 @@ import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
-import dascore as dc
 from dascore.compat import UPath, is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
@@ -432,36 +431,10 @@ def iterate(obj):
     return obj if isinstance(obj, Iterable) else (obj,)
 
 
-class CacheDescriptor:
-    """A descriptor for storing infor in an instance cache (mapping)."""
-
-    def __init__(self, cache_name, func_name, args=None, kwargs=None):
-        self._cache_name = cache_name
-        self._func_name = func_name
-        self._args = () if args is None else args
-        self._kwargs = {} if kwargs is None else kwargs
-
-    def __set_name__(self, owner, name):
-        """Method to set the name of the description on the instance."""
-        self._name = name
-
-    def __get__(self, instance, owner):
-        """Get contents of the cache."""
-        cache = getattr(instance, self._cache_name)
-        if self._name not in cache:
-            func = getattr(instance, self._func_name)
-            out = func(*self._args, **self._kwargs)
-            cache[self._name] = out
-        return cache[self._name]
-
-    def __set__(self, instance, value):
-        """Set the cache contents."""
-        cache = getattr(instance, self._cache_name)
-        cache[self._name] = value
-
-
 def optional_import(
-    package_name: str, on_missing: Literal["raise", "warn", "ignore"] = "raise"
+    package_name: str,
+    on_missing: Literal["raise", "warn", "ignore"] = "raise",
+    required_for: str = "the requested functionality",
 ) -> ModuleType | None:
     """
     Import a module and return the module object if installed.
@@ -476,6 +449,8 @@ def optional_import(
     on_missing
         If "raise" raise an Error if missing, if "warn" or "ignore",
         return None.
+    required_for
+        A string indicating what this import is requried for.
 
     Raises
     ------
@@ -498,10 +473,7 @@ def optional_import(
     try:
         mod = importlib.import_module(package_name)
     except ImportError:
-        msg = (
-            f"{package_name} is not installed but is required for the "
-            f"requested functionality."
-        )
+        msg = f"{package_name} is not installed but is required for {required_for}"
         warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
         mod = None
     return mod
@@ -657,12 +629,6 @@ def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
     return bool(re.match(regex, input_str))
 
 
-def is_valid_coord_str(input_str, prefixes=None):
-    """Return True if an input string is valid for representing coord info."""
-    _valid_keys = tuple(dc.core.CoordSummary.model_fields)
-    return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
-
-
 def cached_method(func):
     """
     Cache decorated method.
@@ -764,6 +730,11 @@ def _dict_list_diffs(dict_list):
             if first[key] != other[key]:
                 out.add(key)
     return sorted(out)
+
+
+def is_range(value) -> bool:
+    """True for a 2-tuple range (a ``(start, stop)`` selector)."""
+    return isinstance(value, tuple) and len(value) == 2
 
 
 def sanitize_range_param(select) -> tuple:

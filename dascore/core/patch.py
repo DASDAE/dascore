@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import cached_property
 from typing import Final
+from uuid import uuid4
 
 import numpy as np
 from rich.text import Text
@@ -99,6 +100,9 @@ class Patch(NamespaceOwner):
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
+        # Lineage identity: minted eagerly so copies made at any point
+        # (deepcopy/pickle carry __dict__) share it deterministically.
+        self._instance_id = uuid4().hex
 
     def __eq__(self, other):
         """Compare one Patch."""
@@ -361,6 +365,7 @@ class Patch(NamespaceOwner):
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.coords.squeeze
     append_dims = dascore.proc.coords.append_dims
+    split_gaps = dascore.proc.coords.split_gaps
     transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
     snap_coords = dascore.proc.snap_coords

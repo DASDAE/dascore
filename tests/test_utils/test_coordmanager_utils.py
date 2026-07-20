@@ -21,7 +21,7 @@ class TestMergeCoordManagers:
         coord = cm.coord_map[name]
         start = coord.max() if from_max else coord.min()
         attr_name = f"{name}_min"
-        new, _ = cm.update_from_attrs({attr_name: start + value})
+        new = cm.update(**{attr_name: start + value})
         return new
 
     @pytest.fixture(scope="class")
@@ -165,3 +165,22 @@ class TestMergeCoordManagers:
 
         with pytest.raises(CoordMergeError, match="cannot be merged"):
             merge_coord_managers([c1, c2], dim="time", drop_conflicting=False)
+
+
+class TestRawMergeKeepsUnits:
+    """The raw-concatenation merge fallback keeps common units."""
+
+    def test_units_survive_value_merge(self):
+        """Merging value-backed coords with one common unit keeps it."""
+        import numpy as np
+
+        import dascore as dc
+        from dascore.utils.coordmanager import merge_coord_managers
+
+        p1 = dc.get_example_patch().set_units(distance="m")
+        d = p1.get_coord("distance")
+        # non-uniform values force the raw concatenation path
+        values = np.sort(np.random.default_rng(0).uniform(400, 500, len(d.data)))
+        p2 = p1.update_coords(distance=values).set_units(distance="m")
+        merged = merge_coord_managers([p1.coords, p2.coords], dim="distance")
+        assert str(merged.coord_map["distance"].units) == "1 m"

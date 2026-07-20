@@ -89,7 +89,7 @@ It is best not to delete files once added to a directory managed by DASCore.
 Despite some implementation differences, all spools have common behavior/methods.
 
 :::{.callout-note}
-Remote file resources work with `dc.spool(...)`, `dc.read(...)`, and `dc.scan(...)`. 
+Remote file resources work with `dc.spool(...)`, `dc.read(...)`, `dc.scan(...)`, and `dc.scan_payloads(...)`.
 :::
 
 :::{.callout-note}
@@ -170,7 +170,7 @@ print(contents)
 #| echo: false
 from IPython.display import display
 
-display(contents.drop(columns=['patch']))
+display(contents.drop(columns=[c for c in contents.columns if c.startswith('_')]))
 ```
 
 The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `path`, `file_format`, and `source_patch_id` are also available for file-backed spools.
@@ -219,11 +219,7 @@ merged_spool = spool.chunk(time=None)
 ```
 
 # concatenate
-Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. 
-
-:::{.callout-warning}
-However, unlike [`chunk`](`dascore.BaseSpool.chunk`), not all `Spool` types implement [`concatenate`](`dascore.BaseSpool.concatenate`). 
-:::
+Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it is available on every spool and produces a lazy, plan-backed result.
 
 ```python 
 import dascore as dc

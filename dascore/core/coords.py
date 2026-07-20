@@ -9,6 +9,7 @@ from __future__ import annotations
 import abc
 import fnmatch
 import hashlib
+import itertools
 import json
 import re
 from collections.abc import Sized
@@ -21,6 +22,7 @@ import numpy as np
 import pandas as pd
 from pydantic import (
     ValidationError,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -63,7 +65,13 @@ from dascore.utils.models import (
     DascoreBaseModel,
     UnitQuantity,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    is_timedelta64,
+    to_float,
+    to_int,
+)
 
 # Valid values for min/max
 min_max_type = TypeVar("min_max_type")
@@ -655,6 +663,62 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         return self
 
+    def simplify(self, tolerance=None) -> BaseCoord:
+        """
+        Return the simplest coordinate representing the same values.
+
+        Unlike [`snap`](`dascore.core.coords.BaseCoord.snap`), which forces a
+        uniform coordinate with unbounded interior error, simplify never moves
+        any value by more than `tolerance`.
+
+        Parameters
+        ----------
+        tolerance
+            The maximum amount any coordinate value may change. For time-like
+            coordinates this is a timedelta (numeric values interpreted as
+            seconds). None or 0 permit only exact (lossless) simplifications.
+
+        Notes
+        -----
+        Most coordinates are already in their simplest form and return
+        themselves. [`CoordSegmented`](`dascore.core.coords.CoordSegmented`)
+        re-fits its segments as evenly sampled ranges wherever the fit error
+        stays within tolerance, possibly collapsing to a single
+        [`CoordRange`](`dascore.core.coords.CoordRange`).
+        """
+        return self
+
+    def get_discontinuities(self, kind="all", tolerance=None) -> pd.DataFrame:
+        """
+        Return a dataframe describing discontinuities in the coordinate.
+
+        Parameters
+        ----------
+        kind
+            Either "all" (every segment boundary) or "gaps" (boundaries whose
+            spacing exceeds the local sampling interval by more than
+            `tolerance`).
+        tolerance
+            For kind="gaps", the excess spacing (beyond the expected sampling
+            interval) required to report a boundary. For time-like
+            coordinates numeric values are interpreted as seconds. Default 0.
+
+        Notes
+        -----
+        The returned dataframe has columns: `index` (position of the first
+        sample after the boundary), `before`, `after` (values on either side),
+        `delta` (after - before) and `excess` (delta minus the expected local
+        sampling interval, NaN when no sampling interval is defined).
+
+        Coordinates without internal segment structure return an empty
+        dataframe.
+        """
+        if kind not in ("all", "gaps"):
+            msg = f"kind must be 'all' or 'gaps', got {kind!r}"
+            raise ParameterError(msg)
+        columns = ["index", "before", "after", "delta", "excess"]
+        return pd.DataFrame(columns=columns)
+
     @abc.abstractmethod
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """
@@ -832,15 +896,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             )
         array = self.data[indexer]
         return get_coord(data=array, units=self.units)
-
-    def get_attrs_dict(self, name):
-        """Get attrs dict."""
-        out = {f"{name}_min": self.min(), f"{name}_max": self.max()}
-        if self.step:
-            out[f"{name}_step"] = self.step
-        if self.units:
-            out[f"{name}_units"] = self.units
-        return out
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1536,8 +1591,8 @@ class CoordArray(BaseCoord):
             return self.empty(), out
         if np.all(out):
             return self, slice(None, None)
-        # Convert boolean to int indexes because these are supported for
-        # indexing pytables arrays but booleans are not.
+        # Convert boolean to int indexes; some consumers (eg lazy file
+        # readers) index with these where booleans are not supported.
         if len(self.shape) == 1:
             out = np.arange(len(out))[out]
         return self.new(values=values[out]), out
@@ -1623,6 +1678,23 @@ class CoordArray(BaseCoord):
         return (("array", hash_array(self.values)),)
 
 
+def _negate_for_search(values):
+    """
+    Negate values so descending arrays can use ascending searchsorted.
+
+    Exactness matters: converting ns-precision datetimes (or large ints) to
+    float collapses nearby values, so time-like values negate on their int
+    ns representation and signed numerics negate natively. Only unsigned
+    ints (which would wrap) fall back to float.
+    """
+    array = np.atleast_1d(np.asarray(values))
+    if dtype_time_like(array.dtype):
+        return -to_int(array)
+    if array.dtype.kind == "u":
+        return -to_float(array)
+    return -array
+
+
 class CoordMonotonicArray(CoordArray):
     """A coordinate with strictly increasing or decreasing values."""
 
@@ -1669,8 +1741,8 @@ class CoordMonotonicArray(CoordArray):
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
-            values = to_float(values) * -1
-            new_value = to_float(new_value) * -1
+            values = _negate_for_search(values)
+            new_value = _negate_for_search(new_value)
         # side = "right" if forward else "left"
         # out = np.atleast_1d(np.searchsorted(values, new_value, side=side))
         # Search values. Ensure the returned index is in bounds (eg values GT
@@ -1712,6 +1784,691 @@ class CoordMonotonicArray(CoordArray):
     def reverse_sorted(self):
         """Determine is coord array is sorted in descending order."""
         return self._step_meets_requirement(lt)
+
+
+def _coerce_segment(seg) -> BaseCoord:
+    """Coerce a segment input (coord or dumped dict) to a coordinate."""
+    if isinstance(seg, BaseCoord):
+        return seg
+    if isinstance(seg, dict):
+        # Round-trip support: rebuild segments from model_dump payloads.
+        if seg.get("values") is not None:
+            return CoordMonotonicArray(**seg)
+        return CoordRange(**seg)
+    msg = f"Segments must be coordinates, got {type(seg)}."
+    raise CoordError(msg)
+
+
+def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
+    """Promote an exactly evenly sampled array segment to a CoordRange."""
+    if not isinstance(seg, CoordMonotonicArray) or len(seg) < 2:
+        return seg
+    values = seg.values
+    diffs = np.diff(values)
+    if len(np.unique(diffs)) != 1:
+        return seg
+    step = diffs[0]
+    candidate = CoordRange(
+        start=values[0], stop=values[-1] + step, step=step, units=seg.units
+    )
+    # Only promote when the range reproduces the values bit-exactly; unlike
+    # get_coord inference, segments must never change any value.
+    if len(candidate) == len(seg) and np.array_equal(candidate.values, values):
+        return candidate
+    return seg
+
+
+def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
+    """Fuse adjacent segments that continue exactly (normal form)."""
+    out = [segments[0]]
+    for seg in segments[1:]:
+        prev = out[-1]
+        both_ranges = isinstance(prev, CoordRange) and isinstance(seg, CoordRange)
+        if both_ranges and prev.step == seg.step and prev.stop == seg.start:
+            out[-1] = CoordRange(
+                start=prev.start, stop=seg.stop, step=prev.step, units=prev.units
+            )
+            continue
+        both_arrays = isinstance(prev, CoordMonotonicArray) and isinstance(
+            seg, CoordMonotonicArray
+        )
+        if both_arrays:
+            # Adjacent irregular arrays carry no sampling expectation, so the
+            # boundary between them has no meaning; fuse for canonical form.
+            values = np.concatenate([prev.values, seg.values])
+            out[-1] = CoordMonotonicArray(values=values, units=prev.units)
+            continue
+        out.append(seg)
+    return tuple(out)
+
+
+def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
+    """Validate segment types, dtypes, and units are compatible."""
+    for seg in segments:
+        if not isinstance(seg, CoordRange | CoordMonotonicArray):
+            msg = (
+                "Segments must be CoordRange or CoordMonotonicArray, "
+                f"got {type(seg)}."
+            )
+            raise CoordError(msg)
+        if not len(seg):
+            msg = "Segments must not be empty."
+            raise CoordError(msg)
+    # Width promotion within one dtype kind is lossless (i4+i8, f4+f8,
+    # M8[s]+M8[ns]); mixing kinds (e.g. int64 + float64) can silently alter
+    # values (ints above 2**53), so it is rejected outright.
+    kinds = {np.dtype(s.dtype).kind for s in segments}
+    if len(kinds) > 1:
+        dtypes = {np.dtype(s.dtype) for s in segments}
+        msg = f"Segments must share compatible dtypes, got {dtypes}."
+        raise CoordError(msg)
+    units = {get_quantity(s.units) for s in segments}
+    if len(units) > 1:
+        msg = "All segments must have the same units."
+        raise CoordError(msg)
+
+
+def _validate_segment_chain(segments: tuple[BaseCoord, ...]) -> None:
+    """Validate direction consistency and strict non-overlap of segments."""
+    multi = [s for s in segments if len(s) > 1]
+    ascending = multi[0].sorted if multi else segments[0].min() < segments[-1].min()
+    for seg in multi:
+        ok = seg.sorted if ascending else seg.reverse_sorted
+        if not ok:
+            msg = "All segments must be sorted in a consistent direction."
+            raise CoordError(msg)
+    for prev, nxt in itertools.pairwise(segments):
+        if ascending:
+            good = nxt.min() > prev.max()
+        else:
+            good = nxt.max() < prev.min()
+        if not good:
+            msg = (
+                "Segments must be monotonic and non-overlapping; segment "
+                f"({nxt.min()}, {nxt.max()}) overlaps or precedes "
+                f"({prev.min()}, {prev.max()})."
+            )
+            raise CoordError(msg)
+
+
+class CoordSegmented(BaseCoord):
+    """
+    A coordinate composed of an ordered sequence of monotonic segments.
+
+    Segments are normal coordinates ([`CoordRange`](`dascore.core.coords.CoordRange`)
+    or [`CoordMonotonicArray`](`dascore.core.coords.CoordMonotonicArray`)); the
+    values of the segmented coordinate are exactly the concatenation of the
+    segment values. Segment boundaries record discontinuities (e.g. data gaps)
+    without altering any value, which makes this the natural coordinate for
+    data merged across nearly-contiguous blocks.
+
+    Notes
+    -----
+    - Direct construction requires at least two segments after normalization;
+      use [`concat_coords`](`dascore.core.coords.concat_coords`) (or
+      `get_coord(segments=...)`) which returns a plain coordinate when the
+      inputs fuse into one segment.
+    - Normalization promotes exactly evenly sampled array segments to ranges
+      and fuses segments that continue exactly, so equal-valued segmented
+      coordinates compare and fingerprint equal regardless of how they
+      were assembled.
+    - `step` is always None; use
+      [`simplify`](`dascore.core.coords.BaseCoord.simplify`) to obtain an
+      evenly sampled coordinate with bounded error, or
+      [`snap`](`dascore.core.coords.BaseCoord.snap`) to force one.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.core.coords import concat_coords, get_coord
+    >>>
+    >>> # Two evenly sampled blocks separated by a gap.
+    >>> c1 = get_coord(start=0.0, stop=10.0, step=1.0)
+    >>> c2 = get_coord(start=15.0, stop=25.0, step=1.0)
+    >>> coord = concat_coords(c1, c2)
+    >>> assert coord.segment_count == 2
+    >>> assert coord.min() == 0.0 and coord.max() == 24.0
+    >>>
+    >>> # Exactly contiguous blocks fuse back to a single range.
+    >>> c3 = get_coord(start=10.0, stop=20.0, step=1.0)
+    >>> fused = concat_coords(c1, c3)
+    >>> assert fused == get_coord(start=0.0, stop=20.0, step=1.0)
+    """
+
+    # Note: typed as BaseCoord (not a union) because pydantic union dispatch
+    # runs member before-validators on foreign instances; the model validator
+    # below enforces the concrete segment types.
+    segments: tuple[BaseCoord, ...]
+    _rich_style = dascore_styles["coord_segmented"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_segments(cls, data: Any) -> Any:
+        """Coerce, normalize, and validate segments; derive model fields."""
+        if not isinstance(data, dict):
+            return data
+        segments = data.get("segments")
+        if isinstance(segments, BaseCoord):
+            segments = (segments,)
+        segments = tuple(_coerce_segment(x) for x in iterate(segments))
+        if not segments:
+            msg = "CoordSegmented requires at least one segment."
+            raise CoordError(msg)
+        _validate_segment_compat(segments)
+        _validate_segment_chain(segments)
+        segments = _fuse_segments(tuple(_maybe_promote_segment(x) for x in segments))
+        if len(segments) < 2:
+            msg = (
+                "Segments fuse into a single coordinate; use concat_coords "
+                "or get_coord(segments=...) which return it directly."
+            )
+            raise CoordError(msg)
+        seg_units = segments[0].units
+        if (given := data.get("units")) is not None:
+            if get_quantity(given) != get_quantity(seg_units):
+                msg = (
+                    f"units {given} do not match segment units {seg_units}. "
+                    "Use set_units or convert_units instead."
+                )
+                raise CoordError(msg)
+        data["segments"] = segments
+        data["units"] = seg_units
+        data["shape"] = (sum(len(x) for x in segments),)
+        data["dtype"] = np.result_type(*[s.dtype for s in segments])
+        data["step"] = None
+        return data
+
+    @field_serializer("segments")
+    def _serialize_segments(self, segments, _info):
+        """Serialize each segment with its own (subclass) schema."""
+        return [x.model_dump() for x in segments]
+
+    def __eq__(self, other) -> bool:
+        """Compare segment-wise (nested arrays break generic dump equality)."""
+        if not isinstance(other, CoordSegmented):
+            return False
+        if len(self.segments) != len(other.segments):
+            return False
+        pairs = zip(self.segments, other.segments)
+        return all(s1 == s2 for s1, s2 in pairs)
+
+    __hash__ = BaseCoord.__hash__
+
+    @property
+    def segment_count(self) -> int:
+        """Return the number of segments."""
+        return len(self.segments)
+
+    @cached_method
+    def _segment_offsets(self) -> np.ndarray:
+        """Return the starting sample index of each segment."""
+        lens = [len(x) for x in self.segments]
+        return np.cumsum([0, *lens[:-1]])
+
+    @property
+    @cached_method
+    def values(self) -> ArrayLike:
+        """Return the values of the coordinate as an array."""
+        out = np.concatenate([x.values for x in self.segments])
+        return array(out.astype(self.dtype, copy=False))
+
+    def _as_monotonic(self) -> CoordMonotonicArray:
+        """
+        Return an equivalent (materialized) monotonic array coord.
+
+        Deliberately not cached: transient materialization for rare
+        operations (snap, get_next_index) must not permanently defeat the
+        O(segments) memory model.
+        """
+        return CoordMonotonicArray(values=self.values, units=self.units)
+
+    def _min(self):
+        """Return min value (exact, no materialization)."""
+        first, last = self.segments[0], self.segments[-1]
+        return first.min() if self.sorted else last.min()
+
+    def _max(self):
+        """Return max value (exact, no materialization)."""
+        first, last = self.segments[0], self.segments[-1]
+        return last.max() if self.sorted else first.max()
+
+    @property
+    @cached_method
+    def sorted(self) -> bool:
+        """Return True if sorted in ascending order."""
+        return bool(self.segments[0].min() < self.segments[-1].min())
+
+    @property
+    @cached_method
+    def reverse_sorted(self) -> bool:
+        """Return True if sorted in descending order."""
+        return not self.sorted
+
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return the payload needed to fingerprint segmented coords."""
+        return (("segments", tuple(x.fingerprint() for x in self.segments)),)
+
+    def new(self, **kwargs):
+        """Update coordinate."""
+        if "data" in kwargs or "values" in kwargs:
+            data = kwargs.get("data", kwargs.get("values"))
+            return get_coord(data=data, units=kwargs.get("units", self.units))
+        segments = kwargs.pop("segments", self.segments)
+        units = kwargs.pop("units", self.units)
+        return self.__class__(segments=segments, units=units)
+
+    def set_units(self, units) -> Self:
+        """Set new units on the coordinate and all segments."""
+        segments = tuple(x.set_units(units) for x in self.segments)
+        return self.__class__(segments=segments)
+
+    def convert_units(self, units) -> Self:
+        """Convert units, or set units if none exist."""
+        if dtype_time_like(self.dtype):
+            return self
+        segments = tuple(x.convert_units(units) for x in self.segments)
+        return self.__class__(segments=segments)
+
+    def _rebuild(self, segments) -> BaseCoord:
+        """Build the simplest coordinate from a (non-empty) list of segments."""
+        segments = tuple(segments)
+        if len(segments) == 1:
+            return segments[0]
+        try:
+            return self.__class__(segments=segments)
+        except (ValidationError, CoordError):
+            fused = _fuse_segments(tuple(_maybe_promote_segment(x) for x in segments))
+            if len(fused) == 1:  # Segments fused to a single coordinate.
+                return fused[0]
+            raise
+
+    def _slice_segments(self, start: int, stop: int) -> BaseCoord:
+        """Return the coordinate for a contiguous sample range."""
+        if stop <= start:
+            return self.empty()
+        out = []
+        for seg, off in zip(self.segments, self._segment_offsets()):
+            lo, hi = max(start - off, 0), min(stop - off, len(seg))
+            if hi <= lo:
+                continue
+            sub = seg if (lo == 0 and hi == len(seg)) else seg[slice(lo, hi)]
+            out.append(sub)
+        return self._rebuild(out)
+
+    def __getitem__(self, item):
+        if isinstance(item, int | np.integer):
+            length = len(self)
+            index = int(item) + length if item < 0 else int(item)
+            if not 0 <= index < length:
+                msg = f"{item} exceeds coord length of {self}"
+                raise IndexError(msg)
+            offsets = self._segment_offsets()
+            seg_ind = int(np.searchsorted(offsets, index, side="right")) - 1
+            return self.segments[seg_ind][index - int(offsets[seg_ind])]
+        if isinstance(item, slice):
+            start = None if item.start is ... else item.start
+            stop = None if item.stop is ... else item.stop
+            item = slice(start, stop, item.step)
+            start_i, stop_i, step_i = item.indices(len(self))
+            if step_i == 1:
+                return self._slice_segments(start_i, stop_i)
+        out = self.values[item]
+        if not np.ndim(out):
+            return out
+        return get_coord(data=out, units=self.units)
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
+        """Apply select, return selected coords and index for selecting data."""
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        if samples:
+            return self._select_by_samples(args)
+        # Delegate to each segment and compose the global slice from segment
+        # offsets. The window over a monotonic coordinate keeps a contiguous
+        # run of samples, and range segments answer in O(1), so selection
+        # stays O(segments) and never materializes the concatenated values.
+        v1, v2 = self.get_slice_tuple(args, relative=relative)
+        kept, lo, hi = [], None, None
+        for seg, off in zip(self.segments, self._segment_offsets()):
+            seg_min, seg_max = seg.min(), seg.max()
+            if (v2 is not None and seg_min > v2) or (v1 is not None and seg_max < v1):
+                continue  # entirely outside the window
+            inside_lo = v1 is None or v1 <= seg_min
+            inside_hi = v2 is None or v2 >= seg_max
+            if inside_lo and inside_hi:  # entirely inside; keep untouched
+                sub, seg_lo, seg_hi = seg, 0, len(seg)
+            else:  # boundary segment; delegate the exact trim
+                sub, indexer = seg.select((v1, v2))
+                seg_lo, seg_hi, _ = indexer.indices(len(seg))
+                if seg_hi <= seg_lo:
+                    continue
+            if lo is None:
+                lo = int(off) + seg_lo
+            hi = int(off) + seg_hi
+            kept.append(sub)
+        if not kept:
+            return self.empty(), slice(0, 0)
+        new = self._rebuild(kept)
+        start = None if lo == 0 else lo
+        stop = None if hi >= len(self) else hi
+        return new, slice(start, stop)
+
+    def _get_index(self, value, forward=True):
+        """Get the index corresponding to a value."""
+        return self._as_monotonic()._get_index(value, forward=forward)
+
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
+        """Sort the contents of the coord. Return new coord and slice for sorting."""
+        forward_forward = not reverse and self.sorted
+        reverse_reverse = reverse and self.reverse_sorted
+        if forward_forward or reverse_reverse:
+            return self, slice(None)
+        segments = tuple(
+            seg.sort(reverse=reverse)[0] for seg in reversed(self.segments)
+        )
+        return self.new(segments=segments), slice(None, None, -1)
+
+    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+        """{doc}."""
+        if step is not None:
+            msg = (
+                "Segmented coordinates have no single step; use simplify or "
+                "snap to get an evenly sampled coordinate first."
+            )
+            raise ParameterError(msg)
+        if min is not None and max is not None:
+            msg = "Cannot specify both min and max in update_limits."
+            raise ParameterError(msg)
+        out = self
+        if min is not None:
+            delta = get_compatible_values(min, self.dtype) - self.min()
+            out = out._shift(delta)
+        elif max is not None:
+            delta = get_compatible_values(max, self.dtype) - self.max()
+            out = out._shift(delta)
+        return out.new(**kwargs) if kwargs else out
+
+    def _shift(self, delta) -> Self:
+        """Return a copy of the coordinate with all values shifted by delta."""
+        segments = []
+        for seg in self.segments:
+            if isinstance(seg, CoordRange):
+                new = seg.new(start=seg.start + delta, stop=seg.stop + delta)
+            else:
+                new = seg.new(values=seg.values + delta)
+            segments.append(new)
+        return self.new(segments=tuple(segments))
+
+    def snap(self) -> CoordRange:
+        """
+        Snap the coordinates to evenly sampled grid points.
+
+        The min/max of the coordinate remain unchanged; every interior value
+        may move without bound. Use
+        [`simplify`](`dascore.core.coords.BaseCoord.simplify`) for a
+        tolerance-bounded alternative.
+        """
+        return self._as_monotonic().snap()
+
+    def simplify(self, tolerance=None) -> BaseCoord:
+        """
+        Return the simplest coordinate representing the same values.
+
+        Segments are greedily re-fit as evenly sampled ranges; a fit is
+        accepted only when no value moves by more than `tolerance`. With a
+        sufficient tolerance a fully contiguous segmented coordinate collapses
+        to a single [`CoordRange`](`dascore.core.coords.CoordRange`).
+
+        Parameters
+        ----------
+        tolerance
+            The maximum amount any coordinate value may change. For time-like
+            coordinates this is a timedelta (numeric values interpreted as
+            seconds). None or 0 permit only exact simplifications.
+        """
+        tol = self._get_tolerance(tolerance)
+        result = []
+        run = [self.segments[0]]
+        run_fit = self._fit_run(run, tol)
+        for seg in self.segments[1:]:
+            trial = [*run, seg]
+            fit = self._fit_run(trial, tol)
+            if fit is not None:
+                run, run_fit = trial, fit
+            else:
+                result.append(run_fit if run_fit is not None else run[0])
+                run, run_fit = [seg], self._fit_run([seg], tol)
+        result.append(run_fit if run_fit is not None else run[0])
+        return self._rebuild(result)
+
+    def _get_tolerance(self, tolerance):
+        """Coerce the tolerance to the dtype expected for value deviations."""
+        if tolerance is None:
+            tolerance = 0
+        if hasattr(tolerance, "units"):  # pint quantity tolerances
+            target = "s" if dtype_time_like(self.dtype) else self.units
+            tolerance = convert_units(tolerance.magnitude, target, tolerance.units)
+        if dtype_time_like(self.dtype):
+            tolerance = dc.to_timedelta64(tolerance)
+            zero = dc.to_timedelta64(0)
+        else:
+            zero = 0
+        if tolerance < zero:
+            msg = "simplify tolerance must not be negative."
+            raise ParameterError(msg)
+        return tolerance
+
+    def _fit_run(self, run, tol) -> CoordRange | None:
+        """Fit a run of segments to a single range within tol, or None."""
+        if len(run) == 1 and isinstance(run[0], CoordRange):
+            return run[0]
+        n = sum(len(x) for x in run)
+        if n < 2:
+            return None
+        ascending = self.sorted
+        first = run[0].min() if ascending else run[0].max()
+        last = run[-1].max() if ascending else run[-1].min()
+        span = last - first
+        if is_timedelta64(span) or is_datetime64(first):
+            span_ns = dc.to_timedelta64(span).astype(np.int64)
+            step = np.timedelta64(int(np.round(span_ns / (n - 1))), "ns")
+            zero = dc.to_timedelta64(0)
+        else:
+            step = span / (n - 1)
+            zero = 0
+        # Strictly monotonic segments guarantee a nonzero step matching the
+        # sort direction.
+        assert step != zero and (step > zero) == ascending
+        candidate = CoordRange(
+            start=first, stop=last + step, step=step, units=self.units
+        ).change_length(n)
+        actual = np.concatenate([x.values for x in run])
+        deviation = np.max(np.abs(candidate.values - actual))
+        if deviation > tol:
+            return None
+        return candidate
+
+    @compose_docstring(doc=BaseCoord.get_discontinuities.__doc__)
+    def get_discontinuities(self, kind="all", tolerance=None) -> pd.DataFrame:
+        """{doc}."""
+        if kind not in ("all", "gaps"):
+            msg = f"kind must be 'all' or 'gaps', got {kind!r}"
+            raise ParameterError(msg)
+        offsets = self._segment_offsets()
+        ascending = self.sorted
+        rows = []
+        for num in range(1, len(self.segments)):
+            prev, nxt = self.segments[num - 1], self.segments[num]
+            before = prev.max() if ascending else prev.min()
+            after = nxt.min() if ascending else nxt.max()
+            delta = after - before
+            expected = self._expected_step(prev)
+            excess = np.abs(delta) - np.abs(expected) if expected is not None else None
+            rows.append(
+                dict(
+                    index=int(offsets[num]),
+                    before=before,
+                    after=after,
+                    delta=delta,
+                    excess=excess,
+                )
+            )
+        df = pd.DataFrame(rows, columns=["index", "before", "after", "delta", "excess"])
+        if kind == "gaps":
+            tol = self._get_tolerance(tolerance)
+            excess = df["excess"]
+            df = df[~pd.isnull(excess) & (excess > tol)]
+        return df.reset_index(drop=True)
+
+    @staticmethod
+    def _expected_step(seg) -> Any:
+        """Return the expected next-sample spacing after a segment, or None."""
+        if isinstance(seg, CoordRange):
+            return seg.step
+        if len(seg) > 1:
+            values = seg.values
+            return values[-1] - values[-2]
+        return None
+
+    @classmethod
+    def from_array(cls, array, tolerance=None, units=None) -> BaseCoord:
+        """
+        Build a coordinate from a monotonic array, detecting uniform runs.
+
+        Values are preserved exactly; each maximal evenly sampled run becomes
+        an evenly sampled segment and each internal sampling break becomes a
+        segment boundary, so gaps inside the array are queryable via
+        [`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`).
+        Fully uniform arrays come back as a plain
+        [`CoordRange`](`dascore.core.coords.CoordRange`) and arrays with no
+        detectable runs as a plain monotonic coordinate.
+
+        Parameters
+        ----------
+        array
+            A strictly monotonic 1D array (numeric, datetime64, or
+            timedelta64) with no missing values.
+        tolerance
+            If not None, apply
+            [`simplify`](`dascore.core.coords.BaseCoord.simplify`) with this
+            tolerance to the result, re-fitting jittery runs and absorbing
+            small gaps with bounded error.
+        units
+            Units for the coordinate.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.core.coords import CoordSegmented
+        >>>
+        >>> values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
+        >>> coord = CoordSegmented.from_array(values)
+        >>> assert coord.segment_count == 2
+        >>> assert len(coord.get_discontinuities("gaps")) == 1
+        """
+        values = np.asarray(array)
+        if values.ndim != 1:
+            msg = "from_array requires a 1D array."
+            raise CoordError(msg)
+        if pd.isnull(values).any():
+            msg = "from_array does not support missing values."
+            raise CoordError(msg)
+        if len(values) < 3:
+            out = get_coord(data=values, units=units)
+        else:
+            diffs = np.diff(values)
+            zero = diffs[0] - diffs[0]
+            if not (np.all(diffs > zero) or np.all(diffs < zero)):
+                msg = "from_array requires strictly monotonic values."
+                raise CoordError(msg)
+            # A diff belongs to a uniform run when it matches a neighboring
+            # diff; isolated diffs are seams (gaps or sampling changes).
+            eq_next = diffs[:-1] == diffs[1:]
+            in_run = np.zeros(len(diffs), dtype=bool)
+            in_run[1:] |= eq_next
+            in_run[:-1] |= eq_next
+            splits = np.flatnonzero(~in_run) + 1
+            blocks = np.split(values, splits)
+            segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
+            out = concat_coords(*segments)
+        if tolerance is not None:
+            out = out.simplify(tolerance)
+        return out
+
+
+def concat_coords(*coords, units=None) -> BaseCoord:
+    """
+    Concatenate monotonic coordinates into a single coordinate.
+
+    This operation is truth-preserving: no value is ever altered, and every
+    boundary between inputs that does not continue exactly is recorded as a
+    segment boundary. The result is a
+    [`CoordSegmented`](`dascore.core.coords.CoordSegmented`) unless the inputs
+    fuse into a single segment, in which case that coordinate is returned
+    directly. Use [`simplify`](`dascore.core.coords.BaseCoord.simplify`) on
+    the result for tolerance-bounded gap absorption.
+
+    Parameters
+    ----------
+    *coords
+        Coordinates to concatenate. Each must be evenly sampled
+        ([`CoordRange`](`dascore.core.coords.CoordRange`)), monotonic
+        ([`CoordMonotonicArray`](`dascore.core.coords.CoordMonotonicArray`)),
+        or already segmented. Inputs are ordered by their envelopes; they
+        must share dtype kind, units, and sort direction, and must not
+        overlap.
+    units
+        If provided, set (not convert) these units on the output.
+
+    Examples
+    --------
+    >>> from dascore.core.coords import concat_coords, get_coord
+    >>>
+    >>> c1 = get_coord(start=0.0, stop=10.0, step=1.0)
+    >>> c2 = get_coord(start=15.0, stop=25.0, step=1.0)
+    >>> coord = concat_coords(c1, c2)
+    >>> assert len(coord) == len(c1) + len(c2)
+    """
+    flat = []
+    for coord in coords:
+        if isinstance(coord, dict):  # model_dump round-trip payloads
+            coord = _coerce_segment(coord)
+        if isinstance(coord, CoordSegmented):
+            flat.extend(coord.segments)
+        elif isinstance(coord, CoordRange | CoordMonotonicArray):
+            if len(coord):
+                flat.append(coord)
+        elif isinstance(coord, BaseCoord):
+            if coord.degenerate:
+                continue
+            msg = (
+                "concat_coords only supports evenly sampled, monotonic, or "
+                f"segmented coordinates, got {type(coord)}."
+            )
+            raise CoordError(msg)
+        else:
+            msg = f"concat_coords requires coordinates, got {type(coord)}."
+            raise CoordError(msg)
+    if units is not None:
+        flat = [x.set_units(units) for x in flat]
+    if not flat:
+        msg = "concat_coords requires at least one non-empty coordinate."
+        raise CoordError(msg)
+    _validate_segment_compat(tuple(flat))
+    multi = [x for x in flat if len(x) > 1]
+    ascending = multi[0].sorted if multi else True
+    # Sort on native values; float conversion would collapse ns datetimes.
+    flat.sort(key=lambda x: x.min(), reverse=not ascending)
+    if len(flat) == 1:
+        return _maybe_promote_segment(flat[0])
+    _validate_segment_chain(tuple(flat))
+    segments = _fuse_segments(tuple(_maybe_promote_segment(x) for x in flat))
+    if len(segments) == 1:
+        return segments[0]
+    return CoordSegmented(segments=segments)
 
 
 def _get_coord_kind(
@@ -1916,6 +2673,7 @@ def get_coord(
     units: None | Unit | Quantity | str = None,
     shape: None | int | tuple[int, ...] = None,
     dtype: str | np.dtype = None,
+    segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
 ) -> BaseCoord:
     """
     Return a coordinate from provided inputs.
@@ -1945,6 +2703,10 @@ def get_coord(
         this shape. Otherwise, leave unset.
     dtype
         Data type for coord. Often can be inferred from other arguments.
+    segments
+        A sequence of monotonic coordinates to concatenate into one
+        coordinate (see [`concat_coords`](`dascore.core.coords.concat_coords`)).
+        Cannot be combined with other value inputs.
 
     Notes
     -----
@@ -2043,6 +2805,16 @@ def get_coord(
                 _max = _get_new_max(data, _min, _step)
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
+
+    if segments is not None:
+        # shape/dtype/step are derived fields on CoordSegmented, so they
+        # legitimately appear alongside segments when round-tripping a
+        # model_dump (e.g. through CoordManager); ignore them here.
+        others = (data, values, start, min, stop, max)
+        if any(x is not None for x in others) or not pd.isnull(step):
+            msg = "segments cannot be combined with other coordinate value inputs."
+            raise CoordError(msg)
+        return concat_coords(*segments, units=units)
 
     data = _get_array(data, values)
     shape = _get_shape(shape)

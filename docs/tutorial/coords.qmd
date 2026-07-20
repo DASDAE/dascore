@@ -62,6 +62,39 @@ print(type(coord).__name__)
 print(coord.values)
 ```
 
+### Segmented Coordinates
+
+[`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic coordinate blocks and the discontinuities between them. It is useful when a logical coordinate contains dropped samples, acquisition gaps, or a sampling-rate change but the corresponding data should remain in one in-memory patch.
+
+Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are already known:
+
+```{python}
+from dascore.core.coords import concat_coords, get_coord
+
+first = get_coord(start=0.0, stop=5.0, step=1.0, units="m")
+second = get_coord(start=8.0, stop=13.0, step=1.0, units="m")
+segmented = concat_coords(first, second)
+
+print(type(segmented).__name__)
+print(segmented.get_discontinuities("gaps"))
+```
+
+Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) for an exact, strictly monotonic stored array. The constructor preserves every value and returns the simplest truthful coordinate, so an exactly uniform input becomes a normal `CoordRange` and a wholly irregular input may become a `CoordMonotonicArray`.
+
+```{python}
+import numpy as np
+
+from dascore.core.coords import CoordSegmented
+
+values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
+exact_coord = CoordSegmented.from_array(values, tolerance=0, units="m")
+
+assert np.array_equal(exact_coord.values, values)
+assert len(exact_coord.get_discontinuities("gaps")) == 1
+```
+
+Segmented coordinates have `step=None` because one step cannot describe the entire coordinate. `coord.simplify(tolerance=...)` may replace segments with a simpler fit while bounding how far values move; `coord.snap()` always forces one evenly sampled range and can move interior values without a bound. Use `patch.split_gaps()` to turn a patch with segmented dimensional coordinates into contiguous patches before writing it to a format that cannot store gaps.
+
 ### Update
 
 Update uses the existing coordinate as a template and returns a coordinate with some part modified. 
@@ -132,22 +165,24 @@ sorted_data = data[indexer, :]
 ```
 
 ### Snap
-['snap'](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged. 
+
+[`snap`](`dascore.core.coords.BaseCoord.snap`) replaces coordinate values with an evenly sampled range spanning the same minimum and maximum. This intentionally loses interior precision and should be used only when that idealization is acceptable. For a full patch, [`Patch.snap_coords(...)`](`dascore.Patch.snap_coords`) also sorts the selected dimensions and applies the same indexing to the data.
 
 ```{python}
 import numpy as np
 
 from dascore.core import get_coord
 
-random_array = np.random.rand(10) 
-random_coord = get_coord(data=random_array)
+values = np.array([0.0, 1.0, 2.2, 3.0])
+irregular_coord = get_coord(data=values)
+snapped_coord = irregular_coord.snap()
 
-sorted_coord, indexer = random_coord.sort()
-
-# The data array can be updated like so:
-data = np.random.rand(10, 20)
-sorted_data = data[indexer, :] 
+assert snapped_coord.evenly_sampled
+assert snapped_coord.min() == irregular_coord.min()
+assert snapped_coord.max() == irregular_coord.max()
 ```
+
+Use `simplify(tolerance=...)` instead when the maximum allowed coordinate movement must be explicit. Most coordinate types are already in their simplest form; this distinction is most useful for segmented coordinates.
 
 
 ### Select

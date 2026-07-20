@@ -1,0 +1,12 @@
+codecov:
+  notify:
+    after_n_builds: 7
+
+comment:
+  after_n_builds: 7
+
+flags:
+  unittests:
+    carryforward: false
+  network:
+    carryforward: true

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import h5py
 import pytest
-from tables import File
 from upath import UPath
 
 import dascore as dc
@@ -18,8 +17,6 @@ from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
-    HDF5Reader,
-    HDF5Writer,
     LocalH5Reader,
     open_h5_resource,
 )
@@ -37,7 +34,6 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
     _FallbackFileObj,
     _get_cached_local_file,
-    _http_headers_from_storage_options,
     clear_remote_file_cache,
     get_remote_cache_path,
     get_remote_cache_scope,
@@ -149,14 +145,15 @@ class TestGetHandleFromResource:
 
     def test_path_to_hdf5_reader(self, generic_hdf5):
         """Ensure we get a reader from tmp path reader."""
-        with closing(get_handle_from_resource(generic_hdf5, HDF5Reader)) as handle:
-            assert isinstance(handle, File)
+        with closing(get_handle_from_resource(generic_hdf5, H5Reader)) as handle:
+            assert "bob" in handle  # h5py-file-like
 
     def test_path_to_hdf5_writer(self, tmp_path):
-        """Ensure we get a reader from tmp path reader."""
+        """Ensure we get a writer from tmp path."""
         path = tmp_path / "test_hdf_writer.h5"
-        with closing(get_handle_from_resource(path, HDF5Writer)) as handle:
-            assert isinstance(handle, File)
+        with closing(get_handle_from_resource(path, H5Writer)) as handle:
+            handle.create_group("waveforms")
+            assert "waveforms" in handle
 
     def test_get_path(self, tmp_path):
         """Ensure we can get a path."""
@@ -446,9 +443,9 @@ class TestGetHandleFromResource:
         with pytest.raises(NotImplementedError):
             get_handle_from_resource(bad_instance, BinaryWriter)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Writer)
+            get_handle_from_resource(bad_instance, H5Writer)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Reader)
+            get_handle_from_resource(bad_instance, H5Reader)
 
 
 class TestIOResourceManager:
@@ -471,13 +468,12 @@ class TestIOResourceManager:
             assert isinstance(path_from_hint, Path)
             path = man.get_resource(Path)
             assert isinstance(path, Path)
-            hf = man.get_resource(HDF5Writer)
+            hf = man.get_resource(H5Writer)
             fi = man.get_resource(BinaryWriter)
-            # Why didn't pytables implement the stream like pythons?
-            assert hf.isopen
+            assert not hf.closed
             assert not fi.closed
-        # after the context manager exists everything should be closed.
-        assert not hf.isopen
+        # after the context manager exits everything should be closed.
+        assert hf.closed
         assert fi.closed
 
     def test_get_none_resource_returns_source(self):
@@ -694,28 +690,21 @@ class TestIOResourceManager:
         assert local_path.read_bytes() == b"a"
         assert handle.read_sizes == [321, 321]
 
-    def test_http_remote_download_uses_urlopen_not_upath_open(
-        self, monkeypatch, tmp_path
-    ):
-        """HTTP cache downloads should bypass fsspec open re-entry."""
+    def test_http_remote_download_uses_upath_open(self, monkeypatch, tmp_path):
+        """HTTP cache downloads should preserve the fsspec transport."""
 
         class _HTTPResource:
             def __init__(self):
                 self.protocol = "http"
-                # fsspec/UPath nests HTTP headers under a "headers" key rather
-                # than as top-level storage_options entries.
                 self.storage_options = {
                     "headers": {"User-Agent": "dascore-test"},
                     "client_kwargs": {"trust_env": True},
                 }
+                self.open_args = None
 
-            def __str__(self):
-                return "http://example.com/data.bin"
-
-            def open(self, *_args, **_kwargs):
-                raise AssertionError(
-                    "HTTP fallback download should not call resource.open"
-                )
+            def open(self, *args, **kwargs):
+                self.open_args = (args, kwargs)
+                return response
 
         class _HTTPResponse:
             def __init__(self):
@@ -732,64 +721,17 @@ class TestIOResourceManager:
             def __exit__(self, *_args):
                 return False
 
-        seen = {}
         response = _HTTPResponse()
-
-        def _fake_urlopen(request, timeout=None):
-            seen["url"] = request.full_url
-            seen["headers"] = dict(request.header_items())
-            seen["timeout"] = timeout
-            return response
+        resource = _HTTPResource()
 
         monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
-        monkeypatch.setattr(remote_io, "urlopen", _fake_urlopen)
         with set_config(remote_download_block_size=2):
             local_path = tmp_path / "downloaded.bin"
-            remote_io._download_remote_file(_HTTPResource(), local_path)
+            remote_io._download_remote_file(resource, local_path)
 
         assert local_path.read_bytes() == b"abc"
-        assert seen["url"] == "http://example.com/data.bin"
-        # Nested headers are forwarded; non-header storage options are not.
-        assert seen["headers"] == {"User-agent": "dascore-test"}
-        assert seen["timeout"] == 60.0
+        assert resource.open_args == (("rb",), {"block_size": 0})
         assert response.read_sizes == [2, 2, 2]
-
-    def test_http_remote_download_uses_configured_timeout(self, monkeypatch, tmp_path):
-        """HTTP cache downloads should pass through the configured timeout."""
-
-        class _HTTPResource:
-            def __init__(self):
-                self.protocol = "http"
-                self.storage_options = {}
-
-            def __str__(self):
-                return "http://example.com/data.bin"
-
-        class _HTTPResponse:
-            def read(self, _size=-1):
-                return b""
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-        seen = {}
-
-        def _fake_urlopen(request, timeout=None):
-            seen["url"] = request.full_url
-            seen["timeout"] = timeout
-            return _HTTPResponse()
-
-        monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
-        monkeypatch.setattr(remote_io, "urlopen", _fake_urlopen)
-        with set_config(remote_download_timeout=12.5):
-            local_path = tmp_path / "downloaded.bin"
-            remote_io._download_remote_file(_HTTPResource(), local_path)
-
-        assert seen == {"url": "http://example.com/data.bin", "timeout": 12.5}
-        assert local_path.read_bytes() == b""
 
     def test_ensure_local_file_can_unwrap_io_resource_manager(self):
         """ensure_local_file should accept IOResourceManager instances."""
@@ -922,73 +864,8 @@ class TestRemoteIOFallback:
         assert not is_no_range_http_error(RuntimeError("range requests"))
 
 
-class TestHttpHeadersFromStorageOptions:
-    """Tests for translating fsspec storage options into urllib headers."""
-
-    class _Resource:
-        def __init__(self, storage_options):
-            self.storage_options = storage_options
-
-    def _expected_basic(self):
-        """Return the expected basic-auth header for user/pass 'u'/'p'."""
-        import base64
-
-        return "Basic " + base64.b64encode(b"u:p").decode()
-
-    def test_nested_headers_forwarded(self):
-        """Headers nested under the 'headers' key should be forwarded."""
-        resource = self._Resource({"headers": {"X-Tok": "abc", "X-Num": 5}})
-        out = _http_headers_from_storage_options(resource)
-        assert out == {"X-Tok": "abc", "X-Num": "5"}
-
-    def test_top_level_auth_tuple_becomes_authorization(self):
-        """A (user, pass) auth tuple should become a Basic auth header."""
-        resource = self._Resource({"auth": ("u", "p")})
-        out = _http_headers_from_storage_options(resource)
-        assert out["Authorization"] == self._expected_basic()
-
-    def test_client_kwargs_auth_becomes_authorization(self):
-        """Basic-auth-like objects in client_kwargs should be translated."""
-
-        class _BasicAuth:
-            login = "u"
-            password = "p"
-
-        resource = self._Resource({"client_kwargs": {"auth": _BasicAuth()}})
-        out = _http_headers_from_storage_options(resource)
-        assert out["Authorization"] == self._expected_basic()
-
-    def test_explicit_authorization_header_wins(self):
-        """An explicit Authorization header should not be overwritten by auth."""
-        resource = self._Resource(
-            {"headers": {"Authorization": "Bearer TOK"}, "auth": ("u", "p")}
-        )
-        out = _http_headers_from_storage_options(resource)
-        assert out["Authorization"] == "Bearer TOK"
-
-    def test_untranslatable_client_kwargs_ignored(self):
-        """Non-auth client_kwargs cannot map to urllib and are dropped."""
-        resource = self._Resource({"client_kwargs": {"trust_env": True}})
-        assert _http_headers_from_storage_options(resource) == {}
-
-    def test_string_auth_not_translated(self):
-        """A bare string auth value is not basic auth and yields no header."""
-        resource = self._Resource({"auth": "some-token"})
-        assert _http_headers_from_storage_options(resource) == {}
-
-    def test_partial_auth_object_ignored(self):
-        """An auth object missing a password yields no Authorization header."""
-
-        class _PartialAuth:
-            login = "u"
-            password = None
-
-        resource = self._Resource({"auth": _PartialAuth()})
-        assert _http_headers_from_storage_options(resource) == {}
-
-    def test_empty_storage_options(self):
-        """A resource with no storage options yields no headers."""
-        assert _http_headers_from_storage_options(self._Resource({})) == {}
+class TestFallbackFileObj:
+    """Tests for switching failed remote handles to local cache files."""
 
     def test_fallback_file_obj_switches_once_and_preserves_position(self):
         """_FallbackFileObj should retry on the local file and preserve cursor."""
@@ -1002,6 +879,7 @@ class TestHttpHeadersFromStorageOptions:
         local_handles = []
 
         def _open_local():
+            assert remote.closed
             handle = BytesIO(b"abcdef")
             local_handles.append(handle)
             return handle
