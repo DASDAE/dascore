@@ -1156,6 +1156,11 @@ class TestResourceCleanup:
 
         spool = dc.spool([dc.get_example_patch()])
         spool.get_contents()  # realize the backend
+        # Drain any garbage other tests left behind before opening the
+        # recording window: a leaked open connection from an earlier test
+        # emits a ResourceWarning when *it* is collected, which would
+        # otherwise be caught here and blamed on this spool.
+        gc.collect()
         with warnings_mod.catch_warnings(record=True) as caught:
             warnings_mod.simplefilter("always", ResourceWarning)
             del spool
