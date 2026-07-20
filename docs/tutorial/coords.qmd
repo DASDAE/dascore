@@ -248,8 +248,15 @@ print(np.mean(coord))
 print(np.greater(coord, 2 * get_quantity("m")))
 ```
 
+Comparison operators work as well, so `coord > 2 * get_quantity("m")` is the
+same as the call above.
+
 Operations which don't make sense for the coordinate's units, such as adding
-seconds to meters, raise a [`UnitError`](`dascore.exceptions.UnitError`).
+seconds to meters, raise a [`UnitError`](`dascore.exceptions.UnitError`). So do
+ufunc methods whose units can't be determined, such as `np.multiply.reduce`.
+Since coordinates are immutable, operations which modify an input (eg
+`np.copyto` or the `out` parameter) raise a
+[`ParameterError`](`dascore.exceptions.ParameterError`).
 
 # CoordManager
 

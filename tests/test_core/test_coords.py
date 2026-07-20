@@ -2189,6 +2189,79 @@ class TestCoordinateArithmetic:
         out = coord.__array_ufunc__(np.add, "__call__", coord, "bob")
         assert out is NotImplemented
 
+    def test_units_of_other_operands_used(self, coord, unitless_coord):
+        """A coord without units should not discard other operands' units."""
+        out1, out2 = unitless_coord * coord, coord * unitless_coord
+        assert out1.units == out2.units == get_quantity("m")
+        np.testing.assert_allclose(out1.values, out2.values)
+        # Values without units are then assumed to be in the other's units.
+        assert (unitless_coord + coord).units == get_quantity("m")
+
+    def test_scaled_dimensionless_output(self, coord):
+        """Units which cancel but have a scale should scale the values."""
+        other = get_coord(data=coord.values * 100, units="cm")
+        out = coord / other
+        assert out.units is None
+        np.testing.assert_allclose(out.values, np.ones_like(coord.values))
+
+    def test_ufunc_method_converts_units(self, coord):
+        """Ufunc methods should convert units rather than ignore them."""
+        other = get_coord(data=coord.values * 100, units="cm")
+        out = np.add.outer(coord, other)
+        assert out.units == coord.units
+        np.testing.assert_allclose(out.values, np.add.outer(*[coord.values] * 2))
+
+    def test_ambiguous_ufunc_method_units_raise(self, coord):
+        """Ufunc methods which change units aren't supported with units."""
+        with pytest.raises(UnitError, match="ambiguous"):
+            np.multiply.reduce(coord)
+        # But they work fine when there are no units to get wrong.
+        out = np.multiply.reduce(get_coord(data=coord.values))
+        assert np.isclose(out, np.multiply.reduce(coord.values))
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            lambda x: np.add.at(x, [0], 1),
+            lambda x: np.copyto(x, 0),
+            lambda x: np.add(x, 1, out=np.empty(len(x))),
+        ],
+    )
+    def test_mutating_operations_raise(self, coord, op):
+        """Coords are immutable so in-place operations should raise."""
+        with pytest.raises(ParameterError, match="immutable"):
+            op(coord)
+        np.testing.assert_allclose(coord.values, [2.0, 4.0, 8.0])
+
+    def test_array_function_returning_list(self, unitless_coord):
+        """Array functions which return lists should return coords."""
+        out = np.array_split(unitless_coord, 3)
+        assert isinstance(out, list)
+        assert all(isinstance(x, BaseCoord) for x in out)
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            lambda x, y: x > y,
+            lambda x, y: x >= y,
+            lambda x, y: x < y,
+            lambda x, y: x <= y,
+        ],
+    )
+    def test_comparisons_return_masks(self, coord, op):
+        """Comparison operators should return boolean arrays."""
+        out = op(coord, 4 * get_quantity("m"))
+        assert isinstance(out, np.ndarray)
+        np.testing.assert_array_equal(out, op(coord.values, 4))
+
+    @pytest.mark.parametrize("func", [np.mean, np.median, np.max, np.std])
+    def test_time_coord_reductions(self, random_patch, func):
+        """Reductions on time coords should use dascore's time-aware logic."""
+        coord = random_patch.get_coord("time")
+        out = func(coord)
+        assert dtype_time_like(np.asarray(out).dtype)
+        assert not isinstance(out, BaseCoord)
+
     def test_array_function_not_implemented_for_unknown_types(self, coord):
         """Unknown types in the array function protocol should defer."""
         out = coord.__array_function__(np.mean, (str,), (coord,), {})
