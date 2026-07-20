@@ -94,8 +94,8 @@ _UNIT_MATCHED_UFUNCS = frozenset(
     }
 )
 
-# Numpy functions which modify one of their inputs in place. Coords are
-# immutable so these are not supported.
+# Numpy functions which modify one of their inputs in place. The read-only
+# array flag already stops these, but a ParameterError explains why.
 _MUTATING_ARRAY_FUNCS = frozenset(
     {np.copyto, np.place, np.put, np.put_along_axis, np.putmask, np.fill_diagonal}
 )
@@ -650,6 +650,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """Implement numpy's ufunc protocol (eg np.sqrt(coord), coord + 1)."""
+        # Coord arrays are read-only, which numpy enforces for out= but
+        # not for ufunc.at, so these have to be rejected explicitly.
         if kwargs.get("out") is not None or method == "at":
             msg = (
                 "Since coordinates are immutable, operations which modify "
