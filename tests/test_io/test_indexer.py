@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -78,6 +79,21 @@ class TestFindIndex:
         index_map_path = dir_index.index_map_path
         assert index_map_path.parent == index_path.parent
 
+    def test_read_only_index_name_is_stable(self, unwritable_directory, tmp_path):
+        """The read-only fallback index name must not depend on hash().
+
+        hash() of a str/Path is randomized per process, so a hash-derived
+        name would differ every session and orphan the prior index. The
+        name is a stable digest of the directory path.
+        """
+        import hashlib
+
+        map_path = tmp_path / "cache_paths.json"
+        with set_config(directory_index_map_path=map_path):
+            first = DBDirectoryIndexer(unwritable_directory).index_path
+        digest = hashlib.sha256(str(unwritable_directory).encode()).hexdigest()[:16]
+        assert first.name == f"_dascore_index_{digest}.sqlite3"
+
     def test_specify_index_path(self, tmp_path_factory):
         """Ensure specifying a Path works and is remembered."""
         data_path = tmp_path_factory.mktemp("data_dir")
@@ -129,6 +145,32 @@ class TestFindIndex:
         with set_config(directory_index_map_path=index_map_path):
             out = DBDirectoryIndexer(tmp_path)
             assert out.index_map_path == index_map_path
+
+
+class TestIndexMap:
+    """Tests for the index-location map helpers."""
+
+    def test_update_is_atomic_and_leaves_no_temp(self, tmp_path):
+        """Updates write via a temp file and swap it in, leaving no debris."""
+        from dascore.io.index.indexer import _get_index_map, _update_index_map
+
+        cache_path = tmp_path / "cache_paths.json"
+        _update_index_map({"a": "1"}, cache_path=str(cache_path))
+        _update_index_map({"b": "2"}, cache_path=str(cache_path))
+        assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
+        # the swap target is the only file left in the directory.
+        assert [p.name for p in tmp_path.iterdir()] == [cache_path.name]
+
+    def test_get_reads_fresh_each_call(self, tmp_path):
+        """Reads are not cached, so out-of-band changes are seen (no @cache)."""
+        from dascore.io.index.indexer import _get_index_map, _update_index_map
+
+        cache_path = tmp_path / "cache_paths.json"
+        _update_index_map({"a": "1"}, cache_path=str(cache_path))
+        assert _get_index_map(str(cache_path)) == {"a": "1"}
+        # simulate another process rewriting the map underneath us.
+        cache_path.write_text(json.dumps({"a": "1", "b": "2"}))
+        assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
 
 
 class TestBasics:

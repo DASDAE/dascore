@@ -1,9 +1,13 @@
 """
-SQL dialect translation for index backends.
+SQL dialect translation for the index backend.
 
 Everything engine-specific lives here: type names, identifier quoting,
 glob matching, and table DDL generation. The rest of the package emits
 logical types and parametrized SQL with `?` placeholders.
+
+This module deliberately imports nothing else from the index package:
+`query` needs the dialect and `backend` needs `query`, so a dialect
+living in either would close an import cycle.
 """
 
 from __future__ import annotations
@@ -12,12 +16,18 @@ from collections.abc import Mapping
 from typing import ClassVar
 
 
-class BaseDialect:
-    """Shared SQL generation for engines close to the standard."""
+class SQLiteDialect:
+    """Dialect for SQLite; STRICT tables enforce the type contract."""
 
-    # logical type -> engine type; concrete dialects define the values.
-    type_map: ClassVar[Mapping[str, str]]
-    strict_suffix: ClassVar[str]
+    # logical type -> engine type. SQLite STRICT tables accept
+    # INTEGER/REAL/TEXT (and INTEGER for bool).
+    type_map: ClassVar[Mapping[str, str]] = {
+        "int64": "INTEGER",
+        "float64": "REAL",
+        "str": "TEXT",
+        "bool": "INTEGER",
+    }
+    strict_suffix: ClassVar[str] = " STRICT"
 
     def quote(self, identifier: str) -> str:
         """Quote an identifier."""
@@ -45,16 +55,3 @@ class BaseDialect:
     def glob(self, column_sql: str) -> str:
         """Return a parametrized unix-glob match expression."""
         return f"{column_sql} GLOB ?"
-
-
-class SQLiteDialect(BaseDialect):
-    """Dialect for SQLite; STRICT tables enforce the type contract."""
-
-    # SQLite STRICT tables accept INTEGER/REAL/TEXT (and INT for bool).
-    type_map: ClassVar[Mapping[str, str]] = {
-        "int64": "INTEGER",
-        "float64": "REAL",
-        "str": "TEXT",
-        "bool": "INTEGER",
-    }
-    strict_suffix: ClassVar[str] = " STRICT"

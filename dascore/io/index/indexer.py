@@ -1,15 +1,19 @@
 """
 A directory indexer backed by the generic spool index.
 
-Drop-in alternative to `dascore.io.indexer.DirectoryIndexer`: it walks a
-directory, detects new/changed/removed sources by per-source
+It walks a directory, detects new/changed/removed sources by per-source
 (mtime, size) comparison, scans only what changed, and answers content
-queries from the index backend.
+queries from the index backend. Also holds the machinery for tracking
+index locations when the data directory itself is not writable (e.g.
+read-only archives).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import tempfile
 from contextlib import suppress
 from pathlib import Path
 
@@ -24,16 +28,59 @@ from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import SourceRecord, summaries_to_records
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
-from dascore.io.indexer import (
-    AbstractIndexer,
-    _get_index_map,
-    _update_index_map,
-)
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
 
 
-class DBDirectoryIndexer(AbstractIndexer):
+def _get_index_map(cache_path) -> dict:
+    """
+    Return a fresh dict of index locations read from disk.
+
+    Read (not cached): another process may have updated the map, and a
+    per-process cache would dump this process's stale copy on the next
+    write, erasing entries others added.
+    """
+    path = Path(cache_path)
+    out = {}
+    successful_read = True
+    if path.exists():
+        try:
+            with path.open("r") as fi:
+                out = json.load(fi)
+        # On rare occasions, the file can become corrupt. See #508.
+        except (OSError, json.JSONDecodeError):
+            successful_read = False
+    if not isinstance(out, dict) or not successful_read:
+        out = {}
+        with suppress(FileNotFoundError, PermissionError):
+            path.unlink(missing_ok=True)
+    return out
+
+
+def _update_index_map(updates, cache_path) -> dict:
+    """Update the index map to track a new index, writing atomically."""
+    data = _get_index_map(cache_path=cache_path)
+    data.update(updates)
+    path = Path(cache_path)
+    path.parent.mkdir(exist_ok=True, parents=True)
+    # Write to a sibling temp file and os.replace() it into place. A direct
+    # write is not atomic: a concurrent reader hitting a half-written file
+    # raises JSONDecodeError, which _get_index_map treats as corruption and
+    # deletes the whole map (see #508). replace() is atomic on the same
+    # filesystem, so readers only ever see a complete file.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fi:
+            json.dump(data, fi)
+        os.replace(tmp, path)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return data
+
+
+class DBDirectoryIndexer:
     """
     Index a directory of fiber files with a database backend.
 
@@ -121,7 +168,11 @@ class DBDirectoryIndexer(AbstractIndexer):
             if not self._is_legacy_or_foreign_index(mapped):
                 return mapped
         if not directory_writable(self.path):
-            name = f"_dascore_index_{abs(hash(self.path))}.sqlite3"
+            # A stable digest, not hash(): str/Path hashing is randomized
+            # per process (PYTHONHASHSEED), so hash() would name a new
+            # index file every session and orphan the previous one.
+            digest = hashlib.sha256(str(self.path).encode()).hexdigest()[:16]
+            name = f"_dascore_index_{digest}.sqlite3"
             index_path = self.index_map_path.parent / name
             _update_index_map(
                 {map_key: str(index_path.absolute())},
@@ -217,7 +268,13 @@ class DBDirectoryIndexer(AbstractIndexer):
                     signature = self._directory_signature(path)
                     files[self._rel(path)] = (*signature, path)
                 continue
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except OSError:
+                # The file vanished between the walk yielding it and this
+                # stat (a concurrent deletion); skip it rather than
+                # crashing the whole index update.
+                continue
             files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
         return files
 

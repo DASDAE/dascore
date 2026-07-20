@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
-from dascore.io.index.dialect import BaseDialect
+from dascore.io.index.dialect import SQLiteDialect
 from dascore.io.index.ingest import typed_value
 from dascore.units import convert_units
 from dascore.utils.misc import is_range
@@ -201,7 +201,7 @@ class _Where:
 
 def build_attr_clause(
     where: _Where,
-    dialect: BaseDialect,
+    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     name: str,
     value,
@@ -285,7 +285,7 @@ def build_attr_clause(
 
 def build_coord_clause(
     where: _Where,
-    dialect: BaseDialect,
+    dialect: SQLiteDialect,
     coord_meta: pd.DataFrame,
     name: str,
     value,
@@ -364,7 +364,7 @@ def build_coord_clause(
 
 def _build_where(
     queries: list[Query],
-    dialect: BaseDialect,
+    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
 ) -> tuple[_Where, list[tuple[str, re.Pattern]]]:
@@ -388,7 +388,7 @@ _HOT_COORDS = ("time", "distance")
 
 
 def _order_clause(
-    order_by, dialect: BaseDialect, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
+    order_by, dialect: SQLiteDialect, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
 ) -> tuple[str, list]:
     """
     Resolve an order spec into an ORDER BY clause and its parameters.
@@ -430,7 +430,7 @@ def _order_clause(
 
 def build_sql(
     query: Query | Sequence[Query],
-    dialect: BaseDialect,
+    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
     count: bool = False,
