@@ -55,13 +55,11 @@ jobs:
         # Defined in .github/actions/load-shared-vars/action.yml
         python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
         free_thread: [false]
-        test_shell: ["bash -el {0}"]
         include:
           - os: ubuntu-latest
             python-version: "3.14t"
             free_thread: true
             name: free_thread
-            test_shell: "env PYTHON_GIL=0 bash --noprofile --norc -e -o pipefail {0}"
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -136,22 +134,37 @@ jobs:
 
       - name: generate qmd docs tests
         id: generate_qmd_tests
-        shell: ${{ matrix.test_shell }}
-        run: python scripts/generate_doc_code_tests.py
+        shell: bash -el {0}
+        run: |
+          if [[ "${{ matrix.free_thread }}" == "true" ]]; then
+            export PATH="${pythonLocation}/bin:${PATH}"
+            export PYTHON_GIL=0
+          fi
+          python scripts/generate_doc_code_tests.py
 
       # Runs test suite and calculates coverage
       - name: run test suite
         id: run_test_suite
         continue-on-error: ${{ env.debug_enabled == 'true' }}
-        shell: ${{ matrix.test_shell }}
-        run: ./.github/test_code.sh
+        shell: bash -el {0}
+        run: |
+          if [[ "${{ matrix.free_thread }}" == "true" ]]; then
+            export PATH="${pythonLocation}/bin:${PATH}"
+            export PYTHON_GIL=0
+          fi
+          ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         id: run_docstrings
         continue-on-error: ${{ env.debug_enabled == 'true' }}
-        shell: ${{ matrix.test_shell }}
-        run: ./.github/test_code.sh doctest
+        shell: bash -el {0}
+        run: |
+          if [[ "${{ matrix.free_thread }}" == "true" ]]; then
+            export PATH="${pythonLocation}/bin:${PATH}"
+            export PYTHON_GIL=0
+          fi
+          ./.github/test_code.sh doctest
 
       - name: note SSH key requirement for debug access
         if: env.debug_enabled == 'true' && (steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure')
