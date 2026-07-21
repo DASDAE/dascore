@@ -43,15 +43,23 @@ jobs:
         id: load-vars
 
   test_code:
+    name: ${{ matrix.name || format('test_code ({0}, Python {1})', matrix.os, matrix.python-version) }}
     needs: setup
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         # Defined in .github/actions/load-shared-vars/action.yml
         os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
         # Defined in .github/actions/load-shared-vars/action.yml
         python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
+        free_thread: [false]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.14t"
+            free_thread: true
+            name: free_thread
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -69,10 +77,60 @@ jobs:
           fetch-depth: '0'
 
       - uses: ./.github/actions/mamba-install-dascore
+        if: ${{ !matrix.free_thread }}
         with:
           python-version: ${{ matrix.python-version }}
           cache-number: ${{ env.CACHE_NUMBER }}
           prepare-test-data: "true"
+
+      - name: set up free-threaded Python
+        if: matrix.free_thread
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: install free-threaded test dependencies
+        if: matrix.free_thread
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,docs]" findiff
+
+      - name: verify free-threaded runtime
+        if: matrix.free_thread
+        shell: bash
+        run: |
+          python -c 'import dascore, sys, sysconfig; assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1; assert not sys._is_gil_enabled()'
+
+      - name: export free-threaded test data cache env
+        if: matrix.free_thread
+        shell: bash
+        env:
+          INPUT_CACHE_NUMBER: ${{ env.CACHE_NUMBER }}
+          RUNNER_OS: ${{ runner.os }}
+        run: python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
+
+      - name: restore free-threaded test data cache
+        if: matrix.free_thread
+        id: restore-free-thread-test-data
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.DATA_CACHE_PATH }}
+          key: ${{ env.DATA_CACHE_KEY }}
+
+      - name: prime free-threaded test data cache
+        if: matrix.free_thread && steps.restore-free-thread-test-data.outputs.cache-hit != 'true'
+        shell: bash
+        run: python .github/scripts/cache_test_data.py
+
+      - name: save free-threaded test data cache
+        if: matrix.free_thread && steps.restore-free-thread-test-data.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.DATA_CACHE_PATH }}
+          key: ${{ env.DATA_CACHE_KEY }}
 
       - name: generate qmd docs tests
         id: generate_qmd_tests
