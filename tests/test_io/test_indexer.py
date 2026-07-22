@@ -140,6 +140,20 @@ class TestFindIndex:
             out = DBDirectoryIndexer(data_path)
         assert out.index_path.parent == data_path
 
+    def test_writable_dir_survives_unavailable_sqlite_map(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """Use a local index when SQLite reports an unavailable map."""
+        import dascore.io.index.indexer as indexer
+
+        def unavailable_map(*args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(indexer, "_get_index_map", unavailable_map)
+        data_path = tmp_path_factory.mktemp("writable_data")
+        out = DBDirectoryIndexer(data_path)
+        assert out.index_path.parent == data_path
+
     def test_writable_dir_index_exists(self, tmp_path_factory):
         """A test case where the index does exist."""
         path = tmp_path_factory.mktemp("normal_indexer_test")
@@ -326,38 +340,83 @@ class TestIndexMap:
         "fork" not in multiprocessing.get_all_start_methods(),
         reason="requires POSIX fork",
     )
-    def test_recovery_lock_resets_after_fork(self, tmp_path):
-        """A child must not inherit a permanently acquired thread lock."""
+    def test_recovery_guard_blocks_fork(self, tmp_path, monkeypatch):
+        """Fork waits until no recovery file-lock descriptor can be inherited."""
         import dascore.io.index.indexer as indexer
 
         cache_path = tmp_path / "cache_paths.sqlite3"
         indexer._update_index_map({"a": "1"}, cache_path)
-        held = threading.Event()
-        release = threading.Event()
 
-        def hold_lock():
-            with indexer._INDEX_MAP_RECOVERY_LOCK:
-                held.set()
-                release.wait(timeout=20)
+        class ObservedLock:
+            """Expose when the at-fork callback waits on the guard lock."""
 
-        thread = threading.Thread(target=hold_lock)
-        process = None
-        thread.start()
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._count_lock = threading.Lock()
+                self.acquire_count = 0
+                self.fork_waiting = threading.Event()
+
+            def acquire(self):
+                with self._count_lock:
+                    self.acquire_count += 1
+                    if self.acquire_count == 2:
+                        self.fork_waiting.set()
+                return self._lock.acquire()
+
+            def release(self):
+                self._lock.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *_):
+                self.release()
+
+        observed_lock = ObservedLock()
+        monkeypatch.setattr(indexer, "_INDEX_MAP_RECOVERY_LOCK", observed_lock)
+        guard_held = threading.Event()
+        release_guard = threading.Event()
+        fork_errors = []
+
+        def hold_guard():
+            with indexer._index_map_recovery_guard(cache_path):
+                guard_held.set()
+                release_guard.wait(timeout=20)
+
+        context = multiprocessing.get_context("fork")
+        process = context.Process(
+            target=_read_index_map_process,
+            args=(str(cache_path),),
+        )
+
+        def start_child():
+            try:
+                with suppress_warnings(DeprecationWarning):
+                    process.start()
+                process.join(timeout=10)
+            except BaseException as exc:
+                fork_errors.append(exc)
+
+        guard_thread = threading.Thread(target=hold_guard)
+        fork_thread = threading.Thread(target=start_child)
+        guard_thread.start()
         try:
-            assert held.wait(timeout=5)
-            context = multiprocessing.get_context("fork")
-            process = context.Process(
-                target=_read_index_map_process,
-                args=(str(cache_path),),
-            )
-            with suppress_warnings(DeprecationWarning):
-                process.start()
-            process.join(timeout=10)
+            assert guard_held.wait(timeout=5)
+            fork_thread.start()
+            assert observed_lock.fork_waiting.wait(timeout=5)
+            assert process.pid is None
+            release_guard.set()
+            fork_thread.join(timeout=15)
+            assert not fork_thread.is_alive()
+            assert not fork_errors
             assert process.exitcode == 0
         finally:
-            release.set()
-            thread.join(timeout=5)
-            if process is not None and process.is_alive():
+            release_guard.set()
+            guard_thread.join(timeout=5)
+            if fork_thread.is_alive():
+                fork_thread.join(timeout=15)
+            if process.pid is not None and process.is_alive():
                 process.terminate()
                 process.join(timeout=5)
 

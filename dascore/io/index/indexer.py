@@ -50,14 +50,28 @@ _INDEX_MAP_CORRUPTION_MESSAGES = ("database disk image is malformed", "not a dat
 _INDEX_MAP_RECOVERY_LOCK = Lock()
 
 
+def _acquire_index_map_recovery_lock_before_fork():
+    """Wait for the recovery guard before allowing a process fork."""
+    _INDEX_MAP_RECOVERY_LOCK.acquire()
+
+
+def _release_index_map_recovery_lock_after_fork():
+    """Release the parent recovery lock acquired before a process fork."""
+    _INDEX_MAP_RECOVERY_LOCK.release()
+
+
 def _reset_index_map_recovery_lock():
-    """Replace thread-lock state inherited from a multithreaded parent."""
+    """Replace thread-lock state inherited by a forked child."""
     global _INDEX_MAP_RECOVERY_LOCK
     _INDEX_MAP_RECOVERY_LOCK = Lock()
 
 
 if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_reset_index_map_recovery_lock)
+    os.register_at_fork(
+        before=_acquire_index_map_recovery_lock_before_fork,
+        after_in_parent=_release_index_map_recovery_lock_after_fork,
+        after_in_child=_reset_index_map_recovery_lock,
+    )
 
 
 def _is_corrupt_index_map_error(exc: sqlite3.DatabaseError) -> bool:
@@ -304,7 +318,7 @@ class DBDirectoryIndexer:
         path_map = {}
         # A writable data directory can fall back to its local index when the
         # optional global map is unavailable, such as on a read-only cache.
-        with suppress(OSError):
+        with suppress(OSError, sqlite3.OperationalError):
             path_map = _get_index_map(cache_path=str(self.index_map_path))
         if out := path_map.get(map_key):
             mapped = Path(out)
