@@ -11,11 +11,11 @@ read-only archives).
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-import tempfile
-from contextlib import suppress
+import sqlite3
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from threading import Lock
 
 import pandas as pd
 from typing_extensions import Self
@@ -31,53 +31,185 @@ from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
 
-
-def _get_index_map(cache_path) -> dict:
-    """
-    Return a fresh dict of index locations read from disk.
-
-    Read (not cached): another process may have updated the map, and a
-    per-process cache would dump this process's stale copy on the next
-    write, erasing entries others added.
-    """
-    path = Path(cache_path)
-    out = {}
-    successful_read = True
-    if path.exists():
-        try:
-            with path.open("r") as fi:
-                out = json.load(fi)
-        # On rare occasions, the file can become corrupt. See #508.
-        except (OSError, json.JSONDecodeError):
-            successful_read = False
-    if not isinstance(out, dict) or not successful_read:
-        out = {}
-        with suppress(FileNotFoundError, PermissionError):
-            path.unlink(missing_ok=True)
-    return out
+_INDEX_MAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS index_map (
+    directory TEXT PRIMARY KEY,
+    index_path TEXT NOT NULL
+)
+"""
+_INDEX_MAP_UPSERT = """
+INSERT INTO index_map (directory, index_path)
+VALUES (?, ?)
+ON CONFLICT(directory) DO UPDATE SET index_path = excluded.index_path
+"""
+_INDEX_MAP_CORRUPTION_CODES = {
+    getattr(sqlite3, "SQLITE_CORRUPT", 11),
+    getattr(sqlite3, "SQLITE_NOTADB", 26),
+}
+_INDEX_MAP_CORRUPTION_MESSAGES = ("database disk image is malformed", "not a database")
+_INDEX_MAP_RECOVERY_LOCK = Lock()
 
 
-def _update_index_map(updates, cache_path) -> dict:
-    """Update the index map to track a new index, writing atomically."""
-    data = _get_index_map(cache_path=cache_path)
-    data.update(updates)
-    path = Path(cache_path)
-    path.parent.mkdir(exist_ok=True, parents=True)
-    # Write to a sibling temp file and os.replace() it into place. A direct
-    # write is not atomic: a concurrent reader hitting a half-written file
-    # raises JSONDecodeError, which _get_index_map treats as corruption and
-    # deletes the whole map (see #508). replace() is atomic on the same
-    # filesystem, so readers only ever see a complete file.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+def _is_corrupt_index_map_error(exc: sqlite3.DatabaseError) -> bool:
+    """Return whether an SQLite error means the disposable map is corrupt."""
+    error_code = getattr(exc, "sqlite_errorcode", None)
+    if error_code is not None:
+        return error_code & 0xFF in _INDEX_MAP_CORRUPTION_CODES
+    message = str(exc).lower()
+    return any(part in message for part in _INDEX_MAP_CORRUPTION_MESSAGES)
+
+
+def _open_index_map(database_path: Path) -> sqlite3.Connection:
+    """Open and initialize one SQLite index-map connection."""
+    connection = sqlite3.connect(database_path, timeout=30, isolation_level=None)
     try:
-        with os.fdopen(fd, "w") as fi:
-            json.dump(data, fi)
-        os.replace(tmp, path)
+        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute(_INDEX_MAP_SCHEMA)
+        return connection
     except BaseException:
-        with suppress(OSError):
-            os.unlink(tmp)
+        connection.close()
         raise
-    return data
+
+
+def _acquire_recovery_file_lock(lock_file):
+    """Acquire a content-independent process lock on an open file."""
+    if os.name == "nt":  # pragma: no cover
+        import errno
+        import msvcrt
+        import time
+
+        lock_file.seek(0, os.SEEK_END)
+        if not lock_file.tell():
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        transient_errors = {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+        while True:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno not in transient_errors:
+                    raise
+                time.sleep(0.05)
+            else:
+                break
+    else:
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _release_recovery_file_lock(lock_file):
+    """Release a process lock acquired by `_acquire_recovery_file_lock`."""
+    if os.name == "nt":  # pragma: no cover
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _index_map_recovery_guard(database_path: Path):
+    """Keep map operations out of the way of destructive recovery."""
+    lock_path = database_path.with_name(f"{database_path.name}.recovery.lock")
+    with _INDEX_MAP_RECOVERY_LOCK, lock_path.open("a+b") as lock_file:
+        _acquire_recovery_file_lock(lock_file)
+        try:
+            yield
+        finally:
+            _release_recovery_file_lock(lock_file)
+
+
+def _index_map_is_healthy(database_path: Path) -> bool:
+    """Validate the schema and all map leaf pages."""
+    connection = None
+    try:
+        connection = _open_index_map(database_path)
+        connection.execute("SELECT directory, index_path FROM index_map").fetchall()
+    except sqlite3.DatabaseError as exc:
+        if not _is_corrupt_index_map_error(exc):
+            raise
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+    return True
+
+
+def _remove_index_map(database_path: Path) -> None:
+    """Remove a corrupt map and SQLite sidecars before rebuilding."""
+    for suffix in ("", "-journal", "-shm", "-wal"):
+        Path(f"{database_path}{suffix}").unlink(missing_ok=True)
+
+
+def _recover_index_map(database_path: Path) -> None:
+    """Rebuild a corrupt map while the caller holds the recovery guard."""
+    # A process that held the recovery lock before us may have fixed it.
+    if _index_map_is_healthy(database_path):
+        return
+    _remove_index_map(database_path)
+    _open_index_map(database_path).close()
+
+
+def _run_index_map_operation(cache_path, operation):
+    """Run one complete map operation, rebuilding and retrying on corruption."""
+    database_path = Path(cache_path)
+    database_path.parent.mkdir(exist_ok=True, parents=True)
+    # Recovery removes and recreates the database, so participating access
+    # is deliberately exclusive, including reads. This ensures no process retains
+    # an open handle to the unlinked database or its name-based SQLite sidecars.
+    # SQLite transactions also protect against connections outside this guard.
+    with _index_map_recovery_guard(database_path):
+        for attempt in range(2):
+            connection = None
+            try:
+                connection = _open_index_map(database_path)
+                return operation(connection)
+            except sqlite3.DatabaseError as exc:
+                if attempt or not _is_corrupt_index_map_error(exc):
+                    raise
+            finally:
+                if connection is not None:
+                    connection.close()
+            _recover_index_map(database_path)
+    raise AssertionError("unreachable")
+
+
+def _get_index_map(cache_path) -> dict[str, str]:
+    """
+    Return a fresh dict of index locations read from the SQLite database.
+
+    Read (not cached): another process may have updated the map.
+    """
+
+    def read(connection):
+        rows = connection.execute(
+            "SELECT directory, index_path FROM index_map"
+        ).fetchall()
+        return dict(rows)
+
+    return _run_index_map_operation(cache_path, read)
+
+
+def _update_index_map(updates, cache_path) -> dict[str, str]:
+    """Transactionally upsert index locations without losing other writers."""
+    rows = [(str(key), str(value)) for key, value in updates.items()]
+
+    def update(connection):
+        with connection:
+            # Reserve the single writer slot before reading or updating rows.
+            connection.execute("BEGIN IMMEDIATE")
+            connection.executemany(_INDEX_MAP_UPSERT, rows)
+            data = connection.execute(
+                "SELECT directory, index_path FROM index_map"
+            ).fetchall()
+        return dict(data)
+
+    return _run_index_map_operation(cache_path, update)
 
 
 class DBDirectoryIndexer:

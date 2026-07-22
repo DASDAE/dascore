@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import json
+import multiprocessing
 import os
 import platform
 import shutil
-from contextlib import suppress
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, suppress
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +20,16 @@ from dascore.config import set_config
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.utils.patch import get_patch_names
+
+
+def _update_corrupt_index_map_process(cache_path, key, ready, start):
+    """Update a corrupt index map in a child process."""
+    from dascore.io.index.indexer import _update_index_map
+
+    ready.set()
+    if not start.wait(timeout=20):
+        raise RuntimeError("timed out waiting to update index map")
+    _update_index_map({key: f"index-{key}"}, cache_path=cache_path)
 
 
 @pytest.fixture(scope="class")
@@ -67,9 +80,8 @@ class TestFindIndex:
     def directory_indexer_bad_cache(self, tmp_path_factory):
         """Create a bad index_map file."""
         path = tmp_path_factory.mktemp("corrupt_cache_test")
-        cache_path = path / "corrupt_cache.json"
-        with cache_path.open("wt") as fi:
-            fi.write("{'bad': 'json'")
+        cache_path = path / "corrupt_cache.sqlite3"
+        cache_path.write_bytes(b"not a sqlite database")
         return cache_path
 
     def test_directory_cant_write(self, unwritable_directory):
@@ -88,7 +100,7 @@ class TestFindIndex:
         """
         import hashlib
 
-        map_path = tmp_path / "cache_paths.json"
+        map_path = tmp_path / "cache_paths.sqlite3"
         with set_config(directory_index_map_path=map_path):
             first = DBDirectoryIndexer(unwritable_directory).index_path
         digest = hashlib.sha256(str(unwritable_directory).encode()).hexdigest()[:16]
@@ -124,7 +136,7 @@ class TestFindIndex:
         assert directory_indexer_bad_cache.exists()
         with set_config(directory_index_map_path=directory_indexer_bad_cache):
             DBDirectoryIndexer(path)
-        assert not directory_indexer_bad_cache.exists()
+        assert directory_indexer_bad_cache.read_bytes().startswith(b"SQLite format 3")
 
     def test_remote_directory_not_supported(self):
         """Remote directory indexing should fail fast."""
@@ -141,7 +153,7 @@ class TestFindIndex:
 
     def test_index_map_path_comes_from_config(self, tmp_path):
         """Index map paths should be sourced from runtime configuration."""
-        index_map_path = tmp_path / "cache_paths.json"
+        index_map_path = tmp_path / "cache_paths.sqlite3"
         with set_config(directory_index_map_path=index_map_path):
             out = DBDirectoryIndexer(tmp_path)
             assert out.index_map_path == index_map_path
@@ -150,27 +162,204 @@ class TestFindIndex:
 class TestIndexMap:
     """Tests for the index-location map helpers."""
 
-    def test_update_is_atomic_and_leaves_no_temp(self, tmp_path):
-        """Updates write via a temp file and swap it in, leaving no debris."""
+    def test_default_map_path_uses_sqlite(self):
+        """The default map path names the SQLite database directly."""
+        from dascore.config import DascoreConfig
+
+        assert DascoreConfig().directory_index_map_path.name == "cache_paths.sqlite3"
+
+    def test_updates_use_sqlite_database(self, tmp_path):
+        """Updates persist transactionally without temporary database files."""
         from dascore.io.index.indexer import _get_index_map, _update_index_map
 
-        cache_path = tmp_path / "cache_paths.json"
+        cache_path = tmp_path / "cache_paths.sqlite3"
         _update_index_map({"a": "1"}, cache_path=str(cache_path))
         _update_index_map({"b": "2"}, cache_path=str(cache_path))
         assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
-        # the swap target is the only file left in the directory.
-        assert [p.name for p in tmp_path.iterdir()] == [cache_path.name]
+        assert cache_path.read_bytes().startswith(b"SQLite format 3")
+        assert {path.name for path in tmp_path.iterdir()} == {
+            cache_path.name,
+            f"{cache_path.name}.recovery.lock",
+        }
 
-    def test_get_reads_fresh_each_call(self, tmp_path):
-        """Reads are not cached, so out-of-band changes are seen (no @cache)."""
+    def test_corrupt_sqlite_is_rebuilt(self, tmp_path):
+        """A corrupt disposable SQLite map is replaced transparently."""
         from dascore.io.index.indexer import _get_index_map, _update_index_map
 
-        cache_path = tmp_path / "cache_paths.json"
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        cache_path.write_bytes(b"not a sqlite database")
+        assert _get_index_map(cache_path) == {}
+        assert cache_path.read_bytes().startswith(b"SQLite format 3")
+        _update_index_map({"a": "1"}, cache_path)
+        assert _get_index_map(cache_path) == {"a": "1"}
+
+    def test_corrupt_recovery_lock_does_not_block_rebuild(self, tmp_path):
+        """Recovery locking must not depend on the lock file's contents."""
+        from dascore.io.index.indexer import _get_index_map
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        lock_path = tmp_path / "cache_paths.sqlite3.recovery.lock"
+        cache_path.write_bytes(b"not a sqlite database")
+        lock_path.write_bytes(b"arbitrary non-database contents")
+
+        assert _get_index_map(cache_path) == {}
+        assert cache_path.read_bytes().startswith(b"SQLite format 3")
+
+    @pytest.mark.parametrize(
+        "message",
+        ["database disk image is malformed", "file is not a database"],
+    )
+    def test_corruption_detection_without_error_code(self, message):
+        """Python 3.10 SQLite messages still identify disposable corruption."""
+        from dascore.io.index.indexer import _is_corrupt_index_map_error
+
+        error = sqlite3.DatabaseError(message)
+        assert not hasattr(error, "sqlite_errorcode")
+        assert _is_corrupt_index_map_error(error)
+
+    def test_unrelated_database_error_propagates(self, tmp_path, monkeypatch):
+        """Operational failures are not mistaken for disposable corruption."""
+        import dascore.io.index.indexer as indexer
+
+        error = sqlite3.OperationalError("database is locked")
+
+        def fail_open(*args):
+            raise error
+
+        monkeypatch.setattr(indexer, "_open_index_map", fail_open)
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            indexer._get_index_map(tmp_path / "cache_paths.sqlite3")
+
+    def test_corruption_during_select_is_rebuilt(self, tmp_path, monkeypatch):
+        """Corruption raised by a query triggers a rebuild and retry."""
+        import dascore.io.index.indexer as indexer
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        indexer._update_index_map({"a": "1"}, cache_path)
+        original_open = indexer._open_index_map
+        open_calls = 0
+
+        class CorruptOnSelect:
+            """Make the first map connection fail when queried."""
+
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, statement, *args, **kwargs):
+                if statement.lstrip().startswith("SELECT"):
+                    self.connection.close()
+                    cache_path.write_bytes(b"not a sqlite database")
+                    error = sqlite3.DatabaseError("database disk image is malformed")
+                    error.sqlite_errorcode = getattr(sqlite3, "SQLITE_CORRUPT", 11)
+                    raise error
+                return self.connection.execute(statement, *args, **kwargs)
+
+            def close(self):
+                self.connection.close()
+
+        def open_map(*args):
+            nonlocal open_calls
+            open_calls += 1
+            connection = original_open(*args)
+            if open_calls == 1:
+                return CorruptOnSelect(connection)
+            return connection
+
+        monkeypatch.setattr(indexer, "_open_index_map", open_map)
+        assert indexer._get_index_map(cache_path) == {}
+        assert cache_path.read_bytes().startswith(b"SQLite format 3")
+
+    @pytest.mark.parametrize("_repeat", range(3))
+    def test_concurrent_process_recovery_preserves_updates(self, tmp_path, _repeat):
+        """Separate processes repeatedly coordinate corruption recovery."""
+        from dascore.io.index.indexer import _get_index_map
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        cache_path.write_bytes(b"not a sqlite database")
+        context = multiprocessing.get_context("spawn")
+        start = context.Event()
+        ready = [context.Event(), context.Event()]
+        keys = ("a", "b")
+        processes = [
+            context.Process(
+                target=_update_corrupt_index_map_process,
+                args=(str(cache_path), key, event, start),
+            )
+            for key, event in zip(keys, ready, strict=True)
+        ]
+        try:
+            for process in processes:
+                process.start()
+            assert all(event.wait(timeout=20) for event in ready)
+            start.set()
+            for process in processes:
+                process.join(timeout=30)
+            assert [process.exitcode for process in processes] == [0, 0]
+        finally:
+            start.set()
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=5)
+
+        assert _get_index_map(cache_path) == {"a": "index-a", "b": "index-b"}
+
+    def test_get_reads_fresh_each_call(self, tmp_path):
+        """Reads are not cached, so out-of-band SQLite changes are visible."""
+        from dascore.io.index.indexer import _get_index_map, _update_index_map
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
         _update_index_map({"a": "1"}, cache_path=str(cache_path))
         assert _get_index_map(str(cache_path)) == {"a": "1"}
-        # simulate another process rewriting the map underneath us.
-        cache_path.write_text(json.dumps({"a": "1", "b": "2"}))
+        with closing(sqlite3.connect(cache_path)) as connection, connection:
+            connection.execute(
+                "INSERT INTO index_map (directory, index_path) VALUES (?, ?)",
+                ("b", "2"),
+            )
         assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
+
+    def test_concurrent_updates_preserve_every_entry(self, tmp_path):
+        """Concurrent callers preserve entries when they start together."""
+        from dascore.io.index.indexer import _get_index_map, _update_index_map
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        keys = [f"source-{number}" for number in range(8)]
+        barrier = threading.Barrier(len(keys))
+
+        def update(key):
+            barrier.wait(timeout=5)
+            _update_index_map({key: f"index-{key}"}, cache_path=cache_path)
+
+        with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+            futures = [pool.submit(update, key) for key in keys]
+            for future in futures:
+                future.result(timeout=10)
+
+        expected = {key: f"index-{key}" for key in keys}
+        assert _get_index_map(cache_path) == expected
+
+    def test_legacy_json_is_ignored(self, tmp_path):
+        """A neighboring JSON map is neither read nor changed."""
+        from dascore.io.index.indexer import _get_index_map
+
+        legacy_path = tmp_path / "cache_paths.json"
+        database_path = tmp_path / "cache_paths.sqlite3"
+        legacy_contents = '{"a": "1", "b": "2"}'
+        legacy_path.write_text(legacy_contents)
+
+        assert _get_index_map(database_path) == {}
+        assert database_path.read_bytes().startswith(b"SQLite format 3")
+        assert legacy_path.read_text() == legacy_contents
+
+    def test_configured_suffix_does_not_select_storage_format(self, tmp_path):
+        """The configured map path is SQLite regardless of its suffix."""
+        from dascore.io.index.indexer import _get_index_map, _update_index_map
+
+        cache_path = tmp_path / "custom-index-map.json"
+        _update_index_map({"external-data": "external-index.sqlite3"}, cache_path)
+
+        assert cache_path.read_bytes().startswith(b"SQLite format 3")
+        assert _get_index_map(cache_path) == {"external-data": "external-index.sqlite3"}
 
 
 class TestBasics:

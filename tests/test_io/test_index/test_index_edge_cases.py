@@ -1224,7 +1224,7 @@ class TestLegacyIndexMap:
         legacy = tmp_path / "legacy_index.h5"
         with h5py.File(legacy, "w") as fh:
             fh.create_dataset("x", data=[1, 2, 3])
-        map_path = tmp_path / "cache_paths.json"
+        map_path = tmp_path / "cache_paths.sqlite3"
         with dc.set_config(directory_index_map_path=map_path):
             _update_index_map({str(data_dir): str(legacy)}, cache_path=str(map_path))
             spool = dc.spool(data_dir).update()

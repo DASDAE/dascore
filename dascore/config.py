@@ -84,8 +84,8 @@ class DascoreConfig(BaseModel):
         description="Persistent directory used to cache downloaded example data.",
     )
     directory_index_map_path: Path = Field(
-        default_factory=lambda: _get_cache_root() / "indexes" / "cache_paths.json",
-        description="Path to the cache that records external index-file locations.",
+        default_factory=lambda: _get_cache_root() / "indexes" / "cache_paths.sqlite3",
+        description="Path to the SQLite cache of external index-file locations.",
     )
 
     # Progress display.
