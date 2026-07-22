@@ -273,10 +273,22 @@ def _round_times_to_microseconds(coord):
         raise PatchError(msg)
     if np.any(np.isnat(values)):
         raise PatchError("ProdML time coordinates cannot contain NaT.")
-    nanoseconds = values.astype("datetime64[ns]").astype(np.int64)
-    quotient, remainder = np.divmod(nanoseconds, 1_000)
-    increment = np.where(nanoseconds >= 0, remainder >= 500, remainder > 500)
-    microseconds = quotient + increment
+    microsecond_values = values.astype("datetime64[us]")
+    if np.array_equal(microsecond_values.astype(values.dtype), values):
+        microseconds = microsecond_values.astype(np.int64)
+        remainder = np.zeros_like(microseconds)
+    else:
+        nanosecond_values = values.astype("datetime64[ns]")
+        if not np.array_equal(nanosecond_values.astype(values.dtype), values):
+            msg = (
+                "ProdML time coordinates must fit the microsecond range or have "
+                "nanosecond precision."
+            )
+            raise PatchError(msg)
+        nanoseconds = nanosecond_values.astype(np.int64)
+        quotient, remainder = np.divmod(nanoseconds, 1_000)
+        increment = np.where(nanoseconds >= 0, remainder >= 500, remainder > 500)
+        microseconds = quotient + increment
     diffs = np.diff(microseconds)
     if np.any(diffs <= 0) or not np.all(diffs == diffs[0]):
         msg = (

@@ -294,6 +294,25 @@ class TestProdMLWriteTimePrecision:
             dc.write(prodml_patch, tmp_path / "exact.h5", "PRODML")
         assert not record
 
+    @pytest.mark.parametrize("year", ("1600", "2500"))
+    def test_microseconds_outside_nanosecond_range(self, year, prodml_patch, tmp_path):
+        """Wide microsecond timestamps should not wrap through nanoseconds."""
+        time = np.datetime64(year, "us") + np.arange(5) * np.timedelta64(2_000, "us")
+        patch = _with_time(prodml_patch, time)
+        path = dc.write(patch, tmp_path / f"wide_{year}.h5", "PRODML")
+        with h5py.File(path, "r") as file:
+            stored = file["Acquisition/Raw[0]/RawDataTime"][:]
+        np.testing.assert_array_equal(stored, time.astype(np.int64))
+
+    def test_finer_than_nanosecond_precision_is_rejected(self, prodml_patch, tmp_path):
+        """Unsupported sub-nanosecond precision should not be truncated."""
+        time = np.datetime64(1, "ps") + np.arange(5) * np.timedelta64(
+            2_000_000_000, "ps"
+        )
+        patch = _with_time(prodml_patch, time)
+        with pytest.raises(PatchError, match="nanosecond precision"):
+            dc.write(patch, tmp_path / "picoseconds.h5", "PRODML")
+
     def test_sub_microseconds_round_and_warn_once(self, prodml_patch, tmp_path):
         """Sub-microsecond timestamps should round to nearest microsecond once."""
         base = np.datetime64("2020-01-01", "ns")
