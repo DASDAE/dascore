@@ -19,6 +19,7 @@ from upath import UPath
 from dascore.config import set_config
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_patch_names
 
 
@@ -30,6 +31,13 @@ def _update_corrupt_index_map_process(cache_path, key, ready, start):
     if not start.wait(timeout=20):
         raise RuntimeError("timed out waiting to update index map")
     _update_index_map({key: f"index-{key}"}, cache_path=cache_path)
+
+
+def _read_index_map_process(cache_path):
+    """Read the index map in a child process."""
+    from dascore.io.index.indexer import _get_index_map
+
+    _get_index_map(cache_path)
 
 
 @pytest.fixture(scope="class")
@@ -121,6 +129,16 @@ class TestFindIndex:
         path = tmp_path_factory.mktemp("normal_indexer_test")
         dir_indexer = DBDirectoryIndexer(path)
         assert dir_indexer.index_path.parent == path
+
+    def test_writable_dir_survives_unwritable_map(
+        self, unwritable_directory, tmp_path_factory
+    ):
+        """Use a local index when the global map directory is read-only."""
+        data_path = tmp_path_factory.mktemp("writable_data")
+        map_path = unwritable_directory / "cache_paths.sqlite3"
+        with set_config(directory_index_map_path=map_path):
+            out = DBDirectoryIndexer(data_path)
+        assert out.index_path.parent == data_path
 
     def test_writable_dir_index_exists(self, tmp_path_factory):
         """A test case where the index does exist."""
@@ -303,6 +321,45 @@ class TestIndexMap:
                 process.join(timeout=5)
 
         assert _get_index_map(cache_path) == {"a": "index-a", "b": "index-b"}
+
+    @pytest.mark.skipif(
+        "fork" not in multiprocessing.get_all_start_methods(),
+        reason="requires POSIX fork",
+    )
+    def test_recovery_lock_resets_after_fork(self, tmp_path):
+        """A child must not inherit a permanently acquired thread lock."""
+        import dascore.io.index.indexer as indexer
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        indexer._update_index_map({"a": "1"}, cache_path)
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold_lock():
+            with indexer._INDEX_MAP_RECOVERY_LOCK:
+                held.set()
+                release.wait(timeout=20)
+
+        thread = threading.Thread(target=hold_lock)
+        process = None
+        thread.start()
+        try:
+            assert held.wait(timeout=5)
+            context = multiprocessing.get_context("fork")
+            process = context.Process(
+                target=_read_index_map_process,
+                args=(str(cache_path),),
+            )
+            with suppress_warnings(DeprecationWarning):
+                process.start()
+            process.join(timeout=10)
+            assert process.exitcode == 0
+        finally:
+            release.set()
+            thread.join(timeout=5)
+            if process is not None and process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
 
     def test_get_reads_fresh_each_call(self, tmp_path):
         """Reads are not cached, so out-of-band SQLite changes are visible."""

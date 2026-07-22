@@ -50,6 +50,16 @@ _INDEX_MAP_CORRUPTION_MESSAGES = ("database disk image is malformed", "not a dat
 _INDEX_MAP_RECOVERY_LOCK = Lock()
 
 
+def _reset_index_map_recovery_lock():
+    """Replace thread-lock state inherited from a multithreaded parent."""
+    global _INDEX_MAP_RECOVERY_LOCK
+    _INDEX_MAP_RECOVERY_LOCK = Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_index_map_recovery_lock)
+
+
 def _is_corrupt_index_map_error(exc: sqlite3.DatabaseError) -> bool:
     """Return whether an SQLite error means the disposable map is corrupt."""
     error_code = getattr(exc, "sqlite_errorcode", None)
@@ -291,7 +301,11 @@ class DBDirectoryIndexer:
         with suppress(PermissionError):
             if expected.exists():
                 return expected
-        path_map = _get_index_map(cache_path=str(self.index_map_path))
+        path_map = {}
+        # A writable data directory can fall back to its local index when the
+        # optional global map is unavailable, such as on a read-only cache.
+        with suppress(OSError):
+            path_map = _get_index_map(cache_path=str(self.index_map_path))
         if out := path_map.get(map_key):
             mapped = Path(out)
             # Index-map entries from older DASCore versions can point at
