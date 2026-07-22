@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import h5py
 import numpy as np
@@ -44,6 +44,8 @@ _ROOT_ATTRS = {
     "GaugeLengthUnits": "gauge_length_units",
     "GaugeLength.uom": "gauge_length_units",
     "AcquisitionId": "acquisition_id",
+    "FacilityId": "facility_id",
+    "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
 }
 
@@ -115,6 +117,15 @@ def _get_prodml_version_str(hdf_fi) -> str:
     # in some prodml schemaVersion is str, in other float; this handles both.
     version_str = str(unbyte(attrs["schemaVersion"]))
     return version_str
+
+
+def _get_root_attrs(attrs):
+    """Return normalized attributes from an Acquisition group."""
+    out = maybe_get_items(attrs, _ROOT_ATTRS)
+    if "facility_id" in out:
+        values = tuple(unbyte(x) for x in np.atleast_1d(out["facility_id"]))
+        out["facility_id"] = values[0] if len(values) == 1 else values
+    return out
 
 
 def _get_distance_coord(acq):
@@ -357,23 +368,22 @@ def _prepare_prodml_write(spool):
     )
     attrs = patch.attrs
     acquisition_id = str(attrs.acquisition_id or uuid4())
-    try:
-        acquisition_id = str(UUID(acquisition_id))
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise PatchError("ProdML acquisition_id must be a valid UUID.") from exc
 
     facility = attrs.get("facility_id") or attrs.station or "UNKNOWN"
     service_company = attrs.get("service_company_name") or "UNKNOWN"
     data_units = get_quantity_str(attrs.data_units) or "UNKNOWN"
-    string_values = (facility, service_company, data_units)
-    if not all(isinstance(x, str) and 0 < len(x) <= 64 for x in string_values):
-        msg = "ProdML facility, service company, and data unit must be String64 values."
-        raise PatchError(msg)
+    string_values = {
+        "FacilityId": facility,
+        "ServiceCompanyName": service_company,
+        "RawDataUnit": data_units,
+    }
+    for name, value in string_values.items():
+        if not isinstance(value, str) or not 0 < len(value.encode("utf-8")) <= 64:
+            msg = f"ProdML {name} must contain 1 to 64 UTF-8 bytes (String64)."
+            raise PatchError(msg)
 
     start_time, end_time = _iso_time(times[0]), _iso_time(times[-1])
     output_rate = 1_000_000.0 / time_step_us
-    pulse_rate = _get_measure(attrs, "pulse_rate", "pulse_rate_units", "Hz")
-    pulse_rate = pulse_rate or (output_rate, "Hz")
     num_loci = len(patch.get_coord("distance"))
     file_uuid, acquisition_uuid, raw_uuid = (str(uuid4()) for _ in range(3))
     acquisition_attrs = {
@@ -385,8 +395,6 @@ def _prepare_prodml_write(spool):
         "MinimumFrequency": 0.0,
         "MinimumFrequency.uom": _fixed_string("Hz"),
         "NumberOfLoci": num_loci,
-        "PulseRate": pulse_rate[0],
-        "PulseRate.uom": _fixed_string(pulse_rate[1]),
         "ServiceCompanyName": _fixed_string(service_company),
         "SpatialSamplingInterval": distance_step,
         "SpatialSamplingInterval.uom": _fixed_string(distance_units),
@@ -396,6 +404,7 @@ def _prepare_prodml_write(spool):
         "uuid": _fixed_string(acquisition_uuid),
     }
     for name, units_name, target, hdf_name in (
+        ("pulse_rate", "pulse_rate_units", "Hz", "PulseRate"),
         ("pulse_width", "pulse_width_units", "s", "PulseWidth"),
         ("gauge_length", "gauge_length_units", "m", "GaugeLength"),
     ):
@@ -525,7 +534,7 @@ def _yield_prodml_attrs_coords(
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
-    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    base_info = _get_root_attrs(acq.attrs)
     base_info.update(extras if extras is not None else {})
     d_coord = _get_distance_coord(acq)
     # Iterate the raw and processed data and return results in a list.
@@ -558,7 +567,7 @@ def _read_prodml(fi, distance=None, time=None, source_patch_id=None):
     """Read the prodml values into a patch."""
     out = []
     acq = fi["Acquisition"]
-    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    base_info = _get_root_attrs(acq.attrs)
     d_coord = _get_distance_coord(acq)
     source_patch_ids = _normalize_source_patch_ids(source_patch_id)
     for info in _yield_data_nodes(fi):

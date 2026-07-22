@@ -30,6 +30,7 @@ def prodml_patch():
     return patch.new(data=data).update_attrs(
         acquisition_id="27addb2c-e435-4cd5-81f1-080ed7cc5fd1",
         facility_id="facility-a",
+        service_company_name="service-a",
         data_type="strain_rate",
         data_units="m/s",
     )
@@ -73,6 +74,13 @@ class TestProdMLWriteDispatch:
             prodml_patch.io.write(path, "PRODML")
         else:
             prodml_patch.io.write(path, "PRODML", file_version="2.1")
+        assert dc.get_format(path) == ("PRODML", "2.1")
+
+    def test_write_accepts_forwarded_kwargs(self, prodml_patch, tmp_path):
+        """Format-specific keywords should follow the shared writer contract."""
+        path = dc.write(
+            prodml_patch, tmp_path / "kwargs.h5", "PRODML", unused_option=True
+        )
         assert dc.get_format(path) == ("PRODML", "2.1")
 
 
@@ -146,6 +154,9 @@ class TestProdMLWriteLayout:
             assert _decode(raw.attrs["RawDataUnit"]) == get_quantity_str(
                 prodml_patch.attrs.data_units
             )
+            assert "PulseRate" not in acquisition.attrs
+            assert "PulseRate.uom" not in acquisition.attrs
+            assert raw.attrs["OutputDataRate"] == 500
 
             raw_data = raw["RawData"]
             raw_time = raw["RawDataTime"]
@@ -170,13 +181,21 @@ class TestProdMLWriteLayout:
                 )
 
             uuid_values = (
-                _decode(acquisition.attrs["AcquisitionId"]),
                 _decode(file.attrs["uuid"]),
                 _decode(acquisition.attrs["uuid"]),
                 _decode(raw.attrs["uuid"]),
             )
-            assert len(set(uuid_values)) == 4
+            assert len(set(uuid_values)) == 3
             assert all(str(UUID(value)) == value for value in uuid_values)
+
+    def test_explicit_pulse_rate(self, prodml_patch, tmp_path):
+        """PulseRate should be written only when supplied by patch metadata."""
+        patch = prodml_patch.update_attrs(pulse_rate=50, pulse_rate_units="Hz")
+        path = dc.write(patch, tmp_path / "pulse_rate.h5", "PRODML")
+        with h5py.File(path, "r") as file:
+            attrs = file["Acquisition"].attrs
+            assert attrs["PulseRate"] == 50
+            assert _decode(attrs["PulseRate.uom"]) == "Hz"
 
     def test_replaces_existing_contents(self, prodml_patch, tmp_path):
         """Writing should replace rather than append to an existing HDF5 file."""
@@ -216,6 +235,8 @@ class TestProdMLWriteRoundTrip:
             assert out.get_coord(name).units == patch.get_coord(name).units
         assert out.attrs.acquisition_id == patch.attrs.acquisition_id
         assert out.attrs.data_units == patch.attrs.data_units
+        assert out.attrs.facility_id == patch.attrs.facility_id
+        assert out.attrs.service_company_name == patch.attrs.service_company_name
 
     def test_station_is_facility_fallback(self, prodml_patch, tmp_path):
         """Station should populate FacilityId when no explicit facility attr exists."""
@@ -225,10 +246,11 @@ class TestProdMLWriteRoundTrip:
         with h5py.File(path, "r") as file:
             facility = file["Acquisition"].attrs["FacilityId"]
             assert _decode(facility[0]) == patch.attrs.station
+        assert dc.read(path)[0].attrs.facility_id == patch.attrs.station
 
     def test_missing_metadata_uses_defaults(self, prodml_patch, tmp_path):
         """Required metadata should receive deterministic compatibility defaults."""
-        attrs = prodml_patch.attrs.drop("facility_id").update(
+        attrs = prodml_patch.attrs.drop("facility_id", "service_company_name").update(
             acquisition_id="", station="", data_units=None
         )
         patch = prodml_patch.new(attrs=attrs)
@@ -241,13 +263,13 @@ class TestProdMLWriteRoundTrip:
             assert str(UUID(_decode(acquisition.attrs["AcquisitionId"])))
         assert dc.read(path)[0].attrs.data_units is None
 
-    def test_acquisition_id_is_canonicalized(self, prodml_patch, tmp_path):
-        """Compact UUID input should be stored in PRODML's canonical form."""
-        canonical = prodml_patch.attrs.acquisition_id
-        patch = prodml_patch.update_attrs(acquisition_id=canonical.replace("-", ""))
-        path = dc.write(patch, tmp_path / "uuid.h5", "PRODML")
+    def test_acquisition_id_is_preserved(self, prodml_patch, tmp_path):
+        """Arbitrary experiment identifiers should be stored unchanged."""
+        patch = prodml_patch.update_attrs(acquisition_id="run-001")
+        path = dc.write(patch, tmp_path / "acquisition_id.h5", "PRODML")
         with h5py.File(path, "r") as file:
-            assert _decode(file["Acquisition"].attrs["AcquisitionId"]) == canonical
+            assert _decode(file["Acquisition"].attrs["AcquisitionId"]) == "run-001"
+        assert dc.read(path)[0].attrs.acquisition_id == "run-001"
 
     def test_single_distance_sample(self, prodml_patch, tmp_path):
         """A one-locus Patch remains representable when its step is defined."""
@@ -353,10 +375,11 @@ class TestProdMLWriteValidation:
             assert set(file) == {"sentinel"}
             assert _decode(file.attrs["sentinel"]) == "old"
 
-    def test_string64_metadata(self, prodml_patch, tmp_path):
+    @pytest.mark.parametrize("value", ("x" * 65, "é" * 33))
+    def test_string64_metadata(self, value, prodml_patch, tmp_path):
         """PRODML String64 attributes cannot exceed their schema limit."""
-        patch = prodml_patch.update_attrs(facility_id="x" * 65)
-        with pytest.raises(PatchError, match="String64"):
+        patch = prodml_patch.update_attrs(facility_id=value)
+        with pytest.raises(PatchError, match=r"FacilityId.*String64"):
             dc.write(patch, tmp_path / "long_string.h5", "PRODML")
 
     def test_invalid_optional_measure_units_are_ignored(self, prodml_patch, tmp_path):

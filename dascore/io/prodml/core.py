@@ -92,6 +92,6 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(self, spool: SpoolType, resource: H5Writer) -> None:
+    def write(self, spool: SpoolType, resource: H5Writer, **kwargs) -> None:
         """Write one raw Patch to a standalone ProdML HDF5 file."""
         _write_prodml(spool, resource)
