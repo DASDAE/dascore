@@ -4,6 +4,7 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 
 ## Unreleased API Changes
 
+- PRODML 2.1 now supports writing one raw time-by-distance patch with `dc.write` as a standalone HDF5 file. Full PRODML 2.3 conformance requires EPC/XML packaging, which DASCore does not write.
 - **The `dascore.io.sintela_binary` module is removed (no alias).** Both Sintela readers now live in `dascore.io.sintela`, which also provides the new protobuf reader; use `from dascore.io.sintela import SintelaBinaryV3`. Reading Sintela binary files through `dc.read`/`dc.spool`/`dc.scan` is unaffected — only the direct module import path changed.
 - **Removed the unused `PatchFileSummary` model** (`dascore.io.PatchFileSummary`), superseded by [`PatchSummary`](`dascore.PatchSummary`), along with the internal helpers `coord_summary_from_data` and `_normalize_coord_summary_dtype`. Build a coord first (`get_coord(...)`) and call `.to_summary()` to summarize raw array data. The unused `index_query_buffer` config option is also removed.
 - The index backend no longer exposes a separate `AbstractIndexBackend` interface class; `SQLIndexBackend` is the base every backend implements (it was the only implementation of that interface). The `dascore.io.indexer` module is merged into `dascore.io.index.indexer`, and the placeholder `AbstractIndexer` base class is removed — use `DBDirectoryIndexer` directly.
