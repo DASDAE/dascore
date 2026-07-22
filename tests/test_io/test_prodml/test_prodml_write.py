@@ -165,7 +165,9 @@ class TestProdMLWriteLayout:
                 (raw_data.attrs, ("Count", "StartIndex")),
                 (raw_time.attrs, ("Count", "StartIndex")),
             ):
-                assert all(np.asarray(attrs[name]).dtype == np.dtype("int64") for name in names)
+                assert all(
+                    np.asarray(attrs[name]).dtype == np.dtype("int64") for name in names
+                )
 
             uuid_values = (
                 _decode(acquisition.attrs["AcquisitionId"]),
@@ -356,6 +358,15 @@ class TestProdMLWriteValidation:
         patch = prodml_patch.update_attrs(facility_id="x" * 65)
         with pytest.raises(PatchError, match="String64"):
             dc.write(patch, tmp_path / "long_string.h5", "PRODML")
+
+    def test_invalid_optional_measure_units_are_ignored(self, prodml_patch, tmp_path):
+        """Bad units on optional measures should not prevent writing."""
+        patch = prodml_patch.update_attrs(
+            pulse_width=10, pulse_width_units="not-a-unit"
+        )
+        path = dc.write(patch, tmp_path / "optional_units.h5", "PRODML")
+        with h5py.File(path, "r") as file:
+            assert "PulseWidth" not in file["Acquisition"].attrs
 
     def test_wrong_dimensions(self, prodml_patch, tmp_path):
         """The dimensions must be exactly time and distance."""

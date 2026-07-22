@@ -321,8 +321,8 @@ def _get_distance_info(coord):
 def _get_measure(attrs, name, units_name, target_units):
     """Return a complete positive measure, or None when it is unusable."""
     value = attrs.get(name)
-    units = get_quantity_str(attrs.get(units_name))
     try:
+        units = get_quantity_str(attrs.get(units_name))
         value = float(value)
         if not units or not np.isfinite(value) or value <= 0:
             return None
