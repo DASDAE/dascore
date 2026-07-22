@@ -16,6 +16,7 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError, UnitError
 from dascore.io.utils import get_exact_coord
 from dascore.units import convert_units, get_quantity_str
+from dascore.utils.hdf5 import encode_h5_strings
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 from dascore.utils.models import UnitQuantity, UTF8Str
@@ -245,24 +246,27 @@ def _get_data_unit_and_type(node):
 # --- Writing ProdML files.
 
 
-def _fixed_string(value):
-    """Return a fixed-length HDF5 byte string."""
-    return np.bytes_(str(value).encode())
-
-
-def _fixed_strings(values):
-    """Return an array of fixed-length HDF5 byte strings."""
-    encoded = [str(value).encode() for value in values]
-    return np.asarray(encoded, dtype=f"S{max(map(len, encoded))}")
-
-
 def _get_single_patch(spool):
-    """Return the only Patch in a writable spool."""
+    """Return the only Patch after validating its writable structure."""
     patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
     if len(patches) != 1 or not isinstance(patches[0], dc.Patch):
         msg = "ProdML writing requires exactly one Patch."
         raise InvalidSpoolError(msg)
-    return patches[0]
+    patch = patches[0]
+    if patch.data.ndim != 2 or set(patch.dims) != {"time", "distance"}:
+        msg = "ProdML writing requires a 2D Patch with time and distance dimensions."
+        raise PatchError(msg)
+    data = np.asarray(patch.data)
+    valid_dtype = data.dtype.kind in "iuf" and data.dtype.itemsize in {1, 2, 4, 8}
+    valid_dtype &= data.dtype.kind != "f" or data.dtype.itemsize in {4, 8}
+    if not data.size or not valid_dtype:
+        msg = "ProdML writing supports nonempty standard integer or float dtypes."
+        raise PatchError(msg)
+    for name in ("time", "distance"):
+        coord = patch.get_coord(name, require_sorted=True, require_evenly_sampled=True)
+        if not coord.sorted:
+            raise PatchError(f"ProdML {name} coordinates must be increasing.")
+    return patch
 
 
 def _round_times_to_microseconds(coord):
@@ -303,42 +307,14 @@ def _round_times_to_microseconds(coord):
 
 
 def _get_distance_info(coord):
-    """Validate a distance coordinate and return its ProdML sampling values."""
-    values = np.asarray(coord.values)
-    if not len(values) or values.dtype.kind not in "iuf":
-        msg = "ProdML writing requires a nonempty numeric distance coordinate."
+    """Return metre sampling values after checking locus-grid alignment."""
+    coord = coord.convert_units("m")
+    start, step = float(coord.min()), float(coord.step)
+    start_locus = round(start / step)
+    if not np.isclose(start, start_locus * step, rtol=0, atol=1e-9):
+        msg = "ProdML distance start must align with its sampling grid."
         raise PatchError(msg)
-    values = values.astype(np.float64)
-    if not np.all(np.isfinite(values)):
-        raise PatchError("ProdML distance coordinates must be finite.")
-    diffs = np.diff(values)
-    step = coord.step
-    if step is None:
-        step = diffs[0] if len(diffs) else np.nan
-    step = float(step)
-    tolerance = np.finfo(float).eps * max(1.0, float(np.max(np.abs(values)))) * 10
-    if (
-        not np.isfinite(step)
-        or step <= 0
-        or not np.allclose(diffs, step, rtol=1e-9, atol=tolerance)
-    ):
-        msg = "ProdML distance coordinates must be increasing and evenly sampled."
-        raise PatchError(msg)
-    units = coord.unit_str
-    if not units:
-        raise PatchError("ProdML distance coordinates require length units.")
-    try:
-        convert_units(1.0, to_units="m", from_units=units)
-    except UnitError as exc:
-        msg = "ProdML distance coordinate units must represent length."
-        raise PatchError(msg) from exc
-    ratio = float(values[0] / step)
-    start_locus = int(np.round(ratio))
-    integer_tolerance = max(1e-9, abs(float(np.spacing(ratio))) * 4)
-    if not np.isclose(ratio, start_locus, rtol=0, atol=integer_tolerance):
-        msg = "ProdML requires distance_start / distance_step to be an integer."
-        raise PatchError(msg)
-    return step, units, start_locus
+    return step, start_locus
 
 
 def _get_measure(attrs, name, units_name, target_units):
@@ -355,65 +331,42 @@ def _get_measure(attrs, name, units_name, target_units):
     return value, units
 
 
-def _iso_time(microseconds):
-    """Return an ISO-8601 UTC timestamp with microsecond precision."""
-    value = np.datetime64(int(microseconds), "us")
-    return _fixed_string(f"{np.datetime_as_string(value, unit='us')}+00:00")
-
-
-def _prepare_prodml_write(spool):
-    """Validate input and prepare all values needed to write ProdML."""
-    patch = _get_single_patch(spool)
-    if patch.data.ndim != 2 or set(patch.dims) != {"time", "distance"}:
-        msg = "ProdML writing requires a 2D Patch with time and distance dimensions."
-        raise PatchError(msg)
-    data = np.asarray(patch.data)
-    valid_dtype = data.dtype.kind in "iuf" and data.dtype.itemsize in {1, 2, 4, 8}
-    valid_dtype &= data.dtype.kind != "f" or data.dtype.itemsize in {4, 8}
-    if not data.size or not valid_dtype:
-        msg = "ProdML writing supports nonempty standard integer or float dtypes."
-        raise PatchError(msg)
-
-    times, time_step_us = _round_times_to_microseconds(patch.get_coord("time"))
-    distance_step, distance_units, start_locus = _get_distance_info(
-        patch.get_coord("distance")
-    )
-    attrs = patch.attrs
-    acquisition_id = str(attrs.acquisition_id or uuid4())
-
-    facility = attrs.get("facility_id") or attrs.station or "UNKNOWN"
-    service_company = attrs.get("service_company_name") or "UNKNOWN"
-    data_units = get_quantity_str(attrs.data_units) or "UNKNOWN"
-    string_values = {
-        "FacilityId": facility,
-        "ServiceCompanyName": service_company,
-        "RawDataUnit": data_units,
+def _get_write_metadata(attrs):
+    """Return normalized and validated metadata strings for writing."""
+    out = {
+        "AcquisitionId": str(attrs.acquisition_id or uuid4()),
+        "FacilityId": attrs.get("facility_id") or attrs.station or "UNKNOWN",
+        "ServiceCompanyName": attrs.get("service_company_name") or "UNKNOWN",
+        "RawDataUnit": get_quantity_str(attrs.data_units) or "UNKNOWN",
     }
-    for name, value in string_values.items():
+    for name in ("FacilityId", "ServiceCompanyName", "RawDataUnit"):
+        value = out[name]
         if not isinstance(value, str) or not 0 < len(value.encode("utf-8")) <= 64:
             msg = f"ProdML {name} must contain 1 to 64 UTF-8 bytes (String64)."
             raise PatchError(msg)
+    return out
 
-    start_time, end_time = _iso_time(times[0]), _iso_time(times[-1])
-    output_rate = 1_000_000.0 / time_step_us
-    num_loci = len(patch.get_coord("distance"))
-    file_uuid, acquisition_uuid, raw_uuid = (str(uuid4()) for _ in range(3))
-    acquisition_attrs = {
-        "AcquisitionId": _fixed_string(acquisition_id),
-        "FacilityId": _fixed_strings([facility]),
+
+def _get_acquisition_attrs(
+    attrs, strings, start_time, output_rate, distance_step, start_locus, num_loci
+):
+    """Return attributes for the Acquisition group."""
+    out = {
+        "AcquisitionId": encode_h5_strings(strings["AcquisitionId"]),
+        "FacilityId": encode_h5_strings([strings["FacilityId"]]),
         "MaximumFrequency": output_rate / 2,
-        "MaximumFrequency.uom": _fixed_string("Hz"),
+        "MaximumFrequency.uom": encode_h5_strings("Hz"),
         "MeasurementStartTime": start_time,
         "MinimumFrequency": 0.0,
-        "MinimumFrequency.uom": _fixed_string("Hz"),
+        "MinimumFrequency.uom": encode_h5_strings("Hz"),
         "NumberOfLoci": num_loci,
-        "ServiceCompanyName": _fixed_string(service_company),
+        "ServiceCompanyName": encode_h5_strings(strings["ServiceCompanyName"]),
         "SpatialSamplingInterval": distance_step,
-        "SpatialSamplingInterval.uom": _fixed_string(distance_units),
+        "SpatialSamplingInterval.uom": encode_h5_strings("m"),
         "StartLocusIndex": start_locus,
         "TriggeredMeasurement": False,
-        "schemaVersion": _fixed_string("2.1"),
-        "uuid": _fixed_string(acquisition_uuid),
+        "schemaVersion": encode_h5_strings("2.1"),
+        "uuid": encode_h5_strings(str(uuid4())),
     }
     for name, units_name, target, hdf_name in (
         ("pulse_rate", "pulse_rate_units", "Hz", "PulseRate"),
@@ -421,22 +374,29 @@ def _prepare_prodml_write(spool):
         ("gauge_length", "gauge_length_units", "m", "GaugeLength"),
     ):
         if measure := _get_measure(attrs, name, units_name, target):
-            acquisition_attrs[hdf_name] = measure[0]
-            acquisition_attrs[f"{hdf_name}.uom"] = _fixed_string(measure[1])
+            out[hdf_name] = measure[0]
+            out[f"{hdf_name}.uom"] = encode_h5_strings(measure[1])
+    return out
 
+
+def _get_array_attrs(
+    patch, strings, times, output_rate, start_locus, start_time, end_time
+):
+    """Return attributes for the raw data and time arrays."""
+    num_loci = len(patch.get_coord("distance"))
     raw_attrs = {
         "NumberOfLoci": num_loci,
         "OutputDataRate": output_rate,
-        "OutputDataRate.uom": _fixed_string("Hz"),
-        "RawDataUnit": _fixed_string(data_units),
+        "OutputDataRate.uom": encode_h5_strings("Hz"),
+        "RawDataUnit": encode_h5_strings(strings["RawDataUnit"]),
         "StartLocusIndex": start_locus,
-        "uuid": _fixed_string(raw_uuid),
+        "uuid": encode_h5_strings(str(uuid4())),
     }
-    if attrs.data_type:
-        raw_attrs["RawDescription"] = _fixed_string(attrs.data_type)
+    if patch.attrs.data_type:
+        raw_attrs["RawDescription"] = encode_h5_strings(patch.attrs.data_type)
     data_attrs = {
-        "Count": data.size,
-        "Dimensions": _fixed_strings(
+        "Count": patch.data.size,
+        "Dimensions": encode_h5_strings(
             ["locus" if dim == "distance" else dim for dim in patch.dims]
         ),
         "PartEndTime": end_time,
@@ -450,12 +410,40 @@ def _prepare_prodml_write(spool):
         "PartStartTime": start_time,
         "StartIndex": 0,
         "StartTime": start_time,
-        "Uom": _fixed_string("us"),
+        "Uom": encode_h5_strings("us"),
     }
+    return raw_attrs, data_attrs, time_attrs
+
+
+def _prepare_prodml_write(spool):
+    """Validate input and prepare all values needed to write ProdML."""
+    patch = _get_single_patch(spool)
+    data = np.asarray(patch.data)
+    times, time_step_us = _round_times_to_microseconds(patch.get_coord("time"))
+    distance_step, start_locus = _get_distance_info(patch.get_coord("distance"))
+    strings = _get_write_metadata(patch.attrs)
+    start_time, end_time = (
+        encode_h5_strings(f"{np.datetime64(int(value), 'us')}+00:00")
+        for value in (times[0], times[-1])
+    )
+    output_rate = 1_000_000.0 / time_step_us
+    num_loci = len(patch.get_coord("distance"))
+    acquisition_attrs = _get_acquisition_attrs(
+        patch.attrs,
+        strings,
+        start_time,
+        output_rate,
+        distance_step,
+        start_locus,
+        num_loci,
+    )
+    raw_attrs, data_attrs, time_attrs = _get_array_attrs(
+        patch, strings, times, output_rate, start_locus, start_time, end_time
+    )
     return (
         data,
         times,
-        _fixed_string(file_uuid),
+        encode_h5_strings(str(uuid4())),
         acquisition_attrs,
         raw_attrs,
         data_attrs,

@@ -36,11 +36,6 @@ def prodml_patch():
     )
 
 
-def _decode(value):
-    """Decode one HDF5 string attribute."""
-    return str(unbyte(value))
-
-
 def _with_time(patch, values):
     """Replace the time coordinate, resizing data along time as needed."""
     values = np.asarray(values)
@@ -147,11 +142,11 @@ class TestProdMLWriteLayout:
             assert isinstance(facility, np.ndarray)
             assert facility.shape == (1,)
             assert facility.dtype.kind == "S"
-            assert _decode(facility[0]) == prodml_patch.attrs.facility_id
-            assert _decode(acquisition.attrs["AcquisitionId"]) == (
+            assert unbyte(facility[0]) == prodml_patch.attrs.facility_id
+            assert unbyte(acquisition.attrs["AcquisitionId"]) == (
                 prodml_patch.attrs.acquisition_id
             )
-            assert _decode(raw.attrs["RawDataUnit"]) == get_quantity_str(
+            assert unbyte(raw.attrs["RawDataUnit"]) == get_quantity_str(
                 prodml_patch.attrs.data_units
             )
             assert "PulseRate" not in acquisition.attrs
@@ -163,13 +158,13 @@ class TestProdMLWriteLayout:
             assert raw_data.shape == prodml_patch.shape
             assert raw_data.dtype == prodml_patch.data.dtype
             assert raw_data.attrs["Count"] == prodml_patch.data.size
-            assert [_decode(x) for x in raw_data.attrs["Dimensions"]] == [
+            assert [unbyte(x) for x in raw_data.attrs["Dimensions"]] == [
                 "locus",
                 "time",
             ]
             assert raw_time.dtype == np.dtype("int64")
             assert raw_time.attrs["Count"] == len(prodml_patch.get_coord("time"))
-            assert _decode(raw_time.attrs["Uom"]) == "us"
+            assert unbyte(raw_time.attrs["Uom"]) == "us"
             for attrs, names in (
                 (acquisition.attrs, ("NumberOfLoci", "StartLocusIndex")),
                 (raw.attrs, ("NumberOfLoci", "StartLocusIndex")),
@@ -181,9 +176,9 @@ class TestProdMLWriteLayout:
                 )
 
             uuid_values = (
-                _decode(file.attrs["uuid"]),
-                _decode(acquisition.attrs["uuid"]),
-                _decode(raw.attrs["uuid"]),
+                unbyte(file.attrs["uuid"]),
+                unbyte(acquisition.attrs["uuid"]),
+                unbyte(raw.attrs["uuid"]),
             )
             assert len(set(uuid_values)) == 3
             assert all(str(UUID(value)) == value for value in uuid_values)
@@ -195,7 +190,7 @@ class TestProdMLWriteLayout:
         with h5py.File(path, "r") as file:
             attrs = file["Acquisition"].attrs
             assert attrs["PulseRate"] == 50
-            assert _decode(attrs["PulseRate.uom"]) == "Hz"
+            assert unbyte(attrs["PulseRate.uom"]) == "Hz"
 
     def test_replaces_existing_contents(self, prodml_patch, tmp_path):
         """Writing should replace rather than append to an existing HDF5 file."""
@@ -222,19 +217,15 @@ class TestProdMLWriteRoundTrip:
 
         with h5py.File(path, "r") as file:
             stored_dims = file["Acquisition/Raw[0]/RawData"].attrs["Dimensions"]
-            assert [_decode(x) for x in stored_dims] == [
+            assert [unbyte(x) for x in stored_dims] == [
                 "locus" if dim == "distance" else dim for dim in dims
             ]
-        assert out.dims == patch.dims
+        expected = patch.update_attrs(tag="", station="")
+        assert out == expected
         assert out.data.dtype == patch.data.dtype
-        np.testing.assert_array_equal(out.data, patch.data)
-        for name in patch.dims:
-            np.testing.assert_array_equal(
-                out.get_coord(name).values, patch.get_coord(name).values
-            )
-            assert out.get_coord(name).units == patch.get_coord(name).units
-        assert out.attrs.acquisition_id == patch.attrs.acquisition_id
-        assert out.attrs.data_units == patch.attrs.data_units
+        assert all(
+            out.get_coord(name).units == patch.get_coord(name).units for name in dims
+        )
         assert out.attrs.facility_id == patch.attrs.facility_id
         assert out.attrs.service_company_name == patch.attrs.service_company_name
 
@@ -245,7 +236,7 @@ class TestProdMLWriteRoundTrip:
         path = dc.write(patch, tmp_path / "station.h5", "PRODML")
         with h5py.File(path, "r") as file:
             facility = file["Acquisition"].attrs["FacilityId"]
-            assert _decode(facility[0]) == patch.attrs.station
+            assert unbyte(facility[0]) == patch.attrs.station
         assert dc.read(path)[0].attrs.facility_id == patch.attrs.station
 
     def test_missing_metadata_uses_defaults(self, prodml_patch, tmp_path):
@@ -257,10 +248,10 @@ class TestProdMLWriteRoundTrip:
         path = dc.write(patch, tmp_path / "defaults.h5", "PRODML")
         with h5py.File(path, "r") as file:
             acquisition = file["Acquisition"]
-            assert _decode(acquisition.attrs["FacilityId"][0]) == "UNKNOWN"
-            assert _decode(acquisition.attrs["ServiceCompanyName"]) == "UNKNOWN"
-            assert _decode(acquisition["Raw[0]"].attrs["RawDataUnit"]) == "UNKNOWN"
-            assert str(UUID(_decode(acquisition.attrs["AcquisitionId"])))
+            assert unbyte(acquisition.attrs["FacilityId"][0]) == "UNKNOWN"
+            assert unbyte(acquisition.attrs["ServiceCompanyName"]) == "UNKNOWN"
+            assert unbyte(acquisition["Raw[0]"].attrs["RawDataUnit"]) == "UNKNOWN"
+            assert str(UUID(unbyte(acquisition.attrs["AcquisitionId"])))
         assert dc.read(path)[0].attrs.data_units is None
 
     def test_acquisition_id_is_preserved(self, prodml_patch, tmp_path):
@@ -268,7 +259,8 @@ class TestProdMLWriteRoundTrip:
         patch = prodml_patch.update_attrs(acquisition_id="run-001")
         path = dc.write(patch, tmp_path / "acquisition_id.h5", "PRODML")
         with h5py.File(path, "r") as file:
-            assert _decode(file["Acquisition"].attrs["AcquisitionId"]) == "run-001"
+            value = file["Acquisition"].attrs["AcquisitionId"]
+            assert unbyte(value) == "run-001"
         assert dc.read(path)[0].attrs.acquisition_id == "run-001"
 
     def test_single_distance_sample(self, prodml_patch, tmp_path):
@@ -350,7 +342,7 @@ class TestProdMLWriteTimePrecision:
         with h5py.File(path, "r") as file:
             raw = file["Acquisition/Raw[0]"]
             np.testing.assert_array_equal(raw["RawDataTime"][:], expected)
-            assert _decode(raw["RawData"].attrs["PartStartTime"]) == (
+            assert unbyte(raw["RawData"].attrs["PartStartTime"]) == (
                 "1969-12-31T23:59:59.000000+00:00"
             )
 
@@ -392,7 +384,7 @@ class TestProdMLWriteValidation:
             dc.write(patch, path, "PRODML")
         with h5py.File(path, "r") as file:
             assert set(file) == {"sentinel"}
-            assert _decode(file.attrs["sentinel"]) == "old"
+            assert unbyte(file.attrs["sentinel"]) == "old"
 
     @pytest.mark.parametrize("value", ("x" * 65, "é" * 33))
     def test_string64_metadata(self, value, prodml_patch, tmp_path):
@@ -446,15 +438,31 @@ class TestProdMLWriteValidation:
         with pytest.raises((PatchError, UnitError), match=r"length|distance|unit"):
             dc.write(patch, tmp_path / "distance_units.h5", "PRODML")
 
-    def test_irregular_distance(self, prodml_patch, tmp_path):
-        """Irregular distance cannot be reconstructed from PRODML attributes."""
-        distance = dc.get_coord(data=[4.0, 6.0, 9.0, 10.0], units="m")
+    def test_missing_distance_units_assume_meters(self, prodml_patch, tmp_path):
+        """Unitless distance coordinates should be interpreted as meters."""
+        patch = prodml_patch.set_units(distance=None)
+        out = dc.read(dc.write(patch, tmp_path / "unitless.h5", "PRODML"))[0]
+        distance = out.get_coord("distance")
+        assert distance.unit_str == "m"
+        assert np.array_equal(distance.values, patch.get_coord("distance").values)
+
+    @pytest.mark.parametrize("values", ([4.0, 6.0, 9.0, 10.0], [10.0, 8.0, 6.0, 4.0]))
+    def test_invalid_distance(self, values, prodml_patch, tmp_path):
+        """Distance coordinates must be evenly sampled and increasing."""
+        distance = dc.get_coord(data=values, units="m")
         patch = prodml_patch.update_coords(distance=distance)
-        with pytest.raises(PatchError, match=r"even|regular|distance"):
+        with pytest.raises(PatchError, match=r"even|regular|distance|increasing"):
             dc.write(patch, tmp_path / "irregular_distance.h5", "PRODML")
 
-    def test_nonintegral_start_locus(self, prodml_patch, tmp_path):
-        """Distance origin must be an integer multiple of sample spacing."""
+    def test_fractional_meter_loci(self, prodml_patch, tmp_path):
+        """Fractional meter coordinates are valid when aligned to the grid."""
+        distance = dc.get_coord(data=0.5 + np.arange(4) * 0.5, units="m")
+        patch = prodml_patch.update_coords(distance=distance)
+        out = dc.read(dc.write(patch, tmp_path / "fractional.h5", "PRODML"))[0]
+        assert out.get_coord("distance") == distance
+
+    def test_unaligned_start_locus(self, prodml_patch, tmp_path):
+        """Distance origin must align with the implicit locus sampling grid."""
         distance = dc.get_coord(data=0.5 + np.arange(4) * 2, units="m")
         patch = prodml_patch.update_coords(distance=distance)
         with pytest.raises(PatchError, match=r"locus|start|distance"):
