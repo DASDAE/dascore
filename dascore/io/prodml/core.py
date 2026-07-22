@@ -5,12 +5,17 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
+from dascore.constants import SpoolType, opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.models import UnitQuantity, UTF8Str
 
-from ...utils.hdf5 import H5Reader
-from .utils import _get_prodml_version_str, _read_prodml, _yield_prodml_attrs_coords
+from ...utils.hdf5 import H5Reader, H5Writer
+from .utils import (
+    _get_prodml_version_str,
+    _read_prodml,
+    _write_prodml,
+    _yield_prodml_attrs_coords,
+)
 
 
 class ProdMLPatchAttrs(dc.PatchAttrs):
@@ -86,3 +91,7 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
     """Support for ProdML V 2.1."""
 
     version = "2.1"
+
+    def write(self, spool: SpoolType, resource: H5Writer, **kwargs) -> None:
+        """Write one raw Patch to a standalone ProdML HDF5 file."""
+        _write_prodml(spool, resource)

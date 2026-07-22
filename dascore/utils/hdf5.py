@@ -21,6 +21,7 @@ from dascore.constants import remote_hdf5_tuned_protocols
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
+    iterate,
     unbyte,
 )
 from dascore.utils.remote_io import (
@@ -33,6 +34,11 @@ from dascore.utils.remote_io import (
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
+
+
+def encode_h5_strings(values: str | Sequence[str]) -> np.ndarray:
+    """Encode strings as a fixed-length UTF-8 HDF5 byte array."""
+    return np.asarray([value.encode() for value in iterate(values)], dtype="S")
 
 
 class _ManagedH5pyFile:
