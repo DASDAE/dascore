@@ -95,7 +95,20 @@ def _open_index_map(database_path: Path) -> sqlite3.Connection:
         raise
 
 
-def _acquire_recovery_file_lock(lock_file):
+def _open_index_map_read_only(database_path: Path) -> sqlite3.Connection:
+    """Open an existing SQLite index map without requiring write access."""
+    database_uri = f"{database_path.absolute().as_uri()}?mode=ro"
+    connection = sqlite3.connect(
+        database_uri,
+        timeout=30,
+        isolation_level=None,
+        uri=True,
+    )
+    connection.execute("PRAGMA busy_timeout = 30000")
+    return connection
+
+
+def _acquire_recovery_file_lock(lock_file) -> bool:
     """Acquire a content-independent process lock on an open file."""
     if os.name == "nt":  # pragma: no cover
         import errno
@@ -117,10 +130,15 @@ def _acquire_recovery_file_lock(lock_file):
                 time.sleep(0.05)
             else:
                 break
+        return True
     else:
-        import fcntl
+        try:
+            import fcntl
+        except ImportError:  # Emscripten can omit this Unix-only module.
+            return False
 
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return True
 
 
 def _release_recovery_file_lock(lock_file):
@@ -141,19 +159,49 @@ def _index_map_recovery_guard(database_path: Path):
     """Keep map operations out of the way of destructive recovery."""
     lock_path = database_path.with_name(f"{database_path.name}.recovery.lock")
     with _INDEX_MAP_RECOVERY_LOCK, lock_path.open("a+b") as lock_file:
-        _acquire_recovery_file_lock(lock_file)
+        lock_acquired = _acquire_recovery_file_lock(lock_file)
         try:
             yield
         finally:
-            _release_recovery_file_lock(lock_file)
+            if lock_acquired:
+                _release_recovery_file_lock(lock_file)
+
+
+@contextmanager
+def _index_map_read_only_guard(database_path: Path):
+    """Coordinate a read-only map access when its lock cannot be written."""
+    lock_path = database_path.with_name(f"{database_path.name}.recovery.lock")
+    with _INDEX_MAP_RECOVERY_LOCK:
+        # Windows byte-range locks require a writable file handle. SQLite still
+        # provides a consistent read transaction when the cache is read-only.
+        if os.name == "nt":  # pragma: no cover
+            yield
+            return
+        try:
+            lock_file = lock_path.open("rb")
+        except OSError:
+            yield
+            return
+        with lock_file:
+            try:
+                lock_acquired = _acquire_recovery_file_lock(lock_file)
+            except OSError:
+                yield
+                return
+            try:
+                yield
+            finally:
+                if lock_acquired:
+                    _release_recovery_file_lock(lock_file)
 
 
 def _index_map_is_healthy(database_path: Path) -> bool:
-    """Validate the schema and all map leaf pages."""
+    """Validate the complete SQLite database, including unused pages."""
     connection = None
     try:
         connection = _open_index_map(database_path)
-        connection.execute("SELECT directory, index_path FROM index_map").fetchall()
+        result = connection.execute("PRAGMA integrity_check").fetchall()
+        return result == [("ok",)]
     except sqlite3.DatabaseError as exc:
         if not _is_corrupt_index_map_error(exc):
             raise
@@ -161,7 +209,6 @@ def _index_map_is_healthy(database_path: Path) -> bool:
     finally:
         if connection is not None:
             connection.close()
-    return True
 
 
 def _remove_index_map(database_path: Path) -> None:
@@ -216,7 +263,25 @@ def _get_index_map(cache_path) -> dict[str, str]:
         ).fetchall()
         return dict(rows)
 
-    return _run_index_map_operation(cache_path, read)
+    try:
+        return _run_index_map_operation(cache_path, read)
+    except OSError:
+        # A shared cache can expose a readable map and recovery sidecar without
+        # granting write access. Join its existing lock when possible, then use
+        # SQLite's read-only URI mode rather than discarding a valid mapping.
+        database_path = Path(cache_path)
+        with _index_map_read_only_guard(database_path):
+            connection = None
+            try:
+                connection = _open_index_map_read_only(database_path)
+                return read(connection)
+            except sqlite3.DatabaseError as exc:
+                if not _is_corrupt_index_map_error(exc):
+                    raise
+                return {}
+            finally:
+                if connection is not None:
+                    connection.close()
 
 
 def _update_index_map(updates, cache_path) -> dict[str, str]:

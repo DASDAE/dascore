@@ -7,6 +7,7 @@ import os
 import platform
 import shutil
 import sqlite3
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, suppress
@@ -154,6 +155,57 @@ class TestFindIndex:
         out = DBDirectoryIndexer(data_path)
         assert out.index_path.parent == data_path
 
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX permissions")
+    def test_read_only_map_reuses_existing_mapping(self, tmp_path):
+        """A readable map remains useful when its cache cannot be written."""
+        data_path = tmp_path / "data"
+        cache_dir = tmp_path / "cache"
+        mapped_dir = tmp_path / "mapped"
+        data_path.mkdir()
+        cache_dir.mkdir()
+        mapped_dir.mkdir()
+        map_path = cache_dir / "cache_paths.sqlite3"
+        mapped_path = mapped_dir / "index.sqlite3"
+        with set_config(directory_index_map_path=map_path):
+            first = DBDirectoryIndexer(data_path, index_path=mapped_path)
+            first.close()
+
+        lock_path = cache_dir / f"{map_path.name}.recovery.lock"
+        os.chmod(data_path, 0o555)
+        os.chmod(cache_dir, 0o555)
+        os.chmod(map_path, 0o444)
+        os.chmod(lock_path, 0o444)
+        try:
+            with set_config(directory_index_map_path=map_path):
+                second = DBDirectoryIndexer(data_path)
+            assert second.index_path == mapped_path
+            second.close()
+        finally:
+            os.chmod(map_path, 0o644)
+            os.chmod(lock_path, 0o644)
+            os.chmod(cache_dir, 0o755)
+            os.chmod(data_path, 0o755)
+
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX permissions")
+    def test_writable_dir_survives_corrupt_read_only_map(self, tmp_path):
+        """An unrecoverable optional map falls back to the local index."""
+        data_path = tmp_path / "data"
+        cache_dir = tmp_path / "cache"
+        data_path.mkdir()
+        cache_dir.mkdir()
+        map_path = cache_dir / "cache_paths.sqlite3"
+        map_path.write_bytes(b"not a sqlite database")
+        os.chmod(cache_dir, 0o555)
+        os.chmod(map_path, 0o444)
+        try:
+            with set_config(directory_index_map_path=map_path):
+                out = DBDirectoryIndexer(data_path)
+            assert out.index_path.parent == data_path
+            out.close()
+        finally:
+            os.chmod(map_path, 0o644)
+            os.chmod(cache_dir, 0o755)
+
     def test_writable_dir_index_exists(self, tmp_path_factory):
         """A test case where the index does exist."""
         path = tmp_path_factory.mktemp("normal_indexer_test")
@@ -300,6 +352,59 @@ class TestIndexMap:
         monkeypatch.setattr(indexer, "_open_index_map", open_map)
         assert indexer._get_index_map(cache_path) == {}
         assert cache_path.read_bytes().startswith(b"SQLite format 3")
+
+    def test_integrity_check_rebuilds_hidden_corruption(self, tmp_path, monkeypatch):
+        """Recovery checks pages that a successful row query may not visit."""
+        import dascore.io.index.indexer as indexer
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        indexer._update_index_map({"a": "1"}, cache_path)
+        original_open = indexer._open_index_map
+        open_calls = 0
+
+        class IntegrityResult:
+            """Return a deterministic non-OK SQLite integrity result."""
+
+            @staticmethod
+            def fetchall():
+                return [("invalid freelist page",)]
+
+        class HiddenCorruption:
+            """Expose corruption only to SQLite's full integrity check."""
+
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, statement, *args, **kwargs):
+                if statement == "PRAGMA integrity_check":
+                    return IntegrityResult()
+                return self.connection.execute(statement, *args, **kwargs)
+
+            def close(self):
+                self.connection.close()
+
+        def open_map(*args):
+            nonlocal open_calls
+            open_calls += 1
+            connection = original_open(*args)
+            if open_calls == 1:
+                return HiddenCorruption(connection)
+            return connection
+
+        monkeypatch.setattr(indexer, "_open_index_map", open_map)
+        indexer._recover_index_map(cache_path)
+        assert indexer._get_index_map(cache_path) == {}
+
+    @pytest.mark.skipif(os.name == "nt", reason="fcntl is POSIX-only")
+    def test_missing_fcntl_uses_process_lock(self, tmp_path, monkeypatch):
+        """Platforms without fcntl retain single-process map support."""
+        import dascore.io.index.indexer as indexer
+
+        cache_path = tmp_path / "cache_paths.sqlite3"
+        monkeypatch.setitem(sys.modules, "fcntl", None)
+
+        indexer._update_index_map({"a": "1"}, cache_path)
+        assert indexer._get_index_map(cache_path) == {"a": "1"}
 
     @pytest.mark.parametrize("_repeat", range(3))
     def test_concurrent_process_recovery_preserves_updates(self, tmp_path, _repeat):
