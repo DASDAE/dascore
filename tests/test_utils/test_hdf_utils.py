@@ -5,16 +5,28 @@ from __future__ import annotations
 from contextlib import closing
 
 import h5py
+import numpy as np
 import pytest
 
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
+    encode_h5_strings,
     extract_h5_attrs,
     get_h5py_file,
     h5_matches_structure,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), (("one", [b"one"]), (["one", "two"], [b"one", b"two"]))
+)
+def test_encode_h5_strings(value, expected):
+    """String encoding should consistently return a byte array."""
+    out = encode_h5_strings(value)
+    assert isinstance(out, np.ndarray)
+    assert out.tolist() == expected
 
 
 @pytest.fixture(scope="class")

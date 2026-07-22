@@ -352,21 +352,21 @@ def _get_acquisition_attrs(
 ):
     """Return attributes for the Acquisition group."""
     out = {
-        "AcquisitionId": encode_h5_strings(strings["AcquisitionId"]),
-        "FacilityId": encode_h5_strings([strings["FacilityId"]]),
+        "AcquisitionId": encode_h5_strings(strings["AcquisitionId"])[0],
+        "FacilityId": encode_h5_strings(strings["FacilityId"]),
         "MaximumFrequency": output_rate / 2,
-        "MaximumFrequency.uom": encode_h5_strings("Hz"),
+        "MaximumFrequency.uom": encode_h5_strings("Hz")[0],
         "MeasurementStartTime": start_time,
         "MinimumFrequency": 0.0,
-        "MinimumFrequency.uom": encode_h5_strings("Hz"),
+        "MinimumFrequency.uom": encode_h5_strings("Hz")[0],
         "NumberOfLoci": num_loci,
-        "ServiceCompanyName": encode_h5_strings(strings["ServiceCompanyName"]),
+        "ServiceCompanyName": encode_h5_strings(strings["ServiceCompanyName"])[0],
         "SpatialSamplingInterval": distance_step,
-        "SpatialSamplingInterval.uom": encode_h5_strings("m"),
+        "SpatialSamplingInterval.uom": encode_h5_strings("m")[0],
         "StartLocusIndex": start_locus,
         "TriggeredMeasurement": False,
-        "schemaVersion": encode_h5_strings("2.1"),
-        "uuid": encode_h5_strings(str(uuid4())),
+        "schemaVersion": encode_h5_strings("2.1")[0],
+        "uuid": encode_h5_strings(str(uuid4()))[0],
     }
     for name, units_name, target, hdf_name in (
         ("pulse_rate", "pulse_rate_units", "Hz", "PulseRate"),
@@ -375,7 +375,7 @@ def _get_acquisition_attrs(
     ):
         if measure := _get_measure(attrs, name, units_name, target):
             out[hdf_name] = measure[0]
-            out[f"{hdf_name}.uom"] = encode_h5_strings(measure[1])
+            out[f"{hdf_name}.uom"] = encode_h5_strings(measure[1])[0]
     return out
 
 
@@ -387,13 +387,13 @@ def _get_array_attrs(
     raw_attrs = {
         "NumberOfLoci": num_loci,
         "OutputDataRate": output_rate,
-        "OutputDataRate.uom": encode_h5_strings("Hz"),
-        "RawDataUnit": encode_h5_strings(strings["RawDataUnit"]),
+        "OutputDataRate.uom": encode_h5_strings("Hz")[0],
+        "RawDataUnit": encode_h5_strings(strings["RawDataUnit"])[0],
         "StartLocusIndex": start_locus,
-        "uuid": encode_h5_strings(str(uuid4())),
+        "uuid": encode_h5_strings(str(uuid4()))[0],
     }
     if patch.attrs.data_type:
-        raw_attrs["RawDescription"] = encode_h5_strings(patch.attrs.data_type)
+        raw_attrs["RawDescription"] = encode_h5_strings(patch.attrs.data_type)[0]
     data_attrs = {
         "Count": patch.data.size,
         "Dimensions": encode_h5_strings(
@@ -410,7 +410,7 @@ def _get_array_attrs(
         "PartStartTime": start_time,
         "StartIndex": 0,
         "StartTime": start_time,
-        "Uom": encode_h5_strings("us"),
+        "Uom": encode_h5_strings("us")[0],
     }
     return raw_attrs, data_attrs, time_attrs
 
@@ -423,7 +423,7 @@ def _prepare_prodml_write(spool):
     distance_step, start_locus = _get_distance_info(patch.get_coord("distance"))
     strings = _get_write_metadata(patch.attrs)
     start_time, end_time = (
-        encode_h5_strings(f"{np.datetime64(int(value), 'us')}+00:00")
+        encode_h5_strings(f"{np.datetime64(int(value), 'us')}+00:00")[0]
         for value in (times[0], times[-1])
     )
     output_rate = 1_000_000.0 / time_step_us
@@ -443,7 +443,7 @@ def _prepare_prodml_write(spool):
     return (
         data,
         times,
-        encode_h5_strings(str(uuid4())),
+        encode_h5_strings(str(uuid4()))[0],
         acquisition_attrs,
         raw_attrs,
         data_attrs,

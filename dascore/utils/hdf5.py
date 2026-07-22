@@ -36,10 +36,9 @@ ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
 
 
-def encode_h5_strings(values: str | Sequence[str]) -> np.bytes_ | np.ndarray:
-    """Encode string(s) as fixed-length UTF-8 HDF5 byte values."""
-    out = np.asarray([value.encode() for value in iterate(values)], dtype="S")
-    return out[0] if isinstance(values, str) else out
+def encode_h5_strings(values: str | Sequence[str]) -> np.ndarray:
+    """Encode strings as a fixed-length UTF-8 HDF5 byte array."""
+    return np.asarray([value.encode() for value in iterate(values)], dtype="S")
 
 
 class _ManagedH5pyFile:
