@@ -172,6 +172,54 @@ class TestIndexMap:
         cache_path.write_text(json.dumps({"a": "1", "b": "2"}))
         assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
 
+    def test_failed_swap_cleans_up_temp(self, tmp_path, monkeypatch):
+        """A failure during the atomic swap unlinks the temp file and re-raises."""
+        from dascore.io.index import indexer as indexer_mod
+
+        cache_path = tmp_path / "cache_paths.json"
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("swap failed")
+
+        monkeypatch.setattr(indexer_mod.os, "replace", boom)
+        with pytest.raises(RuntimeError, match="swap failed"):
+            indexer_mod._update_index_map({"a": "1"}, cache_path=str(cache_path))
+        # No temp debris and no half-written target left behind.
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestWalkResilience:
+    """Tests for the filesystem walk tolerating concurrent changes."""
+
+    def test_walk_skips_file_removed_mid_scan(self, tmp_path, monkeypatch):
+        """A file vanishing between the walk and its stat is skipped, not fatal."""
+        (tmp_path / "good.h5").write_bytes(b"")
+        (tmp_path / "vanisher.h5").write_bytes(b"")
+        indexer = DBDirectoryIndexer(tmp_path)
+        # Keep the walk off the format-detection path; this test targets the
+        # stat guard, not directory-format probing of the root directory.
+        monkeypatch.setattr(indexer, "_directory_format", lambda path: False)
+
+        real_is_dir = Path.is_dir
+
+        def is_dir_then_vanish(self, *args, **kwargs):
+            # Delete the file immediately after the is_dir() probe so the walk's
+            # subsequent real stat() hits the concurrent-deletion guard. This
+            # reproduces the race without assuming how is_dir() is implemented.
+            result = real_is_dir(self, *args, **kwargs)
+            if self.name == "vanisher.h5":
+                self.unlink()
+            return result
+
+        monkeypatch.setattr(Path, "is_dir", is_dir_then_vanish)
+        try:
+            walked = indexer._walk()
+        finally:
+            indexer.close()
+        names = {Path(entry[-1]).name for entry in walked.values()}
+        assert "good.h5" in names
+        assert "vanisher.h5" not in names
+
 
 class TestBasics:
     """Basic tests for indexer."""
