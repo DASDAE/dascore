@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 import dascore.proc.coords
 from dascore.exceptions import ParameterError
+from dascore.proc.rolling import _NumpyPatchRoller, _PandasPatchRoller
 from dascore.units import m
 from dascore.utils.misc import all_close
 from dascore.utils.pd import rolling_df
@@ -241,6 +242,46 @@ class TestRolling:
             time=10 * dt, step=10 * dt, engine="pandas"
         ).apply(lambda frame: np.percentile(frame, 80) + 1)
         assert all_close(out, expected)
+
+
+class TestEngineSelection:
+    """Ensure automatic engine selection is unchanged by the squeeze fast path."""
+
+    @pytest.fixture(scope="class")
+    def flat_patch(self, random_patch):
+        """A patch with a length-1 distance dimension."""
+        return random_patch.select(distance=0, samples=True)
+
+    @pytest.fixture(scope="class")
+    def patch_1d(self):
+        """A truly one-dimensional patch."""
+        return dc.Patch(
+            data=np.arange(10.0),
+            coords={"time": dc.to_datetime64(np.arange(10))},
+            dims=("time",),
+        )
+
+    def test_2d_small_step_selects_numpy(self, random_patch):
+        """A 2D patch with a small step uses the numpy engine."""
+        roller = random_patch.rolling(time=5, samples=True)
+        assert isinstance(roller, _NumpyPatchRoller)
+
+    def test_flat_patch_selects_pandas(self, flat_patch):
+        """A (1, N) patch squeezes to 1D and uses the pandas engine."""
+        roller = flat_patch.rolling(time=5, samples=True)
+        assert isinstance(roller, _PandasPatchRoller)
+
+    def test_1d_patch_selects_pandas(self, patch_1d):
+        """A 1D patch with a small step uses the pandas engine."""
+        roller = patch_1d.rolling(time=3, samples=True)
+        assert isinstance(roller, _PandasPatchRoller)
+
+    def test_explicit_engine_takes_precedence(self, flat_patch, random_patch):
+        """An explicit engine overrides the automatic decision."""
+        numpy_roller = flat_patch.rolling(time=5, samples=True, engine="numpy")
+        assert isinstance(numpy_roller, _NumpyPatchRoller)
+        pandas_roller = random_patch.rolling(time=5, samples=True, engine="pandas")
+        assert isinstance(pandas_roller, _PandasPatchRoller)
 
 
 class TestNumpyVsPandasRolling:
