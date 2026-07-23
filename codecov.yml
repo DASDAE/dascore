@@ -5,12 +5,7 @@ codecov:
 comment:
   after_n_builds: 7
 
-# Require full coverage. `target: 100%` makes the gate absolute rather than
-# relative to the base commit, so a regression cannot slip through when a base
-# upload is partial (see the coverage drop introduced by #759). The gate is
-# scoped to the `unittests` flag (the deterministic non-network + doctest
-# suite, which covers every line): it never depends on the carried-forward
-# `network` upload, so a skipped or stale network report cannot mask a drop.
+# Require 100% coverage on the unittests flag.
 coverage:
   status:
     project:
