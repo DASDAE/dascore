@@ -7,21 +7,24 @@ comment:
 
 # Require full coverage. `target: 100%` makes the gate absolute rather than
 # relative to the base commit, so a regression cannot slip through when a base
-# upload is partial (see the coverage drop introduced by #759). The gate is on
-# combined coverage (all flags); it cannot be scoped to `unittests` alone
-# because some lines are only exercised by the network suite. Note the network
-# flag carries forward (below): if a network upload is skipped, its prior report
-# is reused, so a regression in network-only code could still read as 100%.
+# upload is partial (see the coverage drop introduced by #759). The gate is
+# scoped to the `unittests` flag (the deterministic non-network + doctest
+# suite, which covers every line): it never depends on the carried-forward
+# `network` upload, so a skipped or stale network report cannot mask a drop.
 coverage:
   status:
     project:
       default:
         target: 100%
         threshold: 0%
+        flags:
+          - unittests
     patch:
       default:
         target: 100%
         threshold: 0%
+        flags:
+          - unittests
 
 flags:
   unittests:

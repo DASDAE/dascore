@@ -275,7 +275,9 @@ def _round_times_to_microseconds(coord):
     if not np.issubdtype(values.dtype, np.datetime64) or len(values) < 2:
         msg = "ProdML writing requires at least two absolute time samples."
         raise PatchError(msg)
-    if np.any(np.isnat(values)):
+    # Defensive: a NaT breaks even-sampling, so _get_single_patch's
+    # require_evenly_sampled check rejects such coords before they reach here.
+    if np.any(np.isnat(values)):  # pragma: no cover
         raise PatchError("ProdML time coordinates cannot contain NaT.")
     microsecond_values = values.astype("datetime64[us]")
     if np.array_equal(microsecond_values.astype(values.dtype), values):

@@ -423,6 +423,21 @@ class TestProdMLWriteValidation:
         with pytest.raises(PatchError, match=r"NaT|time"):
             dc.write(patch, tmp_path / "nat.h5", "PRODML")
 
+    def test_relative_time_rejected(self, prodml_patch, tmp_path):
+        """A relative (non-absolute) time coordinate has no PRODML representation."""
+        length = len(prodml_patch.get_coord("time"))
+        relative = dc.get_coord(data=np.arange(length) * 1.0, units="s")
+        patch = prodml_patch.new(coords=prodml_patch.coords.update(time=relative))
+        with pytest.raises(PatchError, match="two absolute time samples"):
+            dc.write(patch, tmp_path / "relative_time.h5", "PRODML")
+
+    def test_nonpositive_optional_measure_ignored(self, prodml_patch, tmp_path):
+        """A non-positive optional measure is dropped rather than written."""
+        patch = prodml_patch.update_attrs(pulse_width=0.0, pulse_width_units="ns")
+        path = dc.write(patch, tmp_path / "nonpositive_measure.h5", "PRODML")
+        with h5py.File(path, "r") as file:
+            assert "PulseWidth" not in file["Acquisition"].attrs
+
     def test_time_irregular_after_rounding(self, prodml_patch, tmp_path):
         """Uniform nanoseconds that round to irregular microseconds are invalid."""
         base = np.datetime64("2020-01-01", "ns")

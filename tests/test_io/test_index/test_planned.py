@@ -53,6 +53,18 @@ class TestHelpers:
         record = _coord_record_from_row(row, "time")
         assert record.length is None
 
+    def test_coord_record_empty_units_dropped(self):
+        """An empty-string units cell normalizes to None (a real step keeps length)."""
+        row = {
+            "distance_min": 0.0,
+            "distance_max": 10.0,
+            "distance_step": 1.0,
+            "_distance_units": "",
+        }
+        record = _coord_record_from_row(row, "distance")
+        assert record.units is None
+        assert record.length == 11
+
     def test_plan_resolver_requires_output_id(self):
         """member_rows without output_id is a construction error."""
         with pytest.raises(ValueError, match="output_id"):

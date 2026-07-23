@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from io import BytesIO
 from pathlib import Path
 
@@ -569,6 +570,16 @@ class TestWarnOrRaise:
         # Now exceptions or warnings will crash the program.
         with suppress_warnings(action="error"):
             warn_or_raise(msg, behavior=None)
+
+
+class TestSuppressWarnings:
+    """Tests for the suppress_warnings context manager."""
+
+    def test_message_filter_applies_action(self):
+        """A message pattern applies the action to matching warnings."""
+        with suppress_warnings(message="boom", action="error"):
+            with pytest.raises(UserWarning, match="boom"):
+                warnings.warn("boom", UserWarning)
 
 
 class TestToObjectArray:
