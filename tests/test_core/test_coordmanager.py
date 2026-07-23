@@ -17,6 +17,8 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
+    CoordPartial,
+    CoordRange,
     get_coord,
 )
 from dascore.exceptions import (
@@ -1082,6 +1084,80 @@ class TestUpdate:
         new = coord_manager.update(distance=(dist * 2) * ft)
         new_coord = new.coord_map["distance"]
         assert dc.get_quantity(new_coord.units) == ft
+
+
+class TestPreserveBaseCoord:
+    """Canonical coords should not be reparsed when passed through update/select.
+
+    Only CoordRange (the canonical evenly-sampled representation) is returned
+    unchanged. Other coord types (CoordPartial, CoordArray, CoordMonotonicArray)
+    are still re-inferred so a fully-specified partial, or slicing that yields an
+    even/empty subset, is canonicalized.
+    """
+
+    def test_update_preserves_range_coord_identity(self, cm_basic):
+        """Updating a CoordRange dim with its own coord keeps the same object."""
+        for name in cm_basic.dims:
+            coord = cm_basic.coord_map[name]
+            assert isinstance(coord, CoordRange)
+            out = cm_basic.update(**{name: coord})
+            assert out.coord_map[name] is coord
+
+    def test_full_partial_canonicalizes_to_range(self, cm_non_coord_dim):
+        """A fully-specified CoordPartial must still become a CoordRange.
+
+        Regression guard: only CoordRange is short-circuited, so a CoordPartial
+        that carries complete start/stop/step is re-inferred into a CoordRange
+        (otherwise value-based selection on it would wrongly raise).
+        """
+        cm = cm_non_coord_dim
+        assert isinstance(cm.coord_map["time"], CoordPartial)
+        size = cm.shape[cm.get_axis("time")]
+        full_partial = CoordPartial(shape=(size,), start=0, stop=size, step=1)
+        out = cm.update(time=full_partial)
+        assert isinstance(out.coord_map["time"], CoordRange)
+        # value-based selection must work on the canonicalized coord.
+        selected, _ = out.select(time=(0, size - 1))
+        assert selected.shape[selected.get_axis("time")] <= size
+
+    def test_update_array_coord_is_equivalent(self, cm_wacky_dims):
+        """Irregular array coords may be re-parsed but stay value-equal."""
+        for name in cm_wacky_dims.dims:
+            coord = cm_wacky_dims.coord_map[name]
+            out = cm_wacky_dims.update(**{name: coord})
+            assert out.coord_map[name] == coord
+            assert np.array_equal(out.get_array(name), cm_wacky_dims.get_array(name))
+
+    def test_select_preserves_untouched_range_coord(self, cm_multidim):
+        """Selecting distance leaves the independent CoordRange time unchanged."""
+        original_time = cm_multidim.coord_map["time"]
+        assert isinstance(original_time, CoordRange)
+        new, _ = cm_multidim.select(distance=(100, 400))
+        assert new.coord_map["time"] is original_time
+        # latitude is tied to distance, so it must be re-sliced (new object).
+        assert new.coord_map["latitude"] is not cm_multidim.coord_map["latitude"]
+
+    def test_select_result_still_correct(self, cm_basic):
+        """The fast path must not change select results."""
+        new, _ = cm_basic.select(distance=(100, 400))
+        dist = new.get_array("distance")
+        full = cm_basic.get_array("distance")
+        expected = full[(full >= 100) & (full <= 400)]
+        assert np.array_equal(dist, expected)
+
+    def test_even_subset_of_irregular_coord_canonicalizes(self):
+        """A sample-selected even subset of an irregular coord becomes a CoordRange.
+
+        Regression guard: array coords must still be re-inferred so slicing that
+        happens to be evenly sampled is canonicalized rather than left as an
+        irregular array coordinate.
+        """
+        coord = dc.get_coord(data=np.array([0.0, 1.0, 3.0]))
+        patch = dc.Patch(data=np.arange(3.0), coords={"x": coord}, dims=("x",))
+        out = patch.select(x=(0, 2), samples=True)  # indices 0..2 -> [0, 1]
+        new_coord = out.coords.coord_map["x"]
+        assert isinstance(new_coord, CoordRange)
+        assert new_coord.evenly_sampled
 
 
 class TestSqueeze:
