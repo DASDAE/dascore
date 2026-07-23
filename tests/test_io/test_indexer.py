@@ -193,32 +193,29 @@ class TestWalkResilience:
 
     def test_walk_skips_file_removed_mid_scan(self, tmp_path, monkeypatch):
         """A file vanishing between the walk and its stat is skipped, not fatal."""
-        (tmp_path / "good.h5").write_bytes(b"")
-        (tmp_path / "vanisher.h5").write_bytes(b"")
+        from dascore.io.index import indexer as indexer_mod
+
+        good = tmp_path / "good.h5"
+        good.write_bytes(b"")
+        # Never created: models a file deleted between the walk yielding it and
+        # _walk's stat() call, so its real stat() raises FileNotFoundError.
+        vanished = tmp_path / "vanished.h5"
         indexer = DBDirectoryIndexer(tmp_path)
-        # Keep the walk off the format-detection path; this test targets the
-        # stat guard, not directory-format probing of the root directory.
-        monkeypatch.setattr(indexer, "_directory_format", lambda path: False)
 
-        real_is_dir = Path.is_dir
+        def fake_iter(*args, **kwargs):
+            # Deterministically feed _walk both candidates, independent of the
+            # real filesystem, so the stat guard is exercised on the vanished one.
+            yield good
+            yield vanished
 
-        def is_dir_then_vanish(self, *args, **kwargs):
-            # Delete the file immediately after the is_dir() probe so the walk's
-            # subsequent real stat() hits the concurrent-deletion guard. This
-            # reproduces the race without assuming how is_dir() is implemented.
-            result = real_is_dir(self, *args, **kwargs)
-            if self.name == "vanisher.h5":
-                self.unlink()
-            return result
-
-        monkeypatch.setattr(Path, "is_dir", is_dir_then_vanish)
+        monkeypatch.setattr(indexer_mod, "_iter_filesystem", fake_iter)
         try:
             walked = indexer._walk()
         finally:
             indexer.close()
         names = {Path(entry[-1]).name for entry in walked.values()}
         assert "good.h5" in names
-        assert "vanisher.h5" not in names
+        assert "vanished.h5" not in names
 
 
 class TestBasics:
