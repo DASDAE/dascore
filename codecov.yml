@@ -5,6 +5,22 @@ codecov:
 comment:
   after_n_builds: 7
 
+# Require 100% coverage on the unittests flag.
+coverage:
+  status:
+    project:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+          - unittests
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+          - unittests
+
 flags:
   unittests:
     carryforward: false

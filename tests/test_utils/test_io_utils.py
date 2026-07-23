@@ -34,6 +34,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
     _FallbackFileObj,
     _get_cached_local_file,
+    _warn_remote_cache_download,
     clear_remote_file_cache,
     get_remote_cache_path,
     get_remote_cache_scope,
@@ -848,6 +849,13 @@ class TestIOResourceManager:
                 assert get_remote_cache_scope() == "metadata"
                 raise RuntimeError("boom")
         assert get_remote_cache_scope() == "default"
+
+    def test_metadata_scope_download_warning_guidance(self, tmp_path):
+        """Metadata scope yields metadata-specific download-warning guidance."""
+        resource = UPath("memory://dascore/metadata_warning.txt")
+        with remote_cache_scope("metadata"):
+            with pytest.warns(UserWarning, match="allow_remote_cache_for_metadata"):
+                _warn_remote_cache_download(resource, tmp_path / "metadata_warning.txt")
 
 
 class TestRemoteIOFallback:

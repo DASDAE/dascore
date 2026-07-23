@@ -172,6 +172,51 @@ class TestIndexMap:
         cache_path.write_text(json.dumps({"a": "1", "b": "2"}))
         assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
 
+    def test_failed_swap_cleans_up_temp(self, tmp_path, monkeypatch):
+        """A failure during the atomic swap unlinks the temp file and re-raises."""
+        from dascore.io.index import indexer as indexer_mod
+
+        cache_path = tmp_path / "cache_paths.json"
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("swap failed")
+
+        monkeypatch.setattr(indexer_mod.os, "replace", boom)
+        with pytest.raises(RuntimeError, match="swap failed"):
+            indexer_mod._update_index_map({"a": "1"}, cache_path=str(cache_path))
+        # No temp debris and no half-written target left behind.
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestWalkResilience:
+    """Tests for the filesystem walk tolerating concurrent changes."""
+
+    def test_walk_skips_file_removed_mid_scan(self, tmp_path, monkeypatch):
+        """A file vanishing between the walk and its stat is skipped, not fatal."""
+        from dascore.io.index import indexer as indexer_mod
+
+        good = tmp_path / "good.h5"
+        good.write_bytes(b"")
+        # Never created: models a file deleted between the walk yielding it and
+        # _walk's stat() call, so its real stat() raises FileNotFoundError.
+        vanished = tmp_path / "vanished.h5"
+        indexer = DBDirectoryIndexer(tmp_path)
+
+        def fake_iter(*args, **kwargs):
+            # Deterministically feed _walk both candidates, independent of the
+            # real filesystem, so the stat guard is exercised on the vanished one.
+            yield good
+            yield vanished
+
+        monkeypatch.setattr(indexer_mod, "_iter_filesystem", fake_iter)
+        try:
+            walked = indexer._walk()
+        finally:
+            indexer.close()
+        names = {Path(entry[-1]).name for entry in walked.values()}
+        assert "good.h5" in names
+        assert "vanished.h5" not in names
+
 
 class TestBasics:
     """Basic tests for indexer."""

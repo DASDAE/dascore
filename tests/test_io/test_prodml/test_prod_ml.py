@@ -11,6 +11,7 @@ import pytest
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.io.core import read
+from dascore.io.prodml.utils import _get_prodml_version_str
 from dascore.utils.downloader import fetch
 
 
@@ -107,3 +108,15 @@ class TestReadQuantXV2:
         time = quantx_v2_das_patch.coords.get_array("time")
         dtype = time.dtype
         assert "[ns]" in str(dtype)
+
+
+class TestVersionDetection:
+    """Tests for the ProdML version fingerprint helper."""
+
+    def test_acquisition_without_expected_attrs(self, tmp_path):
+        """An Acquisition group lacking the fingerprint attrs is not ProdML."""
+        path = tmp_path / "not_prodml.h5"
+        with h5py.File(path, "w") as file:
+            file.create_group("Acquisition").attrs["unrelated"] = "x"
+        with h5py.File(path, "r") as file:
+            assert _get_prodml_version_str(file) == ""
