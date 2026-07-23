@@ -33,7 +33,7 @@ jobs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -51,7 +51,7 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-tags: "true"
           fetch-depth: '0'

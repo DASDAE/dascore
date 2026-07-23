@@ -35,7 +35,7 @@ jobs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -57,7 +57,7 @@ jobs:
       env_file: 'environment.yml'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
@@ -79,7 +79,7 @@ jobs:
         run: ./.github/test_code.sh doctest
 
       # Upload coverage files
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v5
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
