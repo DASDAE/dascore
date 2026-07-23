@@ -54,7 +54,12 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import dascore_styles, select_values_description
-from dascore.core.coords import BaseCoord, CoordSummary, get_coord
+from dascore.core.coords import (
+    BaseCoord,
+    CoordRange,
+    CoordSummary,
+    get_coord,
+)
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -1272,6 +1277,15 @@ def _get_coord_dim_map(coords, dims):
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
+        # A CoordRange is already canonical (it is the evenly-sampled
+        # representation), so re-parsing it via model_dump -> get_coord is pure
+        # overhead; return it directly. Other coord types are NOT short-circuited:
+        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
+        # by slicing (e.g. an evenly spaced subset that should collapse to a
+        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
+        # CoordRange -- get_coord performs that inference.
+        if isinstance(coord, CoordRange):
+            return coord
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict

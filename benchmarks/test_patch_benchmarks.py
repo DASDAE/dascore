@@ -89,6 +89,16 @@ class TestProcessingBenchmarks:
         patch.select(time=(t1, t2))
 
     @pytest.mark.benchmark
+    def test_update_existing_coords(self, example_patch):
+        """Time update_coords re-passing already-validated BaseCoords."""
+        patch = example_patch
+        coords = patch.coords
+        patch.update_coords(
+            time=coords.coord_map["time"],
+            distance=coords.coord_map["distance"],
+        )
+
+    @pytest.mark.benchmark
     def test_sobel_filter(self, example_patch):
         """Time the Sobel filter."""
         patch = example_patch
