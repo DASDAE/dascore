@@ -13,7 +13,7 @@ import pytest
 from h5py.h5r import Reference
 
 import dascore as dc
-from dascore.exceptions import DependencyError
+from dascore.exceptions import DASVaderCompatibilityError, DependencyError
 from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
 from dascore.utils.downloader import fetch
 
@@ -253,3 +253,18 @@ class TestDASVader:
             resolved = _dereference(resource, reference, "htime")
 
             assert resolved[0] == 1
+
+    def test_dereference_failure(self):
+        """Failed references should raise a clear compatibility error."""
+
+        class BrokenResource:
+            """Minimal HDF5 resource whose references cannot be resolved."""
+
+            filename = "legacy.jld2"
+
+            def __getitem__(self, value):
+                raise KeyError(value)
+
+        match = r"legacy\.jld2.*'htime'.*h5py<3\.16"
+        with pytest.raises(DASVaderCompatibilityError, match=match):
+            _dereference(BrokenResource(), Reference(), "htime")
