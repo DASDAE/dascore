@@ -12,7 +12,7 @@ from pydantic import Field
 
 import dascore as dc
 from dascore import patch_function
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.constants import PatchType
 from dascore.exceptions import (
     CoordError,
@@ -298,7 +298,7 @@ class TestHistory:
 
     def test_history_disabled_for_patch_function(self, random_patch):
         """Decorator-based history should respect disabled config."""
-        with set_config(patch_history="disabled"):
+        with config_context(patch_history="disabled"):
             out = add_one(random_patch)
         assert out.attrs.history == random_patch.attrs.history
 
@@ -306,20 +306,20 @@ class TestHistory:
         """Disabling history should stop new entries without clearing old ones."""
         patch = random_patch.pass_filter(time=(10, 20))
         original_history = patch.attrs.history
-        with set_config(patch_history="disabled"):
+        with config_context(patch_history="disabled"):
             out = add_one(patch)
         assert out.attrs.history == original_history
 
     def test_concatenate_history_disabled(self, random_patch):
         """Concatenate should use the shared history helper."""
-        with set_config(patch_history="disabled"):
+        with config_context(patch_history="disabled"):
             out = concatenate_patches([random_patch, random_patch], time=None)
         assert len(out) == 1
         assert out[0].attrs.history == random_patch.attrs.history
 
     def test_stack_history_disabled(self, random_patch):
         """Stack should use the shared history helper."""
-        with set_config(patch_history="disabled"):
+        with config_context(patch_history="disabled"):
             out = stack_patches([random_patch, random_patch])
         assert out.attrs.history == random_patch.attrs.history
 

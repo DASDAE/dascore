@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.utils.display import array_to_text, get_nice_text
 from dascore.utils.patch import _format_values
 
@@ -41,7 +41,7 @@ class TestGetNiceText:
 
     def test_float_precision_config(self):
         """Float display precision should come from runtime config."""
-        with set_config(display_float_precision=1):
+        with config_context(display_float_precision=1):
             txt = get_nice_text(1.234)
         assert str(txt) == "1.2"
 
@@ -52,14 +52,14 @@ class TestArrayFormatting:
     def test_array_threshold_config(self):
         """Array display truncation threshold should be configurable."""
         data = np.arange(10)
-        with set_config(display_array_threshold=3):
+        with config_context(display_array_threshold=3):
             txt = array_to_text(data)
         assert "..." in str(txt)
 
     def test_patch_history_threshold_config(self):
         """Patch history formatting should use the configured threshold."""
         data = np.arange(10)
-        with set_config(
+        with config_context(
             display_float_precision=0,
             display_patch_history_array_threshold=3,
         ):

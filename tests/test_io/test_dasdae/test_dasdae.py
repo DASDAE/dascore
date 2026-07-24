@@ -14,7 +14,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import dasdae as dasdae_mod
@@ -159,7 +159,7 @@ class TestReadDASDAE:
     def test_reads_legacy_fixture(self):
         """Legacy DASDAE fixtures still need to remain readable."""
         path = fetch("example_dasdae_event_1.h5")
-        with set_config(allow_dasdae_format_unpickle=True):
+        with config_context(allow_dasdae_format_unpickle=True):
             spool = dc.read(path, file_format="DASDAE")
         assert len(spool) == 1
         assert spool[0].dims
@@ -372,14 +372,14 @@ class TestLegacyFixtureCompatibility:
 
     def test_translate_legacy_attrs_ignores_non_mapping_coords(self):
         """Undecodable string coord payloads are ignored once opted in."""
-        with set_config(allow_dasdae_format_unpickle=True):
+        with config_context(allow_dasdae_format_unpickle=True):
             out = translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
         assert "coords" not in out
 
     def test_translate_legacy_attrs_decodes_pickled_coord_payload(self):
         """Legacy pickled coord payloads should still restore coord metadata."""
         payload = pickle.dumps({"distance": {"min": 0, "max": 1, "units": "m"}})
-        with set_config(allow_dasdae_format_unpickle=True):
+        with config_context(allow_dasdae_format_unpickle=True):
             out = translate_legacy_attrs({"coords": payload.decode("latin1")})
         assert out["distance_units"] == "m"
         assert out["distance_min"] == 0
@@ -394,20 +394,20 @@ class TestLegacyFixtureCompatibility:
                 return (executed.append, ("pickle ran",))
 
         payload = pickle.dumps(_Payload()).decode("latin1")
-        with set_config(allow_dasdae_format_unpickle=False):
+        with config_context(allow_dasdae_format_unpickle=False):
             with pytest.raises(InvalidFiberFileError, match="unpickle"):
                 translate_legacy_attrs({"coords": payload})
         assert not executed, "pickle.loads ran before the security gate"
 
     def test_scan_preserves_legacy_coord_units_from_attr_payload(self):
         """Legacy attr coord units should backfill missing coord-node units."""
-        with set_config(allow_dasdae_format_unpickle=True):
+        with config_context(allow_dasdae_format_unpickle=True):
             summary = dc.scan(fetch("UoU_lf_urban.hdf5"))[0]
         assert str(summary.coords["distance"].units) == "1 m"
 
     def test_read_legacy_coord_payload_requires_opt_in(self):
         """Legacy pickled coord metadata should fail closed by default."""
-        with set_config(allow_dasdae_format_unpickle=False):
+        with config_context(allow_dasdae_format_unpickle=False):
             with pytest.raises(
                 InvalidFiberFileError, match="allow_dasdae_format_unpickle=True"
             ):

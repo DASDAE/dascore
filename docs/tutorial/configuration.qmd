@@ -5,11 +5,11 @@ DASCore exposes a small runtime configuration surface through `dascore.config`.
 ```python
 from pathlib import Path
 
-from dascore.config import get_config, set_config
+from dascore.config import get_config, config_context
 
 print(get_config().remote_cache_dir)
 
-with set_config(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
+with config_context(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
     ...
 ```
 
@@ -21,9 +21,9 @@ History recording is also configurable:
 - `patch_history="disabled"` preserves any existing history but stops DASCore from appending new entries inside that config context.
 
 ```python
-from dascore.config import set_config
+from dascore.config import config_context
 
-with set_config(patch_history="disabled"):
+with config_context(patch_history="disabled"):
     ...
 ```
 

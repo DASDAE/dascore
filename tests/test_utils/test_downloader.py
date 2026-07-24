@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.constants import DATA_VERSION
 from dascore.utils.downloader import (
     LARGE_REGISTRY_FILES,
@@ -59,7 +59,7 @@ class TestFetch:
     def test_fetcher_path_comes_from_config(self, tmp_path):
         """Downloader fetchers should honor the configured cache directory."""
         cache_dir = tmp_path / "downloads"
-        with set_config(downloader_cache_dir=cache_dir):
+        with config_context(downloader_cache_dir=cache_dir):
             active_fetcher = get_fetcher()
             assert fetcher.path == active_fetcher.path
             assert active_fetcher.path.parent == cache_dir
@@ -105,6 +105,6 @@ class TestTestDataCacheInfo:
     def test_cache_info_respects_configured_cache_dir(self, tmp_path):
         """Cache info should reflect the configured downloader cache root."""
         cache_dir = tmp_path / "downloads"
-        with set_config(downloader_cache_dir=cache_dir):
+        with config_context(downloader_cache_dir=cache_dir):
             info = get_test_data_cache_info()
         assert info.cache_path == cache_dir

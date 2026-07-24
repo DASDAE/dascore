@@ -7,7 +7,7 @@ import sys
 import pytest
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import get_config, set_config
 from dascore.utils.misc import suppress_warnings
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
@@ -62,12 +62,21 @@ def suppress_expected_remote_cache_warnings():
 
 @pytest.fixture(scope="module", autouse=True)
 def isolated_remote_cache(tmp_path_factory):
-    """Keep the common remote matrix in its own cache root."""
-    with set_config(
+    """Keep the common remote matrix in its own cache root.
+
+    Uses the permanent config base (not a scoped ``config_context``) because a
+    module-scoped fixture spans many tests; the scoped override belongs to a
+    single call block, not a fixture that stays open across the module.
+    """
+    previous = get_config()
+    set_config(
         remote_cache_dir=tmp_path_factory.mktemp("remote_common_cache"),
         allow_remote_cache_for_metadata=True,
-    ):
+    )
+    try:
         yield
+    finally:
+        set_config(previous)
 
 
 def _get_remote_case(fetch_name: str, to_http_range_path):

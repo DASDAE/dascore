@@ -1225,7 +1225,7 @@ class TestLegacyIndexMap:
         with h5py.File(legacy, "w") as fh:
             fh.create_dataset("x", data=[1, 2, 3])
         map_dir = tmp_path / "path_map"
-        with dc.set_config(directory_index_map_dir=map_dir):
+        with dc.config_context(directory_index_map_dir=map_dir):
             _set_mapped_index_path(data_dir, legacy, map_dir)
             spool = dc.spool(data_dir).update()
             assert len(spool) == 1

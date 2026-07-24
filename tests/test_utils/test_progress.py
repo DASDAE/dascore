@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rich.progress import Progress
 
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.utils.progress import get_progress_instance, track
 
 
@@ -13,7 +13,7 @@ class TestProgressBar:
 
     def test_progressbar_shows(self):
         """Undo debug patch to progress bar shows."""
-        with set_config(debug=False):
+        with config_context(debug=False):
             for _ in track([1, 2, 3], "testing_tracker"):
                 pass
 
@@ -31,6 +31,6 @@ class TestProgressBar:
                 seen.update(kwargs)
 
         monkeypatch.setattr("dascore.utils.progress.Progress", DummyProgress)
-        with set_config(progress_basic_refresh_per_second=0.5):
+        with config_context(progress_basic_refresh_per_second=0.5):
             get_progress_instance("basic")
         assert seen["refresh_per_second"] == 0.5

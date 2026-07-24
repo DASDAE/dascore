@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import warnings
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -17,7 +17,7 @@ import pytest
 import dascore as dc
 import dascore.examples as ex
 from dascore.compat import random_state
-from dascore.config import set_config
+from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.core.spool import Spool
@@ -87,17 +87,33 @@ def pytest_sessionstart(session):
     # Test-time debug defaults are applied by fixture to avoid state leakage.
 
 
+@contextmanager
+def _permanent_config(**overrides):
+    """Set process-wide config for the block, restoring the prior config.
+
+    Test fixtures use the permanent base (not a scoped ``config_context``) so
+    overrides are visible to worker threads and forked processes the tests
+    spawn, and so they do not shadow a test's own ``set_config`` calls.
+    """
+    previous = get_config()
+    set_config(**overrides)
+    try:
+        yield
+    finally:
+        set_config(previous)
+
+
 @pytest.fixture(autouse=True)
 def use_test_config():
     """Run tests with debug mode enabled unless overridden locally."""
-    with set_config(debug=True):
+    with _permanent_config(debug=True):
         yield
 
 
 @pytest.fixture(scope="session", autouse=True)
 def allow_legacy_dasdae_coord_unpickle():
     """Test fixtures may rely on trusted historical DASDAE coord payloads."""
-    with set_config(allow_dasdae_format_unpickle=True):
+    with _permanent_config(allow_dasdae_format_unpickle=True):
         yield
 
 
@@ -105,7 +121,7 @@ def allow_legacy_dasdae_coord_unpickle():
 def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index-map directory."""
     tmp_map_dir = tmp_path_factory.mktemp("cache_paths") / "path_map"
-    with set_config(directory_index_map_dir=tmp_map_dir):
+    with _permanent_config(directory_index_map_dir=tmp_map_dir):
         yield
 
 
