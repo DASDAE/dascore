@@ -33,8 +33,13 @@ from dascore.utils.paths import directory_writable, requires_local_directory
 
 
 def _path_digest(path) -> str:
-    """Stable per-path digest (hash() of a str/Path is per-process random)."""
-    return hashlib.sha256(str(path).encode()).hexdigest()[:16]
+    """Stable per-path digest (hash() of a str/Path is per-process random).
+
+    Uses the full sha256 and os.fsencode so distinct paths never collide
+    (a collision would make two read-only directories share one index
+    file) and non-UTF-8 filename bytes digest without error.
+    """
+    return hashlib.sha256(os.fsencode(path)).hexdigest()
 
 
 def _map_entry_path(directory, map_dir) -> Path:
@@ -46,26 +51,26 @@ def _get_mapped_index_path(directory, map_dir) -> Path | None:
     """
     Return the index path recorded for a data directory, or None.
 
-    Each directory's mapping is its own small JSON file, so a corrupt or
-    unreadable entry is treated as a miss (and cleaned up) without
-    touching any other directory's mapping. See #508.
+    Each directory's mapping is its own small JSON file. A corrupt or
+    unreadable entry simply reads as a miss; the next atomic write for
+    that directory self-heals it. Reads never delete the entry, which
+    would otherwise race a concurrent writer's repair. See #508.
     """
     entry = _map_entry_path(directory, map_dir)
     try:
         with entry.open("r") as fi:
             data = json.load(fi)
-    except FileNotFoundError:
+    except (OSError, ValueError):
+        # Missing, unreadable, non-UTF-8, or non-JSON: treat as a miss.
         return None
-    except (OSError, json.JSONDecodeError):
-        with suppress(OSError):
-            entry.unlink()
-        return None
-    # The stored directory guards the (astronomically unlikely) digest
-    # collision; a mismatch is treated as a miss.
+    # Guard the (astronomically unlikely) digest collision and any
+    # malformed payload; a mismatch or bad shape is treated as a miss.
     if not isinstance(data, dict) or data.get("directory") != str(directory):
         return None
     index_path = data.get("index_path")
-    return Path(index_path) if index_path else None
+    if not isinstance(index_path, str) or not index_path:
+        return None
+    return Path(index_path)
 
 
 def _set_mapped_index_path(directory, index_path, map_dir) -> None:

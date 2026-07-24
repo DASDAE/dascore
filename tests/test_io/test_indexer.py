@@ -76,12 +76,12 @@ class TestFindIndex:
         name would differ every session and orphan the prior index. The
         name is a stable digest of the directory path.
         """
-        import hashlib
+        from dascore.io.index.indexer import _path_digest
 
         map_dir = tmp_path / "path_map"
         with set_config(directory_index_map_dir=map_dir):
             first = DBDirectoryIndexer(unwritable_directory).index_path
-        digest = hashlib.sha256(str(unwritable_directory).encode()).hexdigest()[:16]
+        digest = _path_digest(unwritable_directory)
         assert first.name == f"_dascore_index_{digest}.sqlite3"
 
     def test_specify_index_path(self, tmp_path_factory):
@@ -119,9 +119,10 @@ class TestFindIndex:
         entry.parent.mkdir(parents=True)
         entry.write_text("{'bad': 'json'")
         with set_config(directory_index_map_dir=map_dir):
-            DBDirectoryIndexer(data_dir)
-        # The corrupt entry is treated as a miss and cleaned up.
-        assert not entry.exists()
+            indexer = DBDirectoryIndexer(data_dir)
+        # The corrupt entry reads as a miss, so the writable data dir keeps
+        # its in-directory index rather than crashing.
+        assert indexer.index_path.parent == data_dir
 
     def test_remote_directory_not_supported(self):
         """Remote directory indexing should fail fast."""
@@ -178,8 +179,8 @@ class TestIndexMap:
         assert _get_mapped_index_path(tmp_path / "a", map_dir) == Path("index-a")
         assert _get_mapped_index_path(tmp_path / "b", map_dir) == Path("index-b")
 
-    def test_corrupt_entry_is_miss_and_cleaned(self, tmp_path):
-        """A corrupt entry reads as a miss and is removed. See #508."""
+    def test_corrupt_entry_is_miss(self, tmp_path):
+        """A corrupt entry reads as a miss (and is not deleted). See #508."""
         from dascore.io.index.indexer import (
             _get_mapped_index_path,
             _map_entry_path,
@@ -190,7 +191,20 @@ class TestIndexMap:
         entry.parent.mkdir(parents=True)
         entry.write_text("{not json")
         assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
-        assert not entry.exists()
+        # Reads never delete the entry; a later write self-heals it.
+        assert entry.exists()
+
+    def test_bad_payload_shapes_are_miss(self, tmp_path):
+        """Non-string or empty index paths read as a miss, not an error."""
+        from dascore.io.index.indexer import _get_mapped_index_path, _map_entry_path
+
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text(
+            json.dumps({"directory": str(tmp_path / "a"), "index_path": []})
+        )
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
 
     def test_digest_collision_is_miss(self, tmp_path):
         """An entry whose stored directory differs reads as a miss."""
