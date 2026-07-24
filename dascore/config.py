@@ -83,9 +83,9 @@ class DascoreConfig(BaseModel):
         default_factory=lambda: _get_cache_root() / "data",
         description="Persistent directory used to cache downloaded example data.",
     )
-    directory_index_map_path: Path = Field(
-        default_factory=lambda: _get_cache_root() / "indexes" / "cache_paths.json",
-        description="Path to the cache that records external index-file locations.",
+    directory_index_map_dir: Path = Field(
+        default_factory=lambda: _get_cache_root() / "indexes" / "path_map",
+        description="Directory of per-data-directory external index-location entries.",
     )
 
     # Progress display.
@@ -129,7 +129,7 @@ class DascoreConfig(BaseModel):
 
     @field_validator(
         "downloader_cache_dir",
-        "directory_index_map_path",
+        "directory_index_map_dir",
         "remote_cache_dir",
         mode="before",
     )

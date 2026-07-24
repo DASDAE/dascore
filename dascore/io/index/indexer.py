@@ -32,52 +32,63 @@ from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
 
 
-def _get_index_map(cache_path) -> dict:
+def _path_digest(path) -> str:
+    """Stable per-path digest (hash() of a str/Path is per-process random)."""
+    return hashlib.sha256(str(path).encode()).hexdigest()[:16]
+
+
+def _map_entry_path(directory, map_dir) -> Path:
+    """Return the entry file recording one data directory's index location."""
+    return Path(map_dir) / f"{_path_digest(directory)}.json"
+
+
+def _get_mapped_index_path(directory, map_dir) -> Path | None:
     """
-    Return a fresh dict of index locations read from disk.
+    Return the index path recorded for a data directory, or None.
 
-    Read (not cached): another process may have updated the map, and a
-    per-process cache would dump this process's stale copy on the next
-    write, erasing entries others added.
+    Each directory's mapping is its own small JSON file, so a corrupt or
+    unreadable entry is treated as a miss (and cleaned up) without
+    touching any other directory's mapping. See #508.
     """
-    path = Path(cache_path)
-    out = {}
-    successful_read = True
-    if path.exists():
-        try:
-            with path.open("r") as fi:
-                out = json.load(fi)
-        # On rare occasions, the file can become corrupt. See #508.
-        except (OSError, json.JSONDecodeError):
-            successful_read = False
-    if not isinstance(out, dict) or not successful_read:
-        out = {}
-        with suppress(FileNotFoundError, PermissionError):
-            path.unlink(missing_ok=True)
-    return out
+    entry = _map_entry_path(directory, map_dir)
+    try:
+        with entry.open("r") as fi:
+            data = json.load(fi)
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        with suppress(OSError):
+            entry.unlink()
+        return None
+    # The stored directory guards the (astronomically unlikely) digest
+    # collision; a mismatch is treated as a miss.
+    if not isinstance(data, dict) or data.get("directory") != str(directory):
+        return None
+    index_path = data.get("index_path")
+    return Path(index_path) if index_path else None
 
 
-def _update_index_map(updates, cache_path) -> dict:
-    """Update the index map to track a new index, writing atomically."""
-    data = _get_index_map(cache_path=cache_path)
-    data.update(updates)
-    path = Path(cache_path)
-    path.parent.mkdir(exist_ok=True, parents=True)
-    # Write to a sibling temp file and os.replace() it into place. A direct
-    # write is not atomic: a concurrent reader hitting a half-written file
-    # raises JSONDecodeError, which _get_index_map treats as corruption and
-    # deletes the whole map (see #508). replace() is atomic on the same
-    # filesystem, so readers only ever see a complete file.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+def _set_mapped_index_path(directory, index_path, map_dir) -> None:
+    """
+    Record a data directory's external index location.
+
+    The entry is written to a sibling temp file and swapped into place, so
+    a concurrent reader never sees a half-written file. Different
+    directories use different files, so concurrent writers to distinct
+    directories cannot clobber one another.
+    """
+    entry = _map_entry_path(directory, map_dir)
+    entry.parent.mkdir(exist_ok=True, parents=True)
+    payload = {"directory": str(directory), "index_path": str(index_path)}
+    fd, tmp = tempfile.mkstemp(dir=entry.parent, prefix=entry.name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fi:
-            json.dump(data, fi)
-        os.replace(tmp, path)
+            json.dump(payload, fi)
+        os.replace(tmp, entry)
     except BaseException:
         with suppress(OSError):
             os.unlink(tmp)
         raise
-    return data
 
 
 class DBDirectoryIndexer:
@@ -94,8 +105,9 @@ class DBDirectoryIndexer:
     """
 
     ext: str | None = None
-    # user-level file tracking index locations for unwritable data dirs
-    index_map_path: Path = config_attr("directory_index_map_path")
+    # cache dir holding per-data-directory index-location entries, used
+    # when a data directory itself is not writable
+    index_map_dir: Path = config_attr("directory_index_map_dir")
 
     def __init__(
         self,
@@ -149,36 +161,31 @@ class DBDirectoryIndexer:
         default; when the data directory is read-only the index lives in
         the dascore cache and its location is recorded in the index map.
         """
-        map_key = str(self.path)
+        map_dir = self.index_map_dir
         if index_path:
             index_path = Path(index_path).absolute()
-            update = {map_key: str(index_path)}
-            _update_index_map(update, cache_path=str(self.index_map_path))
+            # A custom location is the only case worth recording: it is not
+            # otherwise rediscoverable. Read-only fallbacks are deterministic.
+            _set_mapped_index_path(self.path, index_path, map_dir)
             return index_path
         expected = self.path / self._index_name
         with suppress(PermissionError):
             if expected.exists():
                 return expected
-        path_map = _get_index_map(cache_path=str(self.index_map_path))
-        if out := path_map.get(map_key):
-            mapped = Path(out)
+        mapped = _get_mapped_index_path(self.path, map_dir)
+        if mapped is not None and not self._is_legacy_or_foreign_index(mapped):
             # Index-map entries from older DASCore versions can point at
             # the retired PyTables (.h5) index; those are not usable and
             # a fresh SQLite index is built in their place.
-            if not self._is_legacy_or_foreign_index(mapped):
-                return mapped
+            return mapped
         if not directory_writable(self.path):
             # A stable digest, not hash(): str/Path hashing is randomized
             # per process (PYTHONHASHSEED), so hash() would name a new
-            # index file every session and orphan the previous one.
-            digest = hashlib.sha256(str(self.path).encode()).hexdigest()[:16]
-            name = f"_dascore_index_{digest}.sqlite3"
-            index_path = self.index_map_path.parent / name
-            _update_index_map(
-                {map_key: str(index_path.absolute())},
-                cache_path=str(self.index_map_path),
-            )
-            return index_path
+            # index file every session and orphan the previous one. The
+            # name is deterministic, so no map entry is needed to find it.
+            map_dir.mkdir(parents=True, exist_ok=True)
+            name = f"_dascore_index_{_path_digest(self.path)}.sqlite3"
+            return map_dir / name
         return expected
 
     def ensure_updated(self) -> bool:

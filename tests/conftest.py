@@ -103,9 +103,9 @@ def allow_legacy_dasdae_coord_unpickle():
 
 @pytest.fixture(scope="session", autouse=True)
 def swap_index_map_path(tmp_path_factory):
-    """For all tests cases, use a temporary index file."""
-    tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
-    with set_config(directory_index_map_path=tmp_map_path):
+    """For all tests cases, use a temporary index-map directory."""
+    tmp_map_dir = tmp_path_factory.mktemp("cache_paths") / "path_map"
+    with set_config(directory_index_map_dir=tmp_map_dir):
         yield
 
 
