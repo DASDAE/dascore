@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+
+from dascore.exceptions import ParameterError
 
 
 class TestDetrend:
@@ -15,3 +18,8 @@ class TestDetrend:
         det = new.detrend(dim="time", type="linear")
         means = np.mean(det.data, axis=det.get_axis("time"))
         assert np.allclose(means, 0)
+
+    def test_bad_dim_raises(self, random_patch):
+        """A dim not in the patch should raise ParameterError."""
+        with pytest.raises(ParameterError, match="not in patch dim"):
+            random_patch.detrend(dim="not_a_dim")

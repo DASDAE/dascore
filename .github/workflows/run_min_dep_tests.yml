@@ -34,7 +34,7 @@ jobs:
       python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
       os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -58,7 +58,7 @@ jobs:
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-tags: "true"
           fetch-depth: '0'

@@ -2569,3 +2569,49 @@ class TestStringCoordUtilities:
         assert _get_coord_kind(np.array([1])) == "single"
         assert _get_coord_kind(np.array([1, 2])) == "array"
         assert _get_coord_kind(np.array([[1, 2, 3]])) == "array"
+
+
+class TestDimensionalityErrors:
+    """
+    Operations that only support 1D coordinates should raise CoordError on
+    multi-dim input rather than a bare AssertionError (which is also stripped
+    under `python -O`).
+    """
+
+    @pytest.fixture(scope="class")
+    def coord_2d(self):
+        """A simple 2D (non-dimensional) coordinate."""
+        return get_coord(values=np.arange(12).reshape(3, 4))
+
+    @pytest.fixture(scope="class")
+    def partial_2d(self):
+        """A 2D partial coordinate."""
+        coord = get_coord(start=0, step=1, shape=(2, 3))
+        assert isinstance(coord, CoordPartial) and coord.ndim == 2
+        return coord
+
+    def test_select_sample_array_2d_raises(self, coord_2d):
+        """Selecting with a sample array requires a 1D coord."""
+        with pytest.raises(CoordError, match="1D coords"):
+            coord_2d.select(np.array([0, 1]), samples=True)
+
+    def test_get_sample_count_2d_raises(self, coord_2d):
+        """get_sample_count requires a 1D coord."""
+        with pytest.raises(CoordError, match="1D coords"):
+            coord_2d.get_sample_count(2)
+
+    def test_align_to_2d_raises(self, coord_2d):
+        """align_to requires 1D coords."""
+        other = get_coord(values=np.arange(6).reshape(2, 3))
+        with pytest.raises(CoordError, match="1D coords"):
+            coord_2d.align_to(other)
+
+    def test_change_length_2d_partial_raises(self, partial_2d):
+        """change_length requires a 1D coord."""
+        with pytest.raises(CoordError, match="1D coords"):
+            partial_2d.change_length(5)
+
+    def test_coord_range_requires_1d_shape(self):
+        """Constructing a CoordRange with a 2D shape must be rejected."""
+        with pytest.raises(ValidationError, match="only works for 1D coords"):
+            CoordRange(start=0, step=1, shape=(2, 3))

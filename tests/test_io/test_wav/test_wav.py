@@ -10,6 +10,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.constants import ONE_SECOND
+from dascore.exceptions import ParameterError
 
 
 class TestWriteWav:
@@ -89,3 +90,15 @@ class TestWriteWav:
         patch.io.write(path, "wav")
         wavs = list(path.glob("*.wav"))
         assert len(wavs) == len(patch.coords.get_array("microphone"))
+
+    def test_multi_patch_spool_raises(self, audio_patch, tmp_path_factory):
+        """Writing a spool with more than one patch to wav should raise."""
+        path = tmp_path_factory.mktemp("wave_multi") / "temp.wav"
+        # Offset a copy in time so the two patches don't merge into one.
+        time = audio_patch.get_coord("time")
+        offset = (time.max() - time.min()) + 1_000 * time.step
+        other = audio_patch.update_coords(time=time.values + offset)
+        spool = dc.spool([audio_patch, other])
+        assert len(spool) == 2
+        with pytest.raises(ParameterError, match="single patch spools"):
+            dc.write(spool, path, "wav")

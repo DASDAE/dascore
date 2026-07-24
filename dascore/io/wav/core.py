@@ -8,6 +8,7 @@ import numpy as np
 from scipy.io.wavfile import write
 
 from dascore.constants import ONE_SECOND, SpoolType
+from dascore.exceptions import ParameterError
 from dascore.io.core import FiberIO
 from dascore.utils.patch import check_patch_coords
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
@@ -59,7 +60,9 @@ class WavIO(FiberIO):
             if is_local_path(resource)
             else coerce_to_upath(resource)
         )
-        assert len(spool) == 1, "Only single patch spools can be written to wav"
+        if len(spool) != 1:
+            msg = "Only single patch spools can be written to wav"
+            raise ParameterError(msg)
         patch = spool[0]
         # write a single wav file, maybe multi-channeled.
         data, sr = self._get_wav_data(patch, resample_frequency)

@@ -52,7 +52,12 @@ from rich.text import Text
 from typing_extensions import Self
 
 from dascore.constants import dascore_styles, select_values_description
-from dascore.core.coords import BaseCoord, CoordSummary, get_coord
+from dascore.core.coords import (
+    BaseCoord,
+    CoordRange,
+    CoordSummary,
+    get_coord,
+)
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -372,6 +377,9 @@ class CoordManager(DascoreBaseModel):
         cmap = self.coord_map
         assert set(coords).issubset(set(cmap))
         coords2sort = {x: cmap[x] for x in coords if not getattr(cmap[x], attr)}
+        # Nothing to sort; return self to avoid rebuilding an identical manager.
+        if not coords2sort:
+            return self, array
         new_coords, indexers = _get_dimensional_sorts(coords2sort)
         if array is not None:
             for index in indexers:
@@ -401,10 +409,17 @@ class CoordManager(DascoreBaseModel):
         coords = self.dims if len(coords) == 0 else coords
         cm, array = self.sort(*coords, array=array, reverse=reverse)
         # now the arrays are sorted it should be correct to snap dimensions.
-        cmap = dict(cm.coord_map)
+        # Only collect coords whose snap actually changes them so an already
+        # even manager is returned unchanged (snap returns self when even).
+        updates = {}
         for coord_name in coords:
-            cmap[coord_name] = cmap[coord_name].snap()
-        out = cm.new(coord_map=cmap)
+            current = cm.coord_map[coord_name]
+            snapped = current.snap()
+            if snapped is not current:
+                updates[coord_name] = snapped
+        if not updates:
+            return cm, array
+        out = cm.new(coord_map={**cm.coord_map, **updates})
         assert out.shape == self.shape
         return out, array
 
@@ -851,6 +866,9 @@ class CoordManager(DascoreBaseModel):
             return tuple(new_list)
 
         dims = _get_transpose_dims(new=dims or self.dims[::-1], old=self.dims)
+        # No-op transpose; return self rather than rebuilding an equal manager.
+        if dims == self.dims:
+            return self
         return self.new(dims=dims)
 
     def rename_coord(self, **kwargs) -> Self:
@@ -919,6 +937,9 @@ class CoordManager(DascoreBaseModel):
                 msg = f"cant squeeze dim {name} because it has non-zero length"
                 raise CoordError(msg)
             to_drop.append(name)
+        # Nothing to squeeze; return self rather than rebuilding an equal manager.
+        if not to_drop:
+            return self
         return self.drop_coords(*to_drop)[0]
 
     def decimate(self, **kwargs) -> tuple[Self, tuple[slice, ...]]:
@@ -1186,6 +1207,15 @@ def _get_coord_dim_map(coords, dims):
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
+        # A CoordRange is already canonical (it is the evenly-sampled
+        # representation), so re-parsing it via model_dump -> get_coord is pure
+        # overhead; return it directly. Other coord types are NOT short-circuited:
+        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
+        # by slicing (e.g. an evenly spaced subset that should collapse to a
+        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
+        # CoordRange -- get_coord performs that inference.
+        if isinstance(coord, CoordRange):
+            return coord
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.utils.time import is_datetime64
 
 
@@ -114,3 +115,32 @@ class TestPlotMap:
         """Ensure show path is callable."""
         monkeypatch.setattr(plt, "show", lambda: None)
         random_patch.viz.map_fiber(show=True)
+
+
+class TestMapFiberErrors:
+    """Tests for map_fiber input validation."""
+
+    def test_bad_x_coord(self, random_patch):
+        """A non-existent x coordinate name should raise."""
+        with pytest.raises(ParameterError, match="not found in patch"):
+            random_patch.viz.map_fiber("not_a_coord", "time")
+
+    def test_bad_y_coord(self, random_patch):
+        """A non-existent y coordinate name should raise."""
+        with pytest.raises(ParameterError, match="not found in patch"):
+            random_patch.viz.map_fiber("distance", "not_a_coord")
+
+    def test_bad_color_coord(self, random_patch):
+        """A non-existent color coordinate name should raise."""
+        with pytest.raises(ParameterError, match="not found in patch"):
+            random_patch.viz.map_fiber("distance", "time", "not_a_coord")
+
+    def test_bad_scale_type(self, random_patch):
+        """An unknown scale_type should raise."""
+        with pytest.raises(ParameterError, match="scale_type"):
+            random_patch.viz.map_fiber(scale_type="nope", scale=10)
+
+    def test_bad_scale_length(self, random_patch):
+        """A scale that is neither a number nor a length-2 sequence should raise."""
+        with pytest.raises(ParameterError, match="scale must be"):
+            random_patch.viz.map_fiber(scale=(1, 2, 3))

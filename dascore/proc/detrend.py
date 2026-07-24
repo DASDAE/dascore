@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.imports import lazy_import
 from dascore.utils.patch import patch_function
 
@@ -36,7 +37,9 @@ def detrend(
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.detrend("time") # detrend along the time dimension
     """
-    assert dim in patch.dims
+    if dim not in patch.dims:
+        msg = f"dim '{dim}' is not in patch dimensions {patch.dims}"
+        raise ParameterError(msg)
     axis = patch.get_axis(dim)
     out = scipy_detrend(patch.data, axis=axis, type=type)
     return patch.new(data=out)
