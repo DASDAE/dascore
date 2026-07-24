@@ -239,3 +239,17 @@ class TestDASVader:
         """Non-reference values should be returned unchanged."""
         value = np.float64(5_000.0)
         assert _dereference(None, value, "PulseRateFreq") == value
+
+    def test_dereference_anonymous_reference(self, tmp_path):
+        """Anonymous references should be read when supported by HDF5."""
+        path = tmp_path / "anonymous_reference.h5"
+        with h5py.File(path, "w") as resource:
+            target = resource.create_dataset("target", data=np.array([1]))
+            resource.create_dataset("reference", data=target.ref, dtype=h5py.ref_dtype)
+            del resource["target"]
+            reference = resource["reference"][()]
+
+            assert h5py.h5r.get_name(reference, resource.id) is None
+            resolved = _dereference(resource, reference, "htime")
+
+            assert resolved[0] == 1
