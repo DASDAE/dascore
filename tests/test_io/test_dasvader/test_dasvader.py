@@ -13,7 +13,7 @@ import pytest
 from h5py.h5r import Reference
 
 import dascore as dc
-from dascore.exceptions import DependencyError
+from dascore.exceptions import DASVaderCompatibilityError, DependencyError
 from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
 from dascore.utils.downloader import fetch
 
@@ -239,3 +239,32 @@ class TestDASVader:
         """Non-reference values should be returned unchanged."""
         value = np.float64(5_000.0)
         assert _dereference(None, value, "PulseRateFreq") == value
+
+    def test_dereference_anonymous_reference(self, tmp_path):
+        """Anonymous references should be read when supported by HDF5."""
+        path = tmp_path / "anonymous_reference.h5"
+        with h5py.File(path, "w") as resource:
+            target = resource.create_dataset("target", data=np.array([1]))
+            resource.create_dataset("reference", data=target.ref, dtype=h5py.ref_dtype)
+            del resource["target"]
+            reference = resource["reference"][()]
+
+            assert h5py.h5r.get_name(reference, resource.id) is None
+            resolved = _dereference(resource, reference, "htime")
+
+            assert resolved[0] == 1
+
+    def test_dereference_failure(self):
+        """Failed references should raise a clear compatibility error."""
+
+        class BrokenResource:
+            """Minimal HDF5 resource whose references cannot be resolved."""
+
+            filename = "legacy.jld2"
+
+            def __getitem__(self, value):
+                raise KeyError(value)
+
+        match = r"legacy\.jld2.*'htime'.*h5py<3\.16"
+        with pytest.raises(DASVaderCompatibilityError, match=match):
+            _dereference(BrokenResource(), Reference(), "htime")
