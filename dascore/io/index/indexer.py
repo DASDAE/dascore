@@ -35,11 +35,18 @@ from dascore.utils.paths import directory_writable, requires_local_directory
 def _path_digest(path) -> str:
     """Stable per-path digest (hash() of a str/Path is per-process random).
 
-    Uses the full sha256 and os.fsencode so distinct paths never collide
-    (a collision would make two read-only directories share one index
-    file) and non-UTF-8 filename bytes digest without error.
+    Uses the full sha256 so distinct paths never collide (a collision
+    would make two read-only directories share one index file). Prefer
+    os.fsencode so local filesystem paths (including non-UTF-8 filename
+    bytes) digest exactly; fall back to a plain string encoding for inputs
+    os.fsencode rejects, e.g. remote URL/UPath directories we may support
+    later.
     """
-    return hashlib.sha256(os.fsencode(path)).hexdigest()
+    try:
+        encoded = os.fsencode(path)
+    except (TypeError, ValueError, NotImplementedError):
+        encoded = str(path).encode("utf-8", "surrogatepass")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _map_entry_path(directory, map_dir) -> Path:

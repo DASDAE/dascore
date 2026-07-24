@@ -148,6 +148,24 @@ class TestFindIndex:
 class TestIndexMap:
     """Tests for the per-directory index-location entries."""
 
+    def test_digest_falls_back_for_non_fspath(self):
+        """A directory os.fsencode rejects still digests (future URL support)."""
+        import hashlib
+
+        from dascore.io.index.indexer import _path_digest
+
+        class _Remote:
+            """Stand-in for a remote UPath whose fspath is unavailable."""
+
+            def __fspath__(self):
+                raise NotImplementedError
+
+            def __str__(self):
+                return "memory://data/dir"
+
+        expected = hashlib.sha256(b"memory://data/dir").hexdigest()
+        assert _path_digest(_Remote()) == expected
+
     def test_roundtrip(self, tmp_path):
         """A recorded index path is read back for the same directory."""
         from dascore.io.index.indexer import (
