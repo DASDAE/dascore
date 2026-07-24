@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from tempfile import gettempdir
+from threading import Lock
 from typing import Literal
 
 import pooch
@@ -145,6 +146,7 @@ class DascoreConfig(BaseModel):
 # overrides from `config_context(...)` live in a ContextVar so concurrent
 # blocks stay isolated per thread/task and never clobber one another.
 _GLOBAL_CONFIG: DascoreConfig = DascoreConfig()
+_GLOBAL_CONFIG_LOCK = Lock()
 _CONFIG_OVERRIDE: ContextVar[DascoreConfig | None] = ContextVar(
     "dascore_config_override", default=None
 )
@@ -218,8 +220,11 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs) -> DascoreConf
     >>> _ = dc.reset_config()
     """
     global _GLOBAL_CONFIG
-    _GLOBAL_CONFIG = _build_config(_GLOBAL_CONFIG, new_config, kwargs)
-    return _GLOBAL_CONFIG
+    # Serialize the read-modify-write so concurrent keyword updates cannot lose
+    # each other's fields or return a config another thread just installed.
+    with _GLOBAL_CONFIG_LOCK:
+        _GLOBAL_CONFIG = _build_config(_GLOBAL_CONFIG, new_config, kwargs)
+        return _GLOBAL_CONFIG
 
 
 @contextmanager
@@ -238,9 +243,13 @@ def config_context(new_config: DascoreConfig | None = None, **kwargs):
     Notes
     -----
     The override is stored in a ``ContextVar``, so it is isolated per thread and
-    task and restored when the block exits. New OS threads do not inherit it
-    automatically; propagate it explicitly (e.g. capture
-    ``contextvars.copy_context()``), or rely on APIs that bind it for you such as
+    task and restored when the block exits. Whether a newly started OS thread
+    inherits a copy of the override is runtime-dependent
+    (``sys.flags.thread_inherit_context`` -- normally enabled on free-threaded
+    builds and disabled otherwise); an inherited copy is not undone by this
+    block's exit. For deterministic propagation, capture
+    ``contextvars.copy_context()`` and run the worker with it, or rely on APIs
+    that bind the config for you such as
     [`Spool.map`](`dascore.core.spool.BaseSpool.map`).
 
     Examples
@@ -261,5 +270,6 @@ def config_context(new_config: DascoreConfig | None = None, **kwargs):
 def reset_config() -> DascoreConfig:
     """Reset the process-wide runtime config base to defaults."""
     global _GLOBAL_CONFIG
-    _GLOBAL_CONFIG = DascoreConfig()
-    return _GLOBAL_CONFIG
+    with _GLOBAL_CONFIG_LOCK:
+        _GLOBAL_CONFIG = defaults = DascoreConfig()
+        return defaults

@@ -663,7 +663,7 @@ def cached_method(func):
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
-    def __init__(self, func, kwargs, progress=True, config=None):
+    def __init__(self, func, kwargs, config, progress=True):
         self._func = func
         self._kwargs = kwargs
         self._progress = progress
@@ -721,7 +721,7 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # displayed in one thread/process.
     for sub_spool in spools[1:]:
         sub_spool._no_progress = True
-    new_func = _MapFuncWrapper(func, kwargs, progress=progress, config=get_config())
+    new_func = _MapFuncWrapper(func, kwargs, get_config(), progress=progress)
     return [x for y in client.map(new_func, spools) for x in y]
 
 
