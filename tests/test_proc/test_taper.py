@@ -316,3 +316,12 @@ class TestTaperRange:
         # Values from start_idx to end should be 0 (muted)
         assert np.allclose(out.data[start_idx, :], 1)
         assert np.allclose(out.data[end_idx - 1, :], 1)
+
+
+class TestTaperErrors:
+    """Tests for taper input validation."""
+
+    def test_non_length_2_sequence_raises(self, random_patch):
+        """A sequence taper value must have exactly two entries."""
+        with pytest.raises(ParameterError, match="Length 2 sequence"):
+            random_patch.taper(time=(0.1, 0.2, 0.3))

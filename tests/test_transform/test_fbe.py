@@ -45,7 +45,7 @@ class TestFBE:
 
         filtered = random_patch.pass_filter(**kwargs)
         rms = (filtered**2).rolling(time=0.01, step=0.01).mean() ** 0.5
-        expected = 10 * rms.log10()
+        expected = 20 * rms.log10()
 
         assert np.allclose(out.data, expected.data, equal_nan=True)
 

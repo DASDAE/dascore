@@ -58,6 +58,14 @@ class TestSortCoords:
             data_along_slice = np.take(new.data, 0, ind)
             assert np.all(np.equal(arg_sort, data_along_slice))
 
+    def test_noop_sort_returns_self(self, random_patch):
+        """Sorting already-sorted coords should return the same objects."""
+        coords = random_patch.coords
+        new_coords, array = coords.sort(array=random_patch.data)
+        assert new_coords is coords
+        assert array is random_patch.data
+        assert random_patch.sort_coords() is random_patch
+
 
 class TestSnapDims:
     """Tests for snapping dimensions."""
@@ -83,6 +91,53 @@ class TestSnapDims:
             coord = out.coords.coord_map[dim]
             assert coord.sorted
             assert coord.evenly_sampled
+
+    @pytest.fixture(scope="class")
+    def even_time_uneven_distance_patch(self):
+        """A patch with an even (CoordRange) time and monotonic-uneven distance."""
+        time = dc.to_datetime64(np.arange(20))
+        distance = np.cumsum(np.arange(1, 11) ** 1.5)
+        data = np.arange(len(time) * len(distance)).reshape(len(time), len(distance))
+        patch = dc.Patch(
+            data=data.astype(np.float64),
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+        # sanity: time is even, distance is monotonic but not evenly sampled
+        assert patch.coords.coord_map["time"].evenly_sampled
+        assert not patch.coords.coord_map["distance"].evenly_sampled
+        return patch
+
+    def test_snap_already_even_returns_self(self, random_patch):
+        """Snapping an already-even, sorted patch returns the same objects."""
+        coords = random_patch.coords
+        new_coords, array = coords.snap(array=random_patch.data)
+        assert new_coords is coords
+        assert array is random_patch.data
+        assert random_patch.snap_coords() is random_patch
+        assert random_patch.snap_coords("time", "distance") is random_patch
+
+    def test_snap_changes_only_uneven_coord(self, even_time_uneven_distance_patch):
+        """Only the coordinate that must change is replaced; others are reused."""
+        patch = even_time_uneven_distance_patch
+        out = patch.snap_coords()
+        # distance was uneven, so it should now be evenly sampled
+        assert out.coords.coord_map["distance"].evenly_sampled
+        # time was already even; its coordinate object should be reused as-is
+        assert out.coords.coord_map["time"] is patch.coords.coord_map["time"]
+        # data is unchanged because nothing needed reordering
+        assert np.array_equal(out.data, patch.data)
+
+    def test_snap_reverse_sorted(self, even_time_uneven_distance_patch):
+        """Reverse snapping sorts descending and reorders data accordingly."""
+        patch = even_time_uneven_distance_patch
+        out = patch.snap_coords("distance", reverse=True)
+        coord = out.coords.coord_map["distance"]
+        assert coord.reverse_sorted
+        assert coord.evenly_sampled
+        # data columns should be reversed relative to the ascending snap
+        ascending = patch.snap_coords("distance")
+        assert np.array_equal(out.data, ascending.data[:, ::-1])
 
 
 class TestDropCoords:
@@ -680,6 +735,16 @@ class TestSqueeze:
         if coords:
             assert set(coords) == set(patch.coords.coord_map)
 
+    def test_noop_squeeze_returns_self(self, random_patch):
+        """Squeeze on a patch with no length-1 dims returns the same patch."""
+        assert 1 not in random_patch.shape
+        assert random_patch.squeeze() is random_patch
+
+    def test_noop_coord_squeeze_returns_self(self, random_patch):
+        """CoordManager squeeze with no length-1 dims returns self."""
+        coords = random_patch.coords
+        assert coords.squeeze() is coords
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""
@@ -905,3 +970,16 @@ class TestTranspose:
         assert patch_5d.data.size == out.data.size
         # Data values should be the same, just rearranged
         assert np.array_equal(np.sort(patch_5d.data.flat), np.sort(out.data.flat))
+
+    def test_noop_transpose_returns_self(self, random_patch):
+        """Transposing to the current dim order returns the same patch."""
+        assert random_patch.transpose(*random_patch.dims) is random_patch
+
+    def test_noop_transpose_ellipsis_returns_self(self, patch_5d):
+        """A trailing ellipsis that resolves to the same order returns self."""
+        assert patch_5d.transpose(*patch_5d.dims[:-1], ...) is patch_5d
+
+    def test_noop_coord_transpose_returns_self(self, random_patch):
+        """CoordManager transpose to the current order returns self."""
+        coords = random_patch.coords
+        assert coords.transpose(*coords.dims) is coords

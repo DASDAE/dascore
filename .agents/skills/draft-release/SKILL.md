@@ -14,12 +14,18 @@ Draft the next release version and changelog from merged PRs.
 
 ## Workflow
 
-0. Ask for elevated permissions with network access to run `git fetch --all --tags` and the GitHub CLI PR commands used to collect merged PRs (for example `gh pr list`, `gh pr view`, or `gh api`).
-1. Fetch the latest refs and tags:
+0. Ask for elevated permissions with network access to run the `git fetch` and GitHub CLI PR commands used to collect merged PRs (for example `gh pr list`, `gh pr view`, or `gh api`).
+1. Fetch the latest refs and tags from `origin` only. Do **not** use
+   `git fetch --all` — it also fetches unrelated remotes (e.g. a personal fork or
+   another contributor's remote) and can fail on those or clobber local tags,
+   aborting the whole fetch:
 
 ```bash
-git fetch --all --tags
+git fetch --tags origin
 ```
+
+   If you only need to read the tags without touching local state, use
+   `git ls-remote --tags origin` instead.
 
 2. Determine the next version number:
 - Consider only tags that start with `v` and match strict semver:
@@ -45,18 +51,32 @@ git fetch --all --tags
 - `Bug Fixes`
 - `Breaking Changes`
 
-5. Classify PRs deterministically:
-- `Breaking Changes` if any of:
-  - title contains `!` in conventional-commit style segment, or
-  - label indicates breaking change (e.g., `breaking`), or
-  - body contains `BREAKING CHANGE`.
-- Otherwise `New Features` if labels/titles indicate feature work
-  (e.g., `feature`, `enhancement`, `feat`).
+5. Drop reverted pairs first. If a PR in scope reverts another PR that is also
+   in scope (revert PRs usually say "Revert ..." and name the reverted PR or
+   commit in the title/body), the two cancel out to no net user-facing change.
+   Omit both from the sections and instead list them under a short
+   `Reverted (no net change)` note at the end, so the reader knows why those PR
+   numbers are absent.
+
+6. Classify the remaining PRs. This repo does not use conventional-commit
+   markers, and its labels are topical (`proc`, `viz`, `spool`, `IO`,
+   `transform`, `bug`, ...) rather than semantic, so labels alone are not
+   enough — read each PR's title and body and use judgment:
+- `Breaking Changes` if the change removes or alters existing public API,
+   defaults, or behavior in a way that can break callers — regardless of whether
+   any `!`, `breaking` label, or `BREAKING CHANGE` text is present. A signature
+   or keyword change to a documented `Patch`/`dc` method is breaking even when
+   unlabeled; when unsure, list it here with a one-line note on what changed.
+- Otherwise `New Features` if the PR adds a capability, option, or notable
+   performance improvement (judge from the title/body, not just a
+   `feature`/`enhancement` label, which is often missing).
 - Otherwise `Bug Fixes`.
-- Sort entries by PR number ascending.
+- Prefer user-facing behavior over internal implementation when deciding and
+   when summarizing.
+- Sort entries within each section by PR number ascending.
 - Include a link to the PR in the changelog.
 
-6. Print to screen:
+7. Print to screen:
 - The new version tag.
 - The drafted changelog.
 
@@ -73,6 +93,8 @@ Next Version: vX.Y.Z
 
 ## Breaking Changes
 - #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+
+Reverted (no net change): #126 reverted by #127
 ```
 
 ## Notes
@@ -81,3 +103,4 @@ Next Version: vX.Y.Z
 - Prefer explicit, user-facing PR summaries over internal implementation details.
 - If no merged PRs are found in scope, still print the next version and include
   all sections with `- None`.
+- Omit the `Reverted (no net change)` line when no reverted pairs exist.

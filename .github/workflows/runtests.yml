@@ -38,7 +38,7 @@ jobs:
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
       os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -63,7 +63,7 @@ jobs:
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
@@ -109,7 +109,7 @@ jobs:
           limit-access-to-actor: true
 
       # Upload coverage files
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v5
         with:
           fail_ci_if_error: false
           files: ./coverage.xml

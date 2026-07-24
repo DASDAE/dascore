@@ -55,6 +55,9 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     >>> dist_snap = patch.snap_coords("distance")
     """
     cman, data = patch.coords.snap(*coords, array=patch.data, reverse=reverse)
+    # Nothing changed; return the original patch to avoid a rebuild.
+    if cman is patch.coords and data is patch.data:
+        return patch
     return patch.new(data=data, coords=cman)
 
 
@@ -90,6 +93,9 @@ def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     >>> assert dist_snap.coords.coord_map['distance'].reverse_sorted
     """
     cman, data = patch.coords.sort(*coords, array=patch.data, reverse=reverse)
+    # Nothing changed; return the original patch to avoid a rebuild.
+    if cman is patch.coords and data is patch.data:
+        return patch
     return patch.new(data=data, coords=cman)
 
 
@@ -615,6 +621,9 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
         msg = f"Dimension(s) {invalid_list} not found in Patch dimensions: {valid_list}"
         raise ParameterError(msg)
     new_coord = self.coords.transpose(*dims)
+    # No-op transpose; the coord manager returned self, so reuse this patch.
+    if new_coord is self.coords:
+        return self
     new_dims = new_coord.dims
     axes = tuple(old_dims.index(x) for x in new_dims)
     new_data = np.transpose(self.data, axes)
@@ -711,6 +720,9 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     >>> squeezed = single_time.squeeze(dim="time")
     """
     coords = self.coords.squeeze(dim)
+    # Nothing to squeeze; the coord manager returned self, so reuse this patch.
+    if coords is self.coords:
+        return self
     if dim is None:
         axes = None
     else:

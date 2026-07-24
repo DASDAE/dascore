@@ -89,6 +89,16 @@ class TestProcessingBenchmarks:
         patch.select(time=(t1, t2))
 
     @pytest.mark.benchmark
+    def test_update_existing_coords(self, example_patch):
+        """Time update_coords re-passing already-validated BaseCoords."""
+        patch = example_patch
+        coords = patch.coords
+        patch.update_coords(
+            time=coords.coord_map["time"],
+            distance=coords.coord_map["distance"],
+        )
+
+    @pytest.mark.benchmark
     def test_sobel_filter(self, example_patch):
         """Time the Sobel filter."""
         patch = example_patch
@@ -114,6 +124,18 @@ class TestProcessingBenchmarks:
         patch.transpose(*dims)
 
     @pytest.mark.benchmark
+    def test_transpose_noop(self, example_patch):
+        """Time a no-op transpose (same dimension order)."""
+        patch = example_patch
+        patch.transpose(*patch.dims)
+
+    @pytest.mark.benchmark
+    def test_squeeze_noop(self, example_patch):
+        """Time a no-op squeeze (no length-1 dimensions)."""
+        patch = example_patch
+        patch.squeeze()
+
+    @pytest.mark.benchmark
     def test_roll(self, example_patch):
         """Time roll/shift operations."""
         patch = example_patch
@@ -124,6 +146,12 @@ class TestProcessingBenchmarks:
         """Time coordinate snapping."""
         patch = patch_uneven_time
         patch.snap_coords("time")
+
+    @pytest.mark.benchmark
+    def test_snap_coords_already_even(self, example_patch):
+        """Time snapping an already even/sorted patch (no-op fast path)."""
+        patch = example_patch
+        patch.snap_coords("time", "distance")
 
     @pytest.mark.benchmark
     def test_hampel_filter_non_approximate(self, example_patch):
