@@ -63,21 +63,11 @@ class TestFindIndex:
         yield path
         os.chmod(path, 0o755)
 
-    @pytest.fixture()
-    def directory_indexer_bad_cache(self, tmp_path_factory):
-        """Create a bad index_map file."""
-        path = tmp_path_factory.mktemp("corrupt_cache_test")
-        cache_path = path / "corrupt_cache.json"
-        with cache_path.open("wt") as fi:
-            fi.write("{'bad': 'json'")
-        return cache_path
-
     def test_directory_cant_write(self, unwritable_directory):
         """Ensure correct path is found when a read-only directory is used."""
         dir_index = DBDirectoryIndexer(unwritable_directory)
         index_path = dir_index.index_path
-        index_map_path = dir_index.index_map_path
-        assert index_map_path.parent == index_path.parent
+        assert dir_index.index_map_dir == index_path.parent
 
     def test_read_only_index_name_is_stable(self, unwritable_directory, tmp_path):
         """The read-only fallback index name must not depend on hash().
@@ -86,12 +76,12 @@ class TestFindIndex:
         name would differ every session and orphan the prior index. The
         name is a stable digest of the directory path.
         """
-        import hashlib
+        from dascore.io.index.indexer import _path_digest
 
-        map_path = tmp_path / "cache_paths.json"
-        with set_config(directory_index_map_path=map_path):
+        map_dir = tmp_path / "path_map"
+        with set_config(directory_index_map_dir=map_dir):
             first = DBDirectoryIndexer(unwritable_directory).index_path
-        digest = hashlib.sha256(str(unwritable_directory).encode()).hexdigest()[:16]
+        digest = _path_digest(unwritable_directory)
         assert first.name == f"_dascore_index_{digest}.sqlite3"
 
     def test_specify_index_path(self, tmp_path_factory):
@@ -118,13 +108,21 @@ class TestFindIndex:
         assert first.index_path == second.index_path
         assert first.index_path.exists()
 
-    def test_corrupt_cache(self, directory_indexer_bad_cache, tmp_path_factory):
-        """Ensure a corrupted cache doesn't crash indexing. See #508."""
-        path = tmp_path_factory.mktemp("corrupt_cache_test")
-        assert directory_indexer_bad_cache.exists()
-        with set_config(directory_index_map_path=directory_indexer_bad_cache):
-            DBDirectoryIndexer(path)
-        assert not directory_indexer_bad_cache.exists()
+    def test_corrupt_cache(self, tmp_path):
+        """Ensure a corrupt map entry doesn't crash indexing. See #508."""
+        from dascore.io.index.indexer import _map_entry_path
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(data_dir, map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text("{'bad': 'json'")
+        with set_config(directory_index_map_dir=map_dir):
+            indexer = DBDirectoryIndexer(data_dir)
+        # The corrupt entry reads as a miss, so the writable data dir keeps
+        # its in-directory index rather than crashing.
+        assert indexer.index_path.parent == data_dir
 
     def test_remote_directory_not_supported(self):
         """Remote directory indexing should fail fast."""
@@ -139,53 +137,133 @@ class TestFindIndex:
         assert isinstance(out.path, Path)
         assert out.path == Path(tmp_path).absolute()
 
-    def test_index_map_path_comes_from_config(self, tmp_path):
-        """Index map paths should be sourced from runtime configuration."""
-        index_map_path = tmp_path / "cache_paths.json"
-        with set_config(directory_index_map_path=index_map_path):
+    def test_index_map_dir_comes_from_config(self, tmp_path):
+        """Index map dir should be sourced from runtime configuration."""
+        index_map_dir = tmp_path / "path_map"
+        with set_config(directory_index_map_dir=index_map_dir):
             out = DBDirectoryIndexer(tmp_path)
-            assert out.index_map_path == index_map_path
+            assert out.index_map_dir == index_map_dir
 
 
 class TestIndexMap:
-    """Tests for the index-location map helpers."""
+    """Tests for the per-directory index-location entries."""
+
+    def test_digest_falls_back_for_non_fspath(self):
+        """A directory os.fsencode rejects still digests (future URL support)."""
+        import hashlib
+
+        from dascore.io.index.indexer import _path_digest
+
+        class _Remote:
+            """Stand-in for a remote UPath whose fspath is unavailable."""
+
+            def __fspath__(self):
+                raise NotImplementedError
+
+            def __str__(self):
+                return "memory://data/dir"
+
+        expected = hashlib.sha256(b"memory://data/dir").hexdigest()
+        assert _path_digest(_Remote()) == expected
+
+    def test_roundtrip(self, tmp_path):
+        """A recorded index path is read back for the same directory."""
+        from dascore.io.index.indexer import (
+            _get_mapped_index_path,
+            _set_mapped_index_path,
+        )
+
+        map_dir = tmp_path / "path_map"
+        index_path = tmp_path / "idx.sqlite3"
+        _set_mapped_index_path(tmp_path / "data", index_path, map_dir)
+        assert _get_mapped_index_path(tmp_path / "data", map_dir) == index_path
+
+    def test_missing_entry_is_none(self, tmp_path):
+        """An unmapped directory reads back as None (a cache miss)."""
+        from dascore.io.index.indexer import _get_mapped_index_path
+
+        assert _get_mapped_index_path(tmp_path / "nope", tmp_path / "path_map") is None
+
+    def test_distinct_dirs_dont_collide(self, tmp_path):
+        """Separate directories use separate entry files (no lost writes)."""
+        from dascore.io.index.indexer import (
+            _get_mapped_index_path,
+            _set_mapped_index_path,
+        )
+
+        map_dir = tmp_path / "path_map"
+        _set_mapped_index_path(tmp_path / "a", "index-a", map_dir)
+        _set_mapped_index_path(tmp_path / "b", "index-b", map_dir)
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) == Path("index-a")
+        assert _get_mapped_index_path(tmp_path / "b", map_dir) == Path("index-b")
+
+    def test_corrupt_entry_is_miss(self, tmp_path):
+        """A corrupt entry reads as a miss (and is not deleted). See #508."""
+        from dascore.io.index.indexer import (
+            _get_mapped_index_path,
+            _map_entry_path,
+        )
+
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text("{not json")
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
+        # Reads never delete the entry; a later write self-heals it.
+        assert entry.exists()
+
+    def test_bad_payload_shapes_are_miss(self, tmp_path):
+        """Non-string or empty index paths read as a miss, not an error."""
+        from dascore.io.index.indexer import _get_mapped_index_path, _map_entry_path
+
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text(
+            json.dumps({"directory": str(tmp_path / "a"), "index_path": []})
+        )
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
+
+    def test_digest_collision_is_miss(self, tmp_path):
+        """An entry whose stored directory differs reads as a miss."""
+        from dascore.io.index.indexer import _get_mapped_index_path, _map_entry_path
+
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        # Same file, but recorded for a different directory.
+        entry.write_text(json.dumps({"directory": "other", "index_path": "x"}))
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
 
     def test_update_is_atomic_and_leaves_no_temp(self, tmp_path):
-        """Updates write via a temp file and swap it in, leaving no debris."""
-        from dascore.io.index.indexer import _get_index_map, _update_index_map
+        """Writes swap a temp file into place, leaving no debris."""
+        from dascore.io.index.indexer import (
+            _get_mapped_index_path,
+            _map_entry_path,
+            _set_mapped_index_path,
+        )
 
-        cache_path = tmp_path / "cache_paths.json"
-        _update_index_map({"a": "1"}, cache_path=str(cache_path))
-        _update_index_map({"b": "2"}, cache_path=str(cache_path))
-        assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
-        # the swap target is the only file left in the directory.
-        assert [p.name for p in tmp_path.iterdir()] == [cache_path.name]
-
-    def test_get_reads_fresh_each_call(self, tmp_path):
-        """Reads are not cached, so out-of-band changes are seen (no @cache)."""
-        from dascore.io.index.indexer import _get_index_map, _update_index_map
-
-        cache_path = tmp_path / "cache_paths.json"
-        _update_index_map({"a": "1"}, cache_path=str(cache_path))
-        assert _get_index_map(str(cache_path)) == {"a": "1"}
-        # simulate another process rewriting the map underneath us.
-        cache_path.write_text(json.dumps({"a": "1", "b": "2"}))
-        assert _get_index_map(str(cache_path)) == {"a": "1", "b": "2"}
+        map_dir = tmp_path / "path_map"
+        _set_mapped_index_path(tmp_path / "a", "1", map_dir)
+        _set_mapped_index_path(tmp_path / "a", "2", map_dir)
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) == Path("2")
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        assert [p.name for p in map_dir.iterdir()] == [entry.name]
 
     def test_failed_swap_cleans_up_temp(self, tmp_path, monkeypatch):
         """A failure during the atomic swap unlinks the temp file and re-raises."""
         from dascore.io.index import indexer as indexer_mod
 
-        cache_path = tmp_path / "cache_paths.json"
+        map_dir = tmp_path / "path_map"
 
         def boom(*args, **kwargs):
             raise RuntimeError("swap failed")
 
         monkeypatch.setattr(indexer_mod.os, "replace", boom)
         with pytest.raises(RuntimeError, match="swap failed"):
-            indexer_mod._update_index_map({"a": "1"}, cache_path=str(cache_path))
-        # No temp debris and no half-written target left behind.
-        assert list(tmp_path.iterdir()) == []
+            indexer_mod._set_mapped_index_path(tmp_path / "a", "1", map_dir)
+        # No temp debris and no half-written entry left behind.
+        assert list(map_dir.iterdir()) == []
 
 
 class TestWalkResilience:
