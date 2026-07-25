@@ -58,8 +58,11 @@ jobs:
     timeout-minutes: 30
     env:
       PYODIDE_VERSION: '314.0.3'
-      # Shared between the native seeding step and the wasm test run.
-      DFS_DATA_DIR: ${{ github.workspace }}/.wasm-data-cache
+      # Point the default cache location at one directory shared between the
+      # native seeding step and the wasm test run. Unlike DFS_DATA_DIR this
+      # only shifts the default, so tests overriding the cache dir via config
+      # still see their override win.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.wasm-data-cache
       MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v4
