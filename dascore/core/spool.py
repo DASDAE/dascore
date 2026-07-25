@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import abc
-import warnings
 from collections.abc import Callable, Generator, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -46,6 +45,24 @@ from dascore.utils.patch import (
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 
 T = TypeVar("T")
+
+
+# Copy-on-write is always on from pandas 3, which also deprecates the
+# option: reading it there warns on every access, so settle it by version
+# once and only consult the option on pandas 2.
+_COPY_ON_WRITE_ALWAYS = int(pd.__version__.split(".", maxsplit=1)[0]) >= 3
+
+
+def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a caller-owned view of an internally cached dataframe.
+
+    Copy-on-write makes a shallow copy enough, since the frames detach on
+    the first write. Only the literal True enables it; pandas 2 also
+    accepts "warn", which keeps the old sharing semantics.
+    """
+    copy_on_write = _COPY_ON_WRITE_ALWAYS or pd.options.mode.copy_on_write is True
+    return frame.copy(deep=not copy_on_write)
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -259,6 +276,12 @@ class BaseSpool(NamespaceOwner, abc.ABC):
     def get_contents(self) -> pd.DataFrame:
         """
         Get a dataframe of the spool contents.
+
+        Notes
+        -----
+        Each call returns a caller-owned dataframe; mutating it never
+        changes the spool. Use ``frame.copy(deep=True)`` when an eager
+        block copy is needed.
 
         Examples
         --------
@@ -479,7 +502,7 @@ class Spool(BaseSpool):
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
-        return self._df
+        return _copy_public_dataframe(self._df)
 
     def __len__(self):
         # counting pushes to SQL (or the cold live registry); the flat
@@ -514,14 +537,9 @@ class Spool(BaseSpool):
             raise IndexError(msg) from None
 
     def __iter__(self):
-        for ind in range(len(self._catalog)):
-            try:
-                yield self._catalog.get_patch(ind)
-            except MissingPatchError as e:
-                # The patch couldn't be produced, usually because a
-                # coordinate mismatch trimmed it to nothing (see #583).
-                msg = f"Skipping patch at index {ind} (see #583): {e}"
-                warnings.warn(msg, UserWarning, stacklevel=2)
+        # The catalog snapshots the relation once and skips patches which
+        # cannot be resolved (see #583).
+        yield from self._catalog
 
     # --- selection and presentation specs -------------------------------
 

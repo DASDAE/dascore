@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import io
+import threading
 from pathlib import Path
 from typing import TypeVar
 
@@ -26,8 +27,10 @@ from dascore.exceptions import (
 )
 from dascore.io.core import (
     FiberIO,
+    _FiberIOManager,
     _get_reloadable_source_path,
     _make_scan_payload,
+    _reinit_manager_lock,
     _scan_result_to_summary,
     _validate_scan_payload,
 )
@@ -423,7 +426,7 @@ class TestFormatManager:
         format_manager.__dict__.pop("_eps", None)
         format_manager.__dict__.pop("known_formats", None)
         format_manager._eps = pd.Series(dtype=object)
-        assert isinstance(format_manager.known_formats, set)
+        assert isinstance(format_manager.known_formats, frozenset)
 
     def test_load_plugins_empty_entry_points(self, format_manager):
         """Loading plugins should no-op when no entry points are present."""
@@ -490,6 +493,9 @@ class TestBrokenEntryPoint:
         manager.__dict__.pop("known_formats", None)
         # clear the method cache so load_plugins runs again for this instance.
         manager.__dict__.pop("_cache", None)
+        # the copy inherits the original's "everything is loaded" state,
+        # which the swapped-in entry points invalidate.
+        manager._all_loaded = False
         return manager
 
     def test_load_plugins_warns_and_skips(self, broken_ep_manager):
@@ -506,6 +512,100 @@ class TestBrokenEntryPoint:
         assert len(out) == 1
         # The prioritized list (used by scan/read) must also not choke.
         assert len(list(broken_ep_manager.yield_fiberio()))
+
+
+class TestFormatManagerConcurrency:
+    """Concurrent plugin loading must never expose a partial registry."""
+
+    def _make_manager(self, eps):
+        """Return a manager whose entry points are the provided loaders."""
+        manager = _FiberIOManager("dascore.fiber_io")
+        manager.__dict__["_eps"] = pd.Series(eps)
+        return manager
+
+    def test_multi_version_format_never_partial(self, run_in_threads):
+        """Every thread sees all versions, even mid-load."""
+        entered, release, calls = threading.Event(), threading.Event(), []
+
+        def slow_loader():
+            """Stall inside the first version's loader."""
+            calls.append("v1")
+            entered.set()
+            release.wait()
+            return _FiberFormatTestV1
+
+        manager = self._make_manager(
+            {
+                "_TESTFORMATTER__V1": slow_loader,
+                "_TESTFORMATTER__V2": lambda: _FiberFormatTestV2,
+            }
+        )
+        # Free the stalled loader once it has registered nothing but v1;
+        # the other threads are queued behind the manager lock by then.
+        releaser = threading.Thread(target=lambda: (entered.wait(), release.set()))
+        releaser.start()
+        results = run_in_threads(
+            lambda _: tuple(
+                x.version for x in manager.yield_fiberio(format="_TestFormatter")
+            ),
+            4,
+        )
+        releaser.join()
+        # Newest version first, and the loader ran exactly once.
+        assert all(x == ("2", "1") for x in results)
+        assert calls == ["v1"]
+
+    def test_concurrent_full_load_runs_each_loader_once(self, run_in_threads):
+        """Loading all formats from several threads loads each entry point once."""
+        calls = []
+
+        def make_loader(fiber_io):
+            """Return a loader which records that it ran."""
+
+            def loader():
+                calls.append(fiber_io.version)
+                return fiber_io
+
+            return loader
+
+        manager = self._make_manager(
+            {
+                "_TESTFORMATTER__V1": make_loader(_FiberFormatTestV1),
+                "_TESTFORMATTER__V2": make_loader(_FiberFormatTestV2),
+            }
+        )
+        results = run_in_threads(lambda _: len(list(manager.yield_fiberio())))
+        assert set(results) == {2}
+        assert sorted(calls) == ["1", "2"]
+
+    def test_snapshots_are_immutable(self):
+        """Cached lookups hand back immutable snapshots."""
+        manager = self._make_manager({"_TESTFORMATTER__V1": lambda: _FiberFormatTestV1})
+        assert isinstance(manager.known_formats, frozenset)
+        assert isinstance(manager._get_prioritized_list(), tuple)
+        assert isinstance(manager._get_fiber_io_by_input_type("file"), frozenset)
+
+    def test_copy_gets_own_lock(self):
+        """A copied manager must not share the original's lock."""
+        manager = self._make_manager({"_TESTFORMATTER__V1": lambda: _FiberFormatTestV1})
+        copied = copy.deepcopy(manager)
+        assert copied._lock is not manager._lock
+        assert list(copied.yield_fiberio(format="_TestFormatter"))
+
+    def test_fork_handler_replaces_held_lock(self):
+        """A lock held at fork time is replaced so the child cannot deadlock."""
+        manager = FiberIO.manager
+        old_lock = manager._lock
+        try:
+            with old_lock:
+                _reinit_manager_lock()
+                new_lock = manager._lock
+                # The replacement is free even while the old lock is held.
+                assert new_lock.acquire(blocking=False)
+                new_lock.release()
+            assert new_lock is not old_lock
+        finally:
+            manager._lock = old_lock
 
 
 class TestFormatter:

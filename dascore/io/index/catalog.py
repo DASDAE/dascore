@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import abc
 import json
+import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import RLock
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -417,9 +420,47 @@ def _merge_source_records(existing, new):
 
 @dataclass
 class _CatalogRevision:
-    """Shared mutation revision for live catalog views."""
+    """Shared mutation revision, and its lock, for live catalog views."""
 
     value: int = 0
+    # A root and all its views share this; it guards the revision counter
+    # and every cache keyed on it.
+    lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+
+    def __getstate__(self) -> dict:
+        """Pickle the revision without its process-local lock."""
+        return {"value": self.value}
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore the revision with a fresh process-local lock."""
+        self.value = state["value"]
+        self.lock = RLock()
+
+
+@dataclass
+class _RevisionCache:
+    """
+    A value cached against the catalog revision which produced it.
+
+    Reads and writes happen under the revision lock; a value built at an
+    older revision is simply not returned.
+    """
+
+    value: Any = None
+    revision: int = -1
+
+    def get(self, revision: int):
+        """Return the cached value, or None when empty or stale."""
+        return self.value if self.revision == revision else None
+
+    def set(self, value, revision: int):
+        """Store (and return) a value built at the given revision."""
+        self.value, self.revision = value, revision
+        return value
+
+    def clear(self) -> None:
+        """Drop the cached value."""
+        self.value, self.revision = None, -1
 
 
 # sentinel: _view keeps the current order/ids spec unless told otherwise
@@ -463,10 +504,8 @@ class PatchCatalog:
         self._default_order = default_order
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
-        self._df_cache: pd.DataFrame | None = None
-        self._df_cache_revision = -1
-        self._live_cache: tuple | None = None
-        self._live_cache_revision = -1
+        self._df_cache = _RevisionCache()
+        self._live_cache = _RevisionCache()
         # Source records for rebuilding an in-memory backend (set by
         # __getstate__ so pickled catalogs survive losing the connection).
         self._rebuild_records: tuple = ()
@@ -578,22 +617,31 @@ class PatchCatalog:
 
         Every metadata operation funnels through here, so this is also
         where a brand-new directory index gets its one automatic update.
+        Bootstrapping runs under the revision lock so concurrent first
+        use cannot build (or ingest into) two backends.
+
+        The one-time directory scan stays under the lock as well: it is
+        what serializes the build, and there is nothing for a blocked
+        reader to read until it finishes. Once done, ensure_updated is a
+        flag check. A later explicit update() re-scans an index which is
+        already usable, so that one runs outside the lock.
         """
-        if self._backend is None:
-            if self._syncer is not None:
-                # Directory catalogs re-adopt the (unpickled) syncer's
-                # backend; both must keep sharing one connection.
-                self._backend = self._syncer._backend
-            else:
-                self._backend = get_backend(":memory:")
-                if self._rebuild_records:
-                    self._backend.write_sources(list(self._rebuild_records))
-                    self._rebuild_records = ()
-                elif registry := getattr(self.resolver, "_registry", None):
-                    self._backend.write_sources(_live_records(registry))
-        if self._syncer is not None and self._syncer.ensure_updated():
-            self._invalidate()
-        return self._backend
+        with self._revision.lock:
+            if self._backend is None:
+                if self._syncer is not None:
+                    # Directory catalogs re-adopt the (unpickled) syncer's
+                    # backend; both must keep sharing one connection.
+                    self._backend = self._syncer._backend
+                else:
+                    self._backend = get_backend(":memory:")
+                    if self._rebuild_records:
+                        self._backend.write_sources(list(self._rebuild_records))
+                        self._rebuild_records = ()
+                    elif registry := getattr(self.resolver, "_registry", None):
+                        self._backend.write_sources(_live_records(registry))
+            if self._syncer is not None and self._syncer.ensure_updated():
+                self._invalidate()
+            return self._backend
 
     def __getstate__(self) -> dict:
         """
@@ -719,11 +767,10 @@ class PatchCatalog:
         return self._view(self._queries, self._residuals, ids=deduped)
 
     def _invalidate(self) -> None:
-        self._revision.value += 1
-        self._df_cache = None
-        self._df_cache_revision = -1
-        self._live_cache = None
-        self._live_cache_revision = -1
+        with self._revision.lock:
+            self._revision.value += 1
+            self._df_cache.clear()
+            self._live_cache.clear()
 
     def _cold_live_values(self) -> tuple | None:
         """
@@ -733,6 +780,8 @@ class PatchCatalog:
 
         This keeps len/iteration/indexing on freshly-built patch-list
         spools allocation-free: no ingest, no SQL, no flat relation.
+
+        Callers must hold the revision lock.
         """
         cold = (
             self._backend is None
@@ -743,13 +792,12 @@ class PatchCatalog:
         )
         if not cold:
             return None
-        if (
-            self._live_cache is None
-            or self._live_cache_revision != self._revision.value
-        ):
-            self._live_cache = tuple(self.resolver.live_entries().values())
-            self._live_cache_revision = self._revision.value
-        return self._live_cache
+        revision = self._revision.value
+        if (live := self._live_cache.get(revision)) is None:
+            live = self._live_cache.set(
+                tuple(self.resolver.live_entries().values()), revision
+            )
+        return live
 
     def __deepcopy__(self, memo) -> PatchCatalog:
         """
@@ -834,7 +882,9 @@ class PatchCatalog:
         hidden or renamed private so chunk merge-compatibility (which
         compares all non-private columns) is not spuriously blocked.
         """
-        if self._df_cache is None or self._df_cache_revision != self._revision.value:
+        with self._revision.lock:
+            if (cached := self._df_cache.get(self._revision.value)) is not None:
+                return cached
             df = self.backend.query(
                 list(self._queries) or None,
                 order_by=self._effective_order,
@@ -869,29 +919,30 @@ class PatchCatalog:
                 range_dicts = [{k: v for d in range_dicts for k, v in d.items()}]
             for ranges in range_dicts:
                 df = adjust_segments(df, ignore_bad_kwargs=True, **ranges)
-            self._df_cache = df
-            self._df_cache_revision = self._revision.value
-        return self._df_cache
+            # Re-read the revision: bootstrapping the backend above can
+            # bump it, and this frame reflects the state after that.
+            return self._df_cache.set(df, self._revision.value)
 
     def __len__(self) -> int:
-        if (live := self._cold_live_values()) is not None:
-            return len(live)
-        # Count in SQL when the relation is not already realized: coord
-        # range residuals only drop patches the SQL candidacy already
-        # excludes and samples/relative residuals never drop patches, so
-        # the count matches len(to_df()) without projecting or pivoting.
-        if (
-            self._df_cache is not None
-            and self._df_cache_revision == self._revision.value
-        ):
-            return len(self._df_cache)
-        return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+        with self._revision.lock:
+            if (live := self._cold_live_values()) is not None:
+                return len(live)
+            # Count in SQL when the relation is not already realized: coord
+            # range residuals only drop patches the SQL candidacy already
+            # excludes and samples/relative residuals never drop patches, so
+            # the count matches len(to_df()) without projecting or pivoting.
+            if (df := self._df_cache.get(self._revision.value)) is not None:
+                return len(df)
+            return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
-        if (live := self._cold_live_values()) is not None:
-            return live[index]
-        row = self.to_df().iloc[index].to_dict()
+        with self._revision.lock:
+            if (live := self._cold_live_values()) is not None:
+                return live[index]
+            row = self.to_df().iloc[index].to_dict()
+        # Reading (and trimming) the patch happens outside the lock; only
+        # the row it starts from must come from a consistent relation.
         return self.resolve_row(row)
 
     def resolve_row(self, row: Mapping, extra_trim: Mapping | None = None) -> dc.Patch:
@@ -922,28 +973,50 @@ class PatchCatalog:
         return apply_exact_residuals(patch, self._residuals)
 
     def __iter__(self):
-        for index in range(len(self)):
-            yield self.get_patch(index)
+        """
+        Yield every patch under the selection.
+
+        The relation is snapshotted once, then each patch is read and
+        trimmed outside the revision lock. A patch which cannot be
+        resolved is skipped with a warning rather than ending iteration
+        (see #583); indexing with get_patch still raises.
+        """
+        with self._revision.lock:
+            live = self._cold_live_values()
+            df = None if live is not None else self.to_df()
+        if live is not None:
+            yield from live
+            return
+        for index in range(len(df)):
+            try:
+                yield self.resolve_row(df.iloc[index].to_dict())
+            except MissingPatchError as e:
+                # Usually a coordinate mismatch trimmed the patch to nothing.
+                msg = f"Skipping patch at index {index} (see #583): {e}"
+                warnings.warn(msg, UserWarning, stacklevel=2)
 
     # --- mutation (root only) ----------------------------------------------
 
     def add(self, patches: Sequence[dc.Patch] | dc.Patch) -> PatchCatalog:
         """Add live patches to the catalog."""
-        self._require_root("add")
-        if not isinstance(self.resolver, LiveResolver):
-            msg = "add() currently supports in-memory catalogs only."
-            raise NotImplementedError(msg)
-        patches = [patches] if isinstance(patches, dc.Patch) else list(patches)
-        additions = {_patch_path(x): x for x in patches}
-        self.resolver._registry.update(additions)
-        # Re-adding a patch replaces its row (same identity), so this
-        # stays idempotent.
-        self.backend.write_sources(_live_records(additions))
-        self._invalidate()
-        return self
+        with self._revision.lock:
+            self._require_root("add")
+            if not isinstance(self.resolver, LiveResolver):
+                msg = "add() currently supports in-memory catalogs only."
+                raise NotImplementedError(msg)
+            patches = [patches] if isinstance(patches, dc.Patch) else list(patches)
+            additions = {_patch_path(x): x for x in patches}
+            self.resolver._registry.update(additions)
+            # Re-adding a patch replaces its row (same identity), so this
+            # stays idempotent.
+            self.backend.write_sources(_live_records(additions))
+            self._invalidate()
+            return self
 
     def update(self, progress: PROGRESS_LEVELS = "standard") -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
+        # The scan itself is long-running file IO; it manages its own
+        # state, so only the cache invalidation needs the revision lock.
         if self._syncer is not None:
             self._syncer.update(progress=progress)
         self._invalidate()
@@ -951,16 +1024,17 @@ class PatchCatalog:
 
     def remove(self, source_paths: Sequence[str], base_uri: str = "") -> PatchCatalog:
         """Remove sources (and their patches) from the catalog."""
-        self._require_root("remove")
-        source_paths = list(source_paths)
-        self.backend.delete_sources(source_paths, base_uri=base_uri)
-        # The live registry is the store for in-memory patches; it must
-        # stay in step with the backend rows (pickling rebuilds from it).
-        registry = self.resolver.live_entries() if self.resolver else {}
-        for path in source_paths:
-            registry.pop(path, None)
-        self._invalidate()
-        return self
+        with self._revision.lock:
+            self._require_root("remove")
+            source_paths = list(source_paths)
+            self.backend.delete_sources(source_paths, base_uri=base_uri)
+            # The live registry is the store for in-memory patches; it must
+            # stay in step with the backend rows (pickling rebuilds from it).
+            registry = self.resolver.live_entries() if self.resolver else {}
+            for path in source_paths:
+                registry.pop(path, None)
+            self._invalidate()
+            return self
 
     # --- introspection -------------------------------------------------------
 
@@ -982,5 +1056,6 @@ class PatchCatalog:
 
     def close(self) -> None:
         """Close the backend (root and all views share it)."""
-        if self._backend is not None:
-            self._backend.close()
+        with self._revision.lock:
+            if self._backend is not None:
+                self._backend.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import warnings
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -107,6 +108,35 @@ def _permanent_config(**overrides):
 def permanent_config():
     """Return the context manager broad-scoped fixtures use to set config."""
     return _permanent_config
+
+
+@pytest.fixture(scope="session")
+def run_in_threads():
+    """
+    Return a helper which runs func(index) in several threads at once.
+
+    A barrier releases every thread together, so concurrency tests do not
+    need sleeps. The timeouts turn a deadlock into a failure rather than a
+    hung test run.
+    """
+
+    def _run(func, count=4, timeout=60):
+        barrier = threading.Barrier(count, timeout=timeout)
+        results = [None] * count
+
+        def worker(index):
+            barrier.wait()
+            results[index] = func(index)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout)
+            assert not thread.is_alive(), "thread never finished; possible deadlock"
+        return results
+
+    return _run
 
 
 @pytest.fixture(autouse=True)

@@ -258,3 +258,52 @@ class TestPluginRegistry:
             AttributeError, match="ParentClass has no attribute 'totally_unknown'"
         ):
             inst.totally_unknown
+
+
+class TestNamespaceConcurrency:
+    """Lazy namespace attachment must be safe under concurrent first use."""
+
+    def test_one_instance_per_host(self, run_in_threads):
+        """Concurrent first access on one object returns a single namespace."""
+        inst = ParentClass()
+        results = run_in_threads(lambda _: inst.bob)
+        assert len({id(x) for x in results}) == 1
+        assert results[0] is inst.bob
+
+    def test_distinct_hosts_get_own_namespace(self, run_in_threads):
+        """Concurrent first access on distinct objects binds each host."""
+        instances = [ParentClass() for _ in range(4)]
+        results = run_in_threads(lambda index: instances[index].bob)
+        assert [x.return_self() for x in results] == instances
+
+    def test_concurrent_registration_and_lookup(self, run_in_threads):
+        """Registering namespaces while reading the registry stays consistent."""
+
+        class ConcurrentBase(_MethodNameSpace):
+            entry_point_group = "dascore.concurrent_test"
+
+        def register(index):
+            """Define a new namespace and read the registry back."""
+            type(f"Namespace{index}", (ConcurrentBase,), {"name": f"ns_{index}"})
+            # Snapshot under the lock; sibling threads are inserting.
+            with _MethodNameSpace._registry_lock:
+                return set(_MethodNameSpace._registry["dascore.concurrent_test"])
+
+        run_in_threads(register)
+        registered = _MethodNameSpace._registry["dascore.concurrent_test"]
+        assert set(registered) == {f"ns_{i}" for i in range(4)}
+
+    def test_fork_handler_replaces_held_locks(self):
+        """Locks held at fork time are replaced so the child cannot deadlock."""
+        old_attachment = ns_module._ATTACHMENT_LOCK
+        old_registry = _MethodNameSpace._registry_lock
+        try:
+            with old_attachment, old_registry:
+                ns_module._reinit_namespace_locks()
+                new_attachment = ns_module._ATTACHMENT_LOCK
+                new_registry = _MethodNameSpace._registry_lock
+            assert new_attachment is not old_attachment
+            assert new_registry is not old_registry
+        finally:
+            ns_module._ATTACHMENT_LOCK = old_attachment
+            _MethodNameSpace._registry_lock = old_registry

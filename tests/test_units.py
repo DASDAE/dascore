@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pint
 import pytest
 
 import dascore as dc
+import dascore.units as units_module
 from dascore.exceptions import UnitError
 from dascore.units import (
     Quantity,
@@ -465,3 +467,39 @@ class TestMaybeConvertPercentToFraction:
         result = maybe_convert_percent_to_fraction(get_quantity("12.5%"))
         assert len(result) == 1
         assert np.isclose(result[0], 0.125)
+
+
+class TestUnitConcurrency:
+    """The pint registry must initialize once and parse safely in threads."""
+
+    def test_registry_created_once(self, monkeypatch, run_in_threads):
+        """Racing threads all get the same registry instance."""
+        # The registry is process-wide; restore it so quantities created by
+        # other tests keep belonging to the active registry.
+        monkeypatch.setattr(units_module, "_UNIT_REGISTRY", None)
+        original = pint.get_application_registry().get()
+        try:
+            results = run_in_threads(lambda _: units_module.get_registry())
+        finally:
+            pint.set_application_registry(original)
+        assert len({id(x) for x in results}) == 1
+
+    def test_concurrent_parsing(self, run_in_threads):
+        """Parsing distinct quantities in threads returns correct values."""
+        strings = ["m/s", "1/s", "furlong/fortnight", "strain"]
+        results = run_in_threads(lambda index: get_quantity(strings[index]))
+        assert results == [get_quantity(x) for x in strings]
+
+    def test_fork_handler_replaces_held_lock(self):
+        """A lock held at fork time is replaced so the child cannot deadlock."""
+        old_lock = units_module._UNIT_LOCK
+        try:
+            with old_lock:
+                units_module._reinit_unit_lock()
+                new_lock = units_module._UNIT_LOCK
+                # The replacement is free even while the old lock is held.
+                assert new_lock.acquire(blocking=False)
+                new_lock.release()
+            assert new_lock is not old_lock
+        finally:
+            units_module._UNIT_LOCK = old_lock

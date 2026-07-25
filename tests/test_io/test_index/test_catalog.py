@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 
@@ -100,7 +102,7 @@ class TestSelectComposition:
     def test_no_sql_at_select(self, live_catalog):
         """Selection composes without realizing the dataframe."""
         view = live_catalog.select(distance=(0, 10))
-        assert view._df_cache is None
+        assert view._df_cache.get(view._revision.value) is None
 
     def test_views_cannot_mutate(self, live_catalog, patches):
         """Mutation only on the root."""
@@ -306,3 +308,31 @@ class TestViewSerialization:
         assert loaded[0].attrs["tag"] == "0"
         # and the root spool's registry is untouched
         assert len(spool._catalog.resolver.live_entries()) == 5
+
+
+class TestCatalogConcurrency:
+    """Catalog caches must stay coherent under concurrent readers."""
+
+    def test_concurrent_realization(self, live_catalog, patches, run_in_threads):
+        """Racing first realizations build one backend and one relation."""
+        results = run_in_threads(lambda _: len(live_catalog.to_df()))
+        assert set(results) == {len(patches)}
+        # one cached relation, not one per thread
+        assert live_catalog.to_df() is live_catalog.to_df()
+
+    def test_concurrent_reads(self, live_catalog, patches, run_in_threads):
+        """Mixed len/patch access from several threads agrees."""
+
+        def read(index):
+            """Read the catalog a few different ways."""
+            return (len(live_catalog), live_catalog.get_patch(index).shape)
+
+        results = run_in_threads(read, len(patches))
+        assert {x[0] for x in results} == {len(patches)}
+        assert [x[1] for x in results] == [x.shape for x in patches]
+
+    def test_pickled_revision_gets_new_lock(self, live_catalog):
+        """Unpickling a catalog installs a fresh revision lock."""
+        rebuilt = pickle.loads(pickle.dumps(live_catalog))
+        assert rebuilt._revision.lock is not live_catalog._revision.lock
+        assert len(rebuilt) == len(live_catalog)

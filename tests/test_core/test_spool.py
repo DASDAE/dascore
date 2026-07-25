@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.spool import BaseSpool, Spool
+from dascore.core.spool import _COPY_ON_WRITE_ALWAYS, BaseSpool, Spool
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingOptionalDependencyError,
@@ -438,6 +438,25 @@ class TestGetContents:
         sub = random_spool.select(time=(None, new_max)).get_contents()
         assert len(sub) == (len(full_df) - 1)
         assert (sub["time_min"] < new_max).all()
+
+    def test_contents_are_caller_owned(self, random_spool):
+        """Mutating the returned dataframe must not change the spool."""
+        df = random_spool.get_contents()
+        df["tag"] = "modified"
+        assert (random_spool.get_contents()["tag"] != "modified").all()
+
+    @pytest.mark.parametrize("copy_on_write", [False, True, "warn"])
+    def test_contents_owned_in_every_copy_mode(self, random_spool, copy_on_write):
+        """Ownership holds for each copy-on-write setting pandas 2 allows.
+
+        Notably "warn" is truthy but keeps the old sharing semantics.
+        """
+        if _COPY_ON_WRITE_ALWAYS:
+            pytest.skip("pandas 3 has copy-on-write always on")
+        with pd.option_context("mode.copy_on_write", copy_on_write):
+            df = random_spool.get_contents()
+            df["tag"] = "modified"
+        assert (random_spool.get_contents()["tag"] != "modified").all()
 
 
 class TestSelect:
@@ -955,11 +974,14 @@ class TestSpoolCoverageEdges:
     def test_iteration_skips_unresolvable_patch(self, monkeypatch):
         """A patch that fails to resolve is skipped with a #583 warning."""
         spool = dc.spool([dc.get_example_patch()])
+        # Realize the relation so iteration resolves rows rather than
+        # serving the live registry (which cannot fail to resolve).
+        spool.get_contents()
 
-        def _raise(_ind):
+        def _raise(*args, **kwargs):
             raise MissingPatchError("not available in this session")
 
-        monkeypatch.setattr(spool._catalog, "get_patch", _raise)
+        monkeypatch.setattr(spool._catalog, "resolve_row", _raise)
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Sequence
 from functools import cache
+from threading import RLock
 from typing import Any, TypeVar
 
 import numpy as np
@@ -16,7 +17,7 @@ from platformdirs import user_cache_path
 import dascore as dc
 from dascore.compat import is_array
 from dascore.exceptions import UnitError
-from dascore.utils.misc import iterate, unbyte
+from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 str_or_none = TypeVar("str_or_none", None, str)
@@ -33,26 +34,45 @@ def _get_unit_registry():
         return pint.UnitRegistry(cache_folder=":auto:")
 
 
-@cache
+# The pint registry is mutable (it memoizes parsed units and conversions)
+# so every helper which touches it runs under this lock. Each such helper
+# is also cached, meaning the lock is only taken on a cache miss.
+_UNIT_LOCK = RLock()
+_UNIT_REGISTRY: pint.UnitRegistry | None = None
+
+
+@_reinit_after_fork
+def _reinit_unit_lock():
+    """Install a fresh unit lock; see _reinit_after_fork."""
+    global _UNIT_LOCK
+    _UNIT_LOCK = RLock()
+
+
 def get_registry():
-    """Get the pint unit registry."""
-    ureg = _get_unit_registry()
-    # a few custom defs, we may need our own unit registry if this
-    # gets too long.
-    ureg.define("PI=pi")
-    ureg.define("RADIANS=radians")
-    ureg.define("Radians=radians")
-    ureg.define("Radian=radians")
-    # define strain
-    ureg.define("strain=[]=ϵ")
-    # allow multiplication with offset units.
-    ureg.autoconvert_offset_to_baseunit = True
-    # set the shortest display for units.
-    # .formatter was added in new versions of pint; this makes it work with both
-    formatter = getattr(ureg, "formatter", ureg)
-    formatter.default_format = "~"
-    pint.set_application_registry(ureg)
-    return ureg
+    """Get the pint unit registry, creating it exactly once."""
+    global _UNIT_REGISTRY
+    with _UNIT_LOCK:
+        if _UNIT_REGISTRY is None:
+            ureg = _get_unit_registry()
+            # a few custom defs, we may need our own unit registry if this
+            # gets too long.
+            ureg.define("PI=pi")
+            ureg.define("RADIANS=radians")
+            ureg.define("Radians=radians")
+            ureg.define("Radian=radians")
+            # define strain
+            ureg.define("strain=[]=ϵ")
+            # allow multiplication with offset units.
+            ureg.autoconvert_offset_to_baseunit = True
+            # set the shortest display for units.
+            # .formatter was added in new versions of pint; this makes it
+            # work with both
+            formatter = getattr(ureg, "formatter", ureg)
+            formatter.default_format = "~"
+            pint.set_application_registry(ureg)
+            # Publish only once fully defined.
+            _UNIT_REGISTRY = ureg
+        return _UNIT_REGISTRY
 
 
 @cache
@@ -80,16 +100,18 @@ def get_unit(value) -> Unit:
     if isinstance(value, Quantity):
         assert value.magnitude == 1.0
         value = value.units
-    return get_registry().Unit(value)
+    with _UNIT_LOCK:
+        return get_registry().Unit(value)
 
 
 @cache
 def _str_to_quant(qunat_str):
     """Get quantity from a string; cache output."""
-    if isinstance(qunat_str, Unit):
-        qunat_str = str(qunat_str)  # ensure unit is converted to quantity
-    ureg = get_registry()
-    return ureg.Quantity(qunat_str)
+    with _UNIT_LOCK:
+        if isinstance(qunat_str, Unit):
+            qunat_str = str(qunat_str)  # ensure unit is converted to quantity
+        ureg = get_registry()
+        return ureg.Quantity(qunat_str)
 
 
 def get_quantity(value: str_or_none) -> Quantity | None:
@@ -135,12 +157,13 @@ def get_factor_and_unit(
 @cache
 def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
     """Get multiplicative and additive conversion factors."""
-    add_mag = (0 * from_quant).to(0 * to_quant).magnitude
-    # need to convert from and to units to deltas for proper conversion.
-    from_delta = (1 * from_quant.units) - (from_quant.units * 0)
-    to_delta = (1 * to_quant.units) - (to_quant.units * 0)
-    mult_mag1 = from_delta.to(to_delta).magnitude
-    return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
+    with _UNIT_LOCK:
+        add_mag = (0 * from_quant).to(0 * to_quant).magnitude
+        # need to convert from and to units to deltas for proper conversion.
+        from_delta = (1 * from_quant.units) - (from_quant.units * 0)
+        to_delta = (1 * to_quant.units) - (to_quant.units * 0)
+        mult_mag1 = from_delta.to(to_delta).magnitude
+        return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
 
 
 def convert_units(
@@ -217,7 +240,8 @@ def _unit_to_str(unit: Unit) -> str:
     Unit equality/hashing is exact (e.g. m != cm) so, unlike Quantity,
     Unit is safe to use as a cache key.
     """
-    return str(unit)
+    with _UNIT_LOCK:
+        return str(unit)
 
 
 def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
@@ -255,7 +279,8 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
 def _validate_quantity_str(quant_str: str) -> None:
     """Raise a UnitError if the string doesn't specify a valid quantity."""
     try:
-        get_quantity(quant_str)
+        with _UNIT_LOCK:
+            get_quantity(quant_str)
     except UndefinedUnitError as e:
         msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
         raise UnitError(msg) from e

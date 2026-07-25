@@ -239,8 +239,8 @@ class Patch(NamespaceOwner):
         return len(self.coords.dims)
 
     @property
-    def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Return a dict of {coordinate: (shape, ...)}."""
+    def coord_shapes(self) -> Mapping[str, tuple[int, ...]]:
+        """Return an immutable mapping of {coordinate: (shape, ...)}."""
         return self.coords.coord_shapes
 
     @property

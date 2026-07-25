@@ -85,6 +85,13 @@ class TestBasicCoordManager:
         for key in set(expected):
             assert np.all(expected[key] == np.array(c_dict[key]))
 
+    def test_coord_shapes_immutable(self, coord_manager):
+        """coord_shapes is cached and shared, so it must be immutable."""
+        shapes = coord_manager.coord_shapes
+        assert set(shapes) == set(coord_manager.coord_map)
+        with pytest.raises(TypeError):
+            shapes["time"] = (1,)
+
     def test_membership(self, coord_manager):
         """Coord membership should work for coord names."""
         coords = list(coord_manager.coord_map)
