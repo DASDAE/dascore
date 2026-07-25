@@ -47,18 +47,22 @@ from dascore.utils.paths import coerce_to_upath, requires_local_directory
 T = TypeVar("T")
 
 
+# Copy-on-write is always on from pandas 3, which also deprecates the
+# option: reading it there warns on every access, so settle it by version
+# once and only consult the option on pandas 2.
+_COPY_ON_WRITE_ALWAYS = int(pd.__version__.split(".", maxsplit=1)[0]) >= 3
+
+
 def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     """
     Return a caller-owned view of an internally cached dataframe.
 
-    With copy-on-write (always on in pandas 3) a shallow copy already
-    detaches on the first write; without it the blocks must be copied.
-    Only the literal True enables isolation: the "warn" setting keeps the
-    old (sharing) semantics, so it still needs a deep copy.
+    Copy-on-write makes a shallow copy enough, since the frames detach on
+    the first write. Only the literal True enables it; pandas 2 also
+    accepts "warn", which keeps the old sharing semantics.
     """
-    if int(pd.__version__.split(".", maxsplit=1)[0]) >= 3:
-        return frame.copy(deep=False)
-    return frame.copy(deep=pd.options.mode.copy_on_write is not True)
+    copy_on_write = _COPY_ON_WRITE_ALWAYS or pd.options.mode.copy_on_write is True
+    return frame.copy(deep=not copy_on_write)
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
