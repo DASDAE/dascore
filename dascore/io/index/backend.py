@@ -25,7 +25,12 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.dialect import SQLiteDialect
-from dascore.io.index.ingest import SourceRecord, attr_column_name
+from dascore.io.index.ingest import (
+    SourceRecord,
+    attr_column_name,
+    dump_path_attrs,
+    hive_typed_attrs,
+)
 from dascore.io.index.query import (
     Query,
     _as_query_list,
@@ -279,6 +284,13 @@ class SQLIndexBackend(abc.ABC):
     def _ensure_attr_columns(
         self, records: list[SourceRecord]
     ) -> tuple[dict[tuple[str, str], str], set[tuple[str, str, str]]]:
+        """Lazily add typed attr columns for the records' patch attrs."""
+        attr_dicts = [p.attrs for record in records for p in record.patches]
+        return self._ensure_attr_columns_for(attr_dicts)
+
+    def _ensure_attr_columns_for(
+        self, attr_dicts
+    ) -> tuple[dict[tuple[str, str], str], set[tuple[str, str, str]]]:
         """
         Lazily add typed attr columns; return the (name, kind) -> column
         map and a set of (name, kind, units) values to skip.
@@ -306,11 +318,10 @@ class SQLIndexBackend(abc.ABC):
         }
         taken = set(mapping.values())
         observed: dict[tuple[str, str], set[str | None]] = {}
-        for record in records:
-            for patch in record.patches:
-                for name, typed in patch.attrs.items():
-                    key = (name, typed.kind)
-                    observed.setdefault(key, set()).add(typed.units)
+        for attrs in attr_dicts:
+            for name, typed in attrs.items():
+                key = (name, typed.kind)
+                observed.setdefault(key, set()).add(typed.units)
         needed: dict[tuple[str, str], str | None] = {}
         skip_units: set[tuple[str, str, str]] = set()
         for key, units_seen in observed.items():
@@ -462,6 +473,7 @@ class SQLIndexBackend(abc.ABC):
                         record.format_version,
                         record.mtime_ns,
                         record.size_bytes,
+                        dump_path_attrs(record.path_attrs),
                         now,
                         ordinal,
                     )
@@ -608,6 +620,92 @@ class SQLIndexBackend(abc.ABC):
         """Remove sources (identified by base_uri + path) and dependents."""
         with self._transaction():
             self._delete_by_paths(source_paths, base_uri=base_uri)
+
+    def move_sources(
+        self,
+        moves: dict[str, str],
+        new_path_attrs: dict[str, dict[str, str]] | None = None,
+        base_uri: str = "",
+    ) -> None:
+        """
+        Rewrite source paths in place (filesystem renames), atomically.
+
+        Updates each source's stored path and its hive path attrs without
+        touching patch/coord rows, so a directory rename never re-reads
+        file contents. ``moves`` maps old -> new source_path;
+        ``new_path_attrs`` maps old source_path -> the new path's hive
+        attrs. The caller (the directory syncer) guarantees the new hive
+        keys are a superset of the old ones — a removed key would need
+        the file's own attr value back, which only a rescan can supply.
+        """
+        path_attrs = new_path_attrs or {}
+        attrs_by_old = {
+            old: hive_typed_attrs(attrs) for old, attrs in path_attrs.items() if attrs
+        }
+        with self._transaction():
+            column_map, _ = self._ensure_attr_columns_for(attrs_by_old.values())
+            # attr name -> [(kind, column)] once; per-move dataframe
+            # filtering dominated large renames.
+            kinds_by_name: dict[str, list[tuple[str, str]]] = {}
+            for row in self._attr_meta().itertuples():
+                kinds_by_name.setdefault(row.attr_name, []).append(
+                    (row.value_kind, row.column_name)
+                )
+            now = time.time_ns()
+            ids: dict[str, int] = {}
+            for chunk, marks in self._iter_in_batches(list(moves)):
+                df = self._fetch_df(
+                    f"SELECT source_id, source_path FROM sources "
+                    f"WHERE source_path IN ({marks}) AND base_uri = ?",
+                    [*chunk, base_uri],
+                )
+                ids.update(zip(df["source_path"], (int(x) for x in df["source_id"])))
+            source_rows = [
+                (
+                    new,
+                    dump_path_attrs(path_attrs.get(old)),
+                    now,
+                    ids[old],
+                )
+                for old, new in moves.items()
+                if old in ids
+            ]
+            self._executemany(
+                "UPDATE sources SET source_path = ?, path_attrs = ?, "
+                "last_indexed_ns = ? WHERE source_id = ?",
+                source_rows,
+            )
+            # hive wins: set the str column and clear any other-kind columns
+            # of the same attr name, matching what a fresh ingest of the
+            # merged attrs would have produced. A directory rename gives
+            # every moved source the same assignments, so group by the
+            # assignment signature and update each group's patches at once.
+            groups: dict[tuple, list[int]] = {}
+            for old in moves:
+                attrs = attrs_by_old.get(old)
+                if not attrs or old not in ids:
+                    continue
+                sig = []
+                for name, typed in attrs.items():
+                    sig.append((column_map[(name, typed.kind)], typed.value))
+                    sig.extend(
+                        (column, None)
+                        for kind, column in kinds_by_name.get(name, ())
+                        if kind != typed.kind
+                    )
+                groups.setdefault(tuple(sorted(sig)), []).append(ids[old])
+            for sig, source_ids in groups.items():
+                assignments = ", ".join(
+                    f"{self.dialect.quote(col)} = ?" for col, _ in sig
+                )
+                values = [value for _, value in sig]
+                for chunk, marks in self._iter_in_batches(source_ids):
+                    self._execute(
+                        f"UPDATE attrs SET {assignments} WHERE patch_id IN "
+                        f"(SELECT patch_id FROM patches "
+                        f"WHERE source_id IN ({marks}))",
+                        (*values, *chunk),
+                    )
 
     # --- queries -----------------------------------------------------
 
@@ -791,11 +889,13 @@ class SQLIndexBackend(abc.ABC):
                 new_columns[name] = series
         if cols_to_drop:
             out = out.drop(columns=cols_to_drop)
-        # flat-contract names for source columns
+        # flat-contract names for source columns; path_attrs goes private
+        # so chunk merge-compat grouping (non-private columns) ignores it
         renames = {
             "source_path": "path",
             "source_format": "file_format",
             "format_version": "file_version",
+            "path_attrs": "_path_attrs",
         }
         out = out.rename(columns=renames)
         if "base_uri" in out:

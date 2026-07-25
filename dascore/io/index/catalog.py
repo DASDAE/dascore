@@ -17,6 +17,7 @@ Selection composes Query predicates without running SQL; realization
 from __future__ import annotations
 
 import abc
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -279,7 +280,14 @@ class FileResolver(PatchResolver):
             # one, so these rows read the whole source.
             trim = {}
         spool = self._read(path, row, trim, source_patch_id)
-        return _resolve_read_spool(spool, source_patch_id)
+        patch = _resolve_read_spool(spool, source_patch_id)
+        # Hive-style path attrs override what the file recorded (renaming
+        # a path is the user's way of correcting metadata), so loaded
+        # patches agree with the index contents.
+        raw_path_attrs = row.get("_path_attrs")
+        if isinstance(raw_path_attrs, str) and raw_path_attrs:
+            patch = patch.update_attrs(**json.loads(raw_path_attrs))
+        return patch
 
 
 class CompositeResolver(PatchResolver):

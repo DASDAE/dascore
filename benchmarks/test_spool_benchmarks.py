@@ -167,6 +167,36 @@ class TestManyFileDirectoryBenchmarks:
             assert isinstance(patch, dc.Patch)
 
 
+class TestHivePathAttrBenchmarks:
+    """Benchmarks for hive-style path attribute extraction and loading."""
+
+    @pytest.fixture(scope="class")
+    def hive_directory(self, tmp_path_factory):
+        """A hive-partitioned directory: 5 stations x 5 files."""
+        path = tmp_path_factory.mktemp("hive_benchmark")
+        patches = _make_contiguous_patches(25)
+        for i, patch in enumerate(patches):
+            sub = path / "network=XX" / f"station=S{i % 5}"
+            sub.mkdir(parents=True, exist_ok=True)
+            patch.io.write(sub / f"tag=raw__num={i:03d}.h5", "dasdae")
+        return path
+
+    @pytest.mark.benchmark
+    def test_index_hive_directory(self, hive_directory):
+        """Time indexing a hive tree (includes path-attr extraction)."""
+        for index_path in hive_directory.glob(".dascore*"):
+            index_path.unlink()
+        spool = dc.spool(hive_directory).update(progress=None)
+        assert len(spool.select(station="S0")) == 5
+
+    @pytest.mark.benchmark
+    def test_load_patches_with_path_attrs(self, hive_directory):
+        """Time loading patches that get path attrs stamped on."""
+        spool = dc.spool(hive_directory).update(progress=None)
+        for patch in spool:
+            assert patch.attrs.network == "XX"
+
+
 class TestMemorySpoolBenchmarks:
     """Benchmarks for in-memory spool creation and access."""
 

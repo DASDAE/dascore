@@ -11,7 +11,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 | Table | One row per | Purpose |
 |---|---|---|
 | `meta_data` | index | Identifies the file and its schema version |
-| `sources` | file or directory-format source | Tracks the source path, format, size, modification time, and presentation ordinal |
+| `sources` | file or directory-format source | Tracks the source path, format, size, modification time, hive-style path attrs (JSON), and presentation ordinal |
 | `patches` | patch within a source | Stores patch identity and common time/distance envelopes |
 | `attrs` | patch | Stores typed attribute values in dynamically added columns |
 | `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
@@ -27,6 +27,32 @@ The last two tables are deliberately separate. Many patches can share a distance
 The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse.
 
 The current schema version is validated before any mutation. An unrelated or incomplete database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it. A file that identifies itself as a DASCore spool index of a different schema version is rebuilt automatically by the directory indexer — the index is a disposable cache whose truth is the files.
+
+## Hive-style path attributes
+
+Stored source paths are parsed for `key=value` pairs (each directory segment, and `__`-separated pairs in any segment including the extension-stripped file name). The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
+
+Renames are detected during a directory update by exact `(mtime_ns, size_bytes)` stat identity (the rename-invariant manifest signature for directory-format units) between a disappeared and a brand-new path, each unique on its side. A detected move rewrites the source path and its path-derived attr values in SQL without re-reading file contents, so renaming a partition directory over a large archive is cheap. A rename that *removes* a hive key falls back to a rescan — the file's own value for that attr is only recoverable by reading it — and ambiguous stat matches also rescan rather than guess.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import dascore as dc
+
+root = Path(tempfile.mkdtemp())
+(root / "network=XX" / "station=A").mkdir(parents=True)
+dc.get_example_patch().io.write(root / "network=XX" / "station=A" / "tag=raw.h5", "DASDAE")
+
+spool = dc.spool(root).update()
+row = spool.get_contents().iloc[0]
+assert (row["network"], row["station"], row["tag"]) == ("XX", "A", "raw")
+assert spool[0].attrs.station == "A"
+
+# a directory rename is a pure metadata rewrite
+(root / "network=XX" / "station=A").rename(root / "network=XX" / "station=B")
+assert dc.spool(root).update().get_contents()["station"].iloc[0] == "B"
+```
 
 ## Ordering
 
