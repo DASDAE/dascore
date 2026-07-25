@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -11,7 +12,6 @@ import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, get_window_axis_step
 from dascore.utils.pd import rolling_df
 
@@ -37,11 +37,14 @@ Examples
 """
 
 
-class _PatchRollerInfo(DascoreBaseModel):
+@dataclass(frozen=True, slots=True)
+class _PatchRollerInfo:
     """
     A dataclass for storing info on rolling operation.
 
-    Should be subclassed to implement rolling methods.
+    Should be subclassed to implement rolling methods. This is an ephemeral
+    internal object created on every rolling call, so it is a plain dataclass
+    rather than a validated model.
     """
 
     patch: Any  # cant set to patch due to circular import
@@ -59,9 +62,10 @@ class _PatchRollerInfo(DascoreBaseModel):
         Accounts for centered or non-centered coordinates. If the window
         length is even, the first half value is used.
         """
-        coord = self.patch.get_coord(self.dim)
-        if self.step > 1:
-            coord = coord[:: self.step]
+        # Without a step the dimension is unchanged; reuse the coord manager.
+        if self.step == 1:
+            return self.patch.coords
+        coord = self.patch.get_coord(self.dim)[:: self.step]
         return self.patch.coords.update(**{self.dim: coord})
 
     def _get_attrs_with_apply_history(self, func_or_str):
@@ -75,6 +79,16 @@ class _PatchRollerInfo(DascoreBaseModel):
         new_history.append(hist_str)
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
+
+    def _new_patch(self, data, attrs):
+        """
+        Create the output patch from rolled data.
+
+        The coordinates and attrs are both built here, so the Patch is
+        created directly rather than through `Patch.update`, which would
+        reconcile the attrs against the coords a second time.
+        """
+        return self.patch.__class__(data=data, coords=self.get_coords(), attrs=attrs)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
@@ -91,17 +105,26 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         return int(out)
 
     def _pad_roll_array(self, data):
-        """Pad."""
+        """
+        Pad the reduced array with NaNs and align it to the output coordinate.
+
+        The NaNs go at the start of the axis, except when centering, which
+        moves `num_nans // 2` of them to the end. This is done with a single
+        allocation rather than a pad followed by a roll.
+        """
         num_nans = 1 + (self.window - 2) // self.step
-        pad_width = [(0, 0)] * len(data.shape)
-        pad_width[self.axis] = (num_nans, 0)
-        padded = np.pad(data, pad_width, constant_values=np.nan)
+        if not num_nans:  # window of one sample; nothing to pad.
+            return data
+        shape = list(data.shape)
+        shape[self.axis] += num_nans
+        out = np.full(shape, np.nan, dtype=data.dtype)
+        start = num_nans - num_nans // 2 if self.center else num_nans
+        slicer = [slice(None, None)] * len(shape)
+        slicer[self.axis] = slice(start, start + data.shape[self.axis])
+        out[tuple(slicer)] = data
         if self.step == 1:
-            assert padded.shape == self.patch.data.shape
-        if self.center:
-            # roll array along axis to center
-            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
-        return padded
+            assert out.shape == self.patch.data.shape
+        return out
 
     @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
@@ -127,11 +150,10 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         step_slice[self.axis] = slice(start, None, self.step)
         # apply function, then pad with NaNs and roll
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs).astype(np.float64)
-        out = self._pad_roll_array(raw)
-        new_coords = self.get_coords()
+        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs)
+        out = self._pad_roll_array(np.asarray(raw, dtype=np.float64))
         attrs = self._get_attrs_with_apply_history(function)
-        return self.patch.update(data=out, coords=new_coords, attrs=attrs)
+        return self._new_patch(out, attrs)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -181,14 +203,13 @@ class _PandasPatchRoller(_PatchRollerInfo):
         )
         return roll
 
-    def _repack_patch(self, df, attrs=None):
+    def _repack_patch(self, df, attrs):
         """Repack patch into dataframe."""
         data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
-        coords = self.get_coords()
-        return self.patch.update(data=data, coords=coords, attrs=attrs)
+        return self._new_patch(data, attrs)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
