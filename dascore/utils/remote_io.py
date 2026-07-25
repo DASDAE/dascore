@@ -103,14 +103,20 @@ def _get_download_lock(key: tuple[str, Path]) -> RLock:
         return lock
 
 
-def _get_remote_cache_dir(remote_id: str) -> Path:  # pragma: no cover
-    """Return the cache directory for a normalized remote identifier."""
-    return get_remote_cache_path() / sha256(remote_id.encode()).hexdigest()
-
-
 def _normalize_cache_root(cache_root: Path | str) -> Path:
     """Return one normalized cache-root path."""
     return Path(cache_root).expanduser()
+
+
+def _remote_cache_local_path(remote_id: str, cache_root: Path, resource: UPath) -> Path:
+    """
+    Return the local path one remote resource materializes to.
+
+    The materializer and the cached-path probe must agree on this, or one
+    would download a file the other cannot find.
+    """
+    digest = sha256(remote_id.encode()).hexdigest()
+    return cache_root / digest / _safe_remote_name(resource)
 
 
 def _redact_remote_resource(resource: UPath | str) -> str:
@@ -207,11 +213,7 @@ def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
         resource = _REMOTE_RESOURCE_CACHE.get(remote_id)
     if resource is None:
         resource = coerce_to_upath(remote_id.split("#", maxsplit=1)[0])
-    local_path = (
-        cache_root
-        / sha256(remote_id.encode()).hexdigest()
-        / _safe_remote_name(resource)
-    )
+    local_path = _remote_cache_local_path(remote_id, cache_root, resource)
     # Record the depth so a cache clear attempted from inside a download
     # (eg from a warning handler) raises rather than deleting live state.
     depth = getattr(_REMOTE_CACHE_LOCAL, "materializing", 0)
@@ -277,9 +279,7 @@ def _get_cached_local_file(resource) -> Path | None:
     remote = coerce_to_upath(resource)
     cache_root = _normalize_cache_root(get_remote_cache_path())
     remote_id = normalize_remote_id(remote)
-    local_path = (
-        cache_root / sha256(remote_id.encode()).hexdigest() / _safe_remote_name(remote)
-    )
+    local_path = _remote_cache_local_path(remote_id, cache_root, remote)
     return local_path if local_path.exists() else None
 
 

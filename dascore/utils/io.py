@@ -69,7 +69,7 @@ def _resolve_resource(resource, required_type):
     return resource
 
 
-def _annotate_handle_path(handle, resource):  # pragma: no cover
+def _annotate_handle_path(handle, resource):
     """Attach lightweight source-path metadata to a remote handle when absent."""
     path_str = str(resource)
     # This is intentionally a small compatibility hack for readers that still
