@@ -190,6 +190,54 @@ class TestProcessingBenchmarks:
         patch.slope_mute(slopes=(1000, 3000))
 
 
+class TestPatchConstructionBenchmarks:
+    """Benchmarks for the patch construction paths."""
+
+    @pytest.fixture(scope="module")
+    def new_data(self, example_patch):
+        """Data for constructing new patches; built outside the timed call."""
+        return np.asarray(example_patch.data) * 2
+
+    @pytest.fixture(scope="module")
+    def decimated(self, example_patch):
+        """A coord manager with one dimension shortened."""
+        coord = example_patch.get_coord("time")[::2]
+        return example_patch.coords.update(time=coord)
+
+    @pytest.mark.benchmark
+    def test_new_data_only(self, example_patch, new_data):
+        """Time new when only data changes; coords and attrs are reused."""
+        example_patch.new(data=new_data)
+
+    @pytest.mark.benchmark
+    def test_new_with_coords(self, example_patch, decimated):
+        """Time new when the coords change, so attrs must be rebuilt."""
+        example_patch.new(data=example_patch.data[:, ::2], coords=decimated)
+
+    @pytest.mark.benchmark
+    def test_new_with_coords_and_attrs(self, example_patch, new_data):
+        """Time new when both coords and attrs are passed."""
+        patch = example_patch
+        patch.new(data=new_data, coords=patch.coords, attrs=patch.attrs)
+
+    @pytest.mark.benchmark
+    def test_from_parts(self, example_patch, new_data):
+        """Time the fast constructor for already conforming parts."""
+        patch = example_patch
+        dc.Patch.from_parts(new_data, patch.coords, patch.attrs)
+
+    @pytest.mark.benchmark
+    def test_patch_init(self, example_patch, new_data):
+        """
+        Time the normal constructor.
+
+        This is a control; it should not move, since the strict path is
+        deliberately left alone.
+        """
+        patch = example_patch
+        dc.Patch(data=new_data, coords=patch.coords, dims=patch.dims, attrs=patch.attrs)
+
+
 class TestTransformBenchmarks:
     """Benchmarks for patch transform operations."""
 

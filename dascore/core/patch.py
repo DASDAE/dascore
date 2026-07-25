@@ -16,6 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
+from dascore.exceptions import PatchCoordinateError
 from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_ufunc
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -23,6 +24,16 @@ from dascore.utils.models import ArrayLike
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
+
+
+def _check_dims_match(coords: CoordManager, attrs: PatchAttrs) -> None:
+    """Raise if the coord manager and attrs disagree about dimensions."""
+    if coords.dims != attrs.dim_tuple:
+        msg = (
+            f"Dimension mismatch between coords ({coords.dims}) and "
+            f"attrs ({attrs.dim_tuple})."
+        )
+        raise PatchCoordinateError(msg)
 
 
 class Patch(NamespaceOwner):
@@ -60,6 +71,11 @@ class Patch(NamespaceOwner):
     - If coords and attrs are provided, attrs will have priority. This means
     if there is a conflict between information contained in both, the coords
     will be recalculated.
+
+    - Because the constructor always reconciles the two, every Patch has attrs
+    whose coordinate summaries match its coords. Code which already holds a
+    conforming pair can skip that work with
+    [`Patch.from_parts`](`dascore.core.patch.Patch.from_parts`).
     """
 
     data: ArrayLike
@@ -98,10 +114,76 @@ class Patch(NamespaceOwner):
         else:
             # ensure attrs conforms to coords
             attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
-        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
+        _check_dims_match(coords, attrs)
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
+
+    @classmethod
+    def from_parts(
+        cls,
+        data: ArrayLike,
+        coords: CoordManager,
+        attrs: PatchAttrs,
+    ) -> Self:
+        """
+        Create a patch from parts which already conform to each other.
+
+        This is a fast alternative to the normal constructor for code which
+        has already built a coordinate manager and matching attributes. It
+        skips recomputing the coordinate summaries stored on attrs, which
+        the constructor does unconditionally.
+
+        Parameters
+        ----------
+        data
+            The array data. Its shape must match coords.
+        coords
+            A CoordManager describing the data's dimensions.
+        attrs
+            A PatchAttrs whose coordinate summaries were derived from coords.
+
+        Raises
+        ------
+        PatchCoordinateError
+            If coords and attrs disagree about dimension names.
+        CoordDataError
+            If the data shape does not match coords.
+
+        Notes
+        -----
+        The data shape and dimension names are validated, but the coordinate
+        summaries on attrs are trusted. Passing attrs whose summaries came
+        from a different coordinate manager creates a Patch whose attrs
+        disagree with its coords.
+
+        Every Patch conforms by construction, so `patch.attrs` is always safe
+        to pass alongside `patch.coords`. If the coords have changed, rebuild
+        the attrs first with `patch.attrs.update(coords=new_coords)`. Note
+        that attrs built with an empty `coords` (a common way to let the
+        constructor repopulate them) do *not* conform, and the dimension
+        check will not catch it, since clearing coords leaves dims in place.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Data of the same shape reuses the existing coords and attrs.
+        >>> out = dc.Patch.from_parts(patch.data * 2, patch.coords, patch.attrs)
+        >>>
+        >>> # If the coords change, the attrs must be rebuilt from them.
+        >>> coords = patch.coords.update(time=patch.get_coord("time")[::2])
+        >>> out = dc.Patch.from_parts(
+        ...     patch.data[..., ::2], coords, patch.attrs.update(coords=coords)
+        ... )
+        """
+        _check_dims_match(coords, attrs)
+        new = cls.__new__(cls)
+        new._coords = coords
+        new._attrs = attrs
+        new._data = array(coords.validate_data(data))
+        return new
 
     _namespace_entry_point_group = "dascore.patch_namespace"
 

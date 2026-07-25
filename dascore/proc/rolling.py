@@ -68,27 +68,31 @@ class _PatchRollerInfo:
         coord = self.patch.get_coord(self.dim)[:: self.step]
         return self.patch.coords.update(**{self.dim: coord})
 
-    def _get_attrs_with_apply_history(self, func_or_str):
-        """Get new attrs that has history from apply attached."""
-        new_history = list(self.patch.attrs.history)
+    def _get_attrs(self, func_or_str, coords):
+        """Get attrs, with the apply history attached, conforming to coords."""
         if callable(func_or_str):
             func_name = getattr(func_or_str, "__name__", "")
             hist_str = f"{self.roll_hist}.apply({func_name})"
         else:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
-        new_history.append(hist_str)
-        attrs = self.patch.attrs.update(history=new_history, coords={})
-        return attrs
+        # Must be a tuple; model_copy below does no type coercion.
+        history = (*self.patch.attrs.history, hist_str)
+        if coords is self.patch.coords:
+            # The coords didn't change, so their summaries still hold.
+            return self.patch.attrs.model_copy(update={"history": history})
+        return self.patch.attrs.update(history=history, coords=coords)
 
-    def _new_patch(self, data, attrs):
+    def _new_patch(self, data, func_or_str):
         """
         Create the output patch from rolled data.
 
-        The coordinates and attrs are both built here, so the Patch is
-        created directly rather than through `Patch.update`, which would
-        reconcile the attrs against the coords a second time.
+        The coords and matching attrs are both built here, so the patch is
+        made with `Patch.from_parts` rather than the normal constructor,
+        which would reconcile the two a second time.
         """
-        return self.patch.__class__(data=data, coords=self.get_coords(), attrs=attrs)
+        coords = self.get_coords()
+        attrs = self._get_attrs(func_or_str, coords)
+        return self.patch.from_parts(data, coords, attrs)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
@@ -152,8 +156,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         trimmed_slide_view = slide_view[tuple(step_slice)]
         raw = function(trimmed_slide_view, *args, axis=-1, **kwargs)
         out = self._pad_roll_array(np.asarray(raw, dtype=np.float64))
-        attrs = self._get_attrs_with_apply_history(function)
-        return self._new_patch(out, attrs)
+        return self._new_patch(out, function)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -203,20 +206,19 @@ class _PandasPatchRoller(_PatchRollerInfo):
         )
         return roll
 
-    def _repack_patch(self, df, attrs):
+    def _repack_patch(self, df, func_or_str):
         """Repack patch into dataframe."""
         data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
-        return self._new_patch(data, attrs)
+        return self._new_patch(data, func_or_str)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
         rolling = self._get_rolling()
         df = getattr(rolling, name)(*args, **kwargs)
-        attrs = self._get_attrs_with_apply_history(name)
-        return self._repack_patch(df, attrs=attrs)
+        return self._repack_patch(df, name)
 
     @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
@@ -224,8 +226,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         {apply_description}
         """
         df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
-        attrs = self._get_attrs_with_apply_history(function)
-        return self._repack_patch(df, attrs=attrs)
+        return self._repack_patch(df, function)
 
     def mean(self):
         """Apply mean."""

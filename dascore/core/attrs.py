@@ -254,6 +254,22 @@ class PatchAttrs(DascoreBaseModel):
             out["coords"] = {}
         return self.__class__(**out)
 
+    def _conform_to(self, coords: dc.CoordManager) -> Self:
+        """
+        Return attrs whose coord summaries and dims come from coords.
+
+        Equivalent to `self.update(coords=coords)` but skips a full model
+        dump and re-validation. This uses model_copy, which does no type
+        coercion, so the values assigned here must already be in their
+        final form.
+        """
+        return self.model_copy(
+            update={
+                "coords": FrozenDict(coords.to_summary_dict()),
+                "dims": ",".join(coords.dims),
+            }
+        )
+
     def drop(self, *args):
         """Drop specific keys if they exist."""
         contents = dict(self)

@@ -10,7 +10,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 
 import dascore as dc
-from dascore.compat import array
+from dascore.compat import DataArray, array
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -239,6 +239,16 @@ def update(
     -----
     - If both coords and attrs are defined, attrs will have priority.
     """
+    # A Patch or DataArray passed as data brings its own coords and attrs,
+    # which the constructor unpacks, so it can't use the fast paths here.
+    data_has_meta = isinstance(data, DataArray | dc.Patch)
+    # When nothing that can affect coords or attrs changed, the reconciling
+    # done when self was created still holds and needn't be repeated.
+    if not data_has_meta and attrs is None and dims is None:
+        # Identity, not equality; CoordManager equality compares arrays.
+        if coords is None or coords is self.coords:
+            new_data = self.data if data is None else data
+            return self.from_parts(new_data, self.coords, self.attrs)
     data = data if data is not None else self.data
     coords = coords if coords is not None else self.coords
     if dims is None:
@@ -247,9 +257,11 @@ def update(
     if attrs is not None:
         coords, attrs = coords.update_from_attrs(attrs)
     else:
-        _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
-        attrs = _attrs.update(coords=coords)
-    return self.__class__(data=data, coords=coords, attrs=attrs)
+        attrs = dc.PatchAttrs.from_dict(self.attrs)._conform_to(coords)
+    if data_has_meta:  # let the constructor unpack the patch/DataArray.
+        return self.__class__(data=data, coords=coords, attrs=attrs)
+    # coords and attrs were just reconciled; the constructor would redo it.
+    return self.from_parts(data, coords, attrs)
 
 
 @patch_function()
