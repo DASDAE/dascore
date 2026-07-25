@@ -91,7 +91,6 @@ It is best not to delete files once added to a directory managed by DASCore.
 Directory spools parse `key=value` pairs out of the paths inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`network=XX/`), and any segment — including the file name, whose extension is ignored — can hold several separated by `__` (the same separator DASCore's default patch names use). The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory (or file) is how you attach or correct metadata without rewriting data.
 
 ```{python}
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -120,7 +119,6 @@ root = data_path.parent.parent
 (root / "experiment=demo").rename(root / "experiment=final")
 spool = spool.update()
 assert spool.get_contents()["experiment"].iloc[0] == "final"
-shutil.rmtree(root)
 ```
 
 A few details worth knowing:

@@ -295,8 +295,15 @@ class TestEdgeCases:
         spool = Spool.from_directory(hive_dir).update(progress=None)
         spool.indexer.close()
         index_path = hive_dir / ".dascore_index.sqlite3"
-        with sqlite3.connect(index_path) as con:
+        # close explicitly: sqlite3's context manager only wraps the
+        # transaction, and a lingering handle blocks the rebuild's
+        # unlink on Windows.
+        con = sqlite3.connect(index_path)
+        try:
             con.execute("UPDATE meta_data SET index_version = 3")
+            con.commit()
+        finally:
+            con.close()
         reopened = Spool.from_directory(hive_dir).update(progress=None)
         try:
             assert reopened.get_contents()["station"].iloc[0] == "A"
