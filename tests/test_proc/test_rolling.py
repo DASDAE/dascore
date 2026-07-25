@@ -299,12 +299,32 @@ class TestRollingMetadata:
             assert out.get_coord(name) == patch.get_coord(name)
             assert np.array_equal(out.get_array(name), patch.get_array(name))
 
+    # step=1 reuses the patch's coords; step>1 rebuilds them. The attrs are
+    # built differently in each case, so both need covering.
     @pytest.mark.parametrize("engine", ("numpy", "pandas"))
-    def test_attrs_conform_to_coords(self, random_patch, engine):
+    @pytest.mark.parametrize("step", (1, 3))
+    def test_attrs_conform_to_coords(self, random_patch, engine, step):
         """The attrs coord summaries should match the output coords."""
-        out = random_patch.rolling(time=10, samples=True, step=3, engine=engine).mean()
+        out = random_patch.rolling(
+            time=10, samples=True, step=step, engine=engine
+        ).mean()
         assert out.attrs.coords == out.coords.to_summary_dict()
         assert out.attrs.dim_tuple == out.dims
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    @pytest.mark.parametrize("step", (1, 3))
+    def test_history_is_tuple(self, random_patch, engine, step):
+        """
+        History must stay a tuple.
+
+        The step==1 path uses model_copy, which does no type coercion, so a
+        list would silently produce attrs unequal to the validated form.
+        """
+        out = random_patch.rolling(
+            time=10, samples=True, step=step, engine=engine
+        ).mean()
+        assert isinstance(out.attrs.history, tuple)
+        assert out.attrs == out.attrs.update(history=out.attrs.history)
 
 
 class TestNumpyVsPandasRolling:

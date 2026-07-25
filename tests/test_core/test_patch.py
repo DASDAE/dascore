@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import operator
 import weakref
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,12 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import (
+    CoordDataError,
+    CoordError,
+    ParameterError,
+    PatchCoordinateError,
+)
 from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
@@ -91,9 +97,8 @@ class TestInit:
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
-    @pytest.fixture(scope="class")
     def test_conflicting_attrs_coords_raises(self):
-        """Patch for testing conflicting coordinates/attributes."""
+        """Conflicting coordinate info in attrs and coords should raise."""
         array = random_state.random((10, 10))
         # create attrs, these should all get overwritten by coords.
         attrs = dict(
@@ -112,7 +117,7 @@ class TestInit:
         # assemble and output.
         dims = ("distance", "time")
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
-        msg = "Coords and attrs are incompatible."
+        msg = "At most one parameter can be specified in update_limits"
         with pytest.raises(ValueError, match=msg):
             dc.Patch(**out)
 
@@ -345,6 +350,182 @@ class TestNew:
         dims = ("tom", "jerry")
         out = random_patch.new(dims=dims)
         assert out.dims == dims
+
+    def test_new_data_only_validates_shape(self, random_patch):
+        """New should still reject data which doesn't match the coords."""
+        data = random_patch.data[:-1]
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=data)
+
+    def test_new_coords_validates_shape(self, random_patch):
+        """New should reject data which doesn't match passed coords."""
+        coords = random_patch.coords
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=random_patch.data[:, :-1], coords=coords)
+
+    def test_new_same_coords_matches_default(self, random_patch):
+        """Passing the patch's own coords should match passing nothing."""
+        data = random_patch.data * 2
+        out1 = random_patch.new(data=data)
+        out2 = random_patch.new(data=data, coords=random_patch.coords)
+        assert out1.equals(out2, only_required_attrs=False)
+
+    def test_new_no_args_equals_input(self, random_patch):
+        """New with no arguments should reproduce the patch."""
+        assert random_patch.new().equals(random_patch, only_required_attrs=False)
+
+    def test_new_from_patch_takes_over_metadata(self, random_patch):
+        """Passing a patch as data should adopt its coords and attrs."""
+        other = random_patch.decimate(time=2)
+        out = random_patch.new(data=other)
+        assert out.coords == other.coords
+        assert out.shape == other.shape
+
+
+class TestFromParts:
+    """Tests for the `Patch.from_parts` fast constructor."""
+
+    def test_round_trip(self, patch):
+        """Rebuilding a patch from its own parts should reproduce it."""
+        out = dc.Patch.from_parts(patch.data, patch.coords, patch.attrs)
+        assert out.equals(patch, only_required_attrs=False)
+
+    def test_matches_normal_constructor(self, patch):
+        """from_parts should match what the constructor produces."""
+        data = patch.data * 2
+        fast = dc.Patch.from_parts(data, patch.coords, patch.attrs)
+        slow = dc.Patch(
+            data=data, coords=patch.coords, dims=patch.dims, attrs=patch.attrs
+        )
+        assert fast.equals(slow, only_required_attrs=False)
+        assert fast.coords == slow.coords
+        assert fast.attrs == slow.attrs
+
+    def test_data_not_writeable(self, random_patch):
+        """Data should be read-only, just as with the normal constructor."""
+        out = dc.Patch.from_parts(
+            np.array(random_patch.data), random_patch.coords, random_patch.attrs
+        )
+        assert not out.data.flags.writeable
+
+    def test_changed_coords_need_rebuilt_attrs(self, random_patch):
+        """The documented recipe for changed coords should conform."""
+        patch = random_patch
+        coords = patch.coords.update(time=patch.get_coord("time")[::2])
+        attrs = patch.attrs.update(coords=coords)
+        out = dc.Patch.from_parts(patch.data[:, ::2], coords, attrs)
+        assert dict(out.attrs.coords) == out.coords.to_summary_dict()
+
+    def test_bad_shape_raises(self, random_patch):
+        """Data which doesn't match the coords should raise."""
+        with pytest.raises(CoordDataError):
+            dc.Patch.from_parts(
+                random_patch.data[:-1], random_patch.coords, random_patch.attrs
+            )
+
+    def test_dim_mismatch_raises(self, random_patch):
+        """Attrs which disagree with coords about dims should raise."""
+        attrs = random_patch.attrs.update(dims="jazz,hands")
+        with pytest.raises(PatchCoordinateError, match="Dimension mismatch"):
+            dc.Patch.from_parts(random_patch.data, random_patch.coords, attrs)
+
+    def test_subclass_preserved(self, random_patch):
+        """from_parts should honor the class it is called on."""
+
+        class SubPatch(dc.Patch):
+            """A patch subclass."""
+
+        out = SubPatch.from_parts(
+            random_patch.data, random_patch.coords, random_patch.attrs
+        )
+        assert isinstance(out, SubPatch)
+
+
+class TestAttrsConformTo:
+    """Tests for the cheap `PatchAttrs._conform_to` rebuild."""
+
+    @pytest.fixture(scope="class")
+    def coord_managers(self, random_patch_with_lat_lon):
+        """Coord managers covering the interesting kinds of change."""
+        patch = random_patch_with_lat_lon
+        coords = patch.coords
+        return {
+            "same": coords,
+            "decimated": coords.update(time=patch.get_coord("time")[::2]),
+            "dropped": coords.drop_coords("latitude")[0],
+            "transposed": coords.transpose(),
+        }
+
+    def test_matches_update(self, random_patch_with_lat_lon, coord_managers):
+        """_conform_to should match the slower attrs.update(coords=...)."""
+        attrs = random_patch_with_lat_lon.attrs
+        for name, cm in coord_managers.items():
+            fast, slow = attrs._conform_to(cm), attrs.update(coords=cm)
+            assert fast == slow, f"mismatch for {name}"
+            assert fast.model_dump() == slow.model_dump(), f"dump differs for {name}"
+
+    def test_result_conforms(self, random_patch_with_lat_lon, coord_managers):
+        """The rebuilt attrs should agree with the coords they came from."""
+        attrs = random_patch_with_lat_lon.attrs
+        for name, cm in coord_managers.items():
+            out = attrs._conform_to(cm)
+            assert dict(out.coords) == cm.to_summary_dict(), name
+            assert out.dim_tuple == cm.dims, name
+
+    def test_model_copy_does_not_coerce(self, random_patch):
+        """
+        Document why _conform_to must pass final types.
+
+        model_copy skips validation, so a list where a tuple is expected
+        produces an object which is not equal to the validated one.
+        """
+        attrs = random_patch.attrs
+        history = ["a", "b"]
+        coerced = attrs.model_copy(update={"history": tuple(history)})
+        uncoerced = attrs.model_copy(update={"history": history})
+        assert coerced == attrs.update(history=history)
+        assert uncoerced != attrs.update(history=history)
+
+
+class TestAttrsCoordsInvariant:
+    """
+    Every Patch should have attrs whose coord summaries match its coords.
+
+    This is what makes `Patch.from_parts` safe; the constructor establishes
+    it unconditionally. If this breaks, the fast paths built on it are wrong.
+    """
+
+    ops: ClassVar = {
+        "abs": lambda p: p.abs(),
+        "add": lambda p: p + 1,
+        # Differing history makes _merge_models drop the coord summaries,
+        # so this is the binary-op case most likely to break the invariant.
+        "add_patch": lambda p: p + p.update_attrs(history=["boo"]),
+        "select": lambda p: p.select(time=(1, 20), samples=True),
+        "decimate": lambda p: p.decimate(time=2),
+        "transpose": lambda p: p.transpose(),
+        "squeeze": lambda p: p.select(distance=0, samples=True).squeeze(),
+        "pad": lambda p: p.pad(time=2),
+        "dropna": lambda p: p.dropna("time"),
+        "sobel": lambda p: p.sobel_filter("time"),
+        "differentiate": lambda p: p.differentiate("time"),
+        "integrate": lambda p: p.integrate("time"),
+        "aggregate": lambda p: p.mean("time"),
+        "aggregate_squeeze": lambda p: p.mean("time", dim_reduce="squeeze"),
+        "rolling": lambda p: p.rolling(time=5, samples=True).mean(),
+        "rolling_step": lambda p: p.rolling(time=5, samples=True, step=3).mean(),
+        "dft": lambda p: p.dft("time"),
+        "idft": lambda p: p.dft("time").idft(),
+        "set_units": lambda p: p.set_units("strain", time="s"),
+        "update_attrs": lambda p: p.update_attrs(tag="bob"),
+    }
+
+    @pytest.mark.parametrize("name", list(ops))
+    def test_invariant_holds(self, random_patch_with_lat_lon, name):
+        """Output attrs should always agree with output coords."""
+        out = self.ops[name](random_patch_with_lat_lon)
+        assert dict(out.attrs.coords) == out.coords.to_summary_dict()
+        assert out.attrs.dim_tuple == out.coords.dims
 
 
 class TestDisplay:

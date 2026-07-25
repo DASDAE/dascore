@@ -118,7 +118,8 @@ def velocity_to_strain_rate(
     new_attrs = patch.attrs.update(
         data_type="strain_rate", gauge_length=step * step_multiple
     )
-    return patch.update(attrs=new_attrs)
+    # Coords are unchanged, so attrs still conform to them.
+    return patch.from_parts(patch.data, patch.coords, new_attrs)
 
 
 @patch_function(
@@ -273,4 +274,5 @@ def radians_to_strain(
     # Build output patch
     new_attrs = patch.attrs.update(data_units=new_units)
     new_data = patch.data * const * d_factor
-    return patch.update(data=new_data, attrs=new_attrs)
+    # Coords are unchanged, so attrs still conform to them.
+    return patch.from_parts(new_data, patch.coords, new_attrs)

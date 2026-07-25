@@ -145,4 +145,5 @@ def differentiate(
     # update units
     data_units = _get_data_units_from_dims(patch, dims, truediv)
     attrs = patch.attrs.update(data_units=data_units)
-    return patch.new(data=new_data, attrs=attrs)
+    # Coords are unchanged, so attrs still conform to them.
+    return patch.from_parts(new_data, patch.coords, attrs)
