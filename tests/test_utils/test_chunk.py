@@ -11,7 +11,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ChunkError
 from dascore.utils.chunk import get_intervals
-from dascore.utils.chunk_plan import build_chunk_plan
+from dascore.utils.chunk_plan import _build_members, build_chunk_plan
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")
@@ -345,3 +345,30 @@ class TestPlanMembers:
         )
         assert len(plan.outputs) == len(df)
         assert not plan.members["_modified"].any()
+
+
+class TestBuildMembers:
+    """Direct tests for binding outputs to source slices."""
+
+    def test_source_disjoint_from_output_is_skipped(self):
+        """A source which ends before its output starts contributes no row.
+
+        Partitioning splits on gaps, so the search for candidate sources
+        does not offer one in practice; this pins the guard which keeps a
+        boundary off-by-one from emitting an inverted interval.
+        """
+        sub = pd.DataFrame(
+            {
+                "time_min": [0.0, 5.0],
+                "time_max": [1.0, 6.0],
+                "time_step": [1.0, 1.0],
+                "_patch_id": [1, 2],
+            }
+        )
+        outputs = pd.DataFrame({"output_id": [0], "time_min": [3.0], "time_max": [6.0]})
+
+        members = _build_members(sub, outputs, "time")
+
+        # the 0-1 source cannot serve a 3-6 output; only the 5-6 one can
+        assert list(members["_patch_id"]) == [2]
+        assert (members["time_min"] <= members["time_max"]).all()
