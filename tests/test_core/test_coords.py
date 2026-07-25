@@ -2104,6 +2104,13 @@ class TestDimensionalityErrors:
         with pytest.raises(CoordError, match="1D coords"):
             coord_2d.select(np.array([0, 1]), samples=True)
 
+    def test_select_sample_array_0d_raises(self):
+        """A rank-0 coord must also be rejected, not just >1D."""
+        coord_0d = CoordPartial(shape=())
+        assert coord_0d.ndim == 0
+        with pytest.raises(CoordError, match="1D coords"):
+            coord_0d.select(np.array([0, 1]), samples=True)
+
     def test_get_sample_count_2d_raises(self, coord_2d):
         """get_sample_count requires a 1D coord."""
         with pytest.raises(CoordError, match="1D coords"):

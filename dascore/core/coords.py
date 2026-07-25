@@ -347,7 +347,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
-        if self.ndim > 1:
+        if self.ndim != 1:
             msg = "Select only works on 1D coords."
             raise CoordError(msg)
         inds = np.arange(len(self))
