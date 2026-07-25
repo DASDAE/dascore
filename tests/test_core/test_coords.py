@@ -2178,6 +2178,14 @@ class TestChangeLength:
         new = coord.change_length(current - 1)
         assert len(new) == current - 1
 
+    def test_change_length_tiny_step(self):
+        """Length should be exact even when step is small enough to lose precision."""
+        # Deriving the new stop from float arithmetic used to round back to
+        # the original length (and trip an assert) for tiny steps.
+        coord = get_coord(start=0.0, stop=1e-6, step=1e-9)
+        for length in (len(coord) - 1, len(coord) + 5):
+            assert len(coord.change_length(length)) == length
+
     def test_non_coord_change_length(self, basic_non_coord):
         """Ensure non coord can change length."""
         out = basic_non_coord.change_length(2 * len(basic_non_coord))
