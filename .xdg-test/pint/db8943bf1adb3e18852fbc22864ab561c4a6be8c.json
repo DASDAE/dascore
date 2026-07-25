@@ -1,0 +1,1 @@
+{"source": "/home/derrick/Gits/dascore/worktrees/pyodide-pins/.venv-pyodide/lib/python3.14/site-packages/pint/default_en.txt", "converter_id": "parse_file", "system": "Emscripten", "python_implementation": "CPython", "python_version": "3.14.2", "pint_version": "0.25.3", "non_int_type": "float"}

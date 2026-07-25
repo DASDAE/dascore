@@ -222,9 +222,13 @@ def get_local_handle(resource, opener):
 def is_no_range_http_error(exc: Exception) -> bool:
     """Return True when an exception indicates no-range HTTP random access."""
     message = str(exc).lower()
-    return isinstance(exc, ValueError) and all(
-        pattern in message for pattern in _NO_RANGE_HTTP_PATTERNS
-    )
+    if not isinstance(exc, ValueError):
+        return False
+    # Servers with no reported size stream instead of ranging; seeking such
+    # a streaming file needs the same local-file fallback as no-range access.
+    if "cannot seek streaming http file" in message:
+        return True
+    return all(pattern in message for pattern in _NO_RANGE_HTTP_PATTERNS)
 
 
 class _FallbackFileObj:

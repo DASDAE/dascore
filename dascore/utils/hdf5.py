@@ -203,10 +203,16 @@ class H5Reader:
             # alternates between the file header and footer, and fsspec's
             # default single-window cache refetches a full block (or the whole
             # file on range-less servers) on every jump.
-            cache_type = "blockcache" if protocol in ("http", "https") else "readahead"
+            if protocol in ("http", "https"):
+                # Bound retained memory: 8 blocks of the configured size.
+                return {
+                    "block_size": get_config().remote_hdf5_block_size,
+                    "cache_type": "blockcache",
+                    "cache_options": {"maxblocks": 8},
+                }
             return {
                 "block_size": get_config().remote_hdf5_block_size,
-                "cache_type": cache_type,
+                "cache_type": "readahead",
             }
         return {}
 

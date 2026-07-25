@@ -438,6 +438,7 @@ class TestGetHandleFromResource:
             H5Reader.get_handle(path)
         assert opened["block_size"] == 1234
         assert opened["cache_type"] == "blockcache"
+        assert opened["cache_options"] == {"maxblocks": 8}
 
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
@@ -903,6 +904,12 @@ class TestRemoteIOFallback:
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(ValueError("different error"))
         assert not is_no_range_http_error(RuntimeError("range requests"))
+
+    def test_no_range_error_predicate_matches_streaming_seek(self):
+        """Seeking a streaming (size-less) HTTP file needs the same fallback."""
+        exc = ValueError("Cannot seek streaming HTTP file")
+        assert is_no_range_http_error(exc)
+        assert not is_no_range_http_error(RuntimeError(str(exc)))
 
 
 class TestFallbackFileObj:
