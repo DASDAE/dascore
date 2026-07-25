@@ -247,9 +247,10 @@ class TestRollingMetadata:
     """Ensure rolling output carries over the input patch's metadata."""
 
     @pytest.fixture(scope="class")
-    def unit_patch(self, random_patch):
-        """A patch with units set on its coords and data."""
-        return random_patch.set_units("strain", distance="m", time="s")
+    def unit_patch(self, random_patch_with_lat_lon):
+        """A patch with units set on its data and all of its coords."""
+        patch = random_patch_with_lat_lon
+        return patch.set_units("strain", distance="m", time="s", latitude="deg")
 
     @pytest.mark.parametrize("engine", ("numpy", "pandas"))
     def test_coords_unchanged_without_step(self, random_patch, engine):
@@ -259,11 +260,11 @@ class TestRollingMetadata:
 
     @pytest.mark.parametrize("engine", ("numpy", "pandas"))
     def test_units_preserved(self, unit_patch, engine):
-        """Coord and data units should survive a rolling operation."""
+        """Data units and units of every coord should survive rolling."""
         out = unit_patch.rolling(time=10, samples=True, engine=engine).mean()
         assert out.attrs.data_units == unit_patch.attrs.data_units
-        for dim in unit_patch.dims:
-            assert out.get_coord(dim).units == unit_patch.get_coord(dim).units
+        for name in unit_patch.coords.coord_map:
+            assert out.get_coord(name).units == unit_patch.get_coord(name).units
 
     @pytest.mark.parametrize("engine", ("numpy", "pandas"))
     def test_attrs_preserved(self, random_patch, engine):
@@ -273,24 +274,35 @@ class TestRollingMetadata:
         assert out.attrs.tag == "bob"
         assert out.attrs.station == "wat"
 
-    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
-    def test_history_appended(self, random_patch, engine):
+    # The numpy engine routes its reductions through apply, pandas does not.
+    @pytest.mark.parametrize(
+        "engine,suffix", (("numpy", ".apply(mean)"), ("pandas", ".mean()"))
+    )
+    def test_history_appended(self, random_patch, engine, suffix):
         """A single history entry naming the operation should be added."""
         out = random_patch.rolling(time=10, samples=True, engine=engine).mean()
         history = list(out.attrs.history)
         assert len(history) == len(random_patch.attrs.history) + 1
-        assert history[-1].startswith("rolling(") and "mean" in history[-1]
+        expected = (
+            f"rolling(time=10, step=1, overlap=None, "
+            f"center=False, engine={engine}){suffix}"
+        )
+        assert history[-1] == expected
 
-    def test_non_dim_coords_preserved(self, random_patch_with_lat_lon):
-        """Coords which don't change shape should be kept."""
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_non_dim_coords_preserved(self, random_patch_with_lat_lon, engine):
+        """Coords which don't change shape should be kept as they were."""
         patch = random_patch_with_lat_lon
-        out = patch.rolling(time=10, samples=True).mean()
+        out = patch.rolling(time=10, samples=True, engine=engine).mean()
         assert set(out.coords.coord_map) == set(patch.coords.coord_map)
-        assert out.get_array("latitude") is not None
+        for name in set(patch.coords.coord_map) - {"time"}:
+            assert out.get_coord(name) == patch.get_coord(name)
+            assert np.array_equal(out.get_array(name), patch.get_array(name))
 
-    def test_attrs_conform_to_coords(self, random_patch):
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_attrs_conform_to_coords(self, random_patch, engine):
         """The attrs coord summaries should match the output coords."""
-        out = random_patch.rolling(time=10, samples=True, step=3).mean()
+        out = random_patch.rolling(time=10, samples=True, step=3, engine=engine).mean()
         assert out.attrs.coords == out.coords.to_summary_dict()
         assert out.attrs.dim_tuple == out.dims
 
