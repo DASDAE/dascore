@@ -353,6 +353,11 @@ class TestRollingBenchmarks:
         """Time rolling mean calculation."""
         big_roller.mean()
 
+    @pytest.mark.benchmark
+    def test_rolling_mean_full_call(self, example_patch):
+        """Time a complete rolling mean, including roller construction."""
+        example_patch.rolling(time=5, samples=True, center=True).mean()
+
 
 class TestAlignBenchmarks:
     """Benchmarks for align_to_coord operation."""

@@ -243,6 +243,58 @@ class TestRolling:
         assert all_close(out, expected)
 
 
+class TestRollingMetadata:
+    """Ensure rolling output carries over the input patch's metadata."""
+
+    @pytest.fixture(scope="class")
+    def unit_patch(self, random_patch):
+        """A patch with units set on its coords and data."""
+        return random_patch.set_units("strain", distance="m", time="s")
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_coords_unchanged_without_step(self, random_patch, engine):
+        """Without a step the rolling dim is unchanged, so are the coords."""
+        out = random_patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.coords == random_patch.coords
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_units_preserved(self, unit_patch, engine):
+        """Coord and data units should survive a rolling operation."""
+        out = unit_patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.attrs.data_units == unit_patch.attrs.data_units
+        for dim in unit_patch.dims:
+            assert out.get_coord(dim).units == unit_patch.get_coord(dim).units
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_attrs_preserved(self, random_patch, engine):
+        """Non-coordinate attrs should be unaffected by rolling."""
+        patch = random_patch.update_attrs(tag="bob", station="wat")
+        out = patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.attrs.tag == "bob"
+        assert out.attrs.station == "wat"
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_history_appended(self, random_patch, engine):
+        """A single history entry naming the operation should be added."""
+        out = random_patch.rolling(time=10, samples=True, engine=engine).mean()
+        history = list(out.attrs.history)
+        assert len(history) == len(random_patch.attrs.history) + 1
+        assert history[-1].startswith("rolling(") and "mean" in history[-1]
+
+    def test_non_dim_coords_preserved(self, random_patch_with_lat_lon):
+        """Coords which don't change shape should be kept."""
+        patch = random_patch_with_lat_lon
+        out = patch.rolling(time=10, samples=True).mean()
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
+        assert out.get_array("latitude") is not None
+
+    def test_attrs_conform_to_coords(self, random_patch):
+        """The attrs coord summaries should match the output coords."""
+        out = random_patch.rolling(time=10, samples=True, step=3).mean()
+        assert out.attrs.coords == out.coords.to_summary_dict()
+        assert out.attrs.dim_tuple == out.dims
+
+
 class TestNumpyVsPandasRolling:
     """Ensure numpy rolling return the same results as pandas rolling."""
 
