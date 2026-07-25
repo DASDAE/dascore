@@ -630,6 +630,47 @@ def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
     return bool(re.match(regex, input_str))
 
 
+def _locked(lock_name: str):
+    """
+    Run the decorated method while holding one of its owner's locks.
+
+    Parameters
+    ----------
+    lock_name
+        Name of the attribute (on self or cls) holding the lock, eg "_lock".
+        It is looked up on each call so the owner can swap in a fresh lock
+        (eg after a fork).
+
+    Notes
+    -----
+    Not for generator functions; the lock would be held across the
+    consumer's iteration rather than the function body.
+    """
+
+    def _decorator(func):
+        @functools.wraps(func)
+        def _wrapper(self, *args, **kwargs):
+            with getattr(self, lock_name):
+                return func(self, *args, **kwargs)
+
+        return _wrapper
+
+    return _decorator
+
+
+def _reinit_after_fork(func):
+    """
+    Register a callable to run in the child process after a fork.
+
+    A fork can copy a lock while another thread holds it. That thread does
+    not exist in the child, so the inherited copy would never be released.
+    Hooks registered here install fresh locks in the child.
+    """
+    if hasattr(os, "register_at_fork"):  # not available on windows
+        os.register_at_fork(after_in_child=func)
+    return func
+
+
 def cached_method(func):
     """
     Cache decorated method.

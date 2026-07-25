@@ -6,19 +6,28 @@ import functools
 import warnings
 from collections import defaultdict
 from pathlib import Path
+from threading import RLock
 from typing import ClassVar
 
 import pandas as pd
 
 from dascore.exceptions import DASCorePluginError
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.misc import _locked, _reinit_after_fork
 from dascore.utils.plugins import maybe_load_entry_point
 
 _PLUGIN_REGISTRY_DIR = Path(__file__).parent.parent / "plugin_registry"
 
+# Serializes attaching a lazily loaded namespace to its host object. One
+# global lock (rather than one per host) is enough because attachment only
+# constructs a small wrapper around the host.
+_ATTACHMENT_LOCK = RLock()
+
 
 @functools.cache
-def _load_plugin_registry(entry_point_group: str | None) -> dict[str, tuple[str, str]]:
+def _load_plugin_registry(
+    entry_point_group: str | None,
+) -> FrozenDict[str, tuple[str, str]]:
     """Load plugin registry CSV for the given entry point group.
 
     Parameters
@@ -31,14 +40,14 @@ def _load_plugin_registry(entry_point_group: str | None) -> dict[str, tuple[str,
     A mapping of namespace name to (package_name, package_url).
     """
     if entry_point_group is None:
-        return {}
+        return FrozenDict()
     # "dascore.patch_namespace" -> "patch"
     stem = entry_point_group.split(".")[-1].replace("_namespace", "")
     csv_path = _PLUGIN_REGISTRY_DIR / f"{stem}.csv"
     if not csv_path.exists():
-        return {}
+        return FrozenDict()
     df = pd.read_csv(csv_path)
-    return dict(zip(df["namespace"], zip(df["package_name"], df["package_url"])))
+    return FrozenDict(zip(df["namespace"], zip(df["package_name"], df["package_url"])))
 
 
 def _pass_to_host_method(func):
@@ -80,6 +89,8 @@ class _MethodNameSpace(metaclass=_NameSpaceMeta):
     _registry: ClassVar[defaultdict[str | None, dict[str, type[_MethodNameSpace]]]] = (
         defaultdict(dict)
     )
+    # Guards every read and write of _registry.
+    _registry_lock: ClassVar[RLock] = RLock()
 
     def __init__(self, obj):
         self._obj = obj
@@ -92,17 +103,32 @@ class _MethodNameSpace(metaclass=_NameSpaceMeta):
                 setattr(cls, key, val)
         # Register all subclasses.
         if cls.name is not None:
-            registry = cls._registry[cls.entry_point_group]
-            existing = registry.get(cls.name)
-            if existing is not None and existing is not cls:
-                msg = (
-                    f"Namespace collision for group {cls.entry_point_group!r} and "
-                    f"name {cls.name!r}: replacing "
-                    f"{existing.__module__}.{existing.__name__} with "
-                    f"{cls.__module__}.{cls.__name__}."
-                )
-                warnings.warn(msg, UserWarning, stacklevel=2)
-            registry[cls.name] = cls
+            with cls._registry_lock:
+                registry = cls._registry[cls.entry_point_group]
+                existing = registry.get(cls.name)
+                if existing is not None and existing is not cls:
+                    msg = (
+                        f"Namespace collision for group {cls.entry_point_group!r} and "
+                        f"name {cls.name!r}: replacing "
+                        f"{existing.__module__}.{existing.__name__} with "
+                        f"{cls.__module__}.{cls.__name__}."
+                    )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+                registry[cls.name] = cls
+
+    @classmethod
+    @_locked("_registry_lock")
+    def _get_namespace_type(cls, group: str | None, name: str):
+        """Return the namespace class registered to a group, or None."""
+        return cls._registry.get(group, {}).get(name)
+
+
+@_reinit_after_fork
+def _reinit_namespace_locks():
+    """Install fresh namespace locks; see _reinit_after_fork."""
+    global _ATTACHMENT_LOCK
+    _ATTACHMENT_LOCK = RLock()
+    _MethodNameSpace._registry_lock = RLock()
 
 
 class PatchNameSpace(_MethodNameSpace):
@@ -128,19 +154,26 @@ class NamespaceOwner:
     @classmethod
     def get_registered_namespaces(cls):
         """Return registered method namespaces on the class."""
-        registry = _MethodNameSpace._registry.get(cls._namespace_entry_point_group, {})
-        return FrozenDict(registry)
+        with _MethodNameSpace._registry_lock:
+            registry = _MethodNameSpace._registry.get(
+                cls._namespace_entry_point_group, {}
+            )
+            return FrozenDict(registry)
 
     def __getattr__(self, item):
         """Try loading a lazily registered namespace before failing."""
-        # Unknown attribute; try loading the namespaces.
-        maybe_load_entry_point(self._namespace_entry_point_group, item)
+        # Unknown attribute; try loading the namespaces. Plugin imports must
+        # not run while a lock is held.
+        group = self._namespace_entry_point_group
+        maybe_load_entry_point(group, item)
 
         # Once loaded the registry should be populated.
-        registry = _MethodNameSpace._registry.get(self._namespace_entry_point_group, {})
-        if item in registry:
-            instance = registry[item](self)
-            self.__dict__[item] = instance
+        if namespace_type := _MethodNameSpace._get_namespace_type(group, item):
+            with _ATTACHMENT_LOCK:
+                # Another thread may have attached this namespace first; reuse
+                # its instance so all callers share one namespace object.
+                if (instance := self.__dict__.get(item)) is None:
+                    instance = self.__dict__[item] = namespace_type(self)
             return instance
 
         # Check plugin registry for a known third-party package that provides this.

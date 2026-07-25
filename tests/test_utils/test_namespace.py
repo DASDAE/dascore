@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import ClassVar
 
 import pandas as pd
@@ -258,3 +259,51 @@ class TestPluginRegistry:
             AttributeError, match="ParentClass has no attribute 'totally_unknown'"
         ):
             inst.totally_unknown
+
+
+class TestNamespaceConcurrency:
+    """Lazy namespace attachment must be safe under concurrent first use."""
+
+    def _run(self, func, count=4):
+        """Run func(index) in count threads, all released together."""
+        barrier = threading.Barrier(count)
+        results = [None] * count
+
+        def worker(index):
+            barrier.wait()
+            results[index] = func(index)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return results
+
+    def test_one_instance_per_host(self):
+        """Concurrent first access on one object returns a single namespace."""
+        inst = ParentClass()
+        results = self._run(lambda _: inst.bob)
+        assert len({id(x) for x in results}) == 1
+        assert results[0] is inst.bob
+
+    def test_distinct_hosts_get_own_namespace(self):
+        """Concurrent first access on distinct objects binds each host."""
+        instances = [ParentClass() for _ in range(4)]
+        results = self._run(lambda index: instances[index].bob)
+        assert [x.return_self() for x in results] == instances
+
+    def test_concurrent_registration_and_lookup(self):
+        """Registering namespaces while reading the registry stays consistent."""
+
+        class ConcurrentBase(_MethodNameSpace):
+            entry_point_group = "dascore.concurrent_test"
+
+        def register(index):
+            """Define a new namespace and read the registry back."""
+            type(f"Namespace{index}", (ConcurrentBase,), {"name": f"ns_{index}"})
+            return set(_MethodNameSpace._registry["dascore.concurrent_test"])
+
+        self._run(register)
+        registered = _MethodNameSpace._registry["dascore.concurrent_test"]
+        assert set(registered) == {f"ns_{i}" for i in range(4)}

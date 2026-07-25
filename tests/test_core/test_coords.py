@@ -1156,6 +1156,12 @@ class TestCoordRange:
         vals = evenly_sampled_coord.values
         assert len(vals) == len(evenly_sampled_coord)
 
+    def test_values_are_read_only(self, evenly_sampled_coord):
+        """Cached values are shared, so they must not be writable."""
+        coords = [evenly_sampled_coord, get_coord(start=0, stop=1, step=1)]
+        for coord in coords:
+            assert not coord.values.flags.writeable
+
     def test_set_units(self, evenly_sampled_coord):
         """Ensure units can be set."""
         out = evenly_sampled_coord.set_units("m")

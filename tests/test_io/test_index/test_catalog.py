@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
+import threading
+
 import numpy as np
 import pytest
 
@@ -306,3 +309,47 @@ class TestViewSerialization:
         assert loaded[0].attrs["tag"] == "0"
         # and the root spool's registry is untouched
         assert len(spool._catalog.resolver.live_entries()) == 5
+
+
+class TestCatalogConcurrency:
+    """Catalog caches must stay coherent under concurrent readers."""
+
+    def _run(self, func, count=4):
+        """Run func(index) in count threads, all released together."""
+        barrier = threading.Barrier(count)
+        results = [None] * count
+
+        def worker(index):
+            barrier.wait()
+            results[index] = func(index)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return results
+
+    def test_concurrent_realization(self, live_catalog, patches):
+        """Racing first realizations build one backend and one relation."""
+        results = self._run(lambda _: len(live_catalog.to_df()))
+        assert set(results) == {len(patches)}
+        # one cached relation, not one per thread
+        assert live_catalog.to_df() is live_catalog.to_df()
+
+    def test_concurrent_reads(self, live_catalog, patches):
+        """Mixed len/patch access from several threads agrees."""
+
+        def read(index):
+            """Read the catalog a few different ways."""
+            return (len(live_catalog), live_catalog.get_patch(index).shape)
+
+        results = self._run(lambda index: read(index), len(patches))
+        assert {x[0] for x in results} == {len(patches)}
+        assert [x[1] for x in results] == [x.shape for x in patches]
+
+    def test_pickled_revision_gets_new_lock(self, live_catalog):
+        """Unpickling a catalog installs a fresh revision lock."""
+        rebuilt = pickle.loads(pickle.dumps(live_catalog))
+        assert rebuilt._revision.lock is not live_catalog._revision.lock
+        assert len(rebuilt) == len(live_catalog)

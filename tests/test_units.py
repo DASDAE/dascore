@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
+import pint
 import pytest
 
 import dascore as dc
+import dascore.units as units_module
 from dascore.exceptions import UnitError
 from dascore.units import (
     Quantity,
@@ -465,3 +469,41 @@ class TestMaybeConvertPercentToFraction:
         result = maybe_convert_percent_to_fraction(get_quantity("12.5%"))
         assert len(result) == 1
         assert np.isclose(result[0], 0.125)
+
+
+class TestUnitConcurrency:
+    """The pint registry must initialize once and parse safely in threads."""
+
+    def _run(self, func, count=4):
+        """Run func(index) in count threads, all released together."""
+        barrier = threading.Barrier(count)
+        results = [None] * count
+
+        def worker(index):
+            barrier.wait()
+            results[index] = func(index)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return results
+
+    def test_registry_created_once(self, monkeypatch):
+        """Racing threads all get the same registry instance."""
+        # The registry is process-wide; restore it so quantities created by
+        # other tests keep belonging to the active registry.
+        monkeypatch.setattr(units_module, "_UNIT_REGISTRY", None)
+        original = pint.get_application_registry().get()
+        try:
+            results = self._run(lambda _: units_module.get_registry())
+        finally:
+            pint.set_application_registry(original)
+        assert len({id(x) for x in results}) == 1
+
+    def test_concurrent_parsing(self):
+        """Parsing distinct quantities in threads returns correct values."""
+        strings = ["m/s", "1/s", "furlong/fortnight", "strain"]
+        results = self._run(lambda index: get_quantity(strings[index]))
+        assert results == [get_quantity(x) for x in strings]

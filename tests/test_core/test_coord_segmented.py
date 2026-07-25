@@ -230,6 +230,11 @@ class TestProperties:
         """Segmented coords are never evenly sampled."""
         assert not float_gap_coord.evenly_sampled
 
+    def test_cached_arrays_read_only(self, float_gap_coord):
+        """Cached arrays are shared between callers, so must be read-only."""
+        assert not float_gap_coord._segment_offsets().flags.writeable
+        assert not float_gap_coord.values.flags.writeable
+
     def test_sorted_flags(self, float_gap_coord, reverse_gap_coord):
         """Sort direction is reported correctly."""
         assert float_gap_coord.sorted

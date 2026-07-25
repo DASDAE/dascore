@@ -439,6 +439,12 @@ class TestGetContents:
         assert len(sub) == (len(full_df) - 1)
         assert (sub["time_min"] < new_max).all()
 
+    def test_contents_are_caller_owned(self, random_spool):
+        """Mutating the returned dataframe must not change the spool."""
+        df = random_spool.get_contents()
+        df["tag"] = "modified"
+        assert (random_spool.get_contents()["tag"] != "modified").all()
+
 
 class TestSelect:
     """Tests for selecting/trimming spools."""

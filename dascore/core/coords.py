@@ -1501,7 +1501,8 @@ class CoordRange(BaseCoord):
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         if len(self) == 1:
-            return np.asarray([self.start])
+            # Cached, so it must be read-only like the other branch.
+            return array(np.asarray([self.start]))
         # note: linspace works better for floats that might have slightly
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
@@ -2014,7 +2015,8 @@ class CoordSegmented(BaseCoord):
     def _segment_offsets(self) -> np.ndarray:
         """Return the starting sample index of each segment."""
         lens = [len(x) for x in self.segments]
-        return np.cumsum([0, *lens[:-1]])
+        # Cached and shared by callers, so hand back a read-only array.
+        return array(np.cumsum([0, *lens[:-1]]))
 
     @property
     @cached_method

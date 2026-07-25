@@ -9,9 +9,10 @@ import inspect
 import warnings
 from collections import defaultdict
 from collections.abc import Generator, Mapping
-from functools import cache, cached_property, wraps
+from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
+from threading import RLock
 from typing import Any, Literal, NotRequired, TypedDict, get_type_hints
 
 import numpy as np
@@ -43,7 +44,14 @@ from dascore.exceptions import (
 )
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
+from dascore.utils.misc import (
+    _iter_filesystem,
+    _locked,
+    _reinit_after_fork,
+    cached_method,
+    iterate,
+    warn_or_raise,
+)
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
@@ -376,13 +384,33 @@ class _FiberIOManager:
 
     def __init__(self, entry_point: str):
         self._entry_point = entry_point
+        # One lock guards all mutable state below; it is held for the whole
+        # of load_plugins so no caller can observe a half-loaded format.
+        self._lock = RLock()
         self._loaded_eps: set[str] = set()
+        # Formats whose load attempt finished, successfully or not. The
+        # outcome lives in _format_version/_failed_formats.
+        self._loaded_formats: set[str] = set()
         self._failed_formats: set[str] = set()
         self._format_version = defaultdict(dict)
         self._extension_list = defaultdict(list)
         # This is a dict of {input_type: (fiberio_name, version)}
         self._fiber_io_by_input_type = defaultdict(set)
         self._fiber_io_name_ver = set()
+        # Snapshots derived from the registry; cleared when it changes.
+        self._lookup_cache: dict[tuple, frozenset | tuple] = {}
+
+    def __getstate__(self) -> dict:
+        """Return copy/pickle state without the process-local lock."""
+        with self._lock:
+            state = dict(self.__dict__)
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore state with a fresh process-local lock."""
+        self.__dict__.update(state)
+        self._lock = RLock()
 
     @cached_property
     def _eps(self):
@@ -393,38 +421,46 @@ class _FiberIOManager:
         return pd.Series(get_entry_point_loaders("dascore.fiber_io"))
 
     @cached_property
-    def known_formats(self):
+    @_locked("_lock")
+    def known_formats(self) -> frozenset[str]:
         """Return names of known formats."""
         formats = [name.split("__", maxsplit=1)[0] for name in self._eps.index]
-        return set(formats) | set(self._format_version)
+        return frozenset(formats) | frozenset(self._format_version)
 
     @property
-    def unloaded_formats(self):
-        """Return names of known formats."""
+    @_locked("_lock")
+    def unloaded_formats(self) -> list[str]:
+        """Return names of known formats which have not been loaded."""
         loaded_or_failed = set(self._format_version) | self._failed_formats
         return sorted(self.known_formats - loaded_or_failed)
 
-    @cached_method
-    def _get_fiber_io_by_input_type(self, input_type) -> set[FiberIO]:
+    @_locked("_lock")
+    def _get_fiber_io_by_input_type(self, input_type) -> frozenset[FiberIO]:
         """Get a set of FiberIO instances that meet input type."""
-        if input_type not in self._fiber_io_by_input_type:
-            out = set()
-            for input_set in self._fiber_io_by_input_type.values():
-                out |= input_set
-        else:
-            out = self._fiber_io_by_input_type[input_type]
-        return out
+        key = ("input_type", input_type)
+        if (cached := self._lookup_cache.get(key)) is None:
+            if input_type not in self._fiber_io_by_input_type:
+                out = set()
+                for input_set in self._fiber_io_by_input_type.values():
+                    out |= input_set
+            else:
+                out = self._fiber_io_by_input_type[input_type]
+            cached = self._lookup_cache[key] = frozenset(out)
+        return cached
 
-    @cache
-    def _get_prioritized_list(self, input_type="file"):
+    @_locked("_lock")
+    def _get_prioritized_list(self, input_type="file") -> tuple[FiberIO, ...]:
         """Yield a prioritized list of fiber_ios."""
         # must load all plugins before getting list
         self.load_plugins()
+        key = ("prioritized", input_type)
+        if (cached := self._lookup_cache.get(key)) is not None:
+            return cached
         priority_fiber_ios = []
         second_class_fiber_ios = []
         for format_name in self.known_formats:
-            unsorted = self._format_version[format_name]
-            if not unsorted:
+            # Use get; indexing the defaultdict would register empty formats.
+            if not (unsorted := self._format_version.get(format_name)):
                 continue
             keys = sorted(unsorted, reverse=True)
             fiber_ios = [unsorted[key] for key in keys]
@@ -436,28 +472,40 @@ class _FiberIOManager:
         valid_fiberio_by_type = self._get_fiber_io_by_input_type(input_type)
         out = tuple(x for x in maybe_ios if x in valid_fiberio_by_type)
         # And return fiberIOs that much the input type.
+        self._lookup_cache[key] = out
         return out
 
-    @cached_method
     def load_plugins(self, format: str | None = None):
         """Load plugin for specific format or ensure all formats are loaded."""
-        if format is not None and format in self._format_version:
-            return  # already loaded
-        if not (unloaded := self.unloaded_formats):
+        # A format only lands in _loaded_formats once every one of its entry
+        # points is registered, so this fast path (and the lock below) keep
+        # multi-version formats from being seen half loaded.
+        if format is not None and format in self._loaded_formats:
             return
-        formats = {format} if format is not None else unloaded
-        # Load one, or all, formats
-        for form in formats:
-            entries = [name for name in self._eps.index if name.startswith(form)]
-            for name, loader in self._eps.loc[entries].items():
-                fiberio = self._load_entry_point(name, loader)
-                if fiberio is not None:
-                    self.register_fiberio(fiberio)
-            if form not in self._format_version:
-                self._failed_formats.add(form)
-        # The selected format(s) should now be loaded
-        assert set(formats).isdisjoint(self.unloaded_formats)
-        return
+        with self._lock:
+            if format is not None and format in self._format_version:
+                self._loaded_formats.add(format)
+                return  # already loaded
+            if not (unloaded := self.unloaded_formats):
+                return
+            formats = {format} if format is not None else unloaded
+            # Load one, or all, formats. Plugin imports deliberately run
+            # under the lock: tracking in-flight formats instead would need
+            # a claim/wait graph for a step which happens once per format.
+            # The cost is that a thread importing a module which defines a
+            # FiberIO waits here until any in-progress load finishes.
+            for form in formats:
+                entries = [name for name in self._eps.index if name.startswith(form)]
+                for name, loader in self._eps.loc[entries].items():
+                    fiberio = self._load_entry_point(name, loader)
+                    if fiberio is not None:
+                        self.register_fiberio(fiberio)
+                if form not in self._format_version:
+                    self._failed_formats.add(form)
+                self._loaded_formats.add(form)
+            # The selected format(s) should now be loaded
+            assert set(formats).isdisjoint(self.unloaded_formats)
+            return
 
     def _load_entry_point(self, name: str, loader) -> FiberIO | None:
         """Load one FiberIO entry point, skipping broken registrations."""
@@ -474,6 +522,7 @@ class _FiberIOManager:
             warnings.warn(msg, UserWarning, stacklevel=2)
             return None
 
+    @_locked("_lock")
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
@@ -486,6 +535,8 @@ class _FiberIOManager:
         self._format_version[forma][ver] = fiberio
         self._fiber_io_by_input_type[fiberio.input_type].add(fiberio)
         self._fiber_io_name_ver.add(id_tuple)
+        # Snapshots derived from the registry are now stale.
+        self._lookup_cache.clear()
 
     @cached_method
     def get_fiberio(
@@ -574,7 +625,9 @@ class _FiberIOManager:
         assert isinstance(format, str), "Only works once format is known."
         format = format.upper()
         self.load_plugins(format)
-        fiber_ios = self._format_version.get(format, None)
+        with self._lock:
+            # Snapshot; the generator must not read shared state while paused.
+            fiber_ios = dict(self._format_version.get(format, {}))
         # no format found
         if not fiber_ios:
             format_list = list(self.known_formats)
@@ -601,7 +654,9 @@ class _FiberIOManager:
         has_yielded = set()
         self.load_plugins()
         potential_fiberios = self._get_fiber_io_by_input_type(input_type)
-        for fiber_io in self._extension_list[extension]:
+        with self._lock:
+            extension_fiberios = tuple(self._extension_list[extension])
+        for fiber_io in extension_fiberios:
             if fiber_io in potential_fiberios:
                 yield fiber_io
             has_yielded.add(fiber_io)
@@ -929,6 +984,12 @@ class FiberIO:
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
+
+
+@_reinit_after_fork
+def _reinit_manager_lock():
+    """Install a fresh lock on the FiberIO manager; see _reinit_after_fork."""
+    FiberIO.manager._lock = RLock()
 
 
 def read(

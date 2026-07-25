@@ -969,9 +969,9 @@ class CoordManager(DascoreBaseModel):
 
     @property
     @cached_method
-    def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Get a dict of {coord_name: shape}."""
-        return {i: v.shape for i, v in self.coord_map.items()}
+    def coord_shapes(self) -> FrozenDict[str, tuple[int, ...]]:
+        """Get an immutable mapping of {coord_name: shape}."""
+        return FrozenDict({i: v.shape for i, v in self.coord_map.items()})
 
     @property
     @cached_method

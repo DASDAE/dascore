@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import warnings
 from io import BytesIO
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 import pandas as pd
@@ -16,6 +18,7 @@ from upath import UPath
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     _iter_filesystem,
+    _locked,
     _spool_map,
     all_diffs_close_enough,
     cached_method,
@@ -477,6 +480,41 @@ class TestTukeyFence:
         expected_lower = max(11 - 1.5 * 8, 0.0)
         expected_upper = min(19 + 1.5 * 8, 100.0)
         assert np.allclose(result, [expected_lower, expected_upper])
+
+
+class TestLocked:
+    """Ensure the _locked decorator runs the body holding the owner's lock."""
+
+    class _Counter:
+        """A class whose increments run under a non-reentrant lock."""
+
+        def __init__(self):
+            self._lock = Lock()
+            self.value = 0
+
+        @_locked("_lock")
+        def increment(self):
+            """Increment; the decorator must hold _lock for this call."""
+            # A non-reentrant lock cannot be re-acquired while it is held.
+            assert not self._lock.acquire(blocking=False)
+            self.value += 1
+
+    def test_every_call_is_locked(self):
+        """Concurrent callers each run the body with the lock held."""
+        counter = self._Counter()
+        threads = [threading.Thread(target=counter.increment) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert counter.value == 8
+
+    def test_lock_looked_up_per_call(self):
+        """A swapped-in lock is the one used by later calls."""
+        counter = self._Counter()
+        counter._lock = Lock()
+        counter.increment()
+        assert counter.value == 1
 
 
 class TestCachedMethod:
