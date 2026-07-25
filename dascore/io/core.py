@@ -391,11 +391,16 @@ class _FiberIOManager:
         # Formats whose load attempt finished, successfully or not. The
         # outcome lives in _format_version/_failed_formats.
         self._loaded_formats: set[str] = set()
+        # True once no format is left to load; keeps the (hot) repeat call
+        # to load_plugins() off the lock entirely.
+        self._all_loaded = False
         self._failed_formats: set[str] = set()
-        self._format_version = defaultdict(dict)
-        self._extension_list = defaultdict(list)
-        # This is a dict of {input_type: (fiberio_name, version)}
-        self._fiber_io_by_input_type = defaultdict(set)
+        # Plain dicts, not defaultdicts: these are shared state, and a
+        # missing-key read must not register anything.
+        self._format_version: dict[str, dict[str, FiberIO]] = {}
+        self._extension_list: dict[str, list[FiberIO]] = {}
+        # This is a dict of {input_type: {fiberio, ...}}
+        self._fiber_io_by_input_type: dict[str, set[FiberIO]] = {}
         self._fiber_io_name_ver = set()
         # Snapshots derived from the registry; cleared when it changes.
         self._lookup_cache: dict[tuple, frozenset | tuple] = {}
@@ -439,27 +444,24 @@ class _FiberIOManager:
         """Get a set of FiberIO instances that meet input type."""
         key = ("input_type", input_type)
         if (cached := self._lookup_cache.get(key)) is None:
-            if input_type not in self._fiber_io_by_input_type:
+            if (out := self._fiber_io_by_input_type.get(input_type)) is None:
                 out = set()
                 for input_set in self._fiber_io_by_input_type.values():
                     out |= input_set
-            else:
-                out = self._fiber_io_by_input_type[input_type]
             cached = self._lookup_cache[key] = frozenset(out)
         return cached
 
     @_locked("_lock")
     def _get_prioritized_list(self, input_type="file") -> tuple[FiberIO, ...]:
         """Yield a prioritized list of fiber_ios."""
-        # must load all plugins before getting list
-        self.load_plugins()
         key = ("prioritized", input_type)
         if (cached := self._lookup_cache.get(key)) is not None:
             return cached
+        # must load all plugins before getting list
+        self.load_plugins()
         priority_fiber_ios = []
         second_class_fiber_ios = []
         for format_name in self.known_formats:
-            # Use get; indexing the defaultdict would register empty formats.
             if not (unsorted := self._format_version.get(format_name)):
                 continue
             keys = sorted(unsorted, reverse=True)
@@ -477,24 +479,29 @@ class _FiberIOManager:
 
     def load_plugins(self, format: str | None = None):
         """Load plugin for specific format or ensure all formats are loaded."""
-        # A format only lands in _loaded_formats once every one of its entry
-        # points is registered, so this fast path (and the lock below) keep
-        # multi-version formats from being seen half loaded.
-        if format is not None and format in self._loaded_formats:
+        # A format only lands in _loaded_formats (or _all_loaded) once every
+        # one of its entry points is registered, so these fast paths (and
+        # the lock below) keep multi-version formats from being seen half
+        # loaded.
+        if self._all_loaded or (format is not None and format in self._loaded_formats):
             return
         with self._lock:
-            if format is not None and format in self._format_version:
-                self._loaded_formats.add(format)
-                return  # already loaded
-            if not (unloaded := self.unloaded_formats):
-                return
-            formats = {format} if format is not None else unloaded
-            # Load one, or all, formats. Plugin imports deliberately run
-            # under the lock: tracking in-flight formats instead would need
-            # a claim/wait graph for a step which happens once per format.
-            # The cost is that a thread importing a module which defines a
-            # FiberIO waits here until any in-progress load finishes.
-            for form in formats:
+            # Anything already registered (directly, or by another thread
+            # while this one waited) is not pending; it only needs stamping.
+            pending = set(self.unloaded_formats)
+            formats = {format} if format is not None else pending
+            self._loaded_formats |= formats
+            # known_formats is fixed once computed, so what stays pending
+            # here stays pending until it is loaded.
+            self._all_loaded = not (pending - formats)
+            if not (todo := formats & pending):
+                return  # nothing left to load; already registered or failed
+            # Plugin imports deliberately run under the lock: tracking
+            # in-flight formats instead would need a claim/wait graph for a
+            # step which happens once per format. The cost is that a thread
+            # importing a module which defines a FiberIO waits here until
+            # any in-progress load finishes.
+            for form in todo:
                 entries = [name for name in self._eps.index if name.startswith(form)]
                 for name, loader in self._eps.loc[entries].items():
                     fiberio = self._load_entry_point(name, loader)
@@ -502,10 +509,8 @@ class _FiberIOManager:
                         self.register_fiberio(fiberio)
                 if form not in self._format_version:
                     self._failed_formats.add(form)
-                self._loaded_formats.add(form)
             # The selected format(s) should now be loaded
-            assert set(formats).isdisjoint(self.unloaded_formats)
-            return
+            assert formats.isdisjoint(self.unloaded_formats)
 
     def _load_entry_point(self, name: str, loader) -> FiberIO | None:
         """Load one FiberIO entry point, skipping broken registrations."""
@@ -531,9 +536,9 @@ class _FiberIOManager:
             return
         self._loaded_eps.add(fiberio.name)
         for ext in iter(fiberio.preferred_extensions):
-            self._extension_list[ext].append(fiberio)
-        self._format_version[forma][ver] = fiberio
-        self._fiber_io_by_input_type[fiberio.input_type].add(fiberio)
+            self._extension_list.setdefault(ext, []).append(fiberio)
+        self._format_version.setdefault(forma, {})[ver] = fiberio
+        self._fiber_io_by_input_type.setdefault(fiberio.input_type, set()).add(fiberio)
         self._fiber_io_name_ver.add(id_tuple)
         # Snapshots derived from the registry are now stale.
         self._lookup_cache.clear()
@@ -655,7 +660,7 @@ class _FiberIOManager:
         self.load_plugins()
         potential_fiberios = self._get_fiber_io_by_input_type(input_type)
         with self._lock:
-            extension_fiberios = tuple(self._extension_list[extension])
+            extension_fiberios = tuple(self._extension_list.get(extension, ()))
         for fiber_io in extension_fiberios:
             if fiber_io in potential_fiberios:
                 yield fiber_io

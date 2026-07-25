@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import abc
-import warnings
 from collections.abc import Callable, Generator, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -54,10 +53,12 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
 
     With copy-on-write (always on in pandas 3) a shallow copy already
     detaches on the first write; without it the blocks must be copied.
+    Only the literal True enables isolation: the "warn" setting keeps the
+    old (sharing) semantics, so it still needs a deep copy.
     """
     if int(pd.__version__.split(".", maxsplit=1)[0]) >= 3:
         return frame.copy(deep=False)
-    return frame.copy(deep=not pd.options.mode.copy_on_write)
+    return frame.copy(deep=pd.options.mode.copy_on_write is not True)
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -532,14 +533,9 @@ class Spool(BaseSpool):
             raise IndexError(msg) from None
 
     def __iter__(self):
-        for ind in range(len(self._catalog)):
-            try:
-                yield self._catalog.get_patch(ind)
-            except MissingPatchError as e:
-                # The patch couldn't be produced, usually because a
-                # coordinate mismatch trimmed it to nothing (see #583).
-                msg = f"Skipping patch at index {ind} (see #583): {e}"
-                warnings.warn(msg, UserWarning, stacklevel=2)
+        # The catalog snapshots the relation once and skips patches which
+        # cannot be resolved (see #583).
+        yield from self._catalog
 
     # --- selection and presentation specs -------------------------------
 

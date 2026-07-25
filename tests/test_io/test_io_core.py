@@ -30,6 +30,7 @@ from dascore.io.core import (
     _FiberIOManager,
     _get_reloadable_source_path,
     _make_scan_payload,
+    _reinit_manager_lock,
     _scan_result_to_summary,
     _validate_scan_payload,
 )
@@ -492,6 +493,9 @@ class TestBrokenEntryPoint:
         manager.__dict__.pop("known_formats", None)
         # clear the method cache so load_plugins runs again for this instance.
         manager.__dict__.pop("_cache", None)
+        # the copy inherits the original's "everything is loaded" state,
+        # which the swapped-in entry points invalidate.
+        manager._all_loaded = False
         return manager
 
     def test_load_plugins_warns_and_skips(self, broken_ep_manager):
@@ -519,23 +523,7 @@ class TestFormatManagerConcurrency:
         manager.__dict__["_eps"] = pd.Series(eps)
         return manager
 
-    def _run(self, func, count):
-        """Run func(index) in count threads, all released together."""
-        barrier = threading.Barrier(count)
-        results = [None] * count
-
-        def worker(index):
-            barrier.wait()
-            results[index] = func(index)
-
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        return results
-
-    def test_multi_version_format_never_partial(self):
+    def test_multi_version_format_never_partial(self, run_in_threads):
         """Every thread sees all versions, even mid-load."""
         entered, release, calls = threading.Event(), threading.Event(), []
 
@@ -556,7 +544,7 @@ class TestFormatManagerConcurrency:
         # the other threads are queued behind the manager lock by then.
         releaser = threading.Thread(target=lambda: (entered.wait(), release.set()))
         releaser.start()
-        results = self._run(
+        results = run_in_threads(
             lambda _: tuple(
                 x.version for x in manager.yield_fiberio(format="_TestFormatter")
             ),
@@ -567,7 +555,7 @@ class TestFormatManagerConcurrency:
         assert all(x == ("2", "1") for x in results)
         assert calls == ["v1"]
 
-    def test_concurrent_full_load_runs_each_loader_once(self):
+    def test_concurrent_full_load_runs_each_loader_once(self, run_in_threads):
         """Loading all formats from several threads loads each entry point once."""
         calls = []
 
@@ -586,7 +574,7 @@ class TestFormatManagerConcurrency:
                 "_TESTFORMATTER__V2": make_loader(_FiberFormatTestV2),
             }
         )
-        results = self._run(lambda _: len(list(manager.yield_fiberio())), 4)
+        results = run_in_threads(lambda _: len(list(manager.yield_fiberio())))
         assert set(results) == {2}
         assert sorted(calls) == ["1", "2"]
 
@@ -603,6 +591,21 @@ class TestFormatManagerConcurrency:
         copied = copy.deepcopy(manager)
         assert copied._lock is not manager._lock
         assert list(copied.yield_fiberio(format="_TestFormatter"))
+
+    def test_fork_handler_replaces_held_lock(self):
+        """A lock held at fork time is replaced so the child cannot deadlock."""
+        manager = FiberIO.manager
+        old_lock = manager._lock
+        try:
+            with old_lock:
+                _reinit_manager_lock()
+                new_lock = manager._lock
+                # The replacement is free even while the old lock is held.
+                assert new_lock.acquire(blocking=False)
+                new_lock.release()
+            assert new_lock is not old_lock
+        finally:
+            manager._lock = old_lock
 
 
 class TestFormatter:

@@ -445,6 +445,20 @@ class TestGetContents:
         df["tag"] = "modified"
         assert (random_spool.get_contents()["tag"] != "modified").all()
 
+    def test_contents_owned_under_copy_on_write_warn(self, random_spool):
+        """The truthy 'warn' setting does not enable copy-on-write isolation."""
+        with pd.option_context("mode.copy_on_write", "warn"):
+            df = random_spool.get_contents()
+            df["tag"] = "modified"
+        assert (random_spool.get_contents()["tag"] != "modified").all()
+
+    def test_contents_shallow_copy_when_cow_always_on(self, random_spool, monkeypatch):
+        """Pandas 3 has copy-on-write always on, so no eager block copy."""
+        monkeypatch.setattr(pd, "__version__", "3.0.0")
+        df = random_spool.get_contents()
+        assert df is not random_spool._df
+        assert len(df) == len(random_spool)
+
 
 class TestSelect:
     """Tests for selecting/trimming spools."""
@@ -961,11 +975,14 @@ class TestSpoolCoverageEdges:
     def test_iteration_skips_unresolvable_patch(self, monkeypatch):
         """A patch that fails to resolve is skipped with a #583 warning."""
         spool = dc.spool([dc.get_example_patch()])
+        # Realize the relation so iteration resolves rows rather than
+        # serving the live registry (which cannot fail to resolve).
+        spool.get_contents()
 
-        def _raise(_ind):
+        def _raise(*args, **kwargs):
             raise MissingPatchError("not available in this session")
 
-        monkeypatch.setattr(spool._catalog, "get_patch", _raise)
+        monkeypatch.setattr(spool._catalog, "resolve_row", _raise)
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
 

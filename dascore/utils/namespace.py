@@ -47,7 +47,13 @@ def _load_plugin_registry(
     if not csv_path.exists():
         return FrozenDict()
     df = pd.read_csv(csv_path)
-    return FrozenDict(zip(df["namespace"], zip(df["package_name"], df["package_url"])))
+    return FrozenDict(
+        zip(
+            df["namespace"],
+            zip(df["package_name"], df["package_url"], strict=True),
+            strict=True,
+        )
+    )
 
 
 def _pass_to_host_method(func):
