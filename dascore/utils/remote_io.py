@@ -25,6 +25,10 @@ _NO_RANGE_HTTP_PATTERNS = (
     "only reading this file from the beginning is supported",
 )
 _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
+# Resources already materialized this session, so the common case (the
+# file is present) costs one dict lookup rather than a hash, a path
+# build and a stat. Emptied by clear_remote_file_cache.
+_REMOTE_MATERIALIZED: dict[tuple[str, Path], Path] = {}
 # One lock per cached resource, so unrelated downloads still run at the
 # same time. Entries are never removed: the dict is bounded by the number
 # of distinct remote resources a session touches, and keeping them lets a
@@ -159,6 +163,7 @@ def clear_remote_file_cache():
         shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
         get_remote_cache_path().mkdir(parents=True, exist_ok=True)
         _REMOTE_RESOURCE_CACHE.clear()
+        _REMOTE_MATERIALIZED.clear()
 
 
 def _download_remote_file(path, local_path: Path):
@@ -194,7 +199,11 @@ def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
     the first downloads, the rest find the published file. A download
     which fails publishes nothing, so the next caller retries it.
     """
+    key = (remote_id, cache_root)
     with _REMOTE_CACHE_LOCK:
+        # Already materialized: skip hashing, path building and the stat.
+        if (published := _REMOTE_MATERIALIZED.get(key)) is not None:
+            return published
         resource = _REMOTE_RESOURCE_CACHE.get(remote_id)
     if resource is None:
         resource = coerce_to_upath(remote_id.split("#", maxsplit=1)[0])
@@ -208,11 +217,14 @@ def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
     depth = getattr(_REMOTE_CACHE_LOCAL, "materializing", 0)
     _REMOTE_CACHE_LOCAL.materializing = depth + 1
     try:
-        with _get_download_lock((remote_id, cache_root)):
+        with _get_download_lock(key):
             if not local_path.exists():
                 _download_to_cache(resource, local_path)
     finally:
         _REMOTE_CACHE_LOCAL.materializing = depth
+    # Only published paths are memoized, so a failed download is retried.
+    with _REMOTE_CACHE_LOCK:
+        _REMOTE_MATERIALIZED[key] = local_path
     return local_path
 
 
