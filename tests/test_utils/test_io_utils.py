@@ -406,6 +406,39 @@ class TestGetHandleFromResource:
         assert opened["block_size"] == 1234
         assert opened["cache_type"] == "readahead"
 
+    def test_h5_reader_uses_block_cache_for_http_upath(self, monkeypatch):
+        """HTTP-backed HDF5 readers should use a block LRU cache.
+
+        The h5py metadata probe alternates between the file header and footer;
+        fsspec's default single-window cache refetches a block (or the whole
+        file on range-less servers) on every jump.
+        """
+
+        class _DummyHandle:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        opened = {}
+        handle = _DummyHandle()
+        path = UPath("http://example.com/example.h5")
+
+        def _open(_self, _mode, **kwargs):
+            opened.update(kwargs)
+            return handle
+
+        monkeypatch.setattr(type(path), "open", _open)
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(lambda *args, **kwargs: object()),
+        )
+        with config_context(remote_hdf5_block_size=1234):
+            H5Reader.get_handle(path)
+        assert opened["block_size"] == 1234
+        assert opened["cache_type"] == "blockcache"
+
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
         path = UPath("memory://dascore/upath-write.h5")

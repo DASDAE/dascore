@@ -199,9 +199,14 @@ class H5Reader:
             # h5py performs many small seeks while opening HDF5 metadata.
             # s3fs defaults to 50 MB readahead blocks, which can pull most of
             # a large remote file just to satisfy metadata probes.
+            # HTTP needs a block LRU cache instead: the metadata probe
+            # alternates between the file header and footer, and fsspec's
+            # default single-window cache refetches a full block (or the whole
+            # file on range-less servers) on every jump.
+            cache_type = "blockcache" if protocol in ("http", "https") else "readahead"
             return {
                 "block_size": get_config().remote_hdf5_block_size,
-                "cache_type": "readahead",
+                "cache_type": cache_type,
             }
         return {}
 
