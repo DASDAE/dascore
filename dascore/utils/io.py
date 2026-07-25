@@ -8,6 +8,7 @@ from contextlib import suppress
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
+from threading import RLock
 from typing import Any, get_type_hints
 
 import numpy as np
@@ -18,7 +19,6 @@ from dascore.constants import PatchType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
-    cached_method,
     iterate,
     optional_import,
 )
@@ -210,16 +210,25 @@ def get_handle_from_resource(uri, required_type):
 
 
 class IOResourceManager:
-    """A class for managing opening/closing files."""
+    """
+    A class for managing opening/closing files.
+
+    One manager serves one IO operation. Creating and closing its
+    resources is synchronized, so concurrent callers share a single
+    handle per type; a handle it hands back is not itself safe to use
+    from several threads at once.
+    """
 
     def __init__(self, source: Any):
         self._source = source
         self._cache = {}
+        self._lock = RLock()
 
     @property
-    @cached_method
     def source(self):
         """Get the source of the IO manager."""
+        # Not cached: the walk is a couple of isinstance checks, and
+        # memoizing it into _cache would let close_all close the source.
         source = self._source
         # this handles IO managers derived from other IO managers;
         # effectively, we need to go back to the original, non-io manager source
@@ -228,7 +237,7 @@ class IOResourceManager:
         return source
 
     def get_resource(self, required_type: RequiredType) -> RequiredType:
-        """Get the requested resource."""
+        """Get the requested resource, opening each handle exactly once."""
         # no required type, just return source of manager.
         if required_type is None:
             return self.source
@@ -238,21 +247,24 @@ class IOResourceManager:
         if isinstance(self._source, self.__class__):
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
-        if required_type not in self._cache:
-            source = _resolve_resource(self._source, required_type)
-            out = get_handle_from_resource(source, required_type)
-            self._cache[required_type] = out
-        return self._cache[required_type]
+        with self._lock:
+            if required_type not in self._cache:
+                source = _resolve_resource(self._source, required_type)
+                out = get_handle_from_resource(source, required_type)
+                self._cache[required_type] = out
+            return self._cache[required_type]
 
     def close_all(self):
         """Close any open file handles."""
-        for handle in self._cache.values():
-            getattr(handle, "close", lambda: None)()
+        with self._lock:
+            for handle in self._cache.values():
+                getattr(handle, "close", lambda: None)()
 
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
-        self.close_all()
-        self._cache.clear()
+        with self._lock:
+            self.close_all()
+            self._cache.clear()
 
     def __enter__(self):
         """Entering context manager."""
@@ -263,7 +275,9 @@ class IOResourceManager:
         self.close_all()
 
     def __del__(self):
-        self.close_all()
+        # __del__ can run on a partially built manager (eg if __init__ raised).
+        if getattr(self, "_lock", None) is not None:
+            self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):
