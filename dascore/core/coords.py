@@ -11,6 +11,7 @@ import fnmatch
 import hashlib
 import itertools
 import json
+import math
 import re
 from collections.abc import Sized
 from contextlib import suppress
@@ -79,6 +80,10 @@ min_max_type = TypeVar("min_max_type")
 step_type = TypeVar("step_type")
 
 CoordKind = Literal["string", "empty", "single", "array", "range"]
+
+# Cheap zero for comparing against timedelta steps; building it through
+# dc.to_timedelta64(0) in hot paths costs ~10x more than reusing this.
+_TD64_ZERO = np.timedelta64(0, "ns")
 
 
 def ensure_consistent_dtype(value, name, dtype):
@@ -1070,6 +1075,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         other
             Another coordinate.
         """
+        if self is other:
+            return True
         if self.shape != other.shape:
             return False
         non_coords = [self._partial, other._partial]
@@ -1077,6 +1084,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return self == other
         if any(non_coords):
             return False
+        # Evenly sampled coords with identical start/stop/step have identical
+        # values; this avoids materializing and comparing the value arrays.
+        if self._evenly_sampled and other._evenly_sampled:
+            same = (
+                self.start == other.start
+                and self.stop == other.stop
+                and self.step == other.step
+            )
+            if same:
+                return True
         return all_close(self.values, other.values)
 
     def change_length(self, length: int) -> Self:
@@ -1333,25 +1350,38 @@ class CoordRange(BaseCoord):
                 # handle conversion to integer if other values are ints.
                 if isinstance(start, int) and isinstance(stop, int):
                     step = int(step) if np.isclose(np.round(step), step) else step
-        zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+
+        def _round_ratio(numerator, denominator, digits):
+            """Round numerator/denominator, cheaply for scalars."""
+            ratio = _maybe_unbox_scalar(numerator / denominator)
+            if isinstance(ratio, np.ndarray):  # multi-element array inputs
+                return np.round(ratio, digits)
+            # rounding python floats is ~10x faster than numpy scalars.
+            return round(float(ratio), digits)
+
+        zero = _TD64_ZERO if is_timedelta64(step) else 0
         if step != zero:
-            span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
+            span = _round_ratio(stop - start, step, 1)
             int_val = int(_maybe_unbox_scalar(np.ceil(span)))
             stop = start + step * int_val
         start_equal_stop = _maybe_unbox_scalar(start == stop)
-        length = (
-            1
-            if start_equal_stop
-            else int(_maybe_unbox_scalar(np.round((stop - start) / step)))
-        )
+        length = 1 if start_equal_stop else int(_round_ratio(stop - start, step, 0))
         shape = (length,)
         values.update(dict(start=start, stop=stop, shape=shape, step=step))
         # step should have the same sign as stop-start, see #321.
+        # Compare signs via direct comparisons (rather than np.sign) since
+        # np.sign(datetime64) returns a datetime64 which includes precision,
+        # so even if the sign is the same, differing precision fails; direct
+        # comparisons are also much cheaper than to_float conversions.
         diff = stop - start
-        # note: we need to the to_float since np.sign(datetime64) returns a
-        # datetime64 which includes precision, so even if the sign is the same
-        # if the precision is different this validation fails.
-        if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
+        step_ = values["step"]
+        try:
+            same_sign = ((step_ > zero) == (diff > zero)) & (
+                (step_ < zero) == (diff < zero)
+            )
+        except TypeError:  # mixed types (e.g. datetime.timedelta vs int zero)
+            same_sign = np.sign(to_float(step_)) == np.sign(to_float(diff))
+        if not same_sign:
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
         # Note: dtype was a property before but it messed up model
@@ -1452,19 +1482,25 @@ class CoordRange(BaseCoord):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
             return value
-        input_is_array = isinstance(value, Sized)
+        start, step = self.start, self.step
+        if not isinstance(value, Sized):
+            # Scalar fast path; avoids several small-array allocations.
+            # Due to float weirdness we need a little bit of a fudge factor.
+            # (float() first since rounding numpy scalars is ~10x slower)
+            fraction = round(float((value - start) / step), 10)
+            if not math.isfinite(fraction):  # e.g. a step of 0
+                return None
+            out = math.ceil(fraction) if forward else math.floor(fraction)
+            if forward and out < 0:
+                return None
+            if not forward and out >= len(self):
+                return None
+            return out
         array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
-        start, step = self.start, self.step
         # Due to float weirdness we need a little bit of a fudge factor here.
         fraction = func(np.round((array - start) / step, decimals=10))
-        out = fraction.astype(np.int64)
-        lt_forward = (out < 0) & forward
-        gt_back = (out >= len(self)) & (not forward)
-        bad_values = lt_forward | gt_back
-        if not input_is_array and np.any(bad_values):
-            return None
-        return out if input_is_array else int(out[0])
+        return fraction.astype(np.int64)
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
@@ -1543,13 +1579,13 @@ class CoordRange(BaseCoord):
     @property
     def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        zero = _TD64_ZERO if is_timedelta64(self.step) else 0
         return self.step >= zero
 
     @property
     def reverse_sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        zero = _TD64_ZERO if is_timedelta64(self.step) else 0
         return self.step < zero
 
 
@@ -2798,7 +2834,8 @@ def get_coord(
         view2 = data[1:]
         view1 = data[:-1]
         try:
-            is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
+            # ascending first; it is by far the more common case.
+            is_monotonic = np.all(view2 > view1) or np.all(view1 > view2)
         except TypeError:
             return None, None, None, False
         # the array cannot be evenly sampled if it isn't monotonic
@@ -2807,11 +2844,19 @@ def get_coord(
                 diffs = view2 - view1
             except TypeError:
                 return None, None, None, False
-            unique_diff = np.unique(diffs)
+            # sort once and derive the unique values from the sorted array
+            # (np.unique would sort a second copy).
+            sorted_diffs = np.sort(diffs)
+            if sorted_diffs[0] == sorted_diffs[-1]:  # all diffs equal
+                unique_diff = sorted_diffs[:1]
+            else:
+                mask = np.empty(len(sorted_diffs), dtype=np.bool_)
+                mask[0] = True
+                np.not_equal(sorted_diffs[1:], sorted_diffs[:-1], out=mask[1:])
+                unique_diff = sorted_diffs[mask]
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 # this is a poor man's median that preserves dtype
-                sorted_diffs = np.sort(diffs)
                 _step = sorted_diffs[len(sorted_diffs) // 2]
                 _max = _get_new_max(data, _min, _step)
                 return _min, _max + _step, _step, is_monotonic
