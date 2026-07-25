@@ -638,8 +638,6 @@ class SQLIndexBackend(abc.ABC):
         keys are a superset of the old ones — a removed key would need
         the file's own attr value back, which only a rescan can supply.
         """
-        if not moves:
-            return
         path_attrs = new_path_attrs or {}
         attrs_by_old = {
             old: hive_typed_attrs(attrs) for old, attrs in path_attrs.items() if attrs

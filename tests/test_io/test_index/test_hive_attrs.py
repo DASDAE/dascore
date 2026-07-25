@@ -256,6 +256,26 @@ class TestMoveDetection:
         finally:
             spool.indexer.close()
 
+    def test_plain_rename_without_hive_keys(self, tmp_path, scan_calls):
+        """A rename with no hive keys anywhere is still a cheap move."""
+        dc.get_example_patch().io.write(tmp_path / "plain_a.h5", "dasdae")
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            scan_calls.clear()
+            (tmp_path / "plain_a.h5").rename(tmp_path / "plain_b.h5")
+            updated = spool.update(progress=None)
+            assert not scan_calls
+            assert updated.get_contents()["path"].iloc[0] == "plain_b.h5"
+        finally:
+            spool.indexer.close()
+
+    def test_detect_moves_skips_unstatted_and_root(self, hive_spool, hive_dir):
+        """Sources without stored stats and the root unit never match."""
+        files = {"new.h5": (1, 2, hive_dir / "new.h5")}
+        stored = {"gone.h5": None, ".": (1, 2)}
+        moves = hive_spool.indexer._detect_moves(["gone.h5", "."], stored, files)
+        assert moves == {}
+
     def test_non_fiber_file_rename(self, hive_spool, hive_dir, scan_calls):
         """A moved non-fiber file stays quietly tracked."""
         (hive_dir / "notes.txt").write_text("hello")
