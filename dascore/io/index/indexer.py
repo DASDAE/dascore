@@ -26,7 +26,11 @@ from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.index.backend import get_backend, resolve_query
-from dascore.io.index.ingest import SourceRecord, summaries_to_records
+from dascore.io.index.ingest import (
+    SourceRecord,
+    hive_path_attrs,
+    summaries_to_records,
+)
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import directory_writable, requires_local_directory
@@ -297,6 +301,48 @@ class DBDirectoryIndexer:
             files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
         return files
 
+    def _detect_moves(
+        self,
+        stale: list[str],
+        stored: dict[str, tuple[int, int] | None],
+        files: dict[str, tuple[int, int, Path]],
+    ) -> dict[str, str]:
+        """
+        Map old -> new relative path for unambiguous renames/moves.
+
+        A moved source keeps its exact (mtime_ns, size_bytes) — for
+        directory-format units, the rename-invariant manifest signature —
+        so a stale path and a brand-new path with identical stats, each
+        unique on its side, are the same bytes at a new location and the
+        index can rewrite the path instead of re-reading contents. This
+        makes attaching metadata by renaming hive-style directories (or
+        files) cheap on large archives. Renames that *remove* a hive key
+        are excluded: restoring the file's own value for the dropped
+        attr requires a rescan.
+        """
+        old_by_stats: dict[tuple[int, int], list[str]] = {}
+        for rel in stale:
+            stats = stored.get(rel)
+            if stats is None or rel == ".":
+                continue
+            old_by_stats.setdefault(stats, []).append(rel)
+        new_by_stats: dict[tuple[int, int], list[str]] = {}
+        for rel, (mtime, size, _) in files.items():
+            if rel in stored:
+                continue
+            new_by_stats.setdefault((mtime, size), []).append(rel)
+        moves: dict[str, str] = {}
+        for stats, olds in old_by_stats.items():
+            news = new_by_stats.get(stats, ())
+            if len(olds) != 1 or len(news) != 1:
+                continue  # ambiguous match: fall back to rescan
+            old, new = olds[0], news[0]
+            old_keys = set(hive_path_attrs(old, warn=False))
+            if old_keys - set(hive_path_attrs(new, warn=False)):
+                continue
+            moves[old] = new
+        return moves
+
     def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         Update the index: scan new/changed sources, drop removed ones.
@@ -306,7 +352,8 @@ class DBDirectoryIndexer:
         and stale-source removal is folded in (the walk is the dominant
         cost; removal afterwards is nearly free). Directory-format scan
         units (e.g. XMLBinary) are rescanned whole when any member file
-        changes.
+        changes. Renamed/moved sources are detected by their unchanged
+        stats and rewritten in place, never rescanned (see _detect_moves).
         """
         files = self._walk()
         stored = {
@@ -323,6 +370,16 @@ class DBDirectoryIndexer:
             for rel, (mtime, size, _) in files.items()
             if stored.get(rel) != (mtime, size)
         ]
+        # Moves apply to the unrestricted sets, like stale removal below:
+        # the rows must track the filesystem even when a `paths` argument
+        # narrows which sources get rescanned.
+        moves = self._detect_moves(stale, stored, files)
+        if moves:
+            new_attrs = {old: hive_path_attrs(new) for old, new in moves.items()}
+            self._backend.move_sources(moves, new_attrs)
+            moved_targets = set(moves.values())
+            stale = [rel for rel in stale if rel not in moves]
+            changed = [rel for rel in changed if rel not in moved_targets]
         if paths is not None:
             # restrict the rescan (not stale removal) to the given paths
             keep = set()
@@ -366,11 +423,12 @@ class DBDirectoryIndexer:
                         format_version="",
                         mtime_ns=mtime,
                         size_bytes=size,
+                        path_attrs=hive_path_attrs(rel, warn=False) or None,
                     )
                 )
             if records:
                 self._backend.write_sources(records)
-        if stale or changed or not self._initial_update_done:
+        if stale or changed or moves or not self._initial_update_done:
             # Directory archives present in time order; ingest assigns
             # walk-order ordinals, so each sync renumbers to keep the
             # contract (iterate by ordinal) aligned with time. The

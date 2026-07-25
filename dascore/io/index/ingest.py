@@ -10,6 +10,7 @@ units here, so cross-patch comparisons in the index are always valid.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import warnings
 from dataclasses import dataclass, field, fields, replace
@@ -20,6 +21,7 @@ import pandas as pd
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.io.index.schema import KINDS, RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
+from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
@@ -126,6 +128,7 @@ class SourceRecord:
     base_uri: str | None = None
     mtime_ns: int | None = None
     size_bytes: int | None = None
+    path_attrs: dict[str, str] | None = None
     patches: tuple[PatchRecord, ...] = ()
 
 
@@ -198,29 +201,74 @@ def typed_value(value) -> TypedValue | None:
     return None  # complex attrs (sequences, dicts, ...) are skipped
 
 
+def _attr_name_status(name: str) -> str:
+    """
+    Classify an attr name for indexing: "ok", "skip", or "reserved".
+
+    Structural/underscore names skip silently; names that sanitize to a
+    structural storage/contract column are reserved (callers warn).
+    Coordinate-envelope-shaped names (e.g. "channel_step") are ordinary
+    attrs; a genuine collision with a coord envelope column is handled
+    (warn, coord wins) when the flat view is built.
+    """
+    if name in _SKIPPED_ATTRS or name.startswith("_"):
+        return "skip"
+    if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS:
+        return "reserved"
+    return "ok"
+
+
 def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
     """Get indexable typed attrs from a patch summary."""
     raw = summary.attrs.model_dump()
     out = {}
     for name, value in raw.items():
-        if name in _SKIPPED_ATTRS or name.startswith("_"):
-            continue
-        # Structural storage/contract column names cannot double as attr
-        # columns. Coordinate-envelope-shaped names (e.g. "channel_step")
-        # are ordinary attrs; a genuine collision with a coord envelope
-        # column is handled (warn, coord wins) when the flat view is built.
-        if sanitize_attr_name(name) in RESERVED_ATTR_COLUMNS:
+        status = _attr_name_status(name)
+        if status == "reserved":
             msg = (
                 f"Skipping reserved attr name {name!r}; it collides with a "
                 "structural index column. The attr stays on the patch but "
                 "is not queryable through the spool."
             )
             warnings.warn(msg, UserWarning)
+        if status != "ok":
             continue
         typed = typed_value(value)
         if typed is not None:
             out[name] = typed
     return out
+
+
+def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
+    """
+    Return the indexable hive-style path attrs for a stored relative path.
+
+    Applies the same name rules as file attrs: structural/underscore
+    names are dropped silently, reserved column collisions warn and drop.
+    """
+    out = {}
+    for name, value in parse_hive_path_attrs(rel_posix).items():
+        status = _attr_name_status(name)
+        if status == "reserved" and warn:
+            msg = (
+                f"Skipping hive-style path key {name!r} in {rel_posix!r}; "
+                "it collides with a structural index column."
+            )
+            warnings.warn(msg, UserWarning)
+        if status != "ok":
+            continue
+        out[name] = value
+    return out
+
+
+def hive_typed_attrs(path_attrs: dict[str, str]) -> dict[str, TypedValue]:
+    """Wrap hive path attrs as string TypedValues (no type inference)."""
+    return {name: TypedValue("str", value) for name, value in path_attrs.items()}
+
+
+def dump_path_attrs(path_attrs: dict[str, str] | None) -> str | None:
+    """Serialize a path-attrs dict for the sources table (None when empty)."""
+    return json.dumps(path_attrs, sort_keys=True) if path_attrs else None
 
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
@@ -372,11 +420,19 @@ def summaries_to_records(
             patches.append(record)
         posix_path = path.replace("\\", "/")
         store_path = posix_path
+        path_attrs = None
         if root_prefix is not None and (
             posix_path == root_prefix or posix_path.startswith(f"{root_prefix}/")
         ):
             # "." (not "") marks a source that IS the root (directory units)
             store_path = posix_path[len(root_prefix) :].lstrip("/") or "."
+            # Hive-style key=value directory segments become string attrs
+            # that override same-named file attrs (renaming a directory is
+            # the user's way of correcting metadata).
+            path_attrs = hive_path_attrs(store_path) or None
+            if path_attrs:
+                typed = hive_typed_attrs(path_attrs)
+                patches = [replace(p, attrs={**p.attrs, **typed}) for p in patches]
         out.append(
             SourceRecord(
                 source_path=store_path,
@@ -385,6 +441,7 @@ def summaries_to_records(
                 format_version=first.source_version,
                 mtime_ns=(mtimes_ns or {}).get(path),
                 size_bytes=(sizes_bytes or {}).get(path),
+                path_attrs=path_attrs,
                 patches=tuple(patches),
             )
         )
@@ -501,6 +558,7 @@ def assemble_source_records(
                     **{f: _py_scalar(getattr(patch, f)) for f in _PATCH_ROW_FIELDS},
                 )
             )
+        raw_path_attrs = _py_scalar(getattr(src, "path_attrs", None))
         out.append(
             SourceRecord(
                 source_path=_py_scalar(src.source_path) or "",
@@ -509,6 +567,7 @@ def assemble_source_records(
                 format_version=_py_scalar(src.format_version) or "",
                 mtime_ns=_py_scalar(src.mtime_ns),
                 size_bytes=_py_scalar(src.size_bytes),
+                path_attrs=json.loads(raw_path_attrs) if raw_path_attrs else None,
                 patches=tuple(patch_records),
             )
         )

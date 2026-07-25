@@ -11,7 +11,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -46,6 +46,12 @@ SOURCES = MappingProxyType(
         "format_version": "str",
         "mtime_ns": "int64",
         "size_bytes": "int64",
+        # JSON dict of hive-style key=value attrs parsed from the stored
+        # path's directory segments; NULL when the path carries none.
+        # Records which attr values are path-derived so moves can rewrite
+        # them and patch loading can stamp them without re-parsing paths
+        # (derived/union catalogs absolutize paths, losing the segments).
+        "path_attrs": "str",
         "last_indexed_ns": "int64",
         # The catalog's explicit ordering contract: patch rows present in
         # (ordinal, patch_id) order. Assigned at ingest (insertion
@@ -200,6 +206,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "base_uri",
         "mtime_ns",
         "size_bytes",
+        "path_attrs",
         "n_dims",
         "dims",
         "shape",

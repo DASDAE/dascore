@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote
 
 from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
+
+# Hive's sentinel for a NULL partition value; means "no value", so the
+# key is treated as absent rather than set to the sentinel string.
+_HIVE_NULL = "__HIVE_DEFAULT_PARTITION__"
+# A trailing file extension: dot then a letter-led alphanumeric run, so
+# numeric values like "depth=1.5" keep their fractional part.
+_EXTENSION_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
 
 # Synthetic URI schemes for in-memory patch identities (see
 # dascore.io.index.catalog); such paths dispatch to in-memory registries
@@ -80,6 +89,47 @@ def coerce_to_local_path(resource) -> Path:
     if isinstance(resource, str) and "://" not in resource:
         return Path(resource)
     return Path(coerce_to_upath(resource).path)
+
+
+def parse_hive_path_attrs(rel_posix: str) -> dict[str, str]:
+    """
+    Parse hive-style ``key=value`` pairs from a relative path.
+
+    Every path segment participates, including the file name, whose
+    extension is first stripped. A segment holds one pair (Hive layout,
+    ``network=XX/``) or several separated by ``__`` — the same separator
+    DASCore's default patch names use — as in ``station=A__tag=raw.h5``.
+    Keys and values are percent-decoded after splitting, so encoded
+    ``=`` (``%3D``), ``__`` (``%5F%5F``), and ``.`` survive inside either
+    part. When a key repeats, the deepest (then rightmost) one wins.
+    Pairs with an empty key or value, or with Hive's NULL sentinel as
+    the value, are skipped, as are segments/parts without ``=``.
+
+    Parameters
+    ----------
+    rel_posix
+        A POSIX-style path relative to the spool root (as stored in the
+        index), e.g. ``"network=XX/station=A/file.h5"``.
+
+    Examples
+    --------
+    >>> from dascore.utils.paths import parse_hive_path_attrs
+    >>> parse_hive_path_attrs("network=XX/station=A/cable=n__tag=raw.h5")
+    {'network': 'XX', 'station': 'A', 'cable': 'n', 'tag': 'raw'}
+    """
+    out: dict[str, str] = {}
+    segments = rel_posix.split("/")
+    segments[-1] = _EXTENSION_RE.sub("", segments[-1])
+    for segment in segments:
+        for part in segment.split("__"):
+            key, sep, value = part.partition("=")
+            if not sep:
+                continue
+            key, value = unquote(key), unquote(value)
+            if not key or not value or value == _HIVE_NULL:
+                continue
+            out[key] = value
+    return out
 
 
 def requires_local_directory(resource, *, label: str):
