@@ -9,7 +9,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError, RemoteCacheError
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
@@ -48,7 +48,7 @@ def suppress_expected_remote_cache_warnings(request):
 @pytest.fixture(autouse=True)
 def isolated_remote_cache(tmp_path):
     """Use one isolated remote cache per test to avoid suite-order slowdowns."""
-    with set_config(remote_cache_dir=tmp_path / "remote_cache"):
+    with config_context(remote_cache_dir=tmp_path / "remote_cache"):
         clear_remote_file_cache()
         yield
         clear_remote_file_cache()
@@ -137,7 +137,7 @@ class TestHTTPFormatAndSpool:
         fname = "prodml_2.1.h5"
         ensure_http_regression_file(fname)
         path = http_regression_das_path / fname
-        with set_config(
+        with config_context(
             allow_remote_cache_for_metadata=True, warn_on_remote_cache=True
         ):
             with pytest.warns(UserWarning, match="Downloading remote file"):

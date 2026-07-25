@@ -136,7 +136,7 @@ class TestMergePlan:
 
     def test_plan_records_params(self, random_flat):
         """Plans record resolved parameters, not config references."""
-        with dc.set_config(sampling_group_tolerance=0.02):
+        with dc.config_context(sampling_group_tolerance=0.02):
             plan = build_chunk_plan(random_flat, time=None)
         assert plan.params["sampling_group_tolerance"] == 0.02
         assert isinstance(plan.params["group"], tuple)
@@ -282,7 +282,7 @@ class TestGroupParameter:
 
     def test_config_group(self, two_station_flat):
         """Config groupby_attrs drives the default partitioning."""
-        with dc.set_config(groupby_attrs=("network",)):
+        with dc.config_context(groupby_attrs=("network",)):
             with pytest.raises(CoordMergeError, match="station"):
                 build_chunk_plan(two_station_flat, time=None)
 

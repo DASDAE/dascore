@@ -23,6 +23,7 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
+from dascore.config import config_context, get_config
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
@@ -663,20 +664,26 @@ def cached_method(func):
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
-    def __init__(self, func, kwargs, progress=True):
+    def __init__(self, func, kwargs, config, progress=True):
         self._func = func
         self._kwargs = kwargs
         self._progress = progress
+        # Bind the config active at map() call time so workers (threads or
+        # pickled into processes) apply the same config the caller had, rather
+        # than a fresh default or a scoped override that would not propagate.
+        self._config = config
 
     def __call__(self, spool):
-        iterable = spool
-        # in order to handle multiprocessing, we apply a secret tag of "_progress"
-        # to the first spool. This way only the first spool displays the
-        # the progress bar. A huge hack, maybe there is a better way? See #265.
-        if not getattr(spool, "_no_progress", False):
-            desc = f"Applying {self._func.__name__} to spool"
-            iterable = track(spool, desc) if self._progress else spool
-        return [self._func(x, **self._kwargs) for x in iterable]
+        with config_context(self._config):
+            iterable = spool
+            # in order to handle multiprocessing, we apply a secret tag of
+            # "_progress" to the first spool. This way only the first spool
+            # displays the progress bar. A huge hack, maybe there is a better
+            # way? See #265.
+            if not getattr(spool, "_no_progress", False):
+                desc = f"Applying {self._func.__name__} to spool"
+                iterable = track(spool, desc) if self._progress else spool
+            return [self._func(x, **self._kwargs) for x in iterable]
 
 
 def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
@@ -711,7 +718,7 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # displayed in one thread/process.
     for sub_spool in spools[1:]:
         sub_spool._no_progress = True
-    new_func = _MapFuncWrapper(func, kwargs, progress=progress)
+    new_func = _MapFuncWrapper(func, kwargs, get_config(), progress=progress)
     return [x for y in client.map(new_func, spools) for x in y]
 
 

@@ -8,7 +8,7 @@ from functools import cache
 import pytest
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import get_config, set_config
 from dascore.exceptions import DependencyError
 from dascore.utils.downloader import fetch, get_registry_df
 
@@ -31,9 +31,17 @@ def test_file_paths():
 
 @pytest.fixture(scope="module", autouse=True)
 def allow_legacy_dasdae_coord_unpickle():
-    """Benchmarks include trusted historical DASDAE fixtures from the registry."""
-    with set_config(allow_dasdae_format_unpickle=True):
+    """Benchmarks include trusted historical DASDAE fixtures from the registry.
+
+    Uses the permanent config base (not a scoped ``config_context``) because a
+    module-scoped fixture spans many benchmarks.
+    """
+    previous = get_config()
+    set_config(allow_dasdae_format_unpickle=True)
+    try:
         yield
+    finally:
+        set_config(previous)
 
 
 class TestIOBenchmarks:

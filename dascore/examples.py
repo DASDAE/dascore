@@ -13,7 +13,7 @@ import pandas as pd
 import dascore as dc
 import dascore.core
 from dascore.compat import random_state
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
 from dascore.utils.imports import lazy_import
@@ -29,7 +29,7 @@ EXAMPLE_SPOOLS = {}
 
 def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
     """Load the first patch from an example file without spool indirection."""
-    with set_config(allow_dasdae_format_unpickle=True):
+    with config_context(allow_dasdae_format_unpickle=True):
         return dc.read(path)[0]
 
 

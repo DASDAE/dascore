@@ -45,7 +45,7 @@ The relevant runtime config values live in `dascore.config`.
 ```{python}
 from pathlib import Path
 
-from dascore.config import get_config, set_config
+from dascore.config import get_config, config_context
 
 config = get_config()
 
@@ -54,7 +54,7 @@ print(config.allow_remote_cache)
 print(config.allow_remote_cache_for_metadata)
 print(config.warn_on_remote_cache)
 
-with set_config(
+with config_context(
     remote_cache_dir=Path("/tmp/dascore-remote-cache"),
     allow_remote_cache=True,
     allow_remote_cache_for_metadata=False,
@@ -100,13 +100,13 @@ except RemoteCacheError as exc:
 If you know a metadata operation may need local caching, opt in explicitly.
 
 ```python
-from dascore.config import set_config
+from dascore.config import config_context
 from upath import UPath
 import dascore as dc
 
 http_path = UPath("http://example.com/data/prodml_2.1.h5")
 
-with set_config(allow_remote_cache_for_metadata=True):
+with config_context(allow_remote_cache_for_metadata=True):
     fmt = dc.get_format(http_path)
     summary = dc.scan(http_path)[0]
     payload = dc.scan_payloads(http_path, snap=False)[0]

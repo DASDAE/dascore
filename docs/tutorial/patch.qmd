@@ -251,15 +251,15 @@ filtered = patch.pass_filter(time=(1, 10))
 print(filtered.attrs.history[-1])
 ```
 
-If you want to suppress new history entries for a block of operations, use `set_config(patch_history="disabled")`. Existing history is preserved, but DASCore will stop appending new entries until that config context exits.
+If you want to suppress new history entries for a block of operations, use `config_context(patch_history="disabled")`. Existing history is preserved, but DASCore will stop appending new entries until that config context exits.
 
 ```{python}
-from dascore.config import set_config
+from dascore.config import config_context
 
 patch = dc.get_example_patch().pass_filter(time=(1, 10))
 old_history = patch.attrs.history
 
-with set_config(patch_history="disabled"):
+with config_context(patch_history="disabled"):
     out = patch.abs()
 
 assert out.attrs.history == old_history

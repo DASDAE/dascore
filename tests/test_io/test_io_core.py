@@ -15,7 +15,7 @@ import rich.progress as prog
 from upath import UPath
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.constants import SpoolType
 from dascore.exceptions import (
     InvalidFiberIOError,
@@ -1171,7 +1171,7 @@ class TestReloadableSourcePath:
         # Switch off debug to force progress bar, then make contents to scan.
         contents = list(dc.examples.get_example_spool(length=22))
 
-        with set_config(debug=False):
+        with config_context(debug=False):
             with pytest.raises(KeyboardInterrupt, match="test interrupt"):
                 dc.scan(contents, progress=Progress())
 

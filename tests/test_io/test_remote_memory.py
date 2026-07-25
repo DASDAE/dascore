@@ -8,7 +8,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
@@ -44,7 +44,7 @@ def memory_fetch_copy():
 @pytest.fixture(autouse=True)
 def isolated_remote_cache(tmp_path):
     """Use one isolated remote cache per test to avoid cross-test cleanup cost."""
-    with set_config(remote_cache_dir=tmp_path / "remote_cache"):
+    with config_context(remote_cache_dir=tmp_path / "remote_cache"):
         clear_remote_file_cache()
         yield
         clear_remote_file_cache()

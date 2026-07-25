@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from upath import UPath
 
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.utils.patch import get_patch_names
@@ -79,7 +79,7 @@ class TestFindIndex:
         from dascore.io.index.indexer import _path_digest
 
         map_dir = tmp_path / "path_map"
-        with set_config(directory_index_map_dir=map_dir):
+        with config_context(directory_index_map_dir=map_dir):
             first = DBDirectoryIndexer(unwritable_directory).index_path
         digest = _path_digest(unwritable_directory)
         assert first.name == f"_dascore_index_{digest}.sqlite3"
@@ -118,7 +118,7 @@ class TestFindIndex:
         entry = _map_entry_path(data_dir, map_dir)
         entry.parent.mkdir(parents=True)
         entry.write_text("{'bad': 'json'")
-        with set_config(directory_index_map_dir=map_dir):
+        with config_context(directory_index_map_dir=map_dir):
             indexer = DBDirectoryIndexer(data_dir)
         # The corrupt entry reads as a miss, so the writable data dir keeps
         # its in-directory index rather than crashing.
@@ -140,7 +140,7 @@ class TestFindIndex:
     def test_index_map_dir_comes_from_config(self, tmp_path):
         """Index map dir should be sourced from runtime configuration."""
         index_map_dir = tmp_path / "path_map"
-        with set_config(directory_index_map_dir=index_map_dir):
+        with config_context(directory_index_map_dir=index_map_dir):
             out = DBDirectoryIndexer(tmp_path)
             assert out.index_map_dir == index_map_dir
 

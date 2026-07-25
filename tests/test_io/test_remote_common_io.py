@@ -7,7 +7,6 @@ import sys
 import pytest
 
 import dascore as dc
-from dascore.config import set_config
 from dascore.utils.misc import suppress_warnings
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
@@ -61,9 +60,9 @@ def suppress_expected_remote_cache_warnings():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def isolated_remote_cache(tmp_path_factory):
+def isolated_remote_cache(tmp_path_factory, permanent_config):
     """Keep the common remote matrix in its own cache root."""
-    with set_config(
+    with permanent_config(
         remote_cache_dir=tmp_path_factory.mktemp("remote_common_cache"),
         allow_remote_cache_for_metadata=True,
     ):

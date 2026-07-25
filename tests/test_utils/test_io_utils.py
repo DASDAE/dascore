@@ -12,7 +12,7 @@ from upath import UPath
 
 import dascore as dc
 import dascore.utils.remote_io as remote_io
-from dascore.config import set_config
+from dascore.config import config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -401,7 +401,7 @@ class TestGetHandleFromResource:
             "constructor",
             staticmethod(lambda *args, **kwargs: object()),
         )
-        with set_config(remote_hdf5_block_size=1234):
+        with config_context(remote_hdf5_block_size=1234):
             H5Reader.get_handle(path)
         assert opened["block_size"] == 1234
         assert opened["cache_type"] == "readahead"
@@ -455,7 +455,7 @@ class TestIOResourceManager:
     @pytest.fixture(autouse=True)
     def clear_remote_cache(self):
         """Ensure remote cache state doesn't leak between tests."""
-        with set_config(warn_on_remote_cache=False):
+        with config_context(warn_on_remote_cache=False):
             clear_remote_file_cache()
             yield
             clear_remote_file_cache()
@@ -532,7 +532,7 @@ class TestIOResourceManager:
         path = UPath("memory://dascore/io_resource_test_custom_cache.txt")
         path.write_text("hello")
         cache_dir = tmp_path / "remote-cache"
-        with set_config(remote_cache_dir=cache_dir):
+        with config_context(remote_cache_dir=cache_dir):
             local_path = ensure_local_file(path)
         assert cache_dir in local_path.parents
         assert local_path.exists()
@@ -631,9 +631,9 @@ class TestIOResourceManager:
         first_cache = tmp_path / "remote-cache-a"
         second_cache = tmp_path / "remote-cache-b"
 
-        with set_config(remote_cache_dir=first_cache):
+        with config_context(remote_cache_dir=first_cache):
             first = ensure_local_file(path)
-        with set_config(remote_cache_dir=second_cache):
+        with config_context(remote_cache_dir=second_cache):
             second = ensure_local_file(path)
 
         assert first_cache in first.parents
@@ -684,7 +684,7 @@ class TestIOResourceManager:
         path = UPath("memory://dascore/io_resource_test_block_size.bin")
         monkeypatch.setattr(type(path), "open", lambda *_args, **_kwargs: handle)
 
-        with set_config(remote_download_block_size=321):
+        with config_context(remote_download_block_size=321):
             local_path = ensure_local_file(path)
 
         assert local_path.exists()
@@ -726,7 +726,7 @@ class TestIOResourceManager:
         resource = _HTTPResource()
 
         monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
-        with set_config(remote_download_block_size=2):
+        with config_context(remote_download_block_size=2):
             local_path = tmp_path / "downloaded.bin"
             remote_io._download_remote_file(resource, local_path)
 
@@ -759,7 +759,7 @@ class TestIOResourceManager:
         """First-time remote cache materialization should warn."""
         path = UPath("memory://dascore/io_resource_test_warn.txt")
         path.write_text("hello")
-        with set_config(warn_on_remote_cache=True):
+        with config_context(warn_on_remote_cache=True):
             with pytest.warns(
                 UserWarning,
                 match=r"Downloading remote file memory://\.\.\./io_resource_test_warn\.txt",
@@ -771,7 +771,7 @@ class TestIOResourceManager:
         """Cache hits should not warn after a remote file is already cached."""
         path = UPath("memory://dascore/io_resource_test_warn_reuse.txt")
         path.write_text("hello")
-        with set_config(warn_on_remote_cache=True):
+        with config_context(warn_on_remote_cache=True):
             with pytest.warns(UserWarning, match="Downloading remote file"):
                 first = ensure_local_file(path)
             with suppress_warnings(action="always", record=True) as record:
@@ -783,7 +783,7 @@ class TestIOResourceManager:
         """Configured warning suppression should keep downloads silent."""
         path = UPath("memory://dascore/io_resource_test_warn_off.txt")
         path.write_text("hello")
-        with set_config(warn_on_remote_cache=False):
+        with config_context(warn_on_remote_cache=False):
             with suppress_warnings(action="always", record=True) as record:
                 local_path = ensure_local_file(path)
         assert not record
@@ -805,7 +805,7 @@ class TestIOResourceManager:
         """Disabling remote caching should block local materialization."""
         path = UPath("memory://dascore/io_resource_test_disabled.txt")
         path.write_text("hello")
-        with set_config(allow_remote_cache=False):
+        with config_context(allow_remote_cache=False):
             with pytest.raises(RemoteCacheError, match="Remote caching is disabled"):
                 ensure_local_file(path)
         assert not list(get_remote_cache_path().rglob(path.name))
@@ -825,7 +825,7 @@ class TestIOResourceManager:
         """Metadata scope should permit downloads when opted in."""
         path = UPath("memory://dascore/io_resource_test_metadata_enabled.txt")
         path.write_text("hello")
-        with set_config(
+        with config_context(
             allow_remote_cache_for_metadata=True, warn_on_remote_cache=False
         ):
             with remote_cache_scope("metadata"):
@@ -1008,7 +1008,7 @@ class TestFallbackFileObj:
             staticmethod(lambda handle, **_kwargs: handle.seek(1) or object()),
         )
 
-        with set_config(warn_on_remote_cache=True):
+        with config_context(warn_on_remote_cache=True):
             with pytest.warns(UserWarning, match="Downloading remote file"):
                 H5Reader.get_handle(path)
 
@@ -1033,7 +1033,7 @@ class TestFallbackFileObj:
             staticmethod(lambda handle, **_kwargs: handle.seek(1) or object()),
         )
 
-        with set_config(allow_remote_cache=False):
+        with config_context(allow_remote_cache=False):
             with pytest.raises(RemoteCacheError, match="Remote caching is disabled"):
                 H5Reader.get_handle(path)
 

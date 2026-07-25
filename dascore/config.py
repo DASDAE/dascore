@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from tempfile import gettempdir
+from threading import Lock
 from typing import Literal
 
 import pooch
@@ -27,6 +31,9 @@ class DascoreConfig(BaseModel):
     model_config = ConfigDict(
         frozen=True,
         validate_default=True,
+        # Reject unknown fields so misspelled overrides raise rather than
+        # silently doing nothing.
+        extra="forbid",
     )
 
     # General behavior.
@@ -139,9 +146,30 @@ class DascoreConfig(BaseModel):
         return Path(value).expanduser()
 
 
-# The active runtime config is a process-global singleton. A scoped override
-# via `set_config(...)` is applied globally and restored on context exit.
-_CONFIG = DascoreConfig()
+# Runtime configuration has two tiers. `_GLOBAL_CONFIG` is the process-wide
+# base, visible from every thread and task; `set_config(...)` swaps it. Scoped
+# overrides from `config_context(...)` live in a ContextVar so concurrent
+# blocks stay isolated per thread/task and never clobber one another.
+_GLOBAL_CONFIG: DascoreConfig = DascoreConfig()
+_GLOBAL_CONFIG_LOCK = Lock()
+_CONFIG_OVERRIDE: ContextVar[DascoreConfig | None] = ContextVar(
+    "dascore_config_override", default=None
+)
+
+
+def _reinit_config_lock():
+    """Install a fresh config lock, used after a fork.
+
+    A fork can copy the lock while another thread holds it. That thread does
+    not exist in the child, so the inherited copy would never be released and
+    any config change in the child would hang.
+    """
+    global _GLOBAL_CONFIG_LOCK
+    _GLOBAL_CONFIG_LOCK = Lock()
+
+
+if hasattr(os, "register_at_fork"):  # not available on windows
+    os.register_at_fork(after_in_child=_reinit_config_lock)
 
 
 class _ConfigDescriptor:
@@ -161,23 +189,34 @@ def config_attr(attr_name: str):
 
 
 def get_config() -> DascoreConfig:
-    """Return the active runtime configuration."""
-    return _CONFIG
+    """Return the active runtime configuration.
 
-
-@contextmanager
-def _restore_config(previous: DascoreConfig):
-    """Restore the previous config when exiting a context manager."""
-    global _CONFIG
-    try:
-        yield _CONFIG
-    finally:
-        _CONFIG = previous
-
-
-def set_config(new_config: DascoreConfig | None = None, **kwargs):
+    A scoped override from [`config_context`](`dascore.config.config_context`)
+    in the current thread/task takes precedence over the process-wide base set
+    by [`set_config`](`dascore.config.set_config`).
     """
-    Set the active runtime config and return a restoring context manager.
+    override = _CONFIG_OVERRIDE.get()
+    return override if override is not None else _GLOBAL_CONFIG
+
+
+def _build_config(base: DascoreConfig, new_config, kwargs) -> DascoreConfig:
+    """Validate and build a config from a full replacement or field overrides."""
+    if new_config is not None and kwargs:
+        msg = "Cannot supply both new_config and keyword overrides."
+        raise ValueError(msg)
+    if new_config is None:
+        payload = base.model_dump()
+        payload.update(kwargs)
+        return DascoreConfig(**payload)
+    if not isinstance(new_config, DascoreConfig):
+        msg = "new_config must be an instance of DascoreConfig."
+        raise TypeError(msg)
+    return new_config
+
+
+def set_config(new_config: DascoreConfig | None = None, **kwargs) -> DascoreConfig:
+    """
+    Set the process-wide runtime config, visible from every thread and task.
 
     Parameters
     ----------
@@ -185,45 +224,71 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs):
         A complete [`DascoreConfig`](`dascore.config.DascoreConfig`) to install.
         Mutually exclusive with keyword overrides.
     **kwargs
-        Individual field overrides applied on top of the current config.
+        Individual field overrides applied on top of the current base config.
 
     Notes
     -----
-    The config is a process-global singleton. An override is applied immediately
-    and also returns a context manager which restores the previous config on
-    exit. Overrides are not thread-scoped.
+    This is a permanent change to the process-wide base (it is not restored
+    automatically). For a temporary, thread/task-local override that restores
+    on exit, use [`config_context`](`dascore.config.config_context`) instead.
 
     Examples
     --------
     >>> import dascore as dc
-    >>> # Scoped override (restored on block exit) -- the common case.
-    >>> with dc.set_config(debug=True):
-    ...     assert dc.get_config().debug
-    >>> assert not dc.get_config().debug
-    >>>
-    >>> # Bare call: apply until reset.
     >>> _ = dc.set_config(display_float_precision=5)
     >>> assert dc.get_config().display_float_precision == 5
     >>> _ = dc.reset_config()
     """
-    global _CONFIG
-    previous = _CONFIG
-    if new_config is not None and kwargs:
-        msg = "Cannot supply both new_config and keyword overrides."
-        raise ValueError(msg)
-    if new_config is None:
-        payload = previous.model_dump()
-        payload.update(kwargs)
-        new_config = DascoreConfig(**payload)
-    elif not isinstance(new_config, DascoreConfig):
-        msg = "new_config must be an instance of DascoreConfig."
-        raise TypeError(msg)
-    _CONFIG = new_config
-    return _restore_config(previous)
+    global _GLOBAL_CONFIG
+    # Serialize the read-modify-write so concurrent keyword updates cannot lose
+    # each other's fields or return a config another thread just installed.
+    with _GLOBAL_CONFIG_LOCK:
+        _GLOBAL_CONFIG = _build_config(_GLOBAL_CONFIG, new_config, kwargs)
+        return _GLOBAL_CONFIG
+
+
+@contextmanager
+def config_context(
+    new_config: DascoreConfig | None = None, **kwargs
+) -> Iterator[DascoreConfig]:
+    """
+    Temporarily override the runtime config for the current thread/task.
+
+    Parameters
+    ----------
+    new_config
+        A complete [`DascoreConfig`](`dascore.config.DascoreConfig`) to install.
+        Mutually exclusive with keyword overrides.
+    **kwargs
+        Individual field overrides applied on top of the active config.
+
+    Notes
+    -----
+    The override is stored in a ``ContextVar``, so it is isolated per thread and
+    task and restored when the block exits. Whether a newly started OS thread
+    inherits a copy of the override is runtime-dependent
+    (``sys.flags.thread_inherit_context`` -- normally enabled on free-threaded
+    builds and disabled otherwise); an inherited copy is not undone by this
+    block's exit. For deterministic propagation, capture
+    ``contextvars.copy_context()`` and run the worker with it, or rely on APIs
+    that bind the config for you such as
+    [`Spool.map`](`dascore.core.spool.BaseSpool.map`).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> with dc.config_context(debug=True):
+    ...     assert dc.get_config().debug
+    >>> assert not dc.get_config().debug
+    """
+    config = _build_config(get_config(), new_config, kwargs)
+    token = _CONFIG_OVERRIDE.set(config)
+    try:
+        yield config
+    finally:
+        _CONFIG_OVERRIDE.reset(token)
 
 
 def reset_config() -> DascoreConfig:
-    """Reset the active runtime config to defaults."""
-    global _CONFIG
-    _CONFIG = DascoreConfig()
-    return _CONFIG
+    """Reset the process-wide runtime config base to defaults."""
+    return set_config(DascoreConfig())
