@@ -86,6 +86,12 @@ CoordKind = Literal["string", "empty", "single", "array", "range"]
 _TD64_ZERO = np.timedelta64(0, "ns")
 
 
+@cache
+def _second_quantity():
+    """Cache the 'second' quantity time-like coords are normalized to."""
+    return get_quantity("s")
+
+
 def ensure_consistent_dtype(value, name, dtype):
     """Ensure the values are consistent with dtype."""
     # For some reason all ints are getting converted to floats using default
@@ -1313,6 +1319,39 @@ class CoordRange(BaseCoord):
     _evenly_sampled = True
     _rich_style = dascore_styles["coord_range"]
 
+    def _new_grid(self, start, step, length: int) -> Self:
+        """
+        Return a CoordRange on an exactly known grid, skipping re-validation.
+
+        `validate_start_stop_step_len` exists to *derive* shape and a
+        normalized stop (always `start + step * length`) from loosely
+        specified inputs. Callers below already know the sample count exactly
+        -- it comes from index arithmetic on an existing, validated coord --
+        so re-deriving it costs ~60us per call and can only reproduce what is
+        passed in here.
+
+        Only use this where start/step come from an already-validated
+        CoordRange and length is computed from indices; anything taking user
+        input must go through the validating constructor.
+        """
+        units = self.units
+        # Mirror check_time_units, which forces time-like coords to seconds.
+        # Note it tests `start` for truthiness, so a coord starting at exactly
+        # zero is left alone; that quirk is reproduced here deliberately.
+        if start and (is_timedelta64(start) or is_datetime64(start)):
+            units = _second_quantity()
+        return self.model_construct(
+            # copy; model_construct stores the set by reference.
+            _fields_set=set(self.model_fields_set),
+            units=units,
+            step=step,
+            shape=(length,),
+            # matches what the validator stores for dtype.
+            dtype=np.asarray(start + step).dtype,
+            start=start,
+            stop=start + step * length,
+        )
+
     @model_validator(mode="before")
     @classmethod
     def validate_start_stop_step_len(cls, values):
@@ -1415,8 +1454,7 @@ class CoordRange(BaseCoord):
             if len(indices):
                 new_step = self.step * indices.step
                 new_start = self.start + indices.start * self.step
-                new_stop = new_start + new_step * len(indices)
-                return self.new(start=new_start, stop=new_stop, step=new_step)
+                return self._new_grid(new_start, new_step, len(indices))
         out = self.values[item]
         return get_coord(data=out, units=self.units)
 
@@ -1458,9 +1496,12 @@ class CoordRange(BaseCoord):
         data = slice(start, (stop + 1) if stop is not None else stop)
         if self._slice_degenerate(data):
             return self.empty(), slice(0, 0)
+        # The sample count is known exactly from the indices, so build the
+        # new grid directly rather than making the validator re-derive it.
+        first = 0 if start is None else start
+        last = (len(self) - 1) if stop is None else stop
         new_start = self[start] if start is not None else self.start
-        new_end = self[stop] + self.step if stop is not None else self.stop
-        new_coords = self.new(start=new_start, stop=new_end)
+        new_coords = self._new_grid(new_start, self.step, last + 1 - first)
         return new_coords, data
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
@@ -1472,10 +1513,11 @@ class CoordRange(BaseCoord):
             return self, slice(None)
         new_step = -self.step
         if reverse:  # reversing a forward sorted Coordrange
-            new_start, new_stop = self.max(), self.min() + new_step
+            new_start = self.max()
         else:  # order a reverse sorted one
-            new_start, new_stop = self.min(), self.max() + new_step
-        out = self.new(start=new_start, stop=new_stop, step=new_step)
+            new_start = self.min()
+        # reversing preserves the sample count.
+        out = self._new_grid(new_start, new_step, len(self))
         return out, slice(None, None, -1)
 
     def _get_index(self, value, forward=True):
@@ -1568,13 +1610,10 @@ class CoordRange(BaseCoord):
         """
         # CoordRange is always 1D by construction; keep as an internal invariant.
         assert self.ndim == 1, "Can only change length for 1D coords."
-        if (current := len(self)) == length:
+        if len(self) == length:
             return self
-        diff = length - current
-        stop, step = self.stop, self.step
-        out = self.update(stop=stop + step * diff)
-        assert len(out) == length
-        return out
+        # Only the sample count changes; start/step are already valid.
+        return self._new_grid(self.start, self.step, length)
 
     @property
     def sorted(self) -> bool:
