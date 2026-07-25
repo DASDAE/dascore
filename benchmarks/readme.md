@@ -26,6 +26,7 @@ Benchmarks are now organized as pytest tests in the `benchmarks/` directory:
 - `test_patch_benchmarks.py` - Core Patch processing, transform, and visualization benchmarks
 - `test_io_benchmarks.py` - File I/O operations benchmarks
 - `test_spool_benchmarks.py` - Spool chunking and selection benchmarks
+- `test_lookup_benchmarks.py` - In-memory lookups on hot paths (format resolution, remote-cache and IO handle resolution, repeat spool access). These are deliberately small: a change of a few microseconds per lookup is invisible in the end-to-end benchmarks above, because one file read costs far more than the lookups it makes.
 
 Each benchmark uses the `@pytest.mark.benchmark` decorator to automatically measure performance.
 
