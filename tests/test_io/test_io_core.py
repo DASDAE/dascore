@@ -523,6 +523,7 @@ class TestFormatManagerConcurrency:
         manager.__dict__["_eps"] = pd.Series(eps)
         return manager
 
+    @pytest.mark.concurrency
     def test_multi_version_format_never_partial(self, run_in_threads):
         """Every thread sees all versions, even mid-load."""
         entered, release, calls = threading.Event(), threading.Event(), []
@@ -555,6 +556,7 @@ class TestFormatManagerConcurrency:
         assert all(x == ("2", "1") for x in results)
         assert calls == ["v1"]
 
+    @pytest.mark.concurrency
     def test_concurrent_full_load_runs_each_loader_once(self, run_in_threads):
         """Loading all formats from several threads loads each entry point once."""
         calls = []
@@ -1258,6 +1260,7 @@ class TestReloadableSourcePath:
         assert len(out) == 2
         assert not any(summary["source_patch_id"] for summary in out)
 
+    @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
         """Ensure a keyboard interrupt works when progress bar is going"""
 

@@ -359,11 +359,11 @@ def _get_acquisition_attrs(
         "MeasurementStartTime": start_time,
         "MinimumFrequency": 0.0,
         "MinimumFrequency.uom": encode_h5_strings("Hz")[0],
-        "NumberOfLoci": num_loci,
+        "NumberOfLoci": np.int64(num_loci),
         "ServiceCompanyName": encode_h5_strings(strings["ServiceCompanyName"])[0],
         "SpatialSamplingInterval": distance_step,
         "SpatialSamplingInterval.uom": encode_h5_strings("m")[0],
-        "StartLocusIndex": start_locus,
+        "StartLocusIndex": np.int64(start_locus),
         "TriggeredMeasurement": False,
         "schemaVersion": encode_h5_strings("2.1")[0],
         "uuid": encode_h5_strings(str(uuid4()))[0],
@@ -385,30 +385,30 @@ def _get_array_attrs(
     """Return attributes for the raw data and time arrays."""
     num_loci = len(patch.get_coord("distance"))
     raw_attrs = {
-        "NumberOfLoci": num_loci,
+        "NumberOfLoci": np.int64(num_loci),
         "OutputDataRate": output_rate,
         "OutputDataRate.uom": encode_h5_strings("Hz")[0],
         "RawDataUnit": encode_h5_strings(strings["RawDataUnit"])[0],
-        "StartLocusIndex": start_locus,
+        "StartLocusIndex": np.int64(start_locus),
         "uuid": encode_h5_strings(str(uuid4()))[0],
     }
     if patch.attrs.data_type:
         raw_attrs["RawDescription"] = encode_h5_strings(patch.attrs.data_type)[0]
     data_attrs = {
-        "Count": patch.data.size,
+        "Count": np.int64(patch.data.size),
         "Dimensions": encode_h5_strings(
             ["locus" if dim == "distance" else dim for dim in patch.dims]
         ),
         "PartEndTime": end_time,
         "PartStartTime": start_time,
-        "StartIndex": 0,
+        "StartIndex": np.int64(0),
     }
     time_attrs = {
-        "Count": len(times),
+        "Count": np.int64(len(times)),
         "EndTime": end_time,
         "PartEndTime": end_time,
         "PartStartTime": start_time,
-        "StartIndex": 0,
+        "StartIndex": np.int64(0),
         "StartTime": start_time,
         "Uom": encode_h5_strings("us")[0],
     }

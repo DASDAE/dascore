@@ -478,6 +478,7 @@ class TestMixedViewPickle:
         shapes = {loaded[i].shape for i in range(len(loaded))}
         assert shapes == {(300, 11), (300, 2000)}
 
+    @pytest.mark.concurrency
     def test_mixed_union_map_processes(self):
         """Process-backed map ships plan routes with each task."""
         from concurrent.futures import ProcessPoolExecutor

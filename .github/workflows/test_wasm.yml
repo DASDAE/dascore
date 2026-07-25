@@ -12,6 +12,7 @@ on:
       - dev
     paths:
       - 'dascore/**'
+      - 'tests/**'
       - 'scripts/test_wasm.mjs'
       - 'pyproject.toml'
       - '.github/workflows/test_wasm.yml'
@@ -48,3 +49,62 @@ jobs:
 
       - name: Test wheel in WebAssembly
         run: node scripts/test_wasm.mjs dist/*.whl
+
+  # Run the full pytest suite inside a Pyodide virtual environment.
+  # Tests needing threads, subprocesses, or network are deselected since
+  # WebAssembly does not support them.
+  test_wasm_suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYODIDE_VERSION: '314.0.3'
+      # Shared between the native seeding step and the wasm test run.
+      DFS_DATA_DIR: ${{ github.workspace }}/.wasm-data-cache
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      # The host interpreter must match the Pyodide interpreter version.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Create Pyodide virtual environment
+        run: |
+          python -m pip install pyodide-build
+          pyodide xbuildenv install "$PYODIDE_VERSION"
+          pyodide venv .venv-pyodide
+          .venv-pyodide/bin/pip install dist/*.whl pytest
+
+      - name: Cache example data files
+        uses: actions/cache@v4
+        with:
+          path: .wasm-data-cache
+          key: wasm-data-${{ hashFiles('dascore/data_registry.txt') }}
+
+      - name: Seed example data cache with native python
+        run: |
+          python -m pip install dist/*.whl
+          python -c "
+          from dascore.utils.downloader import fetch, get_fetcher
+          for name in get_fetcher().registry:
+              fetch(name)
+          "
+
+      - name: Run test suite in WebAssembly
+        run: >
+          .venv-pyodide/bin/python -m pytest tests
+          -m "not network and not concurrency"
+          -p no:cacheprovider --tb=short

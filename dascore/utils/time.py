@@ -21,6 +21,10 @@ _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
 
 def _float_array_to_ns(array):
     """Convert seconds as floats to signed integer nanoseconds."""
+    # Integer inputs must be widened first; the default integer is only
+    # 32 bits on some platforms (e.g. wasm32) and the multiply overflows.
+    if np.issubdtype(array.dtype, np.integer):
+        return array.astype(np.int64) * 1_000_000_000
     return np.rint(array * 1_000_000_000).astype(np.int64)
 
 
