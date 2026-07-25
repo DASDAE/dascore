@@ -230,7 +230,7 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
                 "structural index column. The attr stays on the patch but "
                 "is not queryable through the spool."
             )
-            warnings.warn(msg, UserWarning)
+            warnings.warn(msg, UserWarning, stacklevel=2)
         if status != "ok":
             continue
         typed = typed_value(value)
@@ -254,7 +254,7 @@ def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
                 f"Skipping hive-style path key {name!r} in {rel_posix!r}; "
                 "it collides with a structural index column."
             )
-            warnings.warn(msg, UserWarning)
+            warnings.warn(msg, UserWarning, stacklevel=2)
         if status != "ok":
             continue
         out[name] = value
