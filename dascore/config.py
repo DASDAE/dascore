@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -29,6 +31,9 @@ class DascoreConfig(BaseModel):
     model_config = ConfigDict(
         frozen=True,
         validate_default=True,
+        # Reject unknown fields so misspelled overrides raise rather than
+        # silently doing nothing.
+        extra="forbid",
     )
 
     # General behavior.
@@ -152,6 +157,21 @@ _CONFIG_OVERRIDE: ContextVar[DascoreConfig | None] = ContextVar(
 )
 
 
+def _reinit_config_lock():
+    """Install a fresh config lock, used after a fork.
+
+    A fork can copy the lock while another thread holds it. That thread does
+    not exist in the child, so the inherited copy would never be released and
+    any config change in the child would hang.
+    """
+    global _GLOBAL_CONFIG_LOCK
+    _GLOBAL_CONFIG_LOCK = Lock()
+
+
+if hasattr(os, "register_at_fork"):  # not available on windows
+    os.register_at_fork(after_in_child=_reinit_config_lock)
+
+
 class _ConfigDescriptor:
     """Descriptor for attributes that should always reflect runtime config."""
 
@@ -228,7 +248,9 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs) -> DascoreConf
 
 
 @contextmanager
-def config_context(new_config: DascoreConfig | None = None, **kwargs):
+def config_context(
+    new_config: DascoreConfig | None = None, **kwargs
+) -> Iterator[DascoreConfig]:
     """
     Temporarily override the runtime config for the current thread/task.
 
@@ -269,7 +291,4 @@ def config_context(new_config: DascoreConfig | None = None, **kwargs):
 
 def reset_config() -> DascoreConfig:
     """Reset the process-wide runtime config base to defaults."""
-    global _GLOBAL_CONFIG
-    with _GLOBAL_CONFIG_LOCK:
-        _GLOBAL_CONFIG = defaults = DascoreConfig()
-        return defaults
+    return set_config(DascoreConfig())

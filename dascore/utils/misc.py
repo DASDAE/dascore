@@ -23,6 +23,7 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
+from dascore.config import config_context, get_config
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
@@ -673,8 +674,6 @@ class _MapFuncWrapper:
         self._config = config
 
     def __call__(self, spool):
-        from dascore.config import config_context
-
         with config_context(self._config):
             iterable = spool
             # in order to handle multiprocessing, we apply a secret tag of
@@ -704,8 +703,6 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     **kwargs
         Keywords passed to func.
     """
-    from dascore.config import get_config
-
     # no client; simple for loop.
     desc = f"Applying {func.__name__} to spool"
     if client is None:

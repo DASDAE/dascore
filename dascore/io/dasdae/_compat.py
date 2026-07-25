@@ -63,8 +63,10 @@ def translate_legacy_attrs(attrs):
             msg = (
                 "This DASDAE file contains legacy pickled coordinate metadata. "
                 "Unpickling DASDAE format metadata is disabled by default for "
-                "security. If you trust this file, enable legacy compatibility "
-                "with dc.config_context(allow_dasdae_format_unpickle=True)."
+                "security. If you trust this file, read it inside a "
+                "'with dc.config_context(allow_dasdae_format_unpickle=True):' "
+                "block, or enable it permanently with "
+                "dc.set_config(allow_dasdae_format_unpickle=True)."
             )
             raise InvalidFiberFileError(msg)
         with contextlib.suppress(

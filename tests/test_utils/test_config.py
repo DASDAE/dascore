@@ -7,6 +7,7 @@ import threading
 import pytest
 
 import dascore as dc
+from dascore import config as dascore_config
 from dascore.config import (
     DascoreConfig,
     config_attr,
@@ -71,6 +72,20 @@ class TestSetConfig:
         """Non-positive tolerances are rejected."""
         with pytest.raises(ValueError, match="sampling_group_tolerance"):
             set_config(sampling_group_tolerance=0)
+
+    def test_unknown_field_raises(self):
+        """A misspelled override raises rather than being silently ignored."""
+        with pytest.raises(ValueError, match="dispplay_float_precision"):
+            set_config(dispplay_float_precision=5)
+
+    def test_fork_handler_replaces_held_lock(self):
+        """A lock held at fork time is replaced so the child cannot deadlock."""
+        old_lock = dascore_config._GLOBAL_CONFIG_LOCK
+        with old_lock:
+            dascore_config._reinit_config_lock()
+            new_lock = dascore_config._GLOBAL_CONFIG_LOCK
+        assert new_lock is not old_lock
+        assert not new_lock.locked()
 
     def test_visible_from_new_thread(self):
         """A permanent set is visible from threads launched afterward."""

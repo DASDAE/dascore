@@ -103,6 +103,12 @@ def _permanent_config(**overrides):
         set_config(previous)
 
 
+@pytest.fixture(scope="session")
+def permanent_config():
+    """Return the context manager broad-scoped fixtures use to set config."""
+    return _permanent_config
+
+
 @pytest.fixture(autouse=True)
 def use_test_config():
     """Run tests with debug mode enabled unless overridden locally."""

@@ -15,6 +15,26 @@ with config_context(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
 
 Configuration changes affect subsequent operations only. For example, changing `remote_cache_dir` changes where future remote-file materializations are cached.
 
+## Two configuration tiers
+
+Config can be changed in two ways:
+
+- `set_config(...)` changes the process-wide base permanently. The change is visible from every thread and task and is not restored automatically; `reset_config()` returns to defaults. Use it for application-level settings applied once at startup.
+- `config_context(...)` overrides the config only for the current thread or task. The override is restored when the block exits, and concurrent blocks in different threads never clobber one another.
+
+```python
+import dascore as dc
+
+dc.set_config(display_float_precision=5)  # permanent
+
+with dc.config_context(display_float_precision=8):  # scoped to this block
+    ...
+
+dc.reset_config()  # drop the permanent change
+```
+
+[`Spool.map`](`dascore.core.spool.BaseSpool.map`) binds the config active when `map` is called and re-applies it in each worker, so overrides also reach thread- and process-pool workers.
+
 History recording is also configurable:
 
 - `patch_history="standard"` preserves the default behavior and appends new entries to `Patch.attrs.history`.
