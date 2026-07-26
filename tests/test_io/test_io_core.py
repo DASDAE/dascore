@@ -514,6 +514,27 @@ class TestBrokenEntryPoint:
         assert len(list(broken_ep_manager.yield_fiberio()))
 
 
+class TestGetFormatErrors:
+    """Errors which must not be mistaken for a format mismatch."""
+
+    def test_remote_cache_error_propagates(self, monkeypatch, tmp_path):
+        """A remote fetch failure is a real error, not a wrong-format signal.
+
+        The loop over FiberIOs swallows exceptions so a reader which does
+        not recognize a file can be skipped; a cache failure has to escape
+        that handler instead of being reported as an unknown format.
+        """
+        path = tmp_path / "unfetchable.h5"
+        path.write_bytes(b"not really an h5 file")
+
+        def _raise(*args, **kwargs):
+            raise RemoteCacheError("cannot fetch this resource")
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", _raise)
+        with pytest.raises(RemoteCacheError, match="cannot fetch this resource"):
+            dc.get_format(path)
+
+
 class TestFormatManagerConcurrency:
     """Concurrent plugin loading must never expose a partial registry."""
 
