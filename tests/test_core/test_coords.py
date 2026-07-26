@@ -1370,21 +1370,27 @@ class TestCoordRange:
         assert np.all(new.values == np.zeros(0))
 
     @pytest.mark.parametrize(
-        "start,step",
+        "start,unit",
         [
-            (0, 0),
-            (np.float64(0), np.float64(0)),
-            (np.datetime64("2020-01-01", "ns"), np.timedelta64(0, "ns")),
+            (0, 1),
+            (np.float64(0), np.float64(1)),
+            (np.datetime64("2020-01-01", "ns"), np.timedelta64(1, "s")),
         ],
     )
-    def test_select_step_of_0(self, start, step):
-        """A step of 0 has no index to select on, so all values are kept."""
+    def test_select_step_of_0(self, start, unit):
+        """All samples of a step of 0 coord equal start; select on that."""
+        step = start - start  # a zero step of the right type.
         coord = CoordRange(start=start, stop=start, step=step)
         # numpy scalars warn (rather than raise) on the zero division.
         with np.errstate(divide="ignore", invalid="ignore"):
-            new, index = coord.select((start, start + 10 * (step + 1)))
-        assert new == coord
-        assert index == slice(None, None, None)
+            # a range which contains start keeps the sample.
+            kept, index = coord.select((start - unit, start + unit))
+            # ranges which don't are degenerate.
+            after, _ = coord.select((start + unit, start + 2 * unit))
+            before, _ = coord.select((start - 2 * unit, start - unit))
+        assert kept == coord
+        assert index == slice(None, 1, None)
+        assert after.degenerate and before.degenerate
 
     def test_zero_dim_array_inputs(self):
         """Ensure 0d arrays (which aren't unboxed) can init a CoordRange."""

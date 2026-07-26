@@ -1520,6 +1520,19 @@ class CoordRange(BaseCoord):
         out = self._new_grid(new_start, new_step, len(self))
         return out, slice(None, None, -1)
 
+    def _get_zero_step_index(self, value, forward):
+        """
+        Get the index of a value for a coord with a step of 0.
+
+        Every sample of such a coord equals start, so the index is either the
+        first sample or one just outside the coord, which makes the
+        selection degenerate.
+        """
+        start = self.start
+        if forward:  # index of the first sample >= value
+            return 0 if value <= start else len(self)
+        return 0 if value >= start else -1
+
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
@@ -1529,17 +1542,15 @@ class CoordRange(BaseCoord):
             # Scalar fast path; avoids several small-array allocations.
             # Due to float weirdness we need a little bit of a fudge factor.
             # (float() first since rounding numpy scalars is ~10x slower)
-            # A step of 0 (a len 1 CoordRange) has no index to compute, so
-            # None is returned, meaning the value doesn't constrain the
-            # selection. It is caught after the division (python scalars
-            # raise, numpy scalars give inf/nan) since testing a numpy step
-            # for truthiness up front costs ~10x more on this hot path.
+            # A step of 0 is handled after the division (python scalars raise,
+            # numpy scalars give inf/nan) since testing a numpy step for
+            # truthiness up front costs ~10x more on this hot path.
             try:
                 fraction = round(float((value - start) / step), 10)
             except ZeroDivisionError:
-                return None
+                return self._get_zero_step_index(value, forward)
             if not math.isfinite(fraction):
-                return None
+                return self._get_zero_step_index(value, forward)
             out = math.ceil(fraction) if forward else math.floor(fraction)
             if forward and out < 0:
                 return None
