@@ -117,16 +117,21 @@ def run_in_threads():
 
     A barrier releases every thread together, so concurrency tests do not
     need sleeps. The timeouts turn a deadlock into a failure rather than a
-    hung test run.
+    hung test run, and anything a worker raises is re-raised here rather
+    than being printed while the test carries on with a None result.
     """
 
     def _run(func, count=4, timeout=60):
         barrier = threading.Barrier(count, timeout=timeout)
         results = [None] * count
+        errors = []
 
         def worker(index):
-            barrier.wait()
-            results[index] = func(index)
+            try:
+                barrier.wait()
+                results[index] = func(index)
+            except BaseException as error:  # re-raised in the calling thread
+                errors.append(error)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
         for thread in threads:
@@ -134,6 +139,10 @@ def run_in_threads():
         for thread in threads:
             thread.join(timeout)
             assert not thread.is_alive(), "thread never finished; possible deadlock"
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("workers raised", errors)
         return results
 
     return _run
