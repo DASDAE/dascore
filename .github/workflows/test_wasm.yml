@@ -104,11 +104,7 @@ jobs:
       - name: Seed example data cache with native python
         run: |
           python -m pip install dist/*.whl
-          python -c "
-          from dascore.utils.downloader import fetch, get_fetcher
-          for name in get_fetcher().registry:
-              fetch(name)
-          "
+          python .github/scripts/cache_test_data.py
 
       - name: Run test suite in WebAssembly
         run: >
