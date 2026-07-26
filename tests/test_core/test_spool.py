@@ -653,6 +653,7 @@ class TestMap:
         assert len(out) == len(random_spool)
         assert dc.spool(out) == random_spool
 
+    @pytest.mark.concurrency
     def test_thread_client(self, random_spool, thread_client):
         """Ensure a thread client works."""
         out = list(random_spool.map(lambda x: x, client=thread_client))

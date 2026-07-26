@@ -137,9 +137,7 @@ class TestPauseAccounting:
     def test_stranded_cyclic_handle_is_recovered(self):
         """A handle leaked inside a cycle is healed by the next remote open."""
         holder = {}
-        handle = _open_h5_paused(
-            _FakeRemoteFile(), lambda fileobj, **kw: object(), "r"
-        )
+        handle = _open_h5_paused(_FakeRemoteFile(), lambda fileobj, **kw: object(), "r")
         holder["handle"], holder["self"] = handle, holder  # unreachable cycle
         del handle, holder
         assert not gc.isenabled()

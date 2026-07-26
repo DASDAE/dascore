@@ -52,6 +52,7 @@ class TestSchemaValidation:
 class TestConcurrentInitialization:
     """Only one writer initializes a new index file."""
 
+    @pytest.mark.concurrency
     def test_concurrent_open(self, tmp_path):
         """Connections racing to create one index all open successfully."""
         path = tmp_path / "shared.sqlite3"

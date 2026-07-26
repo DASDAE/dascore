@@ -472,6 +472,7 @@ class TestMaybeConvertPercentToFraction:
 class TestUnitConcurrency:
     """The pint registry must initialize once and parse safely in threads."""
 
+    @pytest.mark.concurrency
     def test_registry_created_once(self, monkeypatch, run_in_threads):
         """Racing threads all get the same registry instance."""
         # The registry is process-wide; restore it so quantities created by
@@ -484,6 +485,7 @@ class TestUnitConcurrency:
             pint.set_application_registry(original)
         assert len({id(x) for x in results}) == 1
 
+    @pytest.mark.concurrency
     def test_concurrent_parsing(self, run_in_threads):
         """Parsing distinct quantities in threads returns correct values."""
         strings = ["m/s", "1/s", "furlong/fortnight", "strain"]

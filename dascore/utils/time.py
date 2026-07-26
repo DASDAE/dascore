@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from functools import singledispatch
 
@@ -17,10 +18,15 @@ from dascore.exceptions import TimeError
 
 _NAT_DATETIME64 = np.datetime64("NaT", "ns")
 _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
+_EPOCH_DATETIME64 = np.datetime64(0, "ns")
 
 
 def _float_array_to_ns(array):
     """Convert seconds as floats to signed integer nanoseconds."""
+    # Integer inputs must be widened first; the default integer is only
+    # 32 bits on some platforms (e.g. wasm32) and the multiply overflows.
+    if np.issubdtype(array.dtype, np.integer):
+        return array.astype(np.int64) * 1_000_000_000
     return np.rint(array * 1_000_000_000).astype(np.int64)
 
 
@@ -107,8 +113,11 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
 @to_datetime64.register(np.number)
 def _float_to_datetime(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
-    ar = np.asarray([num])
-    return _array_to_datetime64(ar)[0]
+    # Scalar fast path; the array path costs ~10x more for single values.
+    num = float(num)
+    if not math.isfinite(num):  # matches array path: NaN/inf -> NaT
+        return _NAT_DATETIME64
+    return np.datetime64(round(num * 1_000_000_000), "ns")
 
 
 @to_datetime64.register(np.ndarray)
@@ -216,10 +225,13 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
 @to_timedelta64.register(np.number)
-def _float_to_timedelta64(num: float | int) -> np.datetime64:
-    """Convert a float to a single datetime."""
-    ar = np.asarray([num])
-    return _array_to_timedelta64(ar)[0]
+def _float_to_timedelta64(num: float | int) -> np.timedelta64:
+    """Convert a number of seconds to a single timedelta64."""
+    # Scalar fast path; the array path costs ~10x more for single values.
+    num = float(num)
+    if not math.isfinite(num):  # matches array path: NaN/inf -> NaT
+        return _NAT_TIMEDELTA64
+    return np.timedelta64(round(num * 1_000_000_000), "ns")
 
 
 @to_timedelta64.register(np.timedelta64)
@@ -387,7 +399,7 @@ def _array_to_float(array: np.ndarray) -> np.ndarray:
         return array.astype(np.float64)
     if np.issubdtype(array.dtype, np.datetime64):
         # convert to offset from 1970
-        array = array - to_datetime64(0)
+        array = array - _EPOCH_DATETIME64
     if np.issubdtype(array.dtype, np.timedelta64):
         array = array / ONE_SECOND
     return array.astype(np.float64)
@@ -405,7 +417,7 @@ def _series_to_float(series: pd.Series) -> pd.Series:
 @to_float.register(pd.Timestamp)
 def _time_to_float(datetime):
     """Simply return the datetime."""
-    td = to_datetime64(datetime) - to_datetime64(0)
+    td = to_datetime64(datetime) - _EPOCH_DATETIME64
     return to_float(td)
 
 

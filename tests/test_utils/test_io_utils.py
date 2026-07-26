@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
@@ -548,6 +550,54 @@ class TestGetHandleFromResource:
                 handle.create_dataset("data", data=[1, 2, 3])
                 raise RuntimeError("boom")
         assert not path.exists()
+
+    def test_h5_writer_remote_context_commits(self):
+        """Leaving the context without an error uploads the file."""
+        path = UPath("memory://dascore/upath-write-commit.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        assert path.exists()
+        with path.open("rb") as raw, h5py.File(raw, "r", driver="fileobj") as reopened:
+            assert list(reopened["data"][:]) == [1, 2, 3]
+
+    def test_h5_writer_remote_append_keeps_existing(self):
+        """Reopening an existing remote file downloads it before writing."""
+        path = UPath("memory://dascore/upath-write-append.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("first", data=[1, 2, 3])
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("second", data=[4, 5, 6])
+        with path.open("rb") as raw, h5py.File(raw, "r", driver="fileobj") as reopened:
+            assert list(reopened["first"][:]) == [1, 2, 3]
+            assert list(reopened["second"][:]) == [4, 5, 6]
+
+    def test_h5_writer_remote_setitem_and_contains(self):
+        """The remote writer proxies item assignment and membership."""
+        path = UPath("memory://dascore/upath-write-setitem.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle["data"] = [1, 2, 3]
+            assert "data" in handle
+            assert "missing" not in handle
+
+    def test_h5_writer_remote_cleans_up_after_open_failure(self, monkeypatch):
+        """A failed local open removes the temp file and raises."""
+        created = []
+        real_mkstemp = hdf5_module.tempfile.mkstemp
+
+        def _tracking_mkstemp(*args, **kwargs):
+            file_descriptor, name = real_mkstemp(*args, **kwargs)
+            created.append(Path(name))
+            return file_descriptor, name
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(hdf5_module.tempfile, "mkstemp", _tracking_mkstemp)
+        monkeypatch.setattr(hdf5_module, "H5pyFile", _raise)
+        path = UPath("memory://dascore/upath-write-open-failure.h5")
+        with pytest.raises(RuntimeError, match="boom"):
+            H5Writer.get_handle(path)
+        assert created and not created[0].exists()
 
     def test_h5_writer_remote_abort_is_idempotent(self):
         """Remote writer aborts should be safe to call more than once."""
@@ -1375,3 +1425,110 @@ class TestObsPy:
         st = patch.io.to_obspy()
         assert isinstance(st, obspy.Stream)
         assert len(st) == len(patch.get_coord("distance"))
+
+
+class TestRemoteCacheConcurrency:
+    """The remote cache serializes per resource, not globally."""
+
+    @pytest.fixture(autouse=True)
+    def isolated_cache(self, tmp_path, permanent_config):
+        """
+        Give each test its own cache directory.
+
+        Uses the permanent config: worker threads start with a fresh
+        context, so a scoped config_context override would not reach them.
+        """
+        with permanent_config(
+            remote_cache_dir=tmp_path / "remote_cache", warn_on_remote_cache=False
+        ):
+            clear_remote_file_cache()
+            yield
+            clear_remote_file_cache()
+
+    def _memory_file(self, name: str) -> UPath:
+        """Write a small file into the in-memory filesystem."""
+        path = UPath(f"memory://dascore/concurrent/{name}")
+        with path.open("wb") as fi:
+            fi.write(b"dascore" * 64)
+        return path
+
+    def test_racing_callers_download_once(self, monkeypatch, run_in_threads):
+        """Callers wanting one resource agree on the path and download it once."""
+        resource = self._memory_file("shared.bin")
+        downloads = []
+        original = remote_io._download_remote_file
+
+        def _counted(path, local_path):
+            downloads.append(local_path)
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _counted)
+        results = run_in_threads(lambda _: ensure_local_file(resource))
+        assert len({str(x) for x in results}) == 1
+        assert len(downloads) == 1
+        assert results[0].exists()
+
+    def test_distinct_resources_are_not_serialized(self, monkeypatch, run_in_threads):
+        """Unrelated downloads run at once; one global lock would time out here."""
+        resources = [self._memory_file(f"file_{i}.bin") for i in range(4)]
+        barrier = threading.Barrier(len(resources), timeout=30)
+        original = remote_io._download_remote_file
+
+        def _synchronized(path, local_path):
+            # Every download has to be in flight together to get past this.
+            barrier.wait()
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _synchronized)
+        results = run_in_threads(lambda index: ensure_local_file(resources[index]))
+        assert all(x is not None and x.exists() for x in results)
+
+    def test_failed_download_is_retried(self, monkeypatch):
+        """A failed download publishes nothing, so the next caller retries."""
+        resource = self._memory_file("flaky.bin")
+        calls = []
+        original = remote_io._download_remote_file
+
+        def _fail_once(path, local_path):
+            calls.append(local_path)
+            if len(calls) == 1:
+                raise OSError("download failed")
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _fail_once)
+        with pytest.raises(OSError, match="download failed"):
+            ensure_local_file(resource)
+        assert ensure_local_file(resource).exists()
+        assert len(calls) == 2
+
+    def test_unregistered_remote_id_is_coerced(self):
+        """An id missing from the resource cache is rebuilt from the id itself."""
+        resource = self._memory_file("unregistered.bin")
+        remote_io._REMOTE_RESOURCE_CACHE.clear()
+        cache_root = remote_io._normalize_cache_root(remote_io.get_remote_cache_path())
+        local_path = remote_io._materialize_remote_file(str(resource), cache_root)
+        assert local_path.exists()
+
+    def test_reinit_drops_download_locks(self):
+        """The fork hook drops locks a dead thread may have been holding."""
+        resource = self._memory_file("forked.bin")
+        ensure_local_file(resource)
+        assert remote_io._REMOTE_KEY_LOCKS
+        old_locks = remote_io._REMOTE_KEY_LOCKS
+        remote_io._reinit_remote_cache_locks()
+        assert not remote_io._REMOTE_KEY_LOCKS
+        assert remote_io._REMOTE_KEY_LOCKS is not old_locks
+
+
+class TestIOResourceManagerConcurrency:
+    """One manager hands every caller the same handle per type."""
+
+    def test_racing_callers_share_one_handle(self, tmp_path, run_in_threads):
+        """get_resource opens each required type exactly once."""
+        path = tmp_path / "concurrent_resource.bin"
+        path.write_bytes(b"dascore")
+        with IOResourceManager(path) as man:
+            handles = run_in_threads(lambda _: man.get_resource(BinaryReader))
+            assert len({id(x) for x in handles}) == 1
+            assert not handles[0].closed
+        assert handles[0].closed

@@ -514,6 +514,27 @@ class TestBrokenEntryPoint:
         assert len(list(broken_ep_manager.yield_fiberio()))
 
 
+class TestGetFormatErrors:
+    """Errors which must not be mistaken for a format mismatch."""
+
+    def test_remote_cache_error_propagates(self, monkeypatch, tmp_path):
+        """A remote fetch failure is a real error, not a wrong-format signal.
+
+        The loop over FiberIOs swallows exceptions so a reader which does
+        not recognize a file can be skipped; a cache failure has to escape
+        that handler instead of being reported as an unknown format.
+        """
+        path = tmp_path / "unfetchable.h5"
+        path.write_bytes(b"not really an h5 file")
+
+        def _raise(*args, **kwargs):
+            raise RemoteCacheError("cannot fetch this resource")
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", _raise)
+        with pytest.raises(RemoteCacheError, match="cannot fetch this resource"):
+            dc.get_format(path)
+
+
 class TestFormatManagerConcurrency:
     """Concurrent plugin loading must never expose a partial registry."""
 
@@ -523,6 +544,7 @@ class TestFormatManagerConcurrency:
         manager.__dict__["_eps"] = pd.Series(eps)
         return manager
 
+    @pytest.mark.concurrency
     def test_multi_version_format_never_partial(self, run_in_threads):
         """Every thread sees all versions, even mid-load."""
         entered, release, calls = threading.Event(), threading.Event(), []
@@ -555,6 +577,7 @@ class TestFormatManagerConcurrency:
         assert all(x == ("2", "1") for x in results)
         assert calls == ["v1"]
 
+    @pytest.mark.concurrency
     def test_concurrent_full_load_runs_each_loader_once(self, run_in_threads):
         """Loading all formats from several threads loads each entry point once."""
         calls = []
@@ -1258,6 +1281,7 @@ class TestReloadableSourcePath:
         assert len(out) == 2
         assert not any(summary["source_patch_id"] for summary in out)
 
+    @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
         """Ensure a keyboard interrupt works when progress bar is going"""
 

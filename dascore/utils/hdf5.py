@@ -312,7 +312,7 @@ class H5Writer(H5Reader):
     class _RemoteH5Writer:
         """Wrap a local h5py file and upload it back to the remote resource."""
 
-        def __init__(self, resource: UPath, mode: str):  # pragma: no cover
+        def __init__(self, resource: UPath, mode: str):
             self._resource = resource
             suffix = resource.suffix or ".h5"
             fd, temp_name = tempfile.mkstemp(suffix=suffix)
@@ -336,10 +336,10 @@ class H5Writer(H5Reader):
         def __getitem__(self, item):
             return self._handle[item]
 
-        def __setitem__(self, key, value):  # pragma: no cover
+        def __setitem__(self, key, value):
             self._handle[key] = value
 
-        def __contains__(self, item):  # pragma: no cover
+        def __contains__(self, item):
             return item in self._handle
 
         def commit(self):
@@ -371,10 +371,10 @@ class H5Writer(H5Reader):
             """Backward-compatible alias for abort()."""
             self.abort()
 
-        def __enter__(self):  # pragma: no cover
+        def __enter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, tb):  # pragma: no cover
+        def __exit__(self, exc_type, exc, tb):
             if exc_type is None:
                 self.commit()
             else:

@@ -15,6 +15,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
+from threading import RLock
 
 from dascore.compat import UPath
 from dascore.config import get_config
@@ -28,6 +29,10 @@ _NO_RANGE_HTTP_PATTERNS = (
     "only reading this file from the beginning is supported",
 )
 _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
+# One lock per cached resource, so two threads never download the same
+# file at once while unrelated downloads still run together. Entries are
+# never removed; the dict is bounded by the resources a session touches.
+_REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
@@ -101,6 +106,13 @@ def _reset_gc_pause_state():
     _gc_pause_depth = 0
 
 
+@_reinit_after_fork
+def _reinit_remote_cache_locks():
+    """Install fresh download locks; see _reinit_after_fork."""
+    global _REMOTE_KEY_LOCKS
+    _REMOTE_KEY_LOCKS = {}
+
+
 @contextmanager
 def remote_cache_scope(scope: str):
     """Temporarily set the current remote-cache policy scope."""
@@ -142,14 +154,20 @@ def normalize_remote_id(path) -> str:
     return remote_id
 
 
-def _get_remote_cache_dir(remote_id: str) -> Path:  # pragma: no cover
-    """Return the cache directory for a normalized remote identifier."""
-    return get_remote_cache_path() / sha256(remote_id.encode()).hexdigest()
-
-
 def _normalize_cache_root(cache_root: Path | str) -> Path:
     """Return one normalized cache-root path."""
     return Path(cache_root).expanduser()
+
+
+def _remote_cache_local_path(remote_id: str, cache_root: Path, resource: UPath) -> Path:
+    """
+    Return the local path one remote resource materializes to.
+
+    The materializer and the cached-path probe must agree on this, or one
+    would download a file the other cannot find.
+    """
+    digest = sha256(remote_id.encode()).hexdigest()
+    return cache_root / digest / _safe_remote_name(resource)
 
 
 def _redact_remote_resource(resource: UPath | str) -> str:
@@ -186,11 +204,17 @@ def _warn_remote_cache_download(resource: UPath, local_path: Path):
 
 
 def clear_remote_file_cache():
-    """Remove all locally cached remote files and memoized paths."""
+    """
+    Remove all locally cached remote files and memoized paths.
+
+    Clearing is a single-writer operation: it is not synchronized against
+    materializations running at the same time, so run it while nothing
+    else is reading remote files.
+    """
     shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
     get_remote_cache_path().mkdir(parents=True, exist_ok=True)
-    _materialize_remote_file.cache_clear()
     _REMOTE_RESOURCE_CACHE.clear()
+    _materialize_remote_file.cache_clear()
 
 
 def _download_remote_file(path, local_path: Path):
@@ -219,43 +243,50 @@ def _download_remote_file(path, local_path: Path):
 
 
 @lru_cache
-def _materialize_remote_file(  # pragma: no cover
-    remote_id: str, cache_root: Path
-) -> Path:
-    """Materialize one remote resource to a stable local cache path."""
+def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
+    """
+    Materialize one remote resource to a stable local cache path.
+
+    Callers wanting the same resource take turns on its download lock:
+    the first downloads, the rest find the published file. Failures are
+    not memoized, so the next caller retries the download.
+    """
     resource = _REMOTE_RESOURCE_CACHE.get(remote_id)
     if resource is None:
         resource = coerce_to_upath(remote_id.split("#", maxsplit=1)[0])
-    local_path = (
-        cache_root
-        / sha256(remote_id.encode()).hexdigest()
-        / _safe_remote_name(resource)
-    )
-    if not local_path.exists():
-        config = get_config()
-        scope = get_remote_cache_scope()
-        if scope == "metadata" and not config.allow_remote_cache_for_metadata:
-            msg = (
-                "Remote metadata access requires a local cached file for "
-                f"{_redact_remote_resource(resource)}, "
-                "but DASCore does not download remote files during "
-                "`scan()` or public `get_format()` by default. Set "
-                "`allow_remote_cache_for_metadata=True` to opt in to metadata-time "
-                "remote caching."
-            )
-            raise RemoteCacheError(msg)
-        if scope != "metadata" and not config.allow_remote_cache:
-            msg = (
-                f"Remote caching is disabled, but DASCore needs a local file for "
-                f"{_redact_remote_resource(resource)}. "
-                "Set `allow_remote_cache=True` to permit downloading "
-                "remote files into the local cache."
-            )
-            raise RemoteCacheError(msg)
-        if config.warn_on_remote_cache:
-            _warn_remote_cache_download(resource, local_path)
-        _download_remote_file(resource, local_path)
+    local_path = _remote_cache_local_path(remote_id, cache_root, resource)
+    # setdefault is atomic, so every caller gets the same lock object.
+    with _REMOTE_KEY_LOCKS.setdefault((remote_id, cache_root), RLock()):
+        if not local_path.exists():
+            _download_to_cache(resource, local_path)
     return local_path
+
+
+def _download_to_cache(resource: UPath, local_path: Path) -> None:
+    """Apply the remote-cache policy, then download the resource."""
+    config = get_config()
+    scope = get_remote_cache_scope()
+    if scope == "metadata" and not config.allow_remote_cache_for_metadata:
+        msg = (
+            "Remote metadata access requires a local cached file for "
+            f"{_redact_remote_resource(resource)}, "
+            "but DASCore does not download remote files during "
+            "`scan()` or public `get_format()` by default. Set "
+            "`allow_remote_cache_for_metadata=True` to opt in to metadata-time "
+            "remote caching."
+        )
+        raise RemoteCacheError(msg)
+    if scope != "metadata" and not config.allow_remote_cache:
+        msg = (
+            f"Remote caching is disabled, but DASCore needs a local file for "
+            f"{_redact_remote_resource(resource)}. "
+            "Set `allow_remote_cache=True` to permit downloading "
+            "remote files into the local cache."
+        )
+        raise RemoteCacheError(msg)
+    if config.warn_on_remote_cache:
+        _warn_remote_cache_download(resource, local_path)
+    _download_remote_file(resource, local_path)
 
 
 def ensure_local_file(resource) -> Path:
@@ -280,9 +311,7 @@ def _get_cached_local_file(resource) -> Path | None:
     remote = coerce_to_upath(resource)
     cache_root = _normalize_cache_root(get_remote_cache_path())
     remote_id = normalize_remote_id(remote)
-    local_path = (
-        cache_root / sha256(remote_id.encode()).hexdigest() / _safe_remote_name(remote)
-    )
+    local_path = _remote_cache_local_path(remote_id, cache_root, remote)
     return local_path if local_path.exists() else None
 
 

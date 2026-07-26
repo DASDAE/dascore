@@ -425,12 +425,12 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
                 continue
             lo = max(src1[src_num], chu1[out_num])
             hi = min(src2[src_num], chu2[out_num])
-            if lo > hi:  # pragma: no cover -- searchsorted boundary guard
-                # Sources within a partition are continuous (partitioning
-                # splits on gaps) and start-corrected, so searchsorted does
-                # not offer a non-overlapping source in practice; this guards
-                # against a boundary off-by-one rather than a reachable state.
-                continue
+            # Sources within a partition are continuous (partitioning
+            # splits on gaps) and start-corrected, so searchsorted never
+            # offers a source which does not overlap the output. Assert it
+            # rather than skipping: silently dropping a source would lose
+            # data, and the state cannot be reached from the public API.
+            assert lo <= hi, f"source {src_num} does not overlap output {out_num}"
             unchanged = (
                 lo == orig_min[src_num]
                 and hi == orig_max[src_num]

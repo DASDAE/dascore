@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Generator, Sized
 from contextlib import suppress
 
@@ -70,7 +71,9 @@ def track(
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
     # See: https://github.com/Textualize/rich/issues/1053
-    if get_config().debug or not length or progress is None:
+    # Rich progress requires a refresh thread, which WebAssembly can't start.
+    no_threads = sys.platform in ("emscripten", "wasi")
+    if get_config().debug or not length or progress is None or no_threads:
         yield from sequence
         return
     update = 1.0 if isinstance(progress, str) and progress == "standard" else 5.0

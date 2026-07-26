@@ -743,6 +743,7 @@ class TestDirectorySpoolSerialization:
         loaded = pickle.loads(pickle.dumps(sub))
         assert len(loaded) == len(sub)
 
+    @pytest.mark.concurrency
     def test_process_pool_map(self, basic_file_spool):
         """Spool.map works with a process pool executor."""
         from concurrent.futures import ProcessPoolExecutor

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from rich.progress import Progress
 
 from dascore.config import config_context
@@ -11,6 +12,7 @@ from dascore.utils.progress import get_progress_instance, track
 class TestProgressBar:
     """Tests for the rich progress bar."""
 
+    @pytest.mark.concurrency
     def test_progressbar_shows(self):
         """Undo debug patch to progress bar shows."""
         with config_context(debug=False):
