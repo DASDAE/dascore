@@ -21,6 +21,11 @@ concurrency:
   group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Both jobs must exercise the same Pyodide release so their results are
+# comparable; the npm package and the xbuildenv use matching version numbers.
+env:
+  PYODIDE_VERSION: '314.0.3'
+
 jobs:
   test_wasm:
     runs-on: ubuntu-latest
@@ -45,7 +50,7 @@ jobs:
           python -m build --wheel
 
       - name: Install Pyodide
-        run: npm install --no-save pyodide@314.0.2
+        run: npm install --no-save "pyodide@$PYODIDE_VERSION"
 
       - name: Test wheel in WebAssembly
         run: node scripts/test_wasm.mjs dist/*.whl
@@ -57,7 +62,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PYODIDE_VERSION: '314.0.3'
       # Point the default cache location at one directory shared between the
       # native seeding step and the wasm test run. Unlike DFS_DATA_DIR this
       # only shifts the default, so tests overriding the cache dir via config
