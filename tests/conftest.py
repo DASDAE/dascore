@@ -139,10 +139,11 @@ def run_in_threads():
         for thread in threads:
             thread.join(timeout)
             assert not thread.is_alive(), "thread never finished; possible deadlock"
-        if len(errors) == 1:
-            raise errors[0]
         if errors:
-            raise ExceptionGroup("workers raised", errors)
+            # The first failure is re-raised as-is rather than aggregated:
+            # ExceptionGroup is 3.11+ while the package supports 3.10, and it
+            # rejects BaseException members such as pytest's own skip/fail.
+            raise errors[0]
         return results
 
     return _run
