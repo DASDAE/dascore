@@ -21,7 +21,7 @@ class TestImportBenchmarks:
 
     Only dascore's own modules are removed from the module cache, so these
     measure the cost of executing dascore's module bodies, not the one-time
-    cost of importing third party dependencies. A fresh interpreter (eg a
+    cost of importing third-party dependencies. A fresh interpreter (eg a
     CLI call) also pays the latter, but it cannot be measured here; a
     subprocess falls outside the region CodSpeed instruments. Instead, see
     tests/test_imports.py for the guards which keep slow dependencies out of
@@ -31,7 +31,7 @@ class TestImportBenchmarks:
     @pytest.fixture()
     def restore_dascore_modules(self):
         """Put the original dascore modules back after re-importing them."""
-        # Import here so third party dependencies are warm before timing,
+        # Import here so third-party dependencies are warm before timing,
         # even when this file is the only one collected.
         importlib.import_module("dascore")
         saved = {x: sys.modules[x] for x in _dascore_module_names()}
