@@ -17,13 +17,15 @@ def _dascore_module_names():
 
 class TestImportBenchmarks:
     """
-    Benchmarks for importing dascore.
+    Benchmarks for re-executing dascore's modules.
 
     Only dascore's own modules are removed from the module cache, so these
-    measure the cost of executing dascore's module bodies rather than the
-    cost of importing third party dependencies (which python only pays once
-    per interpreter). See tests/test_imports.py for the guards which keep
-    slow optional dependencies out of the import chain entirely.
+    measure the cost of executing dascore's module bodies, not the one-time
+    cost of importing third party dependencies. A fresh interpreter (eg a
+    CLI call) also pays the latter, but it cannot be measured here; a
+    subprocess falls outside the region CodSpeed instruments. Instead, see
+    tests/test_imports.py for the guards which keep slow dependencies out of
+    the import chain entirely.
     """
 
     @pytest.fixture()
@@ -44,8 +46,8 @@ class TestImportBenchmarks:
         pint.set_application_registry(registry)
 
     @pytest.mark.benchmark
-    def test_import_dascore(self, restore_dascore_modules):
-        """Time importing the top-level dascore module."""
+    def test_reimport_dascore(self, restore_dascore_modules):
+        """Time re-importing the top-level dascore module."""
         for name in _dascore_module_names():
             del sys.modules[name]
         importlib.import_module("dascore")
