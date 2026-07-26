@@ -31,7 +31,7 @@ There are two downsides to this approach. First, if the patches aren't chunked a
 
 # Thread Safety
 
-DASCore's test suite runs on a free-threaded CPython build with the GIL disabled, and the guarantees below are what that supports. They apply equally to threads on a standard build.
+DASCore's core test suite — no optional dependencies, no network tests — runs on a free-threaded CPython build with the GIL disabled. The guarantees below are what that supports; they apply equally to threads on a standard build.
 
 ## What threads may share
 

@@ -275,9 +275,7 @@ class IOResourceManager:
         self.close_all()
 
     def __del__(self):
-        # __del__ can run on a partially built manager (eg if __init__ raised).
-        if getattr(self, "_lock", None) is not None:
-            self.close_all()
+        self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):

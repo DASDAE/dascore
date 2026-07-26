@@ -14,6 +14,7 @@ on:
       - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/test_free_threaded.yml'
+      - '.github/scripts/**'
 
 # This job only reads the repository.
 permissions:
@@ -81,6 +82,13 @@ jobs:
       - name: prime test data cache
         if: steps.restore-test-data.outputs.cache-hit != 'true'
         run: python .github/scripts/cache_test_data.py
+
+      - name: save test data cache
+        if: steps.restore-test-data.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.DATA_CACHE_PATH }}
+          key: ${{ env.DATA_CACHE_KEY }}
 
       - name: run test suite without the GIL
         run: python -m pytest tests -m "not network" -q --timeout=900

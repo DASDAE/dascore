@@ -1220,7 +1220,7 @@ class TestRemoteCacheConcurrency:
 
         monkeypatch.setattr(remote_io, "_download_remote_file", _synchronized)
         results = run_in_threads(lambda index: ensure_local_file(resources[index]))
-        assert all(x.exists() for x in results)
+        assert all(x is not None and x.exists() for x in results)
 
     def test_failed_download_is_retried(self, monkeypatch):
         """A failed download publishes nothing, so the next caller retries."""
@@ -1240,19 +1240,6 @@ class TestRemoteCacheConcurrency:
         assert ensure_local_file(resource).exists()
         assert len(calls) == 2
 
-    def test_clear_from_inside_materialization_raises(self, monkeypatch):
-        """Clearing the cache mid-download would delete live state."""
-        resource = self._memory_file("clearing.bin")
-
-        def _clear_while_downloading(path, local_path):
-            clear_remote_file_cache()
-
-        monkeypatch.setattr(
-            remote_io, "_download_remote_file", _clear_while_downloading
-        )
-        with pytest.raises(RuntimeError, match="inside a materialization"):
-            ensure_local_file(resource)
-
     def test_unregistered_remote_id_is_coerced(self):
         """An id missing from the resource cache is rebuilt from the id itself."""
         resource = self._memory_file("unregistered.bin")
@@ -1261,19 +1248,15 @@ class TestRemoteCacheConcurrency:
         local_path = remote_io._materialize_remote_file(str(resource), cache_root)
         assert local_path.exists()
 
-    def test_fork_handler_replaces_held_locks(self):
-        """Locks held at fork time are replaced so the child cannot deadlock."""
-        old_lock = remote_io._REMOTE_CACHE_LOCK
-        try:
-            with old_lock:
-                remote_io._reinit_remote_cache_locks()
-                new_lock = remote_io._REMOTE_CACHE_LOCK
-                assert new_lock.acquire(blocking=False)
-                new_lock.release()
-            assert new_lock is not old_lock
-            assert not remote_io._REMOTE_KEY_LOCKS
-        finally:
-            remote_io._REMOTE_CACHE_LOCK = old_lock
+    def test_reinit_drops_download_locks(self):
+        """The fork hook drops locks a dead thread may have been holding."""
+        resource = self._memory_file("forked.bin")
+        ensure_local_file(resource)
+        assert remote_io._REMOTE_KEY_LOCKS
+        old_locks = remote_io._REMOTE_KEY_LOCKS
+        remote_io._reinit_remote_cache_locks()
+        assert not remote_io._REMOTE_KEY_LOCKS
+        assert remote_io._REMOTE_KEY_LOCKS is not old_locks
 
 
 class TestIOResourceManagerConcurrency:

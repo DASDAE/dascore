@@ -7,11 +7,12 @@ import os
 import shutil
 import tempfile
 import warnings
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
-from threading import RLock, local
+from threading import RLock
 
 from dascore.compat import UPath
 from dascore.config import get_config
@@ -25,20 +26,10 @@ _NO_RANGE_HTTP_PATTERNS = (
     "only reading this file from the beginning is supported",
 )
 _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
-# Resources already materialized this session, so the common case (the
-# file is present) costs one dict lookup rather than a hash, a path
-# build and a stat. Emptied by clear_remote_file_cache.
-_REMOTE_MATERIALIZED: dict[tuple[str, Path], Path] = {}
-# One lock per cached resource, so unrelated downloads still run at the
-# same time. Entries are never removed: the dict is bounded by the number
-# of distinct remote resources a session touches, and keeping them lets a
-# cache clear hold every lock without racing new ones into existence.
+# One lock per cached resource, so two threads never download the same
+# file at once while unrelated downloads still run together. Entries are
+# never removed; the dict is bounded by the resources a session touches.
 _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
-# Guards the two dicts above. Always acquired before a download lock and
-# never while holding one.
-_REMOTE_CACHE_LOCK = RLock()
-# Counts this thread's in-progress materializations (see clear).
-_REMOTE_CACHE_LOCAL = local()
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
@@ -46,11 +37,9 @@ _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
 
 @_reinit_after_fork
 def _reinit_remote_cache_locks():
-    """Install fresh remote-cache locks; see _reinit_after_fork."""
-    global _REMOTE_CACHE_LOCK, _REMOTE_KEY_LOCKS, _REMOTE_CACHE_LOCAL
-    _REMOTE_CACHE_LOCK = RLock()
+    """Install fresh download locks; see _reinit_after_fork."""
+    global _REMOTE_KEY_LOCKS
     _REMOTE_KEY_LOCKS = {}
-    _REMOTE_CACHE_LOCAL = local()
 
 
 @contextmanager
@@ -90,17 +79,8 @@ def normalize_remote_id(path) -> str:
         serialized = json.dumps(storage_options, sort_keys=True, default=str)
         options_suffix = f"#{sha256(serialized.encode()).hexdigest()}"
     remote_id = f"{resource}{options_suffix}"
-    with _REMOTE_CACHE_LOCK:
-        _REMOTE_RESOURCE_CACHE[remote_id] = resource
+    _REMOTE_RESOURCE_CACHE[remote_id] = resource
     return remote_id
-
-
-def _get_download_lock(key: tuple[str, Path]) -> RLock:
-    """Return the download lock for one cached resource, creating it once."""
-    with _REMOTE_CACHE_LOCK:
-        if (lock := _REMOTE_KEY_LOCKS.get(key)) is None:
-            lock = _REMOTE_KEY_LOCKS[key] = RLock()
-        return lock
 
 
 def _normalize_cache_root(cache_root: Path | str) -> Path:
@@ -156,20 +136,14 @@ def clear_remote_file_cache():
     """
     Remove all locally cached remote files and memoized paths.
 
-    Clearing is a single-writer operation: it holds every download lock,
-    so materializations already in flight finish before their artifacts
-    are removed, and later ones download again.
+    Clearing is a single-writer operation: it is not synchronized against
+    materializations running at the same time, so run it while nothing
+    else is reading remote files.
     """
-    if getattr(_REMOTE_CACHE_LOCAL, "materializing", 0):
-        msg = "Cannot clear the remote file cache from inside a materialization."
-        raise RuntimeError(msg)
-    with _REMOTE_CACHE_LOCK, ExitStack() as stack:
-        for lock in _REMOTE_KEY_LOCKS.values():
-            stack.enter_context(lock)
-        shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
-        get_remote_cache_path().mkdir(parents=True, exist_ok=True)
-        _REMOTE_RESOURCE_CACHE.clear()
-        _REMOTE_MATERIALIZED.clear()
+    shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
+    get_remote_cache_path().mkdir(parents=True, exist_ok=True)
+    _REMOTE_RESOURCE_CACHE.clear()
+    _materialize_remote_file.cache_clear()
 
 
 def _download_remote_file(path, local_path: Path):
@@ -197,36 +171,23 @@ def _download_remote_file(path, local_path: Path):
         tmp_path.unlink(missing_ok=True)
 
 
+@lru_cache
 def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
     """
     Materialize one remote resource to a stable local cache path.
 
     Callers wanting the same resource take turns on its download lock:
-    the first downloads, the rest find the published file. A download
-    which fails publishes nothing, so the next caller retries it.
+    the first downloads, the rest find the published file. Failures are
+    not memoized, so the next caller retries the download.
     """
-    key = (remote_id, cache_root)
-    with _REMOTE_CACHE_LOCK:
-        # Already materialized: skip hashing, path building and the stat.
-        if (published := _REMOTE_MATERIALIZED.get(key)) is not None:
-            return published
-        resource = _REMOTE_RESOURCE_CACHE.get(remote_id)
+    resource = _REMOTE_RESOURCE_CACHE.get(remote_id)
     if resource is None:
         resource = coerce_to_upath(remote_id.split("#", maxsplit=1)[0])
     local_path = _remote_cache_local_path(remote_id, cache_root, resource)
-    # Record the depth so a cache clear attempted from inside a download
-    # (eg from a warning handler) raises rather than deleting live state.
-    depth = getattr(_REMOTE_CACHE_LOCAL, "materializing", 0)
-    _REMOTE_CACHE_LOCAL.materializing = depth + 1
-    try:
-        with _get_download_lock(key):
-            if not local_path.exists():
-                _download_to_cache(resource, local_path)
-    finally:
-        _REMOTE_CACHE_LOCAL.materializing = depth
-    # Only published paths are memoized, so a failed download is retried.
-    with _REMOTE_CACHE_LOCK:
-        _REMOTE_MATERIALIZED[key] = local_path
+    # setdefault is atomic, so every caller gets the same lock object.
+    with _REMOTE_KEY_LOCKS.setdefault((remote_id, cache_root), RLock()):
+        if not local_path.exists():
+            _download_to_cache(resource, local_path)
     return local_path
 
 
