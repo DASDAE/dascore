@@ -17,6 +17,7 @@ pytest benchmarks/ --codspeed
 pytest benchmarks/test_patch_benchmarks.py --codspeed
 pytest benchmarks/test_io_benchmarks.py --codspeed
 pytest benchmarks/test_spool_benchmarks.py --codspeed
+pytest benchmarks/test_import_benchmarks.py --codspeed
 ```
 
 ## Benchmark Structure
@@ -26,6 +27,7 @@ Benchmarks are now organized as pytest tests in the `benchmarks/` directory:
 - `test_patch_benchmarks.py` - Core Patch processing, transform, and visualization benchmarks
 - `test_io_benchmarks.py` - File I/O operations benchmarks
 - `test_spool_benchmarks.py` - Spool chunking and selection benchmarks
+- `test_import_benchmarks.py` - Import time benchmarks
 
 Each benchmark uses the `@pytest.mark.benchmark` decorator to automatically measure performance.
 
