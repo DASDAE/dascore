@@ -131,7 +131,8 @@ def _reduce_time_like(func, data):
 
 def _validate_new_length(length) -> int:
     """Ensure a requested coordinate length is a non-negative integer."""
-    if not isinstance(length, int | np.integer):
+    # bool is an int subclass; True/False are never a sensible length.
+    if isinstance(length, bool) or not isinstance(length, int | np.integer):
         msg = f"change_length requires an integer length, not {length!r}."
         raise ParameterError(msg)
     if length < 0:

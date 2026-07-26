@@ -2014,7 +2014,7 @@ class TestChangeLength:
             with pytest.raises(ParameterError, match="non-negative"):
                 coord.change_length(length)
 
-    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None])
+    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None, True, False])
     def test_non_integer_length_raises(
         self, evenly_sampled_coord, basic_non_coord, length
     ):
