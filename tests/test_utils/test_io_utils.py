@@ -504,6 +504,30 @@ class TestGetHandleFromResource:
             handle.close()
         assert gc.isenabled()
 
+    def test_loop_backed_fileobj_constructor_error_resumes_gc(self, monkeypatch):
+        """A failed h5py construction must rebalance the GC pause."""
+        import gc
+
+        from fsspec.asyn import AsyncFileSystem
+
+        class _FakeAsyncFS(AsyncFileSystem):
+            def __init__(self):
+                pass
+
+        class _FakeRemoteFile(BytesIO):
+            pass
+
+        def _explode(*args, **kwargs):
+            raise ValueError("not an hdf5 fileobj")
+
+        fake = _FakeRemoteFile()
+        fake.fs = _FakeAsyncFS()
+        monkeypatch.setattr(H5Reader, "constructor", staticmethod(_explode))
+        assert gc.isenabled()
+        with pytest.raises(ValueError, match="not an hdf5 fileobj"):
+            H5Reader.get_handle(fake)
+        assert gc.isenabled()
+
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
         path = UPath("memory://dascore/upath-write.h5")
@@ -1004,6 +1028,21 @@ class TestRemoteIOFallback:
         exc = ValueError("Cannot seek streaming HTTP file")
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(RuntimeError(str(exc)))
+
+    def test_fork_reset_reinstalls_gc_state(self):
+        """The fork handler must clear a copied pause so children collect."""
+        import gc
+
+        pause_gc()
+        try:
+            assert not gc.isenabled()
+            remote_io._reset_gc_pause_state()
+            assert gc.isenabled()
+            assert remote_io._gc_pause_depth == 0
+        finally:
+            # State was reset, so a stray resume must be a safe no-op.
+            resume_gc()
+        assert gc.isenabled()
 
     def test_pause_gc_nests_and_restores(self):
         """Pause calls nest and only the last resume re-enables collection."""
