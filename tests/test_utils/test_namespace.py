@@ -263,6 +263,7 @@ class TestPluginRegistry:
 class TestNamespaceConcurrency:
     """Lazy namespace attachment must be safe under concurrent first use."""
 
+    @pytest.mark.concurrency
     def test_one_instance_per_host(self, run_in_threads):
         """Concurrent first access on one object returns a single namespace."""
         inst = ParentClass()
@@ -270,12 +271,14 @@ class TestNamespaceConcurrency:
         assert len({id(x) for x in results}) == 1
         assert results[0] is inst.bob
 
+    @pytest.mark.concurrency
     def test_distinct_hosts_get_own_namespace(self, run_in_threads):
         """Concurrent first access on distinct objects binds each host."""
         instances = [ParentClass() for _ in range(4)]
         results = run_in_threads(lambda index: instances[index].bob)
         assert [x.return_self() for x in results] == instances
 
+    @pytest.mark.concurrency
     def test_concurrent_registration_and_lookup(self, run_in_threads):
         """Registering namespaces while reading the registry stays consistent."""
 

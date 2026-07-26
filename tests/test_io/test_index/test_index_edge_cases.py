@@ -1177,6 +1177,7 @@ class TestResourceCleanup:
         catalog.to_df()
         catalog.close()
 
+    @pytest.mark.concurrency
     def test_finalization_from_worker_thread(self):
         """Dropping the last backend reference off-thread does not raise."""
         import gc
@@ -1288,6 +1289,7 @@ class TestReservedAttrNames:
 class TestTransactionIsolation:
     """The statement lock covers whole transactions (round-4 F5)."""
 
+    @pytest.mark.concurrency
     def test_reader_never_sees_half_written_replacement(self, tmp_path):
         """A concurrent reader blocks during a source replacement."""
         import threading

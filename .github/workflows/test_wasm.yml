@@ -12,6 +12,7 @@ on:
       - dev
     paths:
       - 'dascore/**'
+      - 'tests/**'
       - 'scripts/test_wasm.mjs'
       - 'pyproject.toml'
       - '.github/workflows/test_wasm.yml'
@@ -19,6 +20,11 @@ on:
 concurrency:
   group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
+
+# Both jobs must exercise the same Pyodide release so their results are
+# comparable; the npm package and the xbuildenv use matching version numbers.
+env:
+  PYODIDE_VERSION: '314.0.3'
 
 jobs:
   test_wasm:
@@ -45,7 +51,67 @@ jobs:
           python -m build --wheel
 
       - name: Install Pyodide
-        run: npm install --no-save pyodide@314.0.2
+        run: npm install --no-save "pyodide@$PYODIDE_VERSION"
 
       - name: Test wheel in WebAssembly
         run: node scripts/test_wasm.mjs dist/*.whl
+
+  # Run the full pytest suite inside a Pyodide virtual environment.
+  # Tests needing threads, subprocesses, or network are deselected since
+  # WebAssembly does not support them.
+  test_wasm_suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The toolchain that builds the xbuildenv is pinned alongside the runtime
+      # so a new pyodide-build release cannot silently change the environment.
+      PYODIDE_BUILD_VERSION: '0.37.0'
+      # Point the default cache location at one directory shared between the
+      # native seeding step and the wasm test run. Unlike DFS_DATA_DIR this
+      # only shifts the default, so tests overriding the cache dir via config
+      # still see their override win.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.wasm-data-cache
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      # The host interpreter must match the Pyodide interpreter version.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Create Pyodide virtual environment
+        run: |
+          python -m pip install "pyodide-build==$PYODIDE_BUILD_VERSION"
+          pyodide xbuildenv install "$PYODIDE_VERSION"
+          pyodide venv .venv-pyodide
+          .venv-pyodide/bin/pip install dist/*.whl pytest
+
+      - name: Cache example data files
+        uses: actions/cache@v4
+        with:
+          path: .wasm-data-cache
+          key: wasm-data-${{ hashFiles('dascore/data_registry.txt') }}
+
+      - name: Seed example data cache with native python
+        run: |
+          python -m pip install dist/*.whl
+          python .github/scripts/cache_test_data.py
+
+      - name: Run test suite in WebAssembly
+        run: >
+          .venv-pyodide/bin/python -m pytest tests
+          -m "not network and not concurrency"
+          -p no:cacheprovider --tb=short

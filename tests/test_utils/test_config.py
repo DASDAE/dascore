@@ -87,6 +87,7 @@ class TestSetConfig:
         assert new_lock is not old_lock
         assert not new_lock.locked()
 
+    @pytest.mark.concurrency
     def test_visible_from_new_thread(self):
         """A permanent set is visible from threads launched afterward."""
         set_config(display_float_precision=9)
@@ -167,6 +168,7 @@ class TestConfigContext:
         with config_context(display_float_precision=7):
             assert _UsesConfig().value == 7
 
+    @pytest.mark.concurrency
     def test_concurrent_overrides_are_isolated(self):
         """Two threads with different scoped overrides never stomp each other."""
         barrier = threading.Barrier(2)
@@ -213,6 +215,7 @@ class TestConfigDefaults:
 class TestMapConfigBinding:
     """Spool.map applies the config active when map() was called."""
 
+    @pytest.mark.concurrency
     def test_thread_pool_sees_call_time_config(self):
         """A thread-pool map sees the caller's scoped override."""
         from concurrent.futures import ThreadPoolExecutor
@@ -223,6 +226,7 @@ class TestMapConfigBinding:
                 out = spool.map(_worker_read_float_precision, client=executor)
         assert set(out) == {8}
 
+    @pytest.mark.concurrency
     def test_process_pool_sees_call_time_config(self):
         """A process-pool map sees the caller's scoped override too."""
         from concurrent.futures import ProcessPoolExecutor

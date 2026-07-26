@@ -499,6 +499,7 @@ class TestLocked:
             assert not self._lock.acquire(blocking=False)
             self.value += 1
 
+    @pytest.mark.concurrency
     def test_every_call_is_locked(self):
         """Concurrent callers each run the body with the lock held."""
         counter = self._Counter()

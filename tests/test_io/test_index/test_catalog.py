@@ -313,6 +313,7 @@ class TestViewSerialization:
 class TestCatalogConcurrency:
     """Catalog caches must stay coherent under concurrent readers."""
 
+    @pytest.mark.concurrency
     def test_concurrent_realization(self, live_catalog, patches, run_in_threads):
         """Racing first realizations build one backend and one relation."""
         results = run_in_threads(lambda _: len(live_catalog.to_df()))
@@ -320,6 +321,7 @@ class TestCatalogConcurrency:
         # one cached relation, not one per thread
         assert live_catalog.to_df() is live_catalog.to_df()
 
+    @pytest.mark.concurrency
     def test_concurrent_reads(self, live_catalog, patches, run_in_threads):
         """Mixed len/patch access from several threads agrees."""
 
