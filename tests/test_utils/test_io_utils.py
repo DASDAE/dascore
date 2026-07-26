@@ -635,6 +635,27 @@ class TestIOResourceManager:
         assert recorder2.closed
         assert not recorder2.aborted
 
+    def test_close_all_survives_failing_handle(self):
+        """One handle raising must not skip cleanup of the others."""
+
+        class _Exploder:
+            def close(self):
+                raise OSError("close failed")
+
+        class _Recorder:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        man = IOResourceManager("unused")
+        man._cache["bad"] = _Exploder()
+        man._cache["good"] = recorder
+        with pytest.raises(OSError, match="close failed"):
+            man.close_all()
+        assert recorder.closed
+
     def test_non_pathlike_resource_passthrough(self):
         """Non-pathlike resources should bypass path coercion entirely."""
         source = BytesIO(b"abc")

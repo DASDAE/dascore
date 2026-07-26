@@ -249,13 +249,22 @@ class IOResourceManager:
         Close any open file handles.
 
         With ``abort=True``, handles that support it discard uncommitted
-        work (e.g. remote writers skip uploading a partial file).
+        work (e.g. remote writers skip uploading a partial file). One
+        handle failing must not skip cleanup of the others (remote handles
+        resume garbage collection in close), so the first error is
+        re-raised only after every handle was attempted.
         """
+        first_exc = None
         for handle in self._cache.values():
-            if abort and hasattr(handle, "abort"):
-                handle.abort()
-            else:
-                getattr(handle, "close", lambda: None)()
+            try:
+                if abort and hasattr(handle, "abort"):
+                    handle.abort()
+                else:
+                    getattr(handle, "close", lambda: None)()
+            except Exception as exc:
+                first_exc = first_exc if first_exc is not None else exc
+        if first_exc is not None:
+            raise first_exc
 
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
@@ -271,7 +280,8 @@ class IOResourceManager:
         self.close_all(abort=exc_type is not None)
 
     def __del__(self):
-        self.close_all()
+        with suppress(Exception):
+            self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):
