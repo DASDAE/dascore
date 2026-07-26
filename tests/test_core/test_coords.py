@@ -1369,6 +1369,29 @@ class TestCoordRange:
         assert len(new) == 1
         assert np.all(new.values == np.zeros(0))
 
+    @pytest.mark.parametrize(
+        "start,step",
+        [
+            (0, 0),
+            (np.float64(0), np.float64(0)),
+            (np.datetime64("2020-01-01", "ns"), np.timedelta64(0, "ns")),
+        ],
+    )
+    def test_select_step_of_0(self, start, step):
+        """A step of 0 has no index to select on, so all values are kept."""
+        coord = CoordRange(start=start, stop=start, step=step)
+        # numpy scalars warn (rather than raise) on the zero division.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            new, index = coord.select((start, start + 10 * (step + 1)))
+        assert new == coord
+        assert index == slice(None, None, None)
+
+    def test_zero_dim_array_inputs(self):
+        """Ensure 0d arrays (which aren't unboxed) can init a CoordRange."""
+        coord = CoordRange(start=np.array(0.0), stop=np.array(10.0), step=np.array(1.0))
+        assert len(coord) == 10
+        assert coord.step == 1.0
+
     def test_reversed_coord(self, evenly_sampled_reversed_coord):
         """Ensure reverse sampling works for evenly sampled coord."""
         coord = evenly_sampled_reversed_coord

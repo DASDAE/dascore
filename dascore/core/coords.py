@@ -1392,10 +1392,10 @@ class CoordRange(BaseCoord):
 
         def _round_ratio(numerator, denominator, digits):
             """Round numerator/denominator, cheaply for scalars."""
+            # Inputs are always scalar-like (multi-element arrays are rejected
+            # by the pd.isnull check above) and rounding python floats is
+            # ~10x faster than numpy scalars, hence the float conversion.
             ratio = _maybe_unbox_scalar(numerator / denominator)
-            if isinstance(ratio, np.ndarray):  # multi-element array inputs
-                return np.round(ratio, digits)
-            # rounding python floats is ~10x faster than numpy scalars.
             return round(float(ratio), digits)
 
         zero = _TD64_ZERO if is_timedelta64(step) else 0
@@ -1529,8 +1529,16 @@ class CoordRange(BaseCoord):
             # Scalar fast path; avoids several small-array allocations.
             # Due to float weirdness we need a little bit of a fudge factor.
             # (float() first since rounding numpy scalars is ~10x slower)
-            fraction = round(float((value - start) / step), 10)
-            if not math.isfinite(fraction):  # e.g. a step of 0
+            # A step of 0 (a len 1 CoordRange) has no index to compute, so
+            # None is returned, meaning the value doesn't constrain the
+            # selection. It is caught after the division (python scalars
+            # raise, numpy scalars give inf/nan) since testing a numpy step
+            # for truthiness up front costs ~10x more on this hot path.
+            try:
+                fraction = round(float((value - start) / step), 10)
+            except ZeroDivisionError:
+                return None
+            if not math.isfinite(fraction):
                 return None
             out = math.ceil(fraction) if forward else math.floor(fraction)
             if forward and out < 0:
