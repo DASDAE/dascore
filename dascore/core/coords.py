@@ -129,6 +129,17 @@ def _reduce_time_like(func, data):
     return np.atleast_1d(out)
 
 
+def _validate_new_length(length) -> int:
+    """Ensure a requested coordinate length is a non-negative integer."""
+    if not isinstance(length, int | np.integer):
+        msg = f"change_length requires an integer length, not {length!r}."
+        raise ParameterError(msg)
+    if length < 0:
+        msg = f"change_length requires a non-negative length, not {length}."
+        raise ParameterError(msg)
+    return int(length)
+
+
 def _get_dtype(value, dtype):
     """Get the data type based on the first argument."""
     if dtype is not None and dtype != "":
@@ -967,7 +978,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         Parameters
         ----------
         length
-            The output length.
+            The output length. Must be a non-negative integer.
+
+        Raises
+        ------
+        ParameterError
+            If length is not a non-negative integer.
         """
         msg = f"Coordinate type {self.__class__} does not implement change_length"
         raise NotImplementedError(msg)
@@ -1109,7 +1125,7 @@ class CoordPartial(BaseCoord):
         if self.ndim != 1:
             msg = "change_length only works on 1D coords."
             raise CoordError(msg)
-        return get_coord(shape=(length,))
+        return get_coord(shape=(_validate_new_length(length),))
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1373,8 +1389,13 @@ class CoordRange(BaseCoord):
         """
         # CoordRange is always 1D by construction; keep as an internal invariant.
         assert self.ndim == 1, "Can only change length for 1D coords."
+        length = _validate_new_length(length)
         if (current := len(self)) == length:
             return self
+        # A CoordRange always has at least one sample (start == stop has a
+        # length of 1) so an empty coord is the only way to represent 0.
+        if length == 0:
+            return self.empty()
         diff = length - current
         stop, step = self.stop, self.step
         out = self.update(stop=stop + step * diff)

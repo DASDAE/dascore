@@ -2005,6 +2005,29 @@ class TestChangeLength:
         with pytest.raises(NotImplementedError):
             BaseCoord.change_length(coord, 10)
 
+    @pytest.mark.parametrize("length", [-1, -10])
+    def test_negative_length_raises(
+        self, evenly_sampled_coord, basic_non_coord, length
+    ):
+        """Ensure a negative length is rejected rather than making a bad coord."""
+        for coord in (evenly_sampled_coord, basic_non_coord):
+            with pytest.raises(ParameterError, match="non-negative"):
+                coord.change_length(length)
+
+    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None])
+    def test_non_integer_length_raises(
+        self, evenly_sampled_coord, basic_non_coord, length
+    ):
+        """Ensure non integer lengths are rejected."""
+        for coord in (evenly_sampled_coord, basic_non_coord):
+            with pytest.raises(ParameterError, match="integer length"):
+                coord.change_length(length)
+
+    def test_zero_length(self, evenly_sampled_coord, basic_non_coord):
+        """Ensure a length of zero produces an empty coord."""
+        for coord in (evenly_sampled_coord, basic_non_coord):
+            assert len(coord.change_length(0)) == 0
+
 
 class TestIssues:
     """Tests for special issues related to coords."""
