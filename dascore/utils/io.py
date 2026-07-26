@@ -244,10 +244,18 @@ class IOResourceManager:
             self._cache[required_type] = out
         return self._cache[required_type]
 
-    def close_all(self):
-        """Close any open file handles."""
+    def close_all(self, abort: bool = False):
+        """
+        Close any open file handles.
+
+        With ``abort=True``, handles that support it discard uncommitted
+        work (e.g. remote writers skip uploading a partial file).
+        """
         for handle in self._cache.values():
-            getattr(handle, "close", lambda: None)()
+            if abort and hasattr(handle, "abort"):
+                handle.abort()
+            else:
+                getattr(handle, "close", lambda: None)()
 
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
@@ -259,8 +267,8 @@ class IOResourceManager:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Simply ensure all file handles are closed."""
-        self.close_all()
+        """Close all handles; on error, abort uncommitted writes instead."""
+        self.close_all(abort=exc_type is not None)
 
     def __del__(self):
         self.close_all()

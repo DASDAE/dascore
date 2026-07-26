@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from collections.abc import Sequence
@@ -115,6 +116,19 @@ class _ManagedH5pyFile:
         return getattr(self._handle, item)
 
 
+def _is_loop_backed_fileobj(resource) -> bool:
+    """
+    Return True when a file object's filesystem serves reads via a loop thread.
+
+    fsspec async filesystems (http, s3, ...) bridge each read onto a shared
+    event-loop thread; if that module was never imported no such filesystem
+    can exist, so the sys.modules lookup avoids importing fsspec here.
+    """
+    asyn = sys.modules.get("fsspec.asyn")
+    fs = getattr(resource, "fs", None)
+    return asyn is not None and isinstance(fs, asyn.AsyncFileSystem)
+
+
 def get_h5py_file(handle) -> H5pyFile:
     """
     Return the underlying ``h5py.File`` for a DASCore h5 handle.
@@ -162,6 +176,23 @@ def open_h5_resource(
     if isinstance(resource, H5pyFile):
         return _ManagedH5pyFile(resource)
     if isinstance(resource, io.IOBase):
+        # A user-supplied fsspec file object delegates reads to the same
+        # event-loop thread as the UPath branch below and needs the same
+        # GC pause; plain local/in-memory streams do not.
+        if _is_loop_backed_fileobj(resource):
+            pause_gc()
+            owns_pause = True
+            try:
+                managed = _ManagedH5pyFile(
+                    constructor(resource, mode=mode, driver="fileobj"),
+                    resource,
+                    resume_gc_on_close=True,
+                )
+                owns_pause = False
+                return managed
+            finally:
+                if owns_pause:
+                    resume_gc()
         handle = constructor(resource, mode=mode, driver="fileobj")
         return _ManagedH5pyFile(handle, resource)
     if isinstance(resource, UPath):
@@ -174,6 +205,8 @@ def open_h5_resource(
                 constructor=constructor,
                 open_kwargs_getter=open_kwargs_getter,
             )
+        # Note: only mode == "r" is a supported remote path here; H5Writer
+        # intercepts UPath targets with its temp-file write-back handle.
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
         # h5py holds its global lock while blocking on fsspec's event-loop

@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -18,6 +19,7 @@ from pathlib import Path
 from dascore.compat import UPath
 from dascore.config import get_config
 from dascore.exceptions import RemoteCacheError
+from dascore.utils.misc import _reinit_after_fork
 from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
 
 _HTTP_PROTOCOLS = {"http", "https"}
@@ -33,6 +35,11 @@ _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
 _gc_pause_lock = threading.Lock()
 _gc_pause_depth = 0
 _gc_was_enabled = False
+_gc_last_collect = 0.0
+# Minimum seconds between the maintenance collections run by pause_gc. Full
+# collections are O(live objects), so opening many remote files in a loop
+# must not pay one per file.
+_GC_COLLECT_INTERVAL = 10.0
 
 
 def pause_gc() -> None:
@@ -44,21 +51,36 @@ def pause_gc() -> None:
     fetch. If an automatic garbage collection triggers on that loop thread in
     this window, deallocating a dead h5py object requires the same lock and the
     two threads deadlock. Pausing collection for the (bounded) handle lifetime
-    closes the window; reference counting still frees non-cyclic garbage.
+    closes the window; reference counting still frees non-cyclic garbage. This
+    is the mitigation h5py's file-object documentation recommends.
 
     Calls nest; each ``pause_gc`` must be matched by one ``resume_gc``.
+
+    Caveats: the pause is process-global, so cyclic garbage from all threads
+    accumulates until resume, and third-party code calling ``gc.enable()``
+    during the window would silently re-open the deadlock risk.
     """
-    global _gc_pause_depth, _gc_was_enabled
+    global _gc_last_collect, _gc_pause_depth, _gc_was_enabled
     with _gc_pause_lock:
-        if _gc_pause_depth == 0:
-            _gc_was_enabled = gc.isenabled()
-            if _gc_was_enabled:
-                # Clear existing cyclic garbage first so nothing accumulated
-                # (including any leaked handle from a prior session) outlives
-                # the pause indefinitely.
-                gc.collect()
-            gc.disable()
+        # Increment before disabling: an interrupt between the two leaves gc
+        # enabled with a paired resume pending, which is recoverable, while
+        # the reverse order could leave gc off with no pending resume.
+        first = _gc_pause_depth == 0
         _gc_pause_depth += 1
+        if first:
+            _gc_was_enabled = gc.isenabled()
+            gc.disable()
+    # Maintenance collection (explicit gc.collect works while gc is disabled):
+    # finalizes existing cyclic garbage, including any handle leaked by an
+    # earlier failed session, so nothing can suppress collection indefinitely.
+    # It must run OUTSIDE the lock - finalizing a leaked handle runs
+    # close() -> resume_gc(), which takes the same non-reentrant lock.
+    # Rate-limited; correctness does not depend on it (the disable alone
+    # closes the deadlock window).
+    now = time.monotonic()
+    if now - _gc_last_collect >= _GC_COLLECT_INTERVAL:
+        _gc_last_collect = now
+        gc.collect()
 
 
 def resume_gc() -> None:
@@ -67,9 +89,27 @@ def resume_gc() -> None:
     with _gc_pause_lock:
         if _gc_pause_depth == 0:
             return
-        _gc_pause_depth -= 1
-        if _gc_pause_depth == 0 and _gc_was_enabled:
+        # Enable before decrementing: an interrupt between the two leaves gc
+        # enabled with a stale depth, which later resumes fix up, while the
+        # reverse order could leave gc off permanently.
+        if _gc_pause_depth == 1 and _gc_was_enabled:
             gc.enable()
+        _gc_pause_depth -= 1
+
+
+@_reinit_after_fork
+def _reset_gc_pause_state():
+    """
+    Reinstall the GC-pause state in a forked child.
+
+    A fork can copy the lock held and the depth non-zero from a thread that
+    does not exist in the child; no close() will ever rebalance it there.
+    """
+    global _gc_pause_depth, _gc_pause_lock
+    _gc_pause_lock = threading.Lock()
+    if _gc_pause_depth and _gc_was_enabled:
+        gc.enable()
+    _gc_pause_depth = 0
 
 
 @contextmanager
@@ -307,6 +347,14 @@ class _FallbackFileObj:
     This is not a general retry wrapper for arbitrary IO failures. It is meant
     for one known fallback condition where switching from remote access to a
     local cached file is safe and expected.
+
+    Load-bearing invariant: references flow one way here - h5py objects may
+    reference this wrapper and the fsspec handle, but nothing that crosses to
+    fsspec's event-loop thread may ever reference an h5py object. Otherwise
+    that thread could perform the final decref of an h5py object, whose
+    C-level deallocation takes h5py's global lock, and deadlock against a
+    caller blocked on the loop while holding that lock (``pause_gc`` only
+    stops cyclic collection, not refcount-driven deallocation).
     """
 
     def __init__(self, remote_opener, local_opener, error_predicate):

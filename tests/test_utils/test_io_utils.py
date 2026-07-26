@@ -470,6 +470,40 @@ class TestGetHandleFromResource:
         handle.close()
         assert gc.isenabled()
 
+    def test_loop_backed_fileobj_pauses_gc(self, monkeypatch):
+        """User-supplied fsspec async file objects need the GC pause too."""
+        import gc
+
+        from fsspec.asyn import AsyncFileSystem
+
+        from dascore.utils.hdf5 import _is_loop_backed_fileobj
+
+        class _FakeAsyncFS(AsyncFileSystem):
+            def __init__(self):
+                pass
+
+        class _FakeRemoteFile(BytesIO):
+            pass
+
+        plain = BytesIO()
+        assert not _is_loop_backed_fileobj(plain)
+        fake = _FakeRemoteFile()
+        fake.fs = _FakeAsyncFS()
+        assert _is_loop_backed_fileobj(fake)
+
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(lambda *args, **kwargs: BytesIO()),
+        )
+        assert gc.isenabled()
+        handle = H5Reader.get_handle(fake)
+        try:
+            assert not gc.isenabled()
+        finally:
+            handle.close()
+        assert gc.isenabled()
+
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
         path = UPath("memory://dascore/upath-write.h5")
@@ -546,6 +580,36 @@ class TestIOResourceManager:
         source = object()
         with IOResourceManager(source) as man:
             assert man.get_resource(None) is source
+
+    def test_error_in_context_aborts_handles(self):
+        """An exception inside the context must abort, not commit, handles."""
+
+        class _Recorder:
+            aborted = False
+            closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        man = IOResourceManager("unused")
+        man._cache["key"] = recorder
+        with pytest.raises(ValueError, match="boom"):
+            with man:
+                raise ValueError("boom")
+        assert recorder.aborted
+        assert not recorder.closed
+        # A clean exit closes normally.
+        recorder2 = _Recorder()
+        man2 = IOResourceManager("unused")
+        man2._cache["key"] = recorder2
+        with man2:
+            pass
+        assert recorder2.closed
+        assert not recorder2.aborted
 
     def test_non_pathlike_resource_passthrough(self):
         """Non-pathlike resources should bypass path coercion entirely."""

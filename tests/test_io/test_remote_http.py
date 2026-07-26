@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from urllib.request import Request, urlopen
 
 import pytest
@@ -17,15 +16,10 @@ from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_pa
 # The intermittent stall formerly attributed to Windows was a platform-agnostic
 # deadlock between h5py's global lock and garbage collection on fsspec's
 # event-loop thread, fixed by pausing collection around remote h5py handles
-# (see dascore.utils.remote_io.pause_gc). The Windows skip stays for now since
-# CI does not run network tests on Windows to verify other localhost quirks.
+# (see dascore.utils.remote_io.pause_gc), so these tests run on all platforms.
 pytestmark = [
     pytest.mark.network,
     pytest.mark.timeout(30),
-    pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Localhost-HTTP fixture servers are not exercised on Windows CI.",
-    ),
 ]
 
 
