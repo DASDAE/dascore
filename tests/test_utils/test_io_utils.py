@@ -39,7 +39,9 @@ from dascore.utils.remote_io import (
     get_remote_cache_path,
     get_remote_cache_scope,
     is_no_range_http_error,
+    pause_gc,
     remote_cache_scope,
+    resume_gc,
 )
 
 
@@ -399,10 +401,10 @@ class TestGetHandleFromResource:
         monkeypatch.setattr(
             H5Reader,
             "constructor",
-            staticmethod(lambda *args, **kwargs: object()),
+            staticmethod(lambda *args, **kwargs: _DummyHandle()),
         )
         with config_context(remote_hdf5_block_size=1234):
-            H5Reader.get_handle(path)
+            H5Reader.get_handle(path).close()
         assert opened["block_size"] == 1234
         assert opened["cache_type"] == "readahead"
 
@@ -432,13 +434,41 @@ class TestGetHandleFromResource:
         monkeypatch.setattr(
             H5Reader,
             "constructor",
-            staticmethod(lambda *args, **kwargs: object()),
+            staticmethod(lambda *args, **kwargs: _DummyHandle()),
         )
         with config_context(remote_hdf5_block_size=1234):
-            H5Reader.get_handle(path)
+            H5Reader.get_handle(path).close()
         assert opened["block_size"] == 1234
         assert opened["cache_type"] == "blockcache"
         assert opened["cache_options"] == {"maxblocks": 8}
+
+    def test_remote_h5_handle_pauses_gc(self, monkeypatch):
+        """Automatic collection stays paused while a remote handle is open."""
+        import gc
+
+        class _DummyHandle:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        path = UPath("http://example.com/gc-pause.h5")
+        monkeypatch.setattr(type(path), "open", lambda *a, **k: _DummyHandle())
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(lambda *args, **kwargs: _DummyHandle()),
+        )
+        assert gc.isenabled()
+        handle = H5Reader.get_handle(path)
+        try:
+            assert not gc.isenabled()
+        finally:
+            handle.close()
+        assert gc.isenabled()
+        # Closing twice must not unbalance the pause bookkeeping.
+        handle.close()
+        assert gc.isenabled()
 
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
@@ -910,6 +940,24 @@ class TestRemoteIOFallback:
         exc = ValueError("Cannot seek streaming HTTP file")
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(RuntimeError(str(exc)))
+
+    def test_pause_gc_nests_and_restores(self):
+        """Pause calls nest and only the last resume re-enables collection."""
+        import gc
+
+        assert gc.isenabled()
+        pause_gc()
+        pause_gc()
+        try:
+            assert not gc.isenabled()
+            resume_gc()
+            assert not gc.isenabled()
+        finally:
+            resume_gc()
+        assert gc.isenabled()
+        # An unbalanced resume is a safe no-op.
+        resume_gc()
+        assert gc.isenabled()
 
 
 class TestFallbackFileObj:

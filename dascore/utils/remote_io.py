@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import shutil
 import tempfile
+import threading
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -27,6 +29,47 @@ _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
+
+_gc_pause_lock = threading.Lock()
+_gc_pause_depth = 0
+_gc_was_enabled = False
+
+
+def pause_gc() -> None:
+    """
+    Pause automatic garbage collection for one remote read session.
+
+    While a consumer such as h5py reads through a remote file object, it holds
+    its global C-level lock and blocks on fsspec's event-loop thread for each
+    fetch. If an automatic garbage collection triggers on that loop thread in
+    this window, deallocating a dead h5py object requires the same lock and the
+    two threads deadlock. Pausing collection for the (bounded) handle lifetime
+    closes the window; reference counting still frees non-cyclic garbage.
+
+    Calls nest; each ``pause_gc`` must be matched by one ``resume_gc``.
+    """
+    global _gc_pause_depth, _gc_was_enabled
+    with _gc_pause_lock:
+        if _gc_pause_depth == 0:
+            _gc_was_enabled = gc.isenabled()
+            if _gc_was_enabled:
+                # Clear existing cyclic garbage first so nothing accumulated
+                # (including any leaked handle from a prior session) outlives
+                # the pause indefinitely.
+                gc.collect()
+            gc.disable()
+        _gc_pause_depth += 1
+
+
+def resume_gc() -> None:
+    """Undo one ``pause_gc`` call, re-enabling collection at depth zero."""
+    global _gc_pause_depth
+    with _gc_pause_lock:
+        if _gc_pause_depth == 0:
+            return
+        _gc_pause_depth -= 1
+        if _gc_pause_depth == 0 and _gc_was_enabled:
+            gc.enable()
 
 
 @contextmanager

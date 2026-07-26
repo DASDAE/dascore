@@ -6,6 +6,7 @@ import io
 import os
 import shutil
 import tempfile
+import threading
 from collections.abc import Sequence
 from contextlib import suppress
 from functools import partial
@@ -30,6 +31,8 @@ from dascore.utils.remote_io import (
     ensure_local_file,
     get_local_handle,
     is_no_range_http_error,
+    pause_gc,
+    resume_gc,
 )
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
@@ -58,22 +61,34 @@ class _ManagedH5pyFile:
     therefore the point where DASCore tears down the entire HDF5 access stack.
     """
 
-    def __init__(self, handle: H5pyFile, owned_fileobj=None):
+    def __init__(self, handle: H5pyFile, owned_fileobj=None, resume_gc_on_close=False):
         self._handle = handle
         self._owned_fileobj = owned_fileobj
+        self._resume_gc_on_close = resume_gc_on_close
+        self._close_lock = threading.Lock()
         self._closed = False
 
     def close(self):
         """Close the h5py file and, when present, the owned file object."""
-        if self._closed:
-            return
+        # Atomically claim the close so concurrent callers cannot both run
+        # the teardown (and resume the GC pause twice).
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
         try:
             self._handle.close()
         finally:
             if self._owned_fileobj is not None:
                 with suppress(Exception):
                     self._owned_fileobj.close()
-            self._closed = True
+            if self._resume_gc_on_close:
+                resume_gc()
+
+    def __del__(self):
+        """Backstop close so a leaked handle cannot pause collection forever."""
+        with suppress(Exception):
+            self.close()
 
     def __enter__(self):
         return self
@@ -161,17 +176,32 @@ def open_h5_resource(
             )
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
-        handle = _FallbackFileObj(
-            remote_opener=lambda: resource.open(file_mode, **open_kwargs),
-            local_opener=lambda: ensure_local_file(resource).open(file_mode),
-            error_predicate=is_no_range_http_error,
-        )
+        # h5py holds its global lock while blocking on fsspec's event-loop
+        # thread for remote fetches; an automatic garbage collection on that
+        # thread deallocating h5py objects then deadlocks on the same lock.
+        # Pause collection for the handle's lifetime (resumed in close()).
+        pause_gc()
+        owns_pause = True
         try:
-            h5_handle = constructor(handle, mode=mode, driver="fileobj")
-            return _ManagedH5pyFile(h5_handle, handle)
-        except Exception:
-            handle.close()
-            raise
+            handle = _FallbackFileObj(
+                remote_opener=lambda: resource.open(file_mode, **open_kwargs),
+                local_opener=lambda: ensure_local_file(resource).open(file_mode),
+                error_predicate=is_no_range_http_error,
+            )
+            try:
+                managed = _ManagedH5pyFile(
+                    constructor(handle, mode=mode, driver="fileobj"),
+                    handle,
+                    resume_gc_on_close=True,
+                )
+                owns_pause = False
+                return managed
+            except BaseException:
+                handle.close()
+                raise
+        finally:
+            if owns_pause:
+                resume_gc()
     try:
         if mode != "r":
             _maybe_make_parent_directory(resource)
