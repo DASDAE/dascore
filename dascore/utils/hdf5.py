@@ -5,9 +5,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
-import sys
 import tempfile
-import threading
 from collections.abc import Sequence
 from contextlib import suppress
 from functools import partial
@@ -62,29 +60,33 @@ class _ManagedH5pyFile:
     therefore the point where DASCore tears down the entire HDF5 access stack.
     """
 
-    def __init__(self, handle: H5pyFile, owned_fileobj=None, resume_gc_on_close=False):
+    def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
         self._handle = handle
         self._owned_fileobj = owned_fileobj
-        self._resume_gc_on_close = resume_gc_on_close
-        self._close_lock = threading.Lock()
+        # The pid that paused, so a handle inherited through a fork cannot
+        # resume a pause the child never took.
+        self._gc_paused_pid = os.getpid() if gc_paused else None
         self._closed = False
 
     def close(self):
         """Close the h5py file and, when present, the owned file object."""
-        # Atomically claim the close so concurrent callers cannot both run
-        # the teardown (and resume the GC pause twice).
-        with self._close_lock:
-            if self._closed:
-                return
-            self._closed = True
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._handle.close()
         finally:
-            if self._owned_fileobj is not None:
-                with suppress(Exception):
-                    self._owned_fileobj.close()
-            if self._resume_gc_on_close:
-                resume_gc()
+            # Nested so nothing raised by the teardown, including a
+            # BaseException, can skip the resume and strand the pause.
+            try:
+                if self._owned_fileobj is not None:
+                    with suppress(Exception):
+                        self._owned_fileobj.close()
+            finally:
+                # dict.pop is atomic, so racing closes resume exactly once.
+                pid = self.__dict__.pop("_gc_paused_pid", None)
+                if pid == os.getpid():
+                    resume_gc()
 
     def __del__(self):
         """Backstop close so a leaked handle cannot pause collection forever."""
@@ -121,12 +123,36 @@ def _is_loop_backed_fileobj(resource) -> bool:
     Return True when a file object's filesystem serves reads via a loop thread.
 
     fsspec async filesystems (http, s3, ...) bridge each read onto a shared
-    event-loop thread; if that module was never imported no such filesystem
-    can exist, so the sys.modules lookup avoids importing fsspec here.
+    event-loop thread and mark themselves with ``async_impl``; duck-typing it
+    avoids importing fsspec here. Buffering wrappers hide the filesystem, so
+    unwrap a few levels: missing one would leave the deadlock window open.
     """
-    asyn = sys.modules.get("fsspec.asyn")
-    fs = getattr(resource, "fs", None)
-    return asyn is not None and isinstance(fs, asyn.AsyncFileSystem)
+    for _ in range(4):
+        if getattr(getattr(resource, "fs", None), "async_impl", False):
+            return True
+        wrapped = getattr(resource, "raw", None) or getattr(resource, "buffer", None)
+        if wrapped is None or wrapped is resource:
+            return False
+        resource = wrapped
+    return False
+
+
+def _open_h5_paused(fileobj, constructor, mode) -> _ManagedH5pyFile:
+    """
+    Open a loop-backed file object with h5py while automatic gc is paused.
+
+    The returned wrapper owns the pause and releases it on close; if the open
+    fails, both the pause and the file object are released here.
+    """
+    pause_gc()
+    try:
+        handle = constructor(fileobj, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, fileobj, gc_paused=True)
+    except BaseException:
+        with suppress(Exception):
+            fileobj.close()
+        resume_gc()
+        raise
 
 
 def get_h5py_file(handle) -> H5pyFile:
@@ -180,19 +206,7 @@ def open_h5_resource(
         # event-loop thread as the UPath branch below and needs the same
         # GC pause; plain local/in-memory streams do not.
         if _is_loop_backed_fileobj(resource):
-            pause_gc()
-            owns_pause = True
-            try:
-                managed = _ManagedH5pyFile(
-                    constructor(resource, mode=mode, driver="fileobj"),
-                    resource,
-                    resume_gc_on_close=True,
-                )
-                owns_pause = False
-                return managed
-            finally:
-                if owns_pause:
-                    resume_gc()
+            return _open_h5_paused(resource, constructor, mode)
         handle = constructor(resource, mode=mode, driver="fileobj")
         return _ManagedH5pyFile(handle, resource)
     if isinstance(resource, UPath):
@@ -213,28 +227,12 @@ def open_h5_resource(
         # thread for remote fetches; an automatic garbage collection on that
         # thread deallocating h5py objects then deadlocks on the same lock.
         # Pause collection for the handle's lifetime (resumed in close()).
-        pause_gc()
-        owns_pause = True
-        try:
-            handle = _FallbackFileObj(
-                remote_opener=lambda: resource.open(file_mode, **open_kwargs),
-                local_opener=lambda: ensure_local_file(resource).open(file_mode),
-                error_predicate=is_no_range_http_error,
-            )
-            try:
-                managed = _ManagedH5pyFile(
-                    constructor(handle, mode=mode, driver="fileobj"),
-                    handle,
-                    resume_gc_on_close=True,
-                )
-                owns_pause = False
-                return managed
-            except BaseException:
-                handle.close()
-                raise
-        finally:
-            if owns_pause:
-                resume_gc()
+        handle = _FallbackFileObj(
+            remote_opener=lambda: resource.open(file_mode, **open_kwargs),
+            local_opener=lambda: ensure_local_file(resource).open(file_mode),
+            error_predicate=is_no_range_http_error,
+        )
+        return _open_h5_paused(handle, constructor, mode)
     try:
         if mode != "r":
             _maybe_make_parent_directory(resource)

@@ -780,12 +780,15 @@ def _type_caster(func, sig, required_type, arg_name):
             # kwargs is included in bound arguments, need to re-attach
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
-        except Exception as e:  # get_format can't raise; must return false.
-            # A handle created here must close even on failure; leaking a
-            # remote handle would leave garbage collection paused.
+        except BaseException as e:  # get_format can't raise; must return false.
+            # A handle created here must close even on failure, including on
+            # KeyboardInterrupt; leaking a remote handle would leave garbage
+            # collection paused for as long as the traceback is retained.
             if new_resource is not None and new_resource is not resource:
                 with suppress(Exception):
                     getattr(new_resource, "close", lambda: None)()
+            if not isinstance(e, Exception):
+                raise
             if fun_name == "get_format":
                 out = False
             else:
