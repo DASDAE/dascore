@@ -133,11 +133,15 @@ def get_quantity(value: str_or_none) -> Quantity | None:
     >>> many_seconds = dc.get_quantity(dc.to_timedelta64(200))
     """
     value = unbyte(value)
-    if value is None or value is ... or value == "":
+    if value is None or value is ...:
         return None
+    # Check Quantity before the == "" test; comparing a Quantity to a
+    # string goes through pint's parsing machinery and is slow.
     if isinstance(value, Quantity):
         return value
-    elif is_datetime64(value) | is_timedelta64(value):
+    if value == "":
+        return None
+    if is_datetime64(value) | is_timedelta64(value):
         return to_float(value) * dc.get_unit("s")
     return _str_to_quant(value)
 
@@ -260,9 +264,11 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     # common paths need to stay cheap (hence _validate_quantity_str and
     # _unit_to_str caches).
     quant_value = unbyte(quant_value)
-    if quant_value is None or quant_value == "":
+    if quant_value is None:
         return None
     if isinstance(quant_value, str):
+        if quant_value == "":
+            return None
         _validate_quantity_str(quant_value)
         return quant_value
     if isinstance(quant_value, Quantity):
