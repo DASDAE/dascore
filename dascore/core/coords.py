@@ -1395,7 +1395,8 @@ class CoordRange(BaseCoord):
         # A CoordRange always has at least one sample (start == stop has a
         # length of 1) so an empty coord is the only way to represent 0.
         if length == 0:
-            return self.empty()
+            data = np.empty(0, dtype=self.dtype)
+            return get_coord(data=data, step=self.step, units=self.units)
         diff = length - current
         stop, step = self.stop, self.step
         out = self.update(stop=stop + step * diff)

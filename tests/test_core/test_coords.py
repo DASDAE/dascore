@@ -2028,6 +2028,15 @@ class TestChangeLength:
         for coord in (evenly_sampled_coord, basic_non_coord):
             assert len(coord.change_length(0)) == 0
 
+    def test_zero_length_keeps_metadata(self, evenly_sampled_float_coord_with_units):
+        """Ensure an emptied coord keeps its units, step and dtype."""
+        coord = evenly_sampled_float_coord_with_units
+        out = coord.change_length(0)
+        assert len(out) == 0
+        assert out.units == coord.units
+        assert out.step == coord.step
+        assert out.dtype == coord.dtype
+
 
 class TestIssues:
     """Tests for special issues related to coords."""
