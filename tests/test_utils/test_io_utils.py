@@ -12,6 +12,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
@@ -427,6 +428,54 @@ class TestGetHandleFromResource:
                 handle.create_dataset("data", data=[1, 2, 3])
                 raise RuntimeError("boom")
         assert not path.exists()
+
+    def test_h5_writer_remote_context_commits(self):
+        """Leaving the context without an error uploads the file."""
+        path = UPath("memory://dascore/upath-write-commit.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        assert path.exists()
+        with path.open("rb") as raw, h5py.File(raw, "r", driver="fileobj") as reopened:
+            assert list(reopened["data"][:]) == [1, 2, 3]
+
+    def test_h5_writer_remote_append_keeps_existing(self):
+        """Reopening an existing remote file downloads it before writing."""
+        path = UPath("memory://dascore/upath-write-append.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("first", data=[1, 2, 3])
+        with H5Writer.get_handle(path) as handle:
+            handle.create_dataset("second", data=[4, 5, 6])
+        with path.open("rb") as raw, h5py.File(raw, "r", driver="fileobj") as reopened:
+            assert list(reopened["first"][:]) == [1, 2, 3]
+            assert list(reopened["second"][:]) == [4, 5, 6]
+
+    def test_h5_writer_remote_setitem_and_contains(self):
+        """The remote writer proxies item assignment and membership."""
+        path = UPath("memory://dascore/upath-write-setitem.h5")
+        with H5Writer.get_handle(path) as handle:
+            handle["data"] = [1, 2, 3]
+            assert "data" in handle
+            assert "missing" not in handle
+
+    def test_h5_writer_remote_cleans_up_after_open_failure(self, monkeypatch):
+        """A failed local open removes the temp file and raises."""
+        created = []
+        real_mkstemp = hdf5_module.tempfile.mkstemp
+
+        def _tracking_mkstemp(*args, **kwargs):
+            file_descriptor, name = real_mkstemp(*args, **kwargs)
+            created.append(Path(name))
+            return file_descriptor, name
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(hdf5_module.tempfile, "mkstemp", _tracking_mkstemp)
+        monkeypatch.setattr(hdf5_module, "H5pyFile", _raise)
+        path = UPath("memory://dascore/upath-write-open-failure.h5")
+        with pytest.raises(RuntimeError, match="boom"):
+            H5Writer.get_handle(path)
+        assert created and not created[0].exists()
 
     def test_h5_writer_remote_abort_is_idempotent(self):
         """Remote writer aborts should be safe to call more than once."""

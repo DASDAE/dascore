@@ -11,6 +11,7 @@ import fnmatch
 import hashlib
 import itertools
 import json
+import math
 import re
 from collections.abc import Sized
 from contextlib import suppress
@@ -79,6 +80,16 @@ min_max_type = TypeVar("min_max_type")
 step_type = TypeVar("step_type")
 
 CoordKind = Literal["string", "empty", "single", "array", "range"]
+
+# Cheap zero for comparing against timedelta steps; building it through
+# dc.to_timedelta64(0) in hot paths costs ~10x more than reusing this.
+_TD64_ZERO = np.timedelta64(0, "ns")
+
+
+@cache
+def _second_quantity():
+    """Cache the 'second' quantity time-like coords are normalized to."""
+    return get_quantity("s")
 
 
 def ensure_consistent_dtype(value, name, dtype):
@@ -1070,6 +1081,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         other
             Another coordinate.
         """
+        if self is other:
+            return True
         if self.shape != other.shape:
             return False
         non_coords = [self._partial, other._partial]
@@ -1077,6 +1090,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return self == other
         if any(non_coords):
             return False
+        # Evenly sampled coords with identical start/stop/step have identical
+        # values; this avoids materializing and comparing the value arrays.
+        if self._evenly_sampled and other._evenly_sampled:
+            same = (
+                self.start == other.start
+                and self.stop == other.stop
+                and self.step == other.step
+            )
+            if same:
+                return True
         return all_close(self.values, other.values)
 
     def change_length(self, length: int) -> Self:
@@ -1296,6 +1319,39 @@ class CoordRange(BaseCoord):
     _evenly_sampled = True
     _rich_style = dascore_styles["coord_range"]
 
+    def _new_grid(self, start, step, length: int) -> Self:
+        """
+        Return a CoordRange on an exactly known grid, skipping re-validation.
+
+        `validate_start_stop_step_len` exists to *derive* shape and a
+        normalized stop (always `start + step * length`) from loosely
+        specified inputs. Callers below already know the sample count exactly
+        -- it comes from index arithmetic on an existing, validated coord --
+        so re-deriving it costs ~60us per call and can only reproduce what is
+        passed in here.
+
+        Only use this where start/step come from an already-validated
+        CoordRange and length is computed from indices; anything taking user
+        input must go through the validating constructor.
+        """
+        units = self.units
+        # Mirror check_time_units, which forces time-like coords to seconds.
+        # Note it tests `start` for truthiness, so a coord starting at exactly
+        # zero is left alone; that quirk is reproduced here deliberately.
+        if start and (is_timedelta64(start) or is_datetime64(start)):
+            units = _second_quantity()
+        return self.model_construct(
+            # copy; model_construct stores the set by reference.
+            _fields_set=set(self.model_fields_set),
+            units=units,
+            step=step,
+            shape=(length,),
+            # matches what the validator stores for dtype.
+            dtype=np.asarray(start + step).dtype,
+            start=start,
+            stop=start + step * length,
+        )
+
     @model_validator(mode="before")
     @classmethod
     def validate_start_stop_step_len(cls, values):
@@ -1333,25 +1389,38 @@ class CoordRange(BaseCoord):
                 # handle conversion to integer if other values are ints.
                 if isinstance(start, int) and isinstance(stop, int):
                     step = int(step) if np.isclose(np.round(step), step) else step
-        zero = dc.to_timedelta64(0) if is_timedelta64(step) else 0
+
+        def _round_ratio(numerator, denominator, digits):
+            """Round numerator/denominator, cheaply for scalars."""
+            ratio = _maybe_unbox_scalar(numerator / denominator)
+            if isinstance(ratio, np.ndarray):  # multi-element array inputs
+                return np.round(ratio, digits)
+            # rounding python floats is ~10x faster than numpy scalars.
+            return round(float(ratio), digits)
+
+        zero = _TD64_ZERO if is_timedelta64(step) else 0
         if step != zero:
-            span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
+            span = _round_ratio(stop - start, step, 1)
             int_val = int(_maybe_unbox_scalar(np.ceil(span)))
             stop = start + step * int_val
         start_equal_stop = _maybe_unbox_scalar(start == stop)
-        length = (
-            1
-            if start_equal_stop
-            else int(_maybe_unbox_scalar(np.round((stop - start) / step)))
-        )
+        length = 1 if start_equal_stop else int(_round_ratio(stop - start, step, 0))
         shape = (length,)
         values.update(dict(start=start, stop=stop, shape=shape, step=step))
         # step should have the same sign as stop-start, see #321.
+        # Compare signs via direct comparisons (rather than np.sign) since
+        # np.sign(datetime64) returns a datetime64 which includes precision,
+        # so even if the sign is the same, differing precision fails; direct
+        # comparisons are also much cheaper than to_float conversions.
         diff = stop - start
-        # note: we need to the to_float since np.sign(datetime64) returns a
-        # datetime64 which includes precision, so even if the sign is the same
-        # if the precision is different this validation fails.
-        if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
+        step_ = values["step"]
+        try:
+            same_sign = ((step_ > zero) == (diff > zero)) & (
+                (step_ < zero) == (diff < zero)
+            )
+        except TypeError:  # mixed types (e.g. datetime.timedelta vs int zero)
+            same_sign = np.sign(to_float(step_)) == np.sign(to_float(diff))
+        if not same_sign:
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
         # Note: dtype was a property before but it messed up model
@@ -1385,8 +1454,7 @@ class CoordRange(BaseCoord):
             if len(indices):
                 new_step = self.step * indices.step
                 new_start = self.start + indices.start * self.step
-                new_stop = new_start + new_step * len(indices)
-                return self.new(start=new_start, stop=new_stop, step=new_step)
+                return self._new_grid(new_start, new_step, len(indices))
         out = self.values[item]
         return get_coord(data=out, units=self.units)
 
@@ -1428,9 +1496,12 @@ class CoordRange(BaseCoord):
         data = slice(start, (stop + 1) if stop is not None else stop)
         if self._slice_degenerate(data):
             return self.empty(), slice(0, 0)
+        # The sample count is known exactly from the indices, so build the
+        # new grid directly rather than making the validator re-derive it.
+        first = 0 if start is None else start
+        last = (len(self) - 1) if stop is None else stop
         new_start = self[start] if start is not None else self.start
-        new_end = self[stop] + self.step if stop is not None else self.stop
-        new_coords = self.new(start=new_start, stop=new_end)
+        new_coords = self._new_grid(new_start, self.step, last + 1 - first)
         return new_coords, data
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
@@ -1442,29 +1513,36 @@ class CoordRange(BaseCoord):
             return self, slice(None)
         new_step = -self.step
         if reverse:  # reversing a forward sorted Coordrange
-            new_start, new_stop = self.max(), self.min() + new_step
+            new_start = self.max()
         else:  # order a reverse sorted one
-            new_start, new_stop = self.min(), self.max() + new_step
-        out = self.new(start=new_start, stop=new_stop, step=new_step)
+            new_start = self.min()
+        # reversing preserves the sample count.
+        out = self._new_grid(new_start, new_step, len(self))
         return out, slice(None, None, -1)
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
             return value
-        input_is_array = isinstance(value, Sized)
+        start, step = self.start, self.step
+        if not isinstance(value, Sized):
+            # Scalar fast path; avoids several small-array allocations.
+            # Due to float weirdness we need a little bit of a fudge factor.
+            # (float() first since rounding numpy scalars is ~10x slower)
+            fraction = round(float((value - start) / step), 10)
+            if not math.isfinite(fraction):  # e.g. a step of 0
+                return None
+            out = math.ceil(fraction) if forward else math.floor(fraction)
+            if forward and out < 0:
+                return None
+            if not forward and out >= len(self):
+                return None
+            return out
         array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
-        start, step = self.start, self.step
         # Due to float weirdness we need a little bit of a fudge factor here.
         fraction = func(np.round((array - start) / step, decimals=10))
-        out = fraction.astype(np.int64)
-        lt_forward = (out < 0) & forward
-        gt_back = (out >= len(self)) & (not forward)
-        bad_values = lt_forward | gt_back
-        if not input_is_array and np.any(bad_values):
-            return None
-        return out if input_is_array else int(out[0])
+        return fraction.astype(np.int64)
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
@@ -1533,24 +1611,21 @@ class CoordRange(BaseCoord):
         """
         # CoordRange is always 1D by construction; keep as an internal invariant.
         assert self.ndim == 1, "Can only change length for 1D coords."
-        if (current := len(self)) == length:
+        if len(self) == length:
             return self
-        diff = length - current
-        stop, step = self.stop, self.step
-        out = self.update(stop=stop + step * diff)
-        assert len(out) == length
-        return out
+        # Only the sample count changes; start/step are already valid.
+        return self._new_grid(self.start, self.step, length)
 
     @property
     def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        zero = _TD64_ZERO if is_timedelta64(self.step) else 0
         return self.step >= zero
 
     @property
     def reverse_sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
-        zero = dc.to_timedelta64(0) if is_timedelta64(self.step) else 0
+        zero = _TD64_ZERO if is_timedelta64(self.step) else 0
         return self.step < zero
 
 
@@ -2800,7 +2875,8 @@ def get_coord(
         view2 = data[1:]
         view1 = data[:-1]
         try:
-            is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
+            # ascending first; it is by far the more common case.
+            is_monotonic = np.all(view2 > view1) or np.all(view1 > view2)
         except TypeError:
             return None, None, None, False
         # the array cannot be evenly sampled if it isn't monotonic
@@ -2809,11 +2885,19 @@ def get_coord(
                 diffs = view2 - view1
             except TypeError:
                 return None, None, None, False
-            unique_diff = np.unique(diffs)
+            # sort once and derive the unique values from the sorted array
+            # (np.unique would sort a second copy).
+            sorted_diffs = np.sort(diffs)
+            if sorted_diffs[0] == sorted_diffs[-1]:  # all diffs equal
+                unique_diff = sorted_diffs[:1]
+            else:
+                mask = np.empty(len(sorted_diffs), dtype=np.bool_)
+                mask[0] = True
+                np.not_equal(sorted_diffs[1:], sorted_diffs[:-1], out=mask[1:])
+                unique_diff = sorted_diffs[mask]
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 # this is a poor man's median that preserves dtype
-                sorted_diffs = np.sort(diffs)
                 _step = sorted_diffs[len(sorted_diffs) // 2]
                 _max = _get_new_max(data, _min, _step)
                 return _min, _max + _step, _step, is_monotonic
