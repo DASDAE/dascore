@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
@@ -1212,3 +1213,110 @@ class TestObsPy:
         st = patch.io.to_obspy()
         assert isinstance(st, obspy.Stream)
         assert len(st) == len(patch.get_coord("distance"))
+
+
+class TestRemoteCacheConcurrency:
+    """The remote cache serializes per resource, not globally."""
+
+    @pytest.fixture(autouse=True)
+    def isolated_cache(self, tmp_path, permanent_config):
+        """
+        Give each test its own cache directory.
+
+        Uses the permanent config: worker threads start with a fresh
+        context, so a scoped config_context override would not reach them.
+        """
+        with permanent_config(
+            remote_cache_dir=tmp_path / "remote_cache", warn_on_remote_cache=False
+        ):
+            clear_remote_file_cache()
+            yield
+            clear_remote_file_cache()
+
+    def _memory_file(self, name: str) -> UPath:
+        """Write a small file into the in-memory filesystem."""
+        path = UPath(f"memory://dascore/concurrent/{name}")
+        with path.open("wb") as fi:
+            fi.write(b"dascore" * 64)
+        return path
+
+    def test_racing_callers_download_once(self, monkeypatch, run_in_threads):
+        """Callers wanting one resource agree on the path and download it once."""
+        resource = self._memory_file("shared.bin")
+        downloads = []
+        original = remote_io._download_remote_file
+
+        def _counted(path, local_path):
+            downloads.append(local_path)
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _counted)
+        results = run_in_threads(lambda _: ensure_local_file(resource))
+        assert len({str(x) for x in results}) == 1
+        assert len(downloads) == 1
+        assert results[0].exists()
+
+    def test_distinct_resources_are_not_serialized(self, monkeypatch, run_in_threads):
+        """Unrelated downloads run at once; one global lock would time out here."""
+        resources = [self._memory_file(f"file_{i}.bin") for i in range(4)]
+        barrier = threading.Barrier(len(resources), timeout=30)
+        original = remote_io._download_remote_file
+
+        def _synchronized(path, local_path):
+            # Every download has to be in flight together to get past this.
+            barrier.wait()
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _synchronized)
+        results = run_in_threads(lambda index: ensure_local_file(resources[index]))
+        assert all(x is not None and x.exists() for x in results)
+
+    def test_failed_download_is_retried(self, monkeypatch):
+        """A failed download publishes nothing, so the next caller retries."""
+        resource = self._memory_file("flaky.bin")
+        calls = []
+        original = remote_io._download_remote_file
+
+        def _fail_once(path, local_path):
+            calls.append(local_path)
+            if len(calls) == 1:
+                raise OSError("download failed")
+            return original(path, local_path)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _fail_once)
+        with pytest.raises(OSError, match="download failed"):
+            ensure_local_file(resource)
+        assert ensure_local_file(resource).exists()
+        assert len(calls) == 2
+
+    def test_unregistered_remote_id_is_coerced(self):
+        """An id missing from the resource cache is rebuilt from the id itself."""
+        resource = self._memory_file("unregistered.bin")
+        remote_io._REMOTE_RESOURCE_CACHE.clear()
+        cache_root = remote_io._normalize_cache_root(remote_io.get_remote_cache_path())
+        local_path = remote_io._materialize_remote_file(str(resource), cache_root)
+        assert local_path.exists()
+
+    def test_reinit_drops_download_locks(self):
+        """The fork hook drops locks a dead thread may have been holding."""
+        resource = self._memory_file("forked.bin")
+        ensure_local_file(resource)
+        assert remote_io._REMOTE_KEY_LOCKS
+        old_locks = remote_io._REMOTE_KEY_LOCKS
+        remote_io._reinit_remote_cache_locks()
+        assert not remote_io._REMOTE_KEY_LOCKS
+        assert remote_io._REMOTE_KEY_LOCKS is not old_locks
+
+
+class TestIOResourceManagerConcurrency:
+    """One manager hands every caller the same handle per type."""
+
+    def test_racing_callers_share_one_handle(self, tmp_path, run_in_threads):
+        """get_resource opens each required type exactly once."""
+        path = tmp_path / "concurrent_resource.bin"
+        path.write_bytes(b"dascore")
+        with IOResourceManager(path) as man:
+            handles = run_in_threads(lambda _: man.get_resource(BinaryReader))
+            assert len({id(x) for x in handles}) == 1
+            assert not handles[0].closed
+        assert handles[0].closed
