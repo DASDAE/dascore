@@ -46,10 +46,14 @@ MAXINT64 = np.iinfo(np.int64).max
 # types used to represent paths
 path_types = str | Path | UPath
 
+# Protocols served over HTTP. The one spelling of this set; HDF5 tuning and
+# the remote-cache downloader both key off it.
+http_protocols = ("http", "https")
+
 # Remote protocols that should use DASCore's smaller HDF5 readahead blocks.
 # h5py performs many small metadata reads while opening files, and some S3-like
 # backends default to large readahead chunks that overfetch remote data.
-remote_hdf5_tuned_protocols = ("s3", "s3a", "s3n", "http", "https")
+remote_hdf5_tuned_protocols = ("s3", "s3a", "s3n", *http_protocols)
 
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")

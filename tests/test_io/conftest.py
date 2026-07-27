@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -242,30 +243,41 @@ def ensure_http_fetch_file(http_test_data_root):
     return _ensure
 
 
-@pytest.fixture(scope="session")
-def http_das_path(http_test_data_root, ensure_http_fetch_file):
-    """Return a UPath pointing at a localhost HTTP view of DAS test data."""
-    handler = partial(
-        _SilentSimpleHTTPRequestHandler,
-        directory=str(http_test_data_root),
-    )
+@contextmanager
+def _serve_das_tree(handler_cls, root, label):
+    """
+    Serve one local tree over localhost HTTP for the life of a fixture.
+
+    Threaded so one slow or abandoned connection cannot park the accept loop;
+    a parked single-threaded server left new connections in TCP SYN retry
+    backoff, which appeared as 15+ second stalls or hangs.
+    """
+    handler = partial(handler_cls, directory=str(root))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    probe_path = "example_dasdae_event_1.h5"
     try:
         host, port = server.server_address
-        probe_url = f"http://{host}:{port}/das/{probe_path}"
-        _wait_for_http_server(probe_url, "http_das_path readiness probe")
+        probe_url = f"http://{host}:{port}/das/example_dasdae_event_1.h5"
+        _wait_for_http_server(probe_url, f"{label} readiness probe")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        with skip_on_timeout(10, "http_das_path teardown"):
+        with skip_on_timeout(10, f"{label} teardown"):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
             if thread.is_alive():
-                raise TimeoutError("HTTP test server thread did not exit cleanly.")
+                raise TimeoutError(f"{label} server thread did not exit cleanly.")
+
+
+@pytest.fixture(scope="session")
+def http_das_path(http_test_data_root, ensure_http_fetch_file):
+    """Return a UPath pointing at a localhost HTTP view of DAS test data."""
+    with _serve_das_tree(
+        _SilentSimpleHTTPRequestHandler, http_test_data_root, "http_das_path"
+    ) as path:
+        yield path
 
 
 @pytest.fixture(scope="session")
@@ -294,57 +306,21 @@ def ensure_http_regression_file(http_regression_data_root):
 @pytest.fixture(scope="session")
 def http_regression_das_path(http_regression_data_root, ensure_http_regression_file):
     """Return an isolated HTTP tree containing only the regression fixtures."""
-    handler = partial(
+    with _serve_das_tree(
         _RegressionHTTPRequestHandler,
-        directory=str(http_regression_data_root),
-    )
-    # A threaded server so one slow or abandoned connection cannot park the
-    # accept loop; a parked single-threaded server left new connections in
-    # TCP SYN retry backoff, which appeared as 15+ second stalls or hangs.
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    probe_path = "example_dasdae_event_1.h5"
-    try:
-        host, port = server.server_address
-        probe_url = f"http://{host}:{port}/das/{probe_path}"
-        _wait_for_http_server(probe_url, "http_regression_das_path readiness probe")
-        yield UPath(f"http://{host}:{port}/das")
-    finally:
-        with skip_on_timeout(10, "http_regression_das_path teardown"):
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
-            if thread.is_alive():
-                raise TimeoutError(
-                    "HTTP regression server thread did not exit cleanly."
-                )
+        http_regression_data_root,
+        "http_regression_das_path",
+    ) as path:
+        yield path
 
 
 @pytest.fixture(scope="session")
 def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
     """Return a UPath pointing at a localhost HTTP server with range support."""
-    handler = partial(_RangeHTTPRequestHandler, directory=str(http_test_data_root))
-    # Threaded for the same accept-loop reason as http_regression_das_path.
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host, port = server.server_address
-        probe_url = f"http://{host}:{port}/das/example_dasdae_event_1.h5"
-        _wait_for_http_server(probe_url, "http_range_das_path readiness probe")
-        yield UPath(f"http://{host}:{port}/das")
-    finally:
-        with skip_on_timeout(10, "http_range_das_path teardown"):
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
-            if thread.is_alive():
-                raise TimeoutError(
-                    "Range-capable HTTP server thread did not exit cleanly."
-                )
+    with _serve_das_tree(
+        _RangeHTTPRequestHandler, http_test_data_root, "http_range_das_path"
+    ) as path:
+        yield path
 
 
 @pytest.fixture(scope="session")

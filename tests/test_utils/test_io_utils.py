@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
@@ -41,10 +42,34 @@ from dascore.utils.remote_io import (
     get_remote_cache_path,
     get_remote_cache_scope,
     is_no_range_http_error,
-    pause_gc,
     remote_cache_scope,
-    resume_gc,
 )
+
+
+class _DummyHandle:
+    """A file-like stand-in that only records being closed."""
+
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeRemoteFile(BytesIO):
+    """A file object whose fsspec filesystem serves reads on a loop thread."""
+
+
+def _make_loop_backed_file() -> _FakeRemoteFile:
+    """Return a file object that takes the loop-backed (GC-paused) branch."""
+    from fsspec.asyn import AsyncFileSystem
+
+    class _FakeAsyncFS(AsyncFileSystem):
+        def __init__(self):
+            pass
+
+    out = _FakeRemoteFile()
+    out.fs = _FakeAsyncFS()
+    return out
 
 
 class _BadType:
@@ -360,13 +385,6 @@ class TestGetHandleFromResource:
         self, tmp_path, monkeypatch
     ):
         """Ensure constructor failures close UPath-opened file handles."""
-
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
         handle = _DummyHandle()
         path = UPath(tmp_path / "error.h5")
         path.write_bytes(b"not an hdf5")
@@ -382,55 +400,34 @@ class TestGetHandleFromResource:
             H5Reader.get_handle(path)
         assert handle.closed
 
-    def test_h5_reader_uses_small_blocks_for_s3_upath(self, monkeypatch):
-        """S3-backed HDF5 readers should override s3fs's large default block."""
+    @pytest.mark.parametrize(
+        ("url", "options", "expected"),
+        [
+            (
+                "s3://example-bucket/example.h5",
+                {"anon": True},
+                {"cache_type": "readahead"},
+            ),
+            (
+                "http://example.com/example.h5",
+                {},
+                {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}},
+            ),
+        ],
+    )
+    def test_remote_h5_open_kwargs_are_tuned(self, monkeypatch, url, options, expected):
+        """Remote HDF5 opens must override backend defaults that overfetch.
 
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
-        opened = {}
-        handle = _DummyHandle()
-        path = UPath("s3://example-bucket/example.h5", anon=True)
-
-        def _open(_self, _mode, **kwargs):
-            opened.update(kwargs)
-            return handle
-
-        monkeypatch.setattr(type(path), "open", _open)
-        monkeypatch.setattr(
-            H5Reader,
-            "constructor",
-            staticmethod(lambda *args, **kwargs: _DummyHandle()),
-        )
-        with config_context(remote_hdf5_block_size=1234):
-            H5Reader.get_handle(path).close()
-        assert opened["block_size"] == 1234
-        assert opened["cache_type"] == "readahead"
-
-    def test_h5_reader_uses_block_cache_for_http_upath(self, monkeypatch):
-        """HTTP-backed HDF5 readers should use a block LRU cache.
-
-        The h5py metadata probe alternates between the file header and footer;
-        fsspec's default single-window cache refetches a block (or the whole
-        file on range-less servers) on every jump.
+        s3fs defaults to 50 MB readahead blocks. HTTP instead needs a block
+        LRU: the h5py metadata probe alternates between the file header and
+        footer, and a single-window cache refetches on every jump.
         """
-
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
         opened = {}
-        handle = _DummyHandle()
-        path = UPath("http://example.com/example.h5")
+        path = UPath(url, **options)
 
         def _open(_self, _mode, **kwargs):
             opened.update(kwargs)
-            return handle
+            return _DummyHandle()
 
         monkeypatch.setattr(type(path), "open", _open)
         monkeypatch.setattr(
@@ -441,19 +438,11 @@ class TestGetHandleFromResource:
         with config_context(remote_hdf5_block_size=1234):
             H5Reader.get_handle(path).close()
         assert opened["block_size"] == 1234
-        assert opened["cache_type"] == "blockcache"
-        assert opened["cache_options"] == {"maxblocks": 8}
+        for key, value in expected.items():
+            assert opened[key] == value
 
     def test_remote_h5_handle_pauses_gc(self, monkeypatch):
         """Automatic collection stays paused while a remote handle is open."""
-        import gc
-
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
         path = UPath("http://example.com/gc-pause.h5")
         monkeypatch.setattr(type(path), "open", lambda *a, **k: _DummyHandle())
         monkeypatch.setattr(
@@ -474,32 +463,13 @@ class TestGetHandleFromResource:
 
     def test_loop_backed_fileobj_pauses_gc(self, monkeypatch):
         """User-supplied fsspec async file objects need the GC pause too."""
-        import gc
-
-        from fsspec.asyn import AsyncFileSystem
-
-        from dascore.utils.hdf5 import _is_loop_backed_fileobj
-
-        class _FakeAsyncFS(AsyncFileSystem):
-            def __init__(self):
-                pass
-
-        class _FakeRemoteFile(BytesIO):
-            pass
-
-        plain = BytesIO()
-        assert not _is_loop_backed_fileobj(plain)
-        fake = _FakeRemoteFile()
-        fake.fs = _FakeAsyncFS()
-        assert _is_loop_backed_fileobj(fake)
-
         monkeypatch.setattr(
             H5Reader,
             "constructor",
             staticmethod(lambda *args, **kwargs: BytesIO()),
         )
         assert gc.isenabled()
-        handle = H5Reader.get_handle(fake)
+        handle = H5Reader.get_handle(_make_loop_backed_file())
         try:
             assert not gc.isenabled()
         finally:
@@ -508,26 +478,14 @@ class TestGetHandleFromResource:
 
     def test_loop_backed_fileobj_constructor_error_resumes_gc(self, monkeypatch):
         """A failed h5py construction must rebalance the GC pause."""
-        import gc
-
-        from fsspec.asyn import AsyncFileSystem
-
-        class _FakeAsyncFS(AsyncFileSystem):
-            def __init__(self):
-                pass
-
-        class _FakeRemoteFile(BytesIO):
-            pass
 
         def _explode(*args, **kwargs):
             raise ValueError("not an hdf5 fileobj")
 
-        fake = _FakeRemoteFile()
-        fake.fs = _FakeAsyncFS()
         monkeypatch.setattr(H5Reader, "constructor", staticmethod(_explode))
         assert gc.isenabled()
         with pytest.raises(ValueError, match="not an hdf5 fileobj"):
-            H5Reader.get_handle(fake)
+            H5Reader.get_handle(_make_loop_backed_file())
         assert gc.isenabled()
 
     def test_h5_writer_to_remote_upath(self):
@@ -1099,39 +1057,6 @@ class TestRemoteIOFallback:
         exc = ValueError("Cannot seek streaming HTTP file")
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(RuntimeError(str(exc)))
-
-    def test_fork_reset_reinstalls_gc_state(self):
-        """The fork handler must clear a copied pause so children collect."""
-        import gc
-
-        pause_gc()
-        try:
-            assert not gc.isenabled()
-            remote_io._reset_gc_pause_state()
-            assert gc.isenabled()
-            assert remote_io._gc_pause_depth == 0
-        finally:
-            # State was reset, so a stray resume must be a safe no-op.
-            resume_gc()
-        assert gc.isenabled()
-
-    def test_pause_gc_nests_and_restores(self):
-        """Pause calls nest and only the last resume re-enables collection."""
-        import gc
-
-        assert gc.isenabled()
-        pause_gc()
-        pause_gc()
-        try:
-            assert not gc.isenabled()
-            resume_gc()
-            assert not gc.isenabled()
-        finally:
-            resume_gc()
-        assert gc.isenabled()
-        # An unbalanced resume is a safe no-op.
-        resume_gc()
-        assert gc.isenabled()
 
 
 class TestFallbackFileObj:

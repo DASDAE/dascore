@@ -262,7 +262,9 @@ class IOResourceManager:
         work (e.g. remote writers skip uploading a partial file). One
         handle failing must not skip cleanup of the others (remote handles
         resume garbage collection in close), so the first error is
-        re-raised only after every handle was attempted.
+        re-raised only after every handle was attempted. BaseException is
+        caught for that reason too: a Ctrl-C mid-close would otherwise
+        strand the GC pause of every handle after it.
         """
         first_exc = None
         with self._lock:
@@ -272,7 +274,7 @@ class IOResourceManager:
                         handle.abort()
                     else:
                         getattr(handle, "close", lambda: None)()
-                except Exception as exc:
+                except BaseException as exc:
                     first_exc = first_exc if first_exc is not None else exc
         if first_exc is not None:
             raise first_exc
@@ -280,8 +282,10 @@ class IOResourceManager:
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
         with self._lock:
-            self.close_all()
-            self._cache.clear()
+            try:
+                self.close_all()
+            finally:
+                self._cache.clear()
 
     def __enter__(self):
         """Entering context manager."""

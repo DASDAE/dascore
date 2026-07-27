@@ -17,7 +17,7 @@ from h5py import File as H5pyFile
 
 from dascore.compat import UPath
 from dascore.config import get_config
-from dascore.constants import remote_hdf5_tuned_protocols
+from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
@@ -264,7 +264,7 @@ class H5Reader:
             # alternates between the file header and footer, and fsspec's
             # default single-window cache refetches a full block (or the whole
             # file on range-less servers) on every jump.
-            if protocol in ("http", "https"):
+            if protocol in http_protocols:
                 # Bound retained memory: 8 blocks of the configured size.
                 return {
                     "block_size": get_config().remote_hdf5_block_size,

@@ -19,11 +19,11 @@ from threading import RLock
 
 from dascore.compat import UPath
 from dascore.config import get_config
+from dascore.constants import http_protocols
 from dascore.exceptions import RemoteCacheError
 from dascore.utils.misc import _reinit_after_fork
 from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
 
-_HTTP_PROTOCOLS = {"http", "https"}
 _NO_RANGE_HTTP_PATTERNS = (
     "doesn't appear to support range requests",
     "only reading this file from the beginning is supported",
@@ -62,6 +62,7 @@ def pause_gc() -> None:
     recovered by the collection below, on the next remote open.
     """
     global _gc_pause_depth, _gc_was_enabled, _gc_collect_after
+    now = time.monotonic()
     with _gc_pause_lock:
         # Count first: an interrupt before ``disable`` leaves a pending resume
         # (harmless); the reverse order could leave gc off with none pending.
@@ -69,13 +70,15 @@ def pause_gc() -> None:
         if _gc_pause_depth == 1:
             _gc_was_enabled = gc.isenabled()
             gc.disable()
+        # Claim the valve here so concurrent openers cannot each run it.
+        collect = now >= _gc_collect_after
+        if collect:
+            _gc_collect_after = now + 10.0
     # Safety valve: finalize cyclic garbage, including a handle leaked by an
     # earlier session, so a stranded pause cannot disable collection forever.
     # Must run outside the lock, since finalizing such a handle calls
     # resume_gc, which takes it. Rate limited; a full collect is O(live).
-    now = time.monotonic()
-    if now >= _gc_collect_after:
-        _gc_collect_after = now + 10.0
+    if collect:
         gc.collect()
 
 
@@ -221,7 +224,7 @@ def _download_remote_file(path, local_path: Path):
     """Download a remote path into its cache location."""
     resource = coerce_to_upath(path)
     protocol = getattr(resource, "protocol", None)
-    open_kwargs = {"block_size": 0} if protocol in _HTTP_PROTOCOLS else {}
+    open_kwargs = {"block_size": 0} if protocol in http_protocols else {}
     local_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=local_path.parent,
