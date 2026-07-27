@@ -347,7 +347,8 @@ def normalize(
     Normalize a patch along a specified dimension.
 
     NaN values are ignored when computing the norm. They remain NaN in the
-    output but do not affect any other sample.
+    output but do not affect any other sample. Slices with a norm of zero,
+    meaning they contain nothing but zeros and NaN, are returned unscaled.
 
     Parameters
     ----------
@@ -380,27 +381,23 @@ def normalize(
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
         # Equivalent to np.linalg.norm, but skips NaN rather than letting a
-        # single null blank every sample sharing its slice.
-        norm_values = np.nansum(np.abs(data) ** order, axis=axis) ** (1 / order)
+        # single null blank every sample sharing its slice. The float exponent
+        # promotes ints so the powers cannot overflow a narrow dtype.
+        norm_values = np.nansum(np.abs(data) ** float(order), axis=axis) ** (1 / order)
+        divisor = np.expand_dims(norm_values, axis=axis)
     elif norm == "max":
-        norm_values = np.nanmax(np.abs(data), axis=axis)
+        divisor = np.expand_dims(np.nanmax(np.abs(data), axis=axis), axis=axis)
     elif norm == "bit":
-        pass
+        divisor = np.abs(data)
     else:
         msg = (
             f"Norm value of {norm} is not supported. "
             f"Supported values are {('l1', 'l2', 'max', 'bit')}"
         )
         raise ValueError(msg)
-    if norm == "bit":
-        new_data = np.divide(
-            data, np.abs(data), out=np.zeros_like(data), where=np.abs(data) != 0
-        )
-    else:
-        expanded_norm = np.expand_dims(norm_values, axis=axis)
-        new_data = np.divide(
-            data, expanded_norm, out=np.zeros_like(data), where=expanded_norm != 0
-        )
+    # A zero divisor means there is nothing but zeros and nulls to scale, so
+    # divide those by one; the zeros stay zero and the nulls stay null.
+    new_data = data / np.where(divisor == 0, 1, divisor)
     return self.new(data=new_data)
 
 
