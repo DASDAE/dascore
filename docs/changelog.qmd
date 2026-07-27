@@ -49,3 +49,4 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - Removed `dascore.transform.spectrogram` and `Patch.spectrogram`; use [`Patch.stft`](`dascore.Patch.stft`) for transforms. `Patch.viz.spectrogram` remains available for plotting.
 - Removed `dascore.utils.patch.merge_patches`; use `dc.spool(...).chunk(...)`.
 - Removed deprecated compatibility parameters `gauge_multiple`, `lag`, and `notch`; use `step_multiple`, select on lag coordinates after correlation, and `invert`, respectively.
+- DASCore now requires Python 3.11 or later (was 3.10, which was never covered by CI and reaches end of life in October 2026).

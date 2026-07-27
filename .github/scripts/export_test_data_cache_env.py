@@ -25,6 +25,10 @@ def main() -> None:
     print(  # noqa: T201
         f"DATA_CACHE_KEY={info.get_key(runner_os=runner_os, cache_number=cache_number)}"
     )
+    restore_prefix = info.get_restore_prefix(
+        runner_os=runner_os, cache_number=cache_number
+    )
+    print(f"DATA_CACHE_RESTORE_PREFIX={restore_prefix}")  # noqa: T201
 
 
 if __name__ == "__main__":

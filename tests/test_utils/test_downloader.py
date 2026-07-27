@@ -100,7 +100,40 @@ class TestTestDataCacheInfo:
 
         out = info.get_key(runner_os="Linux", cache_number=7)
 
-        assert out == f"data-Linux-{DATA_VERSION}-{info.registry_hash}-7"
+        # cache_number precedes the registry hash so it can be part of the
+        # restore-keys prefix; see test_restore_prefix_respects_the_cache_
+        # number_reset.
+        assert out == f"data-Linux-{DATA_VERSION}-7-{info.registry_hash}"
+
+    def test_restore_prefix_is_a_prefix_of_the_key(self):
+        """The restore fallback must match keys from other registry hashes.
+
+        CI passes this as ``restore-keys``; if it stopped being a prefix of
+        the exact key, a registry change would silently re-download every
+        file rather than reusing the previous cache.
+        """
+        info = get_test_data_cache_info()
+
+        prefix = info.get_restore_prefix(runner_os="Linux", cache_number=7)
+
+        assert prefix == f"data-Linux-{DATA_VERSION}-7-"
+        assert info.get_key(runner_os="Linux", cache_number=7).startswith(prefix)
+        # Must not match another OS, whose cache holds different paths.
+        assert not info.get_key(runner_os="Windows", cache_number=7).startswith(prefix)
+
+    def test_restore_prefix_respects_the_cache_number_reset(self):
+        """Bumping cache_number must not fall back onto the dropped cache.
+
+        cache_number is the documented manual reset. If it were absent from
+        the prefix, restore-keys would hand back the very cache the bump was
+        meant to discard.
+        """
+        info = get_test_data_cache_info()
+
+        old_key = info.get_key(runner_os="Linux", cache_number=1)
+        new_prefix = info.get_restore_prefix(runner_os="Linux", cache_number=2)
+
+        assert not old_key.startswith(new_prefix)
 
     def test_cache_info_respects_configured_cache_dir(self, tmp_path):
         """Cache info should reflect the configured downloader cache root."""

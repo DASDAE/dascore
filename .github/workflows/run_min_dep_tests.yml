@@ -45,6 +45,8 @@ jobs:
     timeout-minutes: 35
     runs-on: ${{ matrix.os }}
     strategy:
+      # See the note in runtests.yml: a cancelled job never saves its cache.
+      fail-fast: false
       matrix:
         # Defined in .github/actions/load-shared-vars/action.yml
         os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
