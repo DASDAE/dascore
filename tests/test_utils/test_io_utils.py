@@ -1240,6 +1240,7 @@ class TestRemoteCacheConcurrency:
             fi.write(b"dascore" * 64)
         return path
 
+    @pytest.mark.concurrency
     def test_racing_callers_download_once(self, monkeypatch, run_in_threads):
         """Callers wanting one resource agree on the path and download it once."""
         resource = self._memory_file("shared.bin")
@@ -1256,6 +1257,7 @@ class TestRemoteCacheConcurrency:
         assert len(downloads) == 1
         assert results[0].exists()
 
+    @pytest.mark.concurrency
     def test_distinct_resources_are_not_serialized(self, monkeypatch, run_in_threads):
         """Unrelated downloads run at once; one global lock would time out here."""
         resources = [self._memory_file(f"file_{i}.bin") for i in range(4)]
@@ -1311,6 +1313,7 @@ class TestRemoteCacheConcurrency:
 class TestIOResourceManagerConcurrency:
     """One manager hands every caller the same handle per type."""
 
+    @pytest.mark.concurrency
     def test_racing_callers_share_one_handle(self, tmp_path, run_in_threads):
         """get_resource opens each required type exactly once."""
         path = tmp_path / "concurrent_resource.bin"
