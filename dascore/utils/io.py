@@ -254,28 +254,50 @@ class IOResourceManager:
                 self._cache[required_type] = out
             return self._cache[required_type]
 
-    def close_all(self):
-        """Close any open file handles."""
+    def close_all(self, abort: bool = False):
+        """
+        Close any open file handles.
+
+        With ``abort=True``, handles that support it discard uncommitted
+        work (e.g. remote writers skip uploading a partial file). One
+        handle failing must not skip cleanup of the others (remote handles
+        resume garbage collection in close), so the first error is
+        re-raised only after every handle was attempted. BaseException is
+        caught for that reason too: a Ctrl-C mid-close would otherwise
+        strand the GC pause of every handle after it.
+        """
+        first_exc = None
         with self._lock:
             for handle in self._cache.values():
-                getattr(handle, "close", lambda: None)()
+                try:
+                    if abort and hasattr(handle, "abort"):
+                        handle.abort()
+                    else:
+                        getattr(handle, "close", lambda: None)()
+                except BaseException as exc:
+                    first_exc = first_exc if first_exc is not None else exc
+        if first_exc is not None:
+            raise first_exc
 
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
         with self._lock:
-            self.close_all()
-            self._cache.clear()
+            try:
+                self.close_all()
+            finally:
+                self._cache.clear()
 
     def __enter__(self):
         """Entering context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Simply ensure all file handles are closed."""
-        self.close_all()
+        """Close all handles; on error, abort uncommitted writes instead."""
+        self.close_all(abort=exc_type is not None)
 
     def __del__(self):
-        self.close_all()
+        with suppress(Exception):
+            self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):

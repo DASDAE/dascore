@@ -9,6 +9,7 @@ import inspect
 import warnings
 from collections import defaultdict
 from collections.abc import Generator, Mapping
+from contextlib import suppress
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -772,13 +773,22 @@ def _type_caster(func, sig, required_type, arg_name):
         bound = sig.bind(*args, **kwargs)
         new_kw = bound.arguments
         resource = new_kw.pop(arg_name)
+        new_resource = None
         try:
             new_resource = get_handle_from_resource(resource, required_type)
             new_kw[arg_name] = new_resource
             # kwargs is included in bound arguments, need to re-attach
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
-        except Exception as e:  # get_format can't raise; must return false.
+        except BaseException as e:  # get_format can't raise; must return false.
+            # A handle created here must close even on failure, including on
+            # KeyboardInterrupt; leaking a remote handle would leave garbage
+            # collection paused for as long as the traceback is retained.
+            if new_resource is not None and new_resource is not resource:
+                with suppress(Exception):
+                    getattr(new_resource, "close", lambda: None)()
+            if not isinstance(e, Exception):
+                raise
             if fun_name == "get_format":
                 out = False
             else:

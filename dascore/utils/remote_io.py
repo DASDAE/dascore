@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -16,11 +19,11 @@ from threading import RLock
 
 from dascore.compat import UPath
 from dascore.config import get_config
+from dascore.constants import http_protocols
 from dascore.exceptions import RemoteCacheError
 from dascore.utils.misc import _reinit_after_fork
 from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
 
-_HTTP_PROTOCOLS = {"http", "https"}
 _NO_RANGE_HTTP_PATTERNS = (
     "doesn't appear to support range requests",
     "only reading this file from the beginning is supported",
@@ -33,6 +36,77 @@ _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
+
+_gc_pause_lock = threading.Lock()
+_gc_pause_depth = 0
+_gc_was_enabled = False
+_gc_collect_after = 0.0
+
+
+def pause_gc() -> None:
+    """
+    Pause automatic garbage collection for one remote read session.
+
+    h5py holds its process-global lock while blocking on fsspec's event-loop
+    thread for each remote fetch. An automatic collection on that thread which
+    has to deallocate a dead h5py object needs the same lock, so the two
+    threads deadlock. Disabling automatic collection for the handle's lifetime
+    closes that window; reference counting still frees non-cyclic garbage.
+
+    Calls nest; every ``pause_gc`` needs one ``resume_gc``. ``_ManagedH5pyFile``
+    pairs them with ``close``/``__del__``.
+
+    The pause is process-global, so cyclic garbage from every thread
+    accumulates until the last remote handle closes. A handle which is never
+    closed keeps it paused; one which is dropped inside a reference cycle is
+    recovered by the collection below, on the next remote open.
+    """
+    global _gc_pause_depth, _gc_was_enabled, _gc_collect_after
+    now = time.monotonic()
+    with _gc_pause_lock:
+        # Count first: an interrupt before ``disable`` leaves a pending resume
+        # (harmless); the reverse order could leave gc off with none pending.
+        _gc_pause_depth += 1
+        if _gc_pause_depth == 1:
+            _gc_was_enabled = gc.isenabled()
+            gc.disable()
+        # Claim the valve here so concurrent openers cannot each run it.
+        collect = now >= _gc_collect_after
+        if collect:
+            _gc_collect_after = now + 10.0
+    # Safety valve: finalize cyclic garbage, including a handle leaked by an
+    # earlier session, so a stranded pause cannot disable collection forever.
+    # Must run outside the lock, since finalizing such a handle calls
+    # resume_gc, which takes it. Rate limited; a full collect is O(live).
+    if collect:
+        gc.collect()
+
+
+def resume_gc() -> None:
+    """Undo one ``pause_gc``; the last one restores the previous gc state."""
+    global _gc_pause_depth
+    with _gc_pause_lock:
+        if _gc_pause_depth == 0:
+            return
+        # Enable first, for the mirror image of the reason pause counts first.
+        if _gc_pause_depth == 1 and _gc_was_enabled:
+            gc.enable()
+        _gc_pause_depth -= 1
+
+
+@_reinit_after_fork
+def _reset_gc_pause_state():
+    """
+    Drop a pause inherited from a fork; no close in the child can undo it.
+
+    Handles inherited by the child record the pid that paused for them, so
+    closing one there cannot resume a pause this child never took.
+    """
+    global _gc_pause_depth, _gc_pause_lock
+    _gc_pause_lock = threading.Lock()
+    if _gc_pause_depth and _gc_was_enabled:
+        gc.enable()
+    _gc_pause_depth = 0
 
 
 @_reinit_after_fork
@@ -150,7 +224,7 @@ def _download_remote_file(path, local_path: Path):
     """Download a remote path into its cache location."""
     resource = coerce_to_upath(path)
     protocol = getattr(resource, "protocol", None)
-    open_kwargs = {"block_size": 0} if protocol in _HTTP_PROTOCOLS else {}
+    open_kwargs = {"block_size": 0} if protocol in http_protocols else {}
     local_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=local_path.parent,
@@ -252,9 +326,13 @@ def get_local_handle(resource, opener):
 def is_no_range_http_error(exc: Exception) -> bool:
     """Return True when an exception indicates no-range HTTP random access."""
     message = str(exc).lower()
-    return isinstance(exc, ValueError) and all(
-        pattern in message for pattern in _NO_RANGE_HTTP_PATTERNS
-    )
+    if not isinstance(exc, ValueError):
+        return False
+    # Servers with no reported size stream instead of ranging; seeking such
+    # a streaming file needs the same local-file fallback as no-range access.
+    if "cannot seek streaming http file" in message:
+        return True
+    return all(pattern in message for pattern in _NO_RANGE_HTTP_PATTERNS)
 
 
 class _FallbackFileObj:
@@ -290,6 +368,14 @@ class _FallbackFileObj:
     This is not a general retry wrapper for arbitrary IO failures. It is meant
     for one known fallback condition where switching from remote access to a
     local cached file is safe and expected.
+
+    Load-bearing invariant: references flow one way here - h5py objects may
+    reference this wrapper and the fsspec handle, but nothing that crosses to
+    fsspec's event-loop thread may ever reference an h5py object. Otherwise
+    that thread could perform the final decref of an h5py object, whose
+    C-level deallocation takes h5py's global lock, and deadlock against a
+    caller blocked on the loop while holding that lock (``pause_gc`` only
+    stops cyclic collection, not refcount-driven deallocation).
     """
 
     def __init__(self, remote_opener, local_opener, error_predicate):
