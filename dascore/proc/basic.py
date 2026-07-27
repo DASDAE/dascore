@@ -346,6 +346,9 @@ def normalize(
     """
     Normalize a patch along a specified dimension.
 
+    NaN values are ignored when computing the norm. They remain NaN in the
+    output but do not affect any other sample.
+
     Parameters
     ----------
     dim
@@ -376,9 +379,11 @@ def normalize(
     data = self.data
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
-        norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
+        # Equivalent to np.linalg.norm, but skips NaN rather than letting a
+        # single null blank every sample sharing its slice.
+        norm_values = np.nansum(np.abs(data) ** order, axis=axis) ** (1 / order)
     elif norm == "max":
-        norm_values = np.max(np.abs(data), axis=axis)
+        norm_values = np.nanmax(np.abs(data), axis=axis)
     elif norm == "bit":
         pass
     else:
@@ -413,6 +418,9 @@ def standardize(
     where u is the mean of the training samples or zero if with_mean=False,
     and s is the standard deviation of the training samples or one if with_std=False.
 
+    NaN values are ignored when computing the mean and standard deviation. They
+    remain NaN in the output but do not affect any other sample.
+
     Parameters
     ----------
     dim
@@ -434,8 +442,8 @@ def standardize(
     """
     axis = self.get_axis(dim)
     data = self.data
-    mean = np.mean(data, axis=axis, keepdims=True)
-    std = np.std(data, axis=axis, keepdims=True)
+    mean = np.nanmean(data, axis=axis, keepdims=True)
+    std = np.nanstd(data, axis=axis, keepdims=True)
     new_data = (data - mean) / std
     return self.new(data=new_data)
 
@@ -838,6 +846,10 @@ def demedian(patch, dim: str = "time"):
     """
     Remove the median along a given dimension of a DASCore patch.
 
+    NaN values are ignored when computing the median, consistent with
+    [Patch.median](`dascore.proc.aggregate.median`). They remain NaN in the
+    output but do not affect any other sample.
+
     Parameters
     ----------
     patch :
@@ -884,7 +896,7 @@ def demedian(patch, dim: str = "time"):
     data = patch.data
 
     # Compute median along axis, keep dims for broadcasting
-    med = np.median(data, axis=axis, keepdims=True)
+    med = np.nanmedian(data, axis=axis, keepdims=True)
 
     new_data = data - med
 
@@ -896,6 +908,10 @@ def demedian(patch, dim: str = "time"):
 def demean(patch, dim: str = "time"):
     """
     Remove the mean along a given dimension of a DASCore patch.
+
+    NaN values are ignored when computing the mean, consistent with
+    [Patch.mean](`dascore.proc.aggregate.mean`). They remain NaN in the output
+    but do not affect any other sample.
 
     Parameters
     ----------
@@ -943,7 +959,7 @@ def demean(patch, dim: str = "time"):
     data = patch.data
 
     # Compute mean along axis, keep dims for broadcasting
-    mea = np.mean(data, axis=axis, keepdims=True)
+    mea = np.nanmean(data, axis=axis, keepdims=True)
 
     new_data = data - mea
 
