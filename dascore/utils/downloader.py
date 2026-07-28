@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import cache
-from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 
@@ -27,8 +25,8 @@ def _get_fetcher(cache_dir: str) -> pooch.Pooch:
         version=DATA_VERSION,
         version_dev="master",
         env="DFS_DATA_DIR",
-        # Priming the CI cache pulls every registry file in one pass, so a
-        # single read timeout from the host used to fail the whole job.
+        # Retry transient network failures; without this a single read
+        # timeout aborts a bulk fetch of the registry.
         retry_if_failed=3,
     )
     fetcher.load_registry(REGISTRY_PATH)
@@ -49,53 +47,6 @@ class _FetcherProxy:
 
 
 fetcher = _FetcherProxy()
-
-
-@dataclass(frozen=True)
-class TestDataCacheInfo:
-    """Metadata needed to restore or prime the CI test-data cache."""
-
-    registry_path: Path
-    cache_path: Path
-    data_version: str
-    registry_hash: str
-
-    def get_restore_prefix(self, runner_os: str, cache_number: str | int) -> str:
-        """
-        Return the cache-key prefix used to fall back to an older cache.
-
-        A registry change makes the exact key miss. Restoring the previous
-        cache under this prefix leaves pooch fetching only the added files
-        rather than the whole registry again.
-
-        ``cache_number`` is part of the prefix, not just the full key, so
-        bumping it still resets the cache; a prefix which stopped at the
-        data version would fall back onto the cache the bump meant to drop.
-        """
-        return f"data-{runner_os}-{self.data_version}-{cache_number}-"
-
-    def get_key(self, runner_os: str, cache_number: str | int) -> str:
-        """Return the GitHub Actions cache key for the given OS and cache number."""
-        prefix = self.get_restore_prefix(runner_os, cache_number)
-        return f"{prefix}{self.registry_hash}"
-
-
-@cache
-def _get_test_data_cache_info(cache_dir: str) -> TestDataCacheInfo:
-    """Return the metadata needed to populate the CI test-data cache."""
-    registry_path = Path(REGISTRY_PATH)
-    fetcher = _get_fetcher(cache_dir)
-    return TestDataCacheInfo(
-        registry_path=registry_path,
-        cache_path=Path(fetcher.path).parent,
-        data_version=DATA_VERSION,
-        registry_hash=sha256(registry_path.read_bytes()).hexdigest(),
-    )
-
-
-def get_test_data_cache_info() -> TestDataCacheInfo:
-    """Return the metadata needed to populate the CI test-data cache."""
-    return _get_test_data_cache_info(str(get_config().downloader_cache_dir))
 
 
 @cache
