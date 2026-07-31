@@ -613,8 +613,8 @@ def _maybe_unpack(maybe_array):
 
 @cache
 def _get_compiled_suffix_prefix_regex(
-    suffixes: str | tuple[str],
-    prefixes: str | tuple[str] | None,
+    suffixes: str | tuple[str, ...],
+    prefixes: str | tuple[str, ...] | None,
 ):
     """Get a compiled regex which matches the form prefixes_suffixes."""
     suffixes = iterate(suffixes)

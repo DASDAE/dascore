@@ -257,6 +257,34 @@ markers = [
 # Use `\n` line endings for all files
 line-ending = "lf"
 
+[tool.ty.src]
+include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
+
+# Rules with large pre-existing error counts, ignored until incrementally
+# burned down. Counts at time of adoption: invalid-argument-type 210,
+# unresolved-attribute 163, invalid-return-type 76, no-matching-overload 42,
+# not-subscriptable 36, invalid-method-override 35, invalid-assignment 21,
+# unsupported-operator 17, call-non-callable 11, not-iterable 10.
+[tool.ty.rules]
+invalid-argument-type = "ignore"
+unresolved-attribute = "ignore"
+invalid-return-type = "ignore"
+no-matching-overload = "ignore"
+not-subscriptable = "ignore"
+invalid-method-override = "ignore"
+invalid-assignment = "ignore"
+unsupported-operator = "ignore"
+call-non-callable = "ignore"
+not-iterable = "ignore"
+
+# These files lazily import optional or untyped modules (xarray, numba,
+# h5py.h5r) that are not installed in the pre-commit hook's environment.
+[[tool.ty.overrides]]
+include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
 [tool.typos.files]
 extend-exclude = ["docs/_static/logo.svg"]
 

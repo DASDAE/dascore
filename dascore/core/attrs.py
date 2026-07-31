@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 from dascore.constants import (
-    VALID_DATA_CATEGORIES,
-    VALID_DATA_TYPES,
+    DataCategory,
+    DataType,
     max_lens,
 )
 from dascore.utils.misc import (
@@ -52,10 +52,10 @@ class PatchAttrs(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = Field(
+    data_type: Annotated[DataType, str_validator] = Field(
         description="Describes the quantity being measured.", default=""
     )
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = Field(
+    data_category: Annotated[DataCategory, str_validator] = Field(
         description="Describes the type of data.",
         default="",
     )

@@ -19,7 +19,12 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.core.summary import PatchSummary
-from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_ufunc
+from dascore.utils.array import (
+    PatchUFunc,
+    apply_ufunc,
+    patch_array_function,
+    patch_array_ufunc,
+)
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.utils.namespace import NamespaceOwner
@@ -109,37 +114,37 @@ class Patch(NamespaceOwner):
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
-        return dascore.utils.array.apply_ufunc(np.add, self, other)
+        return apply_ufunc(np.add, self, other)
 
     def __sub__(self, other):
-        return dascore.utils.array.apply_ufunc(np.subtract, self, other)
+        return apply_ufunc(np.subtract, self, other)
 
     def __floordiv__(self, other):
-        return dascore.utils.array.apply_ufunc(np.floor_divide, self, other)
+        return apply_ufunc(np.floor_divide, self, other)
 
     def __truediv__(self, other):
-        return dascore.utils.array.apply_ufunc(np.divide, self, other)
+        return apply_ufunc(np.divide, self, other)
 
     def __mul__(self, other):
-        return dascore.utils.array.apply_ufunc(np.multiply, self, other)
+        return apply_ufunc(np.multiply, self, other)
 
     def __pow__(self, other):
-        return dascore.utils.array.apply_ufunc(np.power, self, other)
+        return apply_ufunc(np.power, self, other)
 
     def __mod__(self, other):
-        return dascore.utils.array.apply_ufunc(np.mod, self, other)
+        return apply_ufunc(np.mod, self, other)
 
     def __gt__(self, other):
-        return dascore.utils.array.apply_ufunc(np.greater, self, other)
+        return apply_ufunc(np.greater, self, other)
 
     def __ge__(self, other):
-        return dascore.utils.array.apply_ufunc(np.greater_equal, self, other)
+        return apply_ufunc(np.greater_equal, self, other)
 
     def __lt__(self, other):
-        return dascore.utils.array.apply_ufunc(np.less, self, other)
+        return apply_ufunc(np.less, self, other)
 
     def __le__(self, other):
-        return dascore.utils.array.apply_ufunc(np.less_equal, self, other)
+        return apply_ufunc(np.less_equal, self, other)
 
     def __bool__(self):
         return dascore.proc.basic.bool_patch(self)
@@ -150,25 +155,25 @@ class Patch(NamespaceOwner):
 
     def __rsub__(self, other):
         """Reverse subtraction: other - self."""
-        return dascore.utils.array.apply_ufunc(np.subtract, other, self)
+        return apply_ufunc(np.subtract, other, self)
 
     __rmul__ = __mul__
 
     def __rpow__(self, other):
         """Reverse power: other ** self."""
-        return dascore.utils.array.apply_ufunc(np.power, other, self)
+        return apply_ufunc(np.power, other, self)
 
     def __rtruediv__(self, other):
         """Reverse true division: other / self."""
-        return dascore.utils.array.apply_ufunc(np.divide, other, self)
+        return apply_ufunc(np.divide, other, self)
 
     def __rfloordiv__(self, other):
         """Reverse floor division: other // self."""
-        return dascore.utils.array.apply_ufunc(np.floor_divide, other, self)
+        return apply_ufunc(np.floor_divide, other, self)
 
     def __rmod__(self, other):
         """Reverse modulo: other % self."""
-        return dascore.utils.array.apply_ufunc(np.mod, other, self)
+        return apply_ufunc(np.mod, other, self)
 
     def __neg__(self):
         return self.update(data=-self.data)
@@ -377,7 +382,7 @@ class Patch(NamespaceOwner):
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = dascore.utils.array.apply_ufunc
+    apply_ufunc = apply_ufunc
     get_patch_names = get_patch_names
     get_axis = dascore.proc.get_axis
     full = dascore.proc.full

@@ -13,10 +13,13 @@ from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal, NotRequired, TypedDict, get_type_hints
+from typing import Any, Literal, TypedDict, get_type_hints
 
 import numpy as np
 import pandas as pd
+
+# NotRequired is only in typing from python 3.11; dascore supports 3.10.
+from typing_extensions import NotRequired
 
 import dascore as dc
 from dascore.compat import Progress, UPath
@@ -819,7 +822,7 @@ class FiberIO:
 
     name: str = ""
     version: str = ""
-    preferred_extensions: tuple[str] = ()
+    preferred_extensions: tuple[str, ...] = ()
     # Specifies if this fiber IO expects a directory or single file
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.

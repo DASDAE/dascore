@@ -25,7 +25,7 @@ def _jit_taup_uniform(data, dx, dt, p_vals):
     two_sided_p_vals = np.concatenate((-np.flip(p_vals), p_vals))
     taup = np.zeros(shape=(2 * n_slo, nt))
 
-    for ip in numba.prange(n_slo):  # noqa
+    for ip in numba.prange(n_slo):  # noqa  # ty: ignore[unresolved-reference]
         pdx = p_vals[ip] * dx
         for tau in range(nt):
             for ix in range(nx):
@@ -54,7 +54,7 @@ def _jit_taup_general(data, distance, dt, p_vals):
     taup = np.zeros(shape=(2 * n_slo, nt))
     mod_distance = distance - distance[0]
 
-    for ip in numba.prange(n_slo):  # noqa
+    for ip in numba.prange(n_slo):  # noqa  # ty: ignore[unresolved-reference]
         p = p_vals[ip]
         for tau in range(nt):
             for ix in range(nx):

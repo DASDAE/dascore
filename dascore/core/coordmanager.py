@@ -44,7 +44,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import zip_longest
-from typing import Annotated, TypeVar
+from types import EllipsisType
+from typing import Annotated
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -81,7 +82,7 @@ from dascore.utils.models import (
     frozen_dict_validator,
 )
 
-MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
+MaybeArray = ArrayLike | np.ndarray | None
 CoordManagerInput = Mapping[
     str,
     BaseCoord | np.ndarray | tuple[str | tuple[str, ...], BaseCoord | np.ndarray],
@@ -802,7 +803,7 @@ class CoordManager(DascoreBaseModel):
 
     def _get_dim_array_dict(
         self, keep_coord=False
-    ) -> dict[tuple[str], ArrayLike | BaseCoord]:
+    ) -> dict[str, tuple[tuple[str, ...], ArrayLike | BaseCoord]]:
         """
         Get the coord map in the form:
         {coord_name = ((dims,), array)}.
@@ -839,7 +840,7 @@ class CoordManager(DascoreBaseModel):
             new_coords[name] = coord.simplify_units()
         return self.new(coord_map=new_coords)
 
-    def transpose(self, *dims: str | type(Ellipsis)) -> Self:
+    def transpose(self, *dims: str | EllipsisType) -> Self:
         """Transpose the coordinates."""
 
         def _get_transpose_dims(new, old):
