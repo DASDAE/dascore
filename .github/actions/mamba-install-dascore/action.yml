@@ -33,9 +33,17 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up environment variable with date
+    # Weekly, not daily. The env file's content hash is already part of the
+    # key setup-micromamba builds, so this only exists to pick up upstream
+    # package updates for unpinned deps. A daily key minted ~35 fresh
+    # environment caches every day (platform x python x env file), which is
+    # more than the repo's 10 GB cache budget on its own and evicted the
+    # test-data caches.
+    - name: Set up environment variable with cache week
       shell: bash -l {0}
-      run: echo "CURRENT_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+      # %G, not %Y: ISO week numbers pair with the ISO year, so %Y-W%V
+      # collides across a new year boundary.
+      run: echo "CACHE_WEEK=$(date '+%G-W%V')" >> $GITHUB_ENV
 
     - uses: mamba-org/setup-micromamba@v3
       with:
@@ -45,10 +53,15 @@ runs:
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ env.CURRENT_DATE }}-${{ inputs.environment-file }}
+        cache-environment-key: environment-${{ env.CACHE_WEEK }}-${{ inputs.environment-file }}
         post-cleanup: "shell-init"
+        # python-gil pins the GIL-enabled build. Without it the solver can
+        # pick the free-threaded (cp3XXt) build of python, which is not what
+        # this job means to test and which lacks wheels for some deps.
+        # Free-threading is covered separately by test_free_threaded.yml.
         create-args: >-
           python=${{ inputs.python-version }}
+          python-gil
 
     # Not sure why this is needed but it appears to be the case
     - name: fix env
@@ -82,6 +95,10 @@ runs:
       run: |
         python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
 
+    # restore-keys lets a changed registry reuse the previous cache: pooch
+    # then fetches only the added files instead of re-downloading all of them.
+    # A prefix-only match reports cache-hit false, so the prime and save steps
+    # below still run and publish the cache under the new exact key.
     - name: restore test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
       id: restore-test-data
@@ -89,6 +106,7 @@ runs:
       with:
         path: ${{ env.DATA_CACHE_PATH }}
         key: ${{ env.DATA_CACHE_KEY }}
+        restore-keys: ${{ env.DATA_CACHE_RESTORE_PREFIX }}
 
     - name: prime test data cache
       if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"

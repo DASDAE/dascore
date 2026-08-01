@@ -49,6 +49,10 @@ jobs:
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
+      # One job failing used to cancel the rest, and a cancelled job never
+      # reaches its cache-save step - so a single unrelated failure both hid
+      # the other results and forced every other job to re-prime next run.
+      fail-fast: false
       matrix:
         # Defined in .github/actions/load-shared-vars/action.yml
         os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
