@@ -9,6 +9,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
+from dascore.io.index.catalog import _canonical_range
 from dascore.io.index.query import InvalidSpoolQueryError
 
 
@@ -142,6 +143,50 @@ class TestResidualSelects:
             patch.get_coord("time").max() - patch.get_coord("time").min()
         ) / np.timedelta64(1, "s")
         assert got_span <= span - 1
+
+
+class TestRelativeTimeCoords:
+    """Patches whose time axis is an offset rather than a date (#798)."""
+
+    @pytest.fixture()
+    def relative_time_catalog(self, patches):
+        """A catalog over patches with a timedelta64 time coordinate."""
+        out = []
+        for patch in patches:
+            coord = patch.get_coord("time")
+            out.append(patch.update_coords(time=coord.values - coord.min()))
+        return PatchCatalog.from_patches(tuple(out))
+
+    def test_select_then_load(self, relative_time_catalog):
+        """A selected relative range loads, trimmed to the requested bounds."""
+        start, stop = np.timedelta64(1, "s"), np.timedelta64(3, "s")
+        view = relative_time_catalog.select(time=(start, stop))
+        assert len(view)
+        coord = view.get_patch(0).get_coord("time")
+        assert coord.min() >= start
+        assert coord.max() <= stop
+
+    def test_select_open_ended(self, relative_time_catalog):
+        """One-sided relative ranges load as well."""
+        stop = np.timedelta64(2, "s")
+        coord = relative_time_catalog.select(time=(None, stop)).get_patch(0)
+        assert coord.get_coord("time").max() <= stop
+
+    @pytest.mark.parametrize(
+        "bounds",
+        [
+            (np.timedelta64(1, "s"), np.timedelta64(3, "s")),
+            (np.datetime64("2020-01-01"), np.datetime64("2020-01-02")),
+            (None, np.timedelta64(3, "s")),
+        ],
+    )
+    def test_time_ranges_are_not_canonical(self, bounds):
+        """Time bounds keep their native form for the residual select."""
+        assert _canonical_range(bounds) is None
+
+    def test_numeric_ranges_still_canonical(self):
+        """Numeric bounds are still resolved to SI magnitudes."""
+        assert _canonical_range((1, 10)).magnitudes == (1.0, 10.0)
 
 
 class TestDirectoryCatalog:

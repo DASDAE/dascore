@@ -114,6 +114,11 @@ def _canonical_range(value) -> _CanonicalRange | None:
             units = str(base.units)
         elif isinstance(bound, bool | np.bool_):
             return None
+        elif isinstance(bound, np.datetime64 | np.timedelta64):
+            # Time bounds are never a canonical-SI numeric range. timedelta64
+            # needs naming here because numpy makes it an np.integer subclass,
+            # so it would otherwise reach float() below and raise.
+            return None
         elif isinstance(bound, int | float | np.integer | np.floating):
             magnitudes.append(float(bound))
         else:  # datetimes, strings: not a numeric range
