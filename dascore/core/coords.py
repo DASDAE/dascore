@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -480,6 +480,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         coord1, slice1 = self.order(intersection)
         coord2, slice2 = other.order(intersection)
         return coord1, coord2, slice1, slice2
+
+    @overload
+    def __getitem__(self, item: int | np.integer) -> Any: ...
+
+    @overload
+    def __getitem__(self, item: slice | np.ndarray) -> Self: ...
 
     @abc.abstractmethod
     def __getitem__(self, item):

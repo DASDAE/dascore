@@ -36,6 +36,9 @@ TimeDelta64 = Annotated[
     PlainSerializer(to_str, when_used="json"),  # getting undefined name
 ]
 
+# The validator may preserve non-numpy array-likes (see compat.array), but
+# ndarray is deliberately the single static face of array values; a structural
+# protocol is not worth the complexity it spreads through every signature.
 ArrayLike = Annotated[
     np.ndarray,
     PlainValidator(array),

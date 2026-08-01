@@ -66,6 +66,8 @@ def track(
     guess_len = length if length is not None else 0
     with suppress(TypeError, ValueError):
         length = len(sequence) if not guess_len else guess_len
+    if length is None:  # unsized iterable with no length given; no progress bar
+        length = 0
     if length < min_length:
         length = 0
     # This is a dirty hack to allow debugging while running tests.
