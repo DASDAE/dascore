@@ -75,6 +75,10 @@ class TestUnitInit:
         assert unit == reverted
         assert invert_quantity(None) is None
 
+    def test_invert_empty_string(self):
+        """An empty unit string has no quantity to invert; return None."""
+        assert invert_quantity("") is None
+
 
 class TestGetQuantStr:
     """Ensure units can be validated."""

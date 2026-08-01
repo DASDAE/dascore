@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import mmap
 import struct
+from typing import Any
 
 import numpy as np
 
@@ -176,7 +177,7 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     # lead_in is 28 bytes:
     fields = struct.unpack("<4siiQQ", lead_in)
     # Keep track of information about file in fileinfo
-    fileinfo = dict(zip(FILEINFO_NAMES, fields))
+    fileinfo: dict[str, Any] = dict(zip(FILEINFO_NAMES, fields))
     fileinfo["decimated"] = not bool(fileinfo["toc"] & DECIMATE_MASK)
     # Make offsets relative to beginning of file:
     fileinfo["next_segment_offset"] += lead_in_length
@@ -218,7 +219,7 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     tdms_file.seek(var + 4, 1)
     fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
     if fileinfo["data_type"] not in ("int16", "float32"):
-        raise Exception("Unsupported TDMS data type: " + fileinfo["data_type"])
+        raise Exception(f"Unsupported TDMS data type: {fileinfo['data_type']}")
     # get number of samples by dividing amount of unread data by the
     # size of data per channel
     numofsamples = (

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Generator, Mapping, Sequence
 from functools import cache
 
 import numpy as np
@@ -344,7 +344,7 @@ def get_interval_columns(df, name):
     return start, stop, step
 
 
-def yield_range_tuple_from_kwargs(df, kwargs) -> tuple[str, slice]:
+def yield_range_tuple_from_kwargs(df, kwargs) -> Generator[tuple[str, tuple]]:
     """
     For each slice keyword, yield the name and a tuple of (start, stop).
 

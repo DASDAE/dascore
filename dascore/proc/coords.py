@@ -159,7 +159,7 @@ def get_array(
     name: str | None = None,
     require_sorted: bool = False,
     require_evenly_sampled: bool = False,
-) -> BaseCoord:
+) -> np.ndarray:
     """
     Get an array associated with patch data or a coordinate.
 

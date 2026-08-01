@@ -20,7 +20,6 @@ from dascore.exceptions import UnitError
 from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
-str_or_none = TypeVar("str_or_none", None, str)
 numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
@@ -114,7 +113,9 @@ def _str_to_quant(qunat_str):
         return ureg.Quantity(qunat_str)
 
 
-def get_quantity(value: str_or_none) -> Quantity | None:
+def get_quantity(
+    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+) -> Quantity | None:
     """
     Convert a value to a pint quantity.
 
@@ -147,8 +148,9 @@ def get_quantity(value: str_or_none) -> Quantity | None:
 
 
 def get_factor_and_unit(
-    value: str_or_none, simplify: bool = False
-) -> tuple[float, str_or_none]:
+    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+    simplify: bool = False,
+) -> tuple[float, str | None]:
     """Convert a mixed unit/scaling factor to scale_factor and unit str."""
     quant = get_quantity(value)
     if quant is None:
@@ -171,7 +173,7 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 
 def convert_units(
-    data: numeric,
+    data: numeric | Quantity,
     to_units: None | str | Quantity,
     from_units: None | str | Quantity = None,
 ) -> numeric:
@@ -194,7 +196,7 @@ def convert_units(
     [time])
     """
     if isinstance(data, Quantity):  # an existing quantity
-        from_units, data = data.units, data.magnitude
+        return convert_units(data.magnitude, to_units, data.units)
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data
@@ -205,7 +207,9 @@ def convert_units(
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
         raise UnitError(str(e))
-    return (data * mult1 + add) * mult2
+    # ty cannot resolve `*` on the `numeric & ~Quantity` intersection left
+    # by the isinstance early return above.
+    return (data * mult1 + add) * mult2  # ty: ignore[unsupported-operator]
 
 
 def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
@@ -225,7 +229,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
+def invert_quantity(unit: pint.Unit | str | Quantity | None) -> Quantity | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
@@ -233,6 +237,8 @@ def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
     if pd.isnull(unit_test):
         return None
     quant = get_quantity(unit)
+    if quant is None:
+        return None
     return 1 / quant
 
 

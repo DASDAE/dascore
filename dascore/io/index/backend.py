@@ -886,7 +886,7 @@ class SQLIndexBackend(abc.ABC):
                 if kinds == {"str"}:
                     # flat-contract convention: missing strings are ""
                     series = series.fillna("")
-                new_columns[name] = series
+                new_columns[str(name)] = series
         if cols_to_drop:
             out = out.drop(columns=cols_to_drop)
         # flat-contract names for source columns; path_attrs goes private

@@ -65,7 +65,9 @@ def _apply_scipy_operation(
     ddof: int = 0,
 ) -> np.ndarray:
     """Apply scipy operation with proper handling."""
-    _, func_name = OPERATION_REGISTRY[operation]["scipy"]
+    spec = OPERATION_REGISTRY[operation]["scipy"]
+    assert spec is not None  # callers check the registry before dispatching here
+    _, func_name = spec
     func = _get_engine_function("scipy", operation)
     scipy_kwargs = {"mode": mode, "cval": cval, "origin": origin}
 
@@ -201,9 +203,11 @@ def _get_available_engines() -> tuple[str, ...]:
     return tuple(["scipy", *bottle_list])
 
 
-def _get_engine_function(engine: str, func_name: str) -> Callable | None:
+def _get_engine_function(engine: str, func_name: str) -> Callable:
     """Get and cache engine function."""
-    module_name, func_name = OPERATION_REGISTRY[func_name][engine]
+    spec = OPERATION_REGISTRY[func_name][engine]
+    assert spec is not None  # callers check the registry before dispatching here
+    module_name, func_name = spec
     mod = _get_module(module_name)
     return getattr(mod, func_name)
 

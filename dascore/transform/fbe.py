@@ -8,7 +8,6 @@ from dascore.constants import PatchType
 from dascore.units import get_filter_units
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
 from dascore.utils.patch import get_dim_sampling_rate, patch_function
-from dascore.utils.time import to_float
 
 
 @patch_function()
@@ -84,7 +83,7 @@ def fbe(
     check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if step is None:
-        step = to_float(1 / sample_rate)
+        step = 1 / sample_rate
 
     patch = patch.pass_filter(**kwargs)
 

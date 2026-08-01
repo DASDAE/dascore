@@ -19,6 +19,11 @@ class TestProgressBar:
             for _ in track([1, 2, 3], "testing_tracker"):
                 pass
 
+    def test_unsized_iterable(self):
+        """Unsized iterables without a length just skip the progress bar."""
+        with config_context(debug=False):
+            assert list(track(iter([1, 2, 3]), "unsized_tracker")) == [1, 2, 3]
+
     def test_get_basic_progress(self):
         """Ensure we can return a basic progress bar."""
         pbar = get_progress_instance("basic")

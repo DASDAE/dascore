@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import unquote
 
+from typing_extensions import TypeIs
+
 from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
 
@@ -23,7 +25,7 @@ _EXTENSION_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
 _MEMORY_SCHEMES = ("memorypatch://", "memory://")
 
 
-def is_pathlike(resource) -> bool:
+def is_pathlike(resource) -> TypeIs[str | Path | UPath]:
     """Return True if resource is supported path-like input."""
     return isinstance(resource, str | Path | UPath)
 

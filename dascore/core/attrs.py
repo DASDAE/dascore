@@ -136,8 +136,8 @@ class PatchAttrs(DascoreBaseModel):
             return attr_map
         if attr_map is None:
             out = {}
-        elif hasattr(attr_map, "model_dump"):
-            out = attr_map.model_dump()
+        elif callable(model_dump := getattr(attr_map, "model_dump", None)):
+            out = model_dump()
         else:
             out = attr_map
         if isinstance(out, Mapping):

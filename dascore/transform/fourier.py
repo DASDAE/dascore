@@ -282,11 +282,11 @@ def dft(
     >>> # calculate a power spectral density along time
     >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
-    output = output.upper()
-    if output not in DFT_OUTPUT_TYPES:
+    output_type = output.upper()
+    if output_type not in DFT_OUTPUT_TYPES:
         msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
         raise ValueError(msg)
-    if output == "FFT" and db:
+    if output_type == "FFT" and db:
         msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
         raise ParameterError(msg)
 
@@ -318,11 +318,13 @@ def dft(
     shift_slice = slice(None) if real is None else slice(None, -1)
     data = nft.fftshift(fft_data, axes=axes[shift_slice])
     # get attributes
-    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad, output=output)
+    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad, output=output_type)
     patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
 
-    if output != "FFT":
-        patch_out = _convert_dft_spectral_amplitudes(patch_out, output, dims, real, db)
+    if output_type != "FFT":
+        patch_out = _convert_dft_spectral_amplitudes(
+            patch_out, output_type, dims, real, db
+        )
 
     return patch_out
 

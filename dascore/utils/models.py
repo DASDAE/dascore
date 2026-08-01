@@ -36,8 +36,11 @@ TimeDelta64 = Annotated[
     PlainSerializer(to_str, when_used="json"),  # getting undefined name
 ]
 
+# The validator may preserve non-numpy array-likes (see compat.array), but
+# ndarray is deliberately the single static face of array values; a structural
+# protocol is not worth the complexity it spreads through every signature.
 ArrayLike = Annotated[
-    object,
+    np.ndarray,
     PlainValidator(array),
 ]
 
@@ -75,8 +78,8 @@ def sensible_model_equals(
     self: BaseModel | Mapping, other: BaseModel | Mapping
 ) -> bool:
     """Custom equality to not compare private attrs and handle numpy arrays."""
-    d1 = self.model_dump() if hasattr(self, "model_dump") else self
-    d2 = other.model_dump() if hasattr(other, "model_dump") else other
+    d1 = self.model_dump() if isinstance(self, BaseModel) else self
+    d2 = other.model_dump() if isinstance(other, BaseModel) else other
     if not set(d1) == set(d2):  # different keys, not equal
         return False
     for name in set(x for x in d1 if not x.startswith("_")):

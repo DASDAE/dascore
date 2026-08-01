@@ -45,7 +45,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -300,9 +300,8 @@ class CoordManager(DascoreBaseModel):
         # update based on keywords
         for item, value in coord_updates.items():
             coord_name, attr = item.split("_")
-            new = list(out[coord_name])
-            new[1] = new[1].update(**{attr: value})
-            out[coord_name] = tuple(new)
+            coord_dims, coord = out[coord_name]
+            out[coord_name] = (coord_dims, coord.update(**{attr: value}))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
@@ -1000,7 +999,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = self.dim_map
         return tuple((name, *dim_map[name]) for name in self.coord_map)
 
-    def _get_indexer(self, ind: int | None = None, value=None):
+    def _get_indexer(self, ind: int, value=None):
         """
         Get an indexer for the appropriate data shape.
 
@@ -1008,7 +1007,7 @@ class CoordManager(DascoreBaseModel):
 
         ind is a list of indices to substitute in values.
         """
-        out = [slice(None, None) for _ in self.shape]
+        out: list[Any] = [slice(None, None) for _ in self.shape]
         out[ind] = value
         return tuple(out)
 

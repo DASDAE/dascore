@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sized
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.linalg import norm
@@ -137,7 +137,7 @@ class _MuteGeometry1D(_MuteGeometry):
     def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
         coord = patch.get_coord(self.dims[0])
         _, c_index = coord.select(self.lims, relative=self.relative)
-        index = [slice(None)] * array.ndim
+        index: list[Any] = [slice(None)] * array.ndim
         index[self.axes[0]] = c_index
         array[tuple(index)] = fill_value
         return array

@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -481,9 +481,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         coord2, slice2 = other.order(intersection)
         return coord1, coord2, slice1, slice2
 
+    @overload
+    def __getitem__(self, item: int | np.integer) -> Any: ...
+
+    @overload
+    def __getitem__(self, item: slice | np.ndarray) -> Self: ...
+
     @abc.abstractmethod
-    def __getitem__(self, item) -> Self:
-        """Should implement slicing and return new instance."""
+    def __getitem__(self, item):
+        """Index the coord; slices return a new coord, int indices a value."""
 
     @cached_method
     def __len__(self):
@@ -1139,17 +1145,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             new_coord = get_coord(shape=(1,), units=self.units, dtype=self.dtype)
         elif dim_reduce == "squeeze":
             return None
-        elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
-            func = dim_reduce if callable(dim_reduce) else func
+        else:
+            func = dim_reduce if callable(dim_reduce) else _AGG_FUNCS.get(dim_reduce)
+            if func is None:
+                msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
+                raise ParameterError(msg)
             coord_data = self.data
             if dtype_time_like(coord_data):
                 result = _reduce_time_like(func, coord_data)
             else:
                 result = func(self.data)
             new_coord = self.update(data=result)
-        else:
-            msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
-            raise ParameterError(msg)
         return new_coord
 
 
@@ -2258,6 +2264,7 @@ class CoordSegmented(BaseCoord):
             kept.append(sub)
         if not kept:
             return self.empty(), slice(0, 0)
+        assert hi is not None  # kept is non-empty, so the loop set hi
         new = self._rebuild(kept)
         start = None if lo == 0 else lo
         stop = None if hi >= len(self) else hi
