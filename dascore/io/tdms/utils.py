@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import mmap
 import struct
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -49,7 +50,8 @@ TDS_DATA_TYPE = dict(
 )
 
 # Function mapping for reading TDMS data types
-TDS_READ_VAL = dict(
+# Values differ by type, so the readers are only typed as callables.
+TDS_READ_VAL: dict[str, Callable] = dict(
     {
         "void": lambda f: None,  # tdsTypeVoid
         "int8": lambda f: struct.unpack("<b", f.read(1))[0],

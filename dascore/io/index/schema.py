@@ -9,6 +9,7 @@ never engine-native timestamp types.
 from __future__ import annotations
 
 from types import MappingProxyType
+from typing import NamedTuple
 
 # Version of the index schema, independent of dascore's version.
 INDEX_VERSION = 4
@@ -241,6 +242,92 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # values block chunk merge-compatibility grouping, which compares all
 # non-private columns.
 SPOOL_HIDDEN_COLUMNS = ("n_dims", "sample_count_total", "shape")
+
+# --- Row views -------------------------------------------------------
+#
+# Index code reads table rows with `iter_rows(df, Row)` (see
+# dascore.utils.pd), which names the row shape pandas builds dynamically
+# in `itertuples`. Fields mirror the table definitions above (a test keeps
+# them in step) and nullable columns are typed with None, though pandas
+# may surface them as NaN — reading code guards with `pd.isnull`. A frame
+# holding only some of a table's columns still uses its table's row view;
+# only the columns actually fetched can be read.
+
+
+class SourceRow(NamedTuple):
+    """A row of the sources table."""
+
+    source_id: int
+    base_uri: str
+    source_path: str
+    source_format: str
+    format_version: str
+    mtime_ns: int | None
+    size_bytes: int | None
+    path_attrs: str | None
+    last_indexed_ns: int
+    ordinal: int
+
+
+class PatchRow(NamedTuple):
+    """A row of the patches table."""
+
+    patch_id: int
+    source_id: int
+    source_patch_id: str
+    n_dims: int
+    dims: str
+    shape: str
+    sample_count_total: int
+    time_min: int | None
+    time_max: int | None
+    time_step: int | None
+    distance_min: float | None
+    distance_max: float | None
+    distance_step: float | None
+
+
+class CoordDefRow(NamedTuple):
+    """A row of the coord_defs table."""
+
+    coord_def_id: int
+    def_key: str
+    fingerprint: str | None
+    value_kind: str
+    dtype: str
+    length: int
+    units: str | None
+    min_num: float | None
+    max_num: float | None
+    step_num: float | None
+    min_ns: int | None
+    max_ns: int | None
+    step_ns: int | None
+    min_str: str | None
+    max_str: str | None
+    is_monotonic: bool | None
+    is_relative: bool | None
+
+
+class PatchCoordRow(NamedTuple):
+    """A row of the patch_coords table."""
+
+    patch_id: int
+    coord_name: str
+    coord_dims: str
+    coord_def_id: int
+
+
+# Row view for each stored table, used to check the views stay in step
+# with the column definitions.
+TABLE_ROWS = MappingProxyType(
+    {
+        "sources": SourceRow,
+        "patches": PatchRow,
+        "coord_defs": CoordDefRow,
+        "patch_coords": PatchCoordRow,
+    }
+)
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,

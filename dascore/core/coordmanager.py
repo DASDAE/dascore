@@ -123,7 +123,7 @@ def _get_indexers_and_new_coords_dict(
 ):
     """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
-    new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
+    new_coords = dict(cm._get_dim_coord_dict())
     for coord_name, vals in kwargs.items():
         # All coordinates should exist in coord_map (filtered by
         # _get_single_dim_kwarg_list)
@@ -223,7 +223,9 @@ class CoordManager(DascoreBaseModel):
 
     def __getattr__(self, item) -> BaseCoord:
         try:
-            return super().__getattr__(item)
+            # pydantic defines BaseModel.__getattr__ only at runtime so
+            # checkers still flag misspelled fields.
+            return super().__getattr__(item)  # ty: ignore[unresolved-attribute]
         except AttributeError:
             # unlike get item, get attr returns the base coordinate.
             try:
@@ -295,7 +297,7 @@ class CoordManager(DascoreBaseModel):
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
         coords, _ = self.drop_coords(*(coord_to_drop + indirect_coord_drops))
-        out = coords._get_dim_array_dict(keep_coord=True)
+        out = coords._get_dim_coord_dict()
         out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
         # update based on keywords
         for item, value in coord_updates.items():
@@ -800,20 +802,18 @@ class CoordManager(DascoreBaseModel):
             raise CoordDataError(msg)
         return data
 
-    def _get_dim_array_dict(
-        self, keep_coord=False
-    ) -> dict[str, tuple[tuple[str, ...], ArrayLike | BaseCoord]]:
-        """
-        Get the coord map in the form:
-        {coord_name = ((dims,), array)}.
+    def _get_dim_coord_dict(self) -> dict[str, tuple[tuple[str, ...], BaseCoord]]:
+        """Get the coord map in the form {coord_name: ((dims,), coord)}."""
+        return {
+            name: (self.dim_map[name], coord) for name, coord in self.coord_map.items()
+        }
 
-        if keep_coord, just keep the coordinate as second arg.
-        """
-        out = {}
-        for name, coord in self.coord_map.items():
-            dims = self.dim_map[name]
-            out[name] = (dims, coord if keep_coord else coord.data)
-        return out
+    def _get_dim_array_dict(self) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
+        """Get the coord map in the form {coord_name: ((dims,), array)}."""
+        return {
+            name: (dims, coord.data)
+            for name, (dims, coord) in self._get_dim_coord_dict().items()
+        }
 
     def set_units(self, **kwargs):
         """Set the units of the coordinate manager."""
@@ -1015,7 +1015,7 @@ class CoordManager(DascoreBaseModel):
         """Return the keys (coordinates) in the coord manager."""
         return self.coord_map.keys()
 
-    def to_summary_dict(self) -> dict[str, CoordSummary | tuple[str, ...]]:
+    def to_summary_dict(self) -> dict[str, CoordSummary]:
         """Convert the contents of the coordinate manager to a summary dict."""
         dim_map = self.dim_map
         out = {}

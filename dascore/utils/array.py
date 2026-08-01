@@ -256,7 +256,8 @@ def _apply_binary_ufunc(
         try:
             new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
         except DimensionalityError as er:
-            msg = f"{operator} failed with units {data_units} and {other.units}"
+            other_units = getattr(other, "units", None)
+            msg = f"{operator} failed with units {data_units} and {other_units}"
             raise UnitError(msg) from er
         # Check if result has units (comparison operators return plain arrays)
         if hasattr(new_data_w_units, "units"):

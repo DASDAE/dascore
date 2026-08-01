@@ -91,11 +91,12 @@ class _CanonicalRange:
             return self.magnitudes
         # a unit-bearing query keeps its own dimensionality; a bare
         # numeric query means canonical SI in the coord's dimension
-        base = (
-            get_quantity(self.units)
-            if self.units is not None
-            else get_quantity(str(coord_units)).to_base_units().units
-        )
+        if self.units is not None:
+            base = get_quantity(self.units)
+        else:
+            coord_quant = get_quantity(str(coord_units))
+            assert coord_quant is not None  # the coord has units in this branch
+            base = coord_quant.to_base_units().units
         return tuple(None if mag is None else mag * base for mag in self.magnitudes)
 
 
@@ -200,7 +201,7 @@ class PatchResolver(abc.ABC):
         re-applied above, so ignoring them is slower, never wrong.
         """
 
-    def live_entries(self) -> Mapping[str, dc.Patch]:
+    def live_entries(self) -> dict[str, dc.Patch]:
         """Return the live patches this resolver serves (path -> patch)."""
         return {}
 
@@ -220,7 +221,7 @@ class LiveResolver(PatchResolver):
             _patch_path(patch): patch for patch in patches
         }
 
-    def live_entries(self) -> Mapping[str, dc.Patch]:
+    def live_entries(self) -> dict[str, dc.Patch]:
         """Return the live patch registry."""
         return self._registry
 
@@ -308,7 +309,7 @@ class CompositeResolver(PatchResolver):
         # plan://<token>/ prefix -> the PlanResolver that owns it
         self.plans: dict[str, PatchResolver] = {}
 
-    def live_entries(self) -> Mapping[str, dc.Patch]:
+    def live_entries(self) -> dict[str, dc.Patch]:
         """Return the merged live patch registry."""
         return self.live._registry
 
@@ -682,12 +683,13 @@ class PatchCatalog:
         # patch, not N — the payload Spool.map ships per task) — in
         # presentation order, so a rebuilt registry keeps the view's
         # ordering.
-        if self.is_view and self.resolver.live_entries():
+        resolver = self.resolver
+        if self.is_view and resolver is not None and resolver.live_entries():
             df = self.to_df()
             paths = list(dict.fromkeys(df["path"].astype(str)))
-            entries = self.resolver.live_entries()
+            entries = resolver.live_entries()
             keep = {k: entries[k] for k in paths if k in entries}
-            state["resolver"] = _membership_resolver(self.resolver, keep, paths)
+            state["resolver"] = _membership_resolver(resolver, keep, paths)
         return state
 
     def _view(self, queries, residuals, order=_KEEP, ids=_KEEP) -> PatchCatalog:
@@ -969,6 +971,7 @@ class PatchCatalog:
                     }
                 )
         trim_hint.update(extra_trim or {})
+        assert self.resolver is not None  # rows only exist once one is set
         patch = self.resolver.resolve(row, **trim_hint)
         return apply_exact_residuals(patch, self._residuals)
 
@@ -987,6 +990,7 @@ class PatchCatalog:
         if live is not None:
             yield from live
             return
+        assert df is not None  # the frame is fetched when there are no live values
         for index in range(len(df)):
             try:
                 yield self.resolve_row(df.iloc[index].to_dict())

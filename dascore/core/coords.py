@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -290,6 +290,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     step: Any = None
     shape: tuple[int, ...] | None = None
     dtype: Any = None
+
+    if TYPE_CHECKING:
+        # Every coord exposes its values, but the array-backed coords store
+        # them in a pydantic field while the rest compute them in a property.
+        # Pydantic refuses to let a field shadow an inherited property (and a
+        # field here would make values a required init argument), so the
+        # shared interface is only declared for type checkers.
+        @property
+        def values(self) -> ArrayLike:
+            """The coordinate's values."""
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False

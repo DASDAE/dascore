@@ -580,6 +580,7 @@ def order(
         samples=samples,
     )
     if copy:
+        assert data is not None  # order returns an array when given one
         data = data.copy()
     return patch.new(data=data, coords=new_coords)
 

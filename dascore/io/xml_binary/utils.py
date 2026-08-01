@@ -75,7 +75,7 @@ def _read_xml_metadata(path):
     return XMLBinaryInfo.model_validate(contents)
 
 
-def _make_distance_coord(metadata: XMLLaserZones):
+def _make_distance_coord(metadata: XMLBinaryInfo):
     """
     Make the base coordinates from the metadata.
     """
@@ -91,7 +91,7 @@ def _make_distance_coord(metadata: XMLLaserZones):
     return distance
 
 
-def _make_time_coord(file_start_times, metadata: XMLLaserZones):
+def _make_time_coord(file_start_times, metadata: XMLBinaryInfo):
     """Create time coord for each file."""
     dt = dc.to_timedelta64(1.0 / metadata.output_temporal_sampling_rate)
     nt = metadata.number_of_frames
@@ -99,7 +99,7 @@ def _make_time_coord(file_start_times, metadata: XMLLaserZones):
         yield get_coord(start=start, stop=start + dt * nt, step=dt, units="s")
 
 
-def _make_base_attrs_dict(metadata: XMLLaserZones):
+def _make_base_attrs_dict(metadata: XMLBinaryInfo):
     """
     Make the base attributes and coordinates from metadata.
     """

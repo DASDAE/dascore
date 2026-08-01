@@ -104,7 +104,8 @@ def _coord_record_from_row(
         lo, hi = pd.Timestamp(lo).to_datetime64(), pd.Timestamp(hi).to_datetime64()
         dtype = "datetime64[ns]"
     elif isinstance(lo, pd.Timedelta | np.timedelta64):
-        lo, hi = pd.Timedelta(lo).to_timedelta64(), pd.Timedelta(hi).to_timedelta64()
+        # dascore's converter (unlike Timedelta.to_timedelta64) handles NaT.
+        lo, hi = dc.to_timedelta64(lo), dc.to_timedelta64(hi)
         dtype = "timedelta64[ns]"
     else:
         lo, hi = float(lo), float(hi)

@@ -216,7 +216,10 @@ def build_attr_clause(
         raise InvalidSpoolQueryError(msg)
     kinds = set(rows["value_kind"])
     columns = dict(zip(rows["value_kind"], rows["column_name"]))
-    units = {row.value_kind: _normalize_unit(row.units) for row in rows.itertuples()}
+    units = {
+        kind: _normalize_unit(unit)
+        for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
+    }
 
     def col(kind):
         return f"a.{dialect.quote(columns[kind])}"

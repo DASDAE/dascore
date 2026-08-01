@@ -10,7 +10,16 @@ import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
 from dascore.io.index import get_backend
-from dascore.io.index.schema import INDEX_VERSION, TABLES
+from dascore.io.index.schema import INDEX_VERSION, TABLE_ROWS, TABLES
+
+
+class TestRowViews:
+    """The row views index code reads must match the stored columns."""
+
+    @pytest.mark.parametrize("table", sorted(TABLE_ROWS))
+    def test_fields_match_columns(self, table):
+        """Each row view declares exactly its table's columns."""
+        assert TABLE_ROWS[table]._fields == tuple(TABLES[table])
 
 
 class TestSchemaValidation:

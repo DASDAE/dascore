@@ -19,9 +19,17 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
-from dascore.io.index.schema import KINDS, RESERVED_ATTR_COLUMNS
+from dascore.io.index.schema import (
+    KINDS,
+    RESERVED_ATTR_COLUMNS,
+    CoordDefRow,
+    PatchCoordRow,
+    PatchRow,
+    SourceRow,
+)
 from dascore.units import get_quantity
 from dascore.utils.paths import parse_hive_path_attrs
+from dascore.utils.pd import iter_rows
 from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
@@ -148,7 +156,9 @@ def attr_column_name(name: str, kind: str) -> str:
 def _base_unit_info(value, unit_str: str | None = None) -> tuple[float, str]:
     """Return a value's base-unit magnitude and canonical unit string."""
     quant = value if unit_str is None else value * get_quantity(unit_str)
-    quant = get_quantity(quant).to_base_units()
+    quant = get_quantity(quant)
+    assert quant is not None  # unit-bearing values only
+    quant = quant.to_base_units()
     return float(quant.magnitude), str(quant.units)
 
 
@@ -505,10 +515,16 @@ def assemble_source_records(
     if "patch_id" in patches.columns:
         patches = patches.sort_values("patch_id")
     col_info = {
-        row.column_name: (row.attr_name, row.value_kind, _py_scalar(row.units))
-        for row in meta.itertuples()
+        column: (name, kind, _py_scalar(units))
+        for column, name, kind, units in zip(
+            meta["column_name"],
+            meta["attr_name"],
+            meta["value_kind"],
+            meta["units"],
+            strict=True,
+        )
     }
-    def_map = {int(row.coord_def_id): row for row in defs.itertuples()}
+    def_map = {int(row.coord_def_id): row for row in iter_rows(defs, CoordDefRow)}
     attr_rows = (
         {int(k): v for k, v in attrs.set_index("patch_id").to_dict("index").items()}
         if not attrs.empty
@@ -523,12 +539,12 @@ def assemble_source_records(
         else {}
     )
     out = []
-    for src in sources.itertuples():
+    for src in iter_rows(sources, SourceRow):
         sub = patches_by_source.get(int(src.source_id))
         if sub is None:
             continue
         patch_records = []
-        for patch in sub.itertuples():
+        for patch in iter_rows(sub, PatchRow):
             pid = int(patch.patch_id)
             typed = {}
             for col, value in attr_rows.get(pid, {}).items():
@@ -538,7 +554,7 @@ def assemble_source_records(
                         kind=kind, value=_py_scalar(value), units=units
                     )
             coords = []
-            for link in link_groups.get(pid, pd.DataFrame()).itertuples():
+            for link in iter_rows(link_groups.get(pid, pd.DataFrame()), PatchCoordRow):
                 cdef = def_map[int(link.coord_def_id)]
                 coords.append(
                     CoordRecord(

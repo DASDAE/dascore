@@ -8,7 +8,7 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 
 import numpy as np
 import pandas as pd
@@ -94,7 +94,9 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
         f"{k}={_format_values(v)!r}" for k, v in kwargs_.items() if v is not None
     ]
     arguments.sort()
-    out = f"{func.__name__}("
+    # partials and other callables without a name still get a history entry.
+    name = getattr(func, "__name__", str(func))
+    out = f"{name}("
     if arguments:
         out += f"{','.join(arguments)}"
     return out + ")"
@@ -194,6 +196,21 @@ def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
             msg = f"Patch is missing the following attributes: {missing}"
             raise PatchAttributeError(msg)
     return patch
+
+
+class _PatchFunction(Protocol):
+    """
+    A function wrapped by `patch_function`.
+
+    The decorator attaches references back to the function it wrapped so
+    callers can skip the patch-function machinery when calling it again.
+    """
+
+    func: Callable
+    raw_function: Callable
+    __wrapped__: Callable
+
+    def __call__(self, patch, *args, **kwargs): ...
 
 
 def patch_function(
@@ -311,12 +328,13 @@ def patch_function(
 
         # Attach original function. Although we want to encourage raw_function
         # for consistency with pydantic, we leave this to not break old code.
-        _func.func = getattr(func, "raw_function", func)
+        patch_func = cast(_PatchFunction, _func)
+        patch_func.func = getattr(func, "raw_function", func)
         # matches pydantic naming.
-        _func.raw_function = getattr(func, "raw_function", func)
-        _func.__wrapped__ = func
+        patch_func.raw_function = getattr(func, "raw_function", func)
+        patch_func.__wrapped__ = func
 
-        return _func
+        return patch_func
 
     if callable(required_dims):  # the decorator is used without parens
         return patch_function()(required_dims)

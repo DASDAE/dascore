@@ -298,7 +298,7 @@ def _validate_quantity_str(quant_str: str) -> None:
         raise UnitError(msg) from e
 
 
-def get_inverted_quant(quant, data_units):
+def get_inverted_quant(quant: Quantity | None, data_units):
     """Convert to inverted units."""
     if quant is None:
         return quant, True
@@ -382,8 +382,8 @@ def get_filter_units(
     _check_to_units(to_unit, dim)
     # get inverse of desired output units and ensure units are pure.
     to_quant = get_quantity(to_unit)
-    assert to_quant.magnitude == 1.0
-    to_units = get_quantity(to_unit).units
+    assert to_quant is not None and to_quant.magnitude == 1.0
+    to_units = to_quant.units
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)

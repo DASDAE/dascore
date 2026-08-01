@@ -260,12 +260,11 @@ line-ending = "lf"
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
 # Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Counts as of 2026-08-01: invalid-argument-type 179,
-# unresolved-attribute 138, invalid-return-type 72, invalid-method-override 35,
-# not-subscriptable 19, no-matching-overload 12.
+# burned down. Counts as of 2026-08-01: invalid-argument-type 175,
+# invalid-return-type 72, invalid-method-override 36, no-matching-overload 13,
+# not-subscriptable 5.
 [tool.ty.rules]
 invalid-argument-type = "ignore"
-unresolved-attribute = "ignore"
 invalid-return-type = "ignore"
 no-matching-overload = "ignore"
 not-subscriptable = "ignore"
@@ -278,6 +277,16 @@ include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/uti
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
+
+# The last 26 unresolved-attribute errors are two API questions rather than
+# wrong hints: which members BaseCoord promises (start/stop/_get_index) and
+# whether a PatchCatalog can exist without a backing catalog/resolver. Both
+# are settled, with the rest of the coord/spool API, in a follow-up PR.
+[[tool.ty.overrides]]
+include = ["dascore/core/coords.py", "dascore/core/spool.py"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
 
 [tool.typos.files]
 extend-exclude = ["docs/_static/logo.svg"]

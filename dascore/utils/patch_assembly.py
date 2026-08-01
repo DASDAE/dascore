@@ -224,6 +224,7 @@ class PatchAssembler:
             coords.append(patch.coords)
             attrs.append(patch.attrs)
             summaries.append(patch.coords._get_dim_summary())
+        assert buffer is not None  # allocated on the first pass of the loop
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
         # Ensure the loaded patches only vary along the expected dimension,

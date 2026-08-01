@@ -101,7 +101,10 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
 
             out_func = decorated
         else:
-            out_func = numba.jit(**compiler_kwargs)(func)
+            # numba is the real module in this branch; the dummy stands in
+            # only when the import failed.
+            jit = numba.jit  # ty: ignore[unresolved-attribute]
+            out_func = jit(**compiler_kwargs)(func)
         # Make the original func accessible via .func; function objects accept
         # new attributes even though their declared type does not.
         out_func.func = func  # ty: ignore[invalid-assignment]

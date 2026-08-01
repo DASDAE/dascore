@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -181,7 +182,16 @@ def open_h5_resource(
         raise NotImplementedError(msg)
 
 
-class H5Reader:
+# FiberIO read/scan/get_format annotate the *caster* class (H5Reader and
+# friends): the io machinery swaps the annotated resource for whatever
+# `get_handle` returns, so what those methods actually receive is the
+# managed handle. Inheriting it while type checking makes the annotation
+# describe the value the method really gets; nothing is instantiated at
+# runtime, where the casters stay plain classes.
+_H5CasterBase = _ManagedH5pyFile if TYPE_CHECKING else object
+
+
+class H5Reader(_H5CasterBase):
     """A thin wrapper around h5py for reading files.
 
     Remote UPath resources stay remote-first and transparently retry against
