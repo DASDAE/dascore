@@ -340,9 +340,9 @@ def patches_to_df(
     A dataframe with the attrs of each patch converted to a columns
     plus a field called 'patch' which contains a reference to the patches.
     """
-    # Handle spool case
-    if isinstance(patches, dc.BaseSpool):
-        df = patches.get_contents()
+    # Handle spool case (or anything else exposing spool-style get_contents)
+    if callable(get_contents := getattr(patches, "get_contents", None)):
+        df = get_contents()
         # get_contents() carries only metadata; embed the patches so the
         # flat-dump path can serve them (the "patch" column is the point).
         if "patch" not in df.columns:

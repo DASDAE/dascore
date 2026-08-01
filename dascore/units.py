@@ -148,7 +148,8 @@ def get_quantity(
 
 
 def get_factor_and_unit(
-    value: str | Quantity | None, simplify: bool = False
+    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+    simplify: bool = False,
 ) -> tuple[float, str | None]:
     """Convert a mixed unit/scaling factor to scale_factor and unit str."""
     quant = get_quantity(value)
@@ -172,7 +173,7 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 
 def convert_units(
-    data: numeric,
+    data: numeric | Quantity,
     to_units: None | str | Quantity,
     from_units: None | str | Quantity = None,
 ) -> numeric:
@@ -228,7 +229,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
+def invert_quantity(unit: pint.Unit | str | Quantity | None) -> Quantity | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
