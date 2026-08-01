@@ -141,8 +141,8 @@ def run_in_threads():
             assert not thread.is_alive(), "thread never finished; possible deadlock"
         if errors:
             # The first failure is re-raised as-is rather than aggregated:
-            # ExceptionGroup is 3.11+ while the package supports 3.10, and it
-            # rejects BaseException members such as pytest's own skip/fail.
+            # ExceptionGroup rejects BaseException members such as pytest's
+            # own skip/fail.
             raise errors[0]
         return results
 

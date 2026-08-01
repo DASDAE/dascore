@@ -13,13 +13,10 @@ from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal, TypedDict, get_type_hints
+from typing import Any, Literal, NotRequired, TypedDict, get_type_hints
 
 import numpy as np
 import pandas as pd
-
-# NotRequired is only in typing from python 3.11; dascore supports 3.10.
-from typing_extensions import NotRequired
 
 import dascore as dc
 from dascore.compat import Progress, UPath

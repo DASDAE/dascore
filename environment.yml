@@ -8,7 +8,7 @@ dependencies:
   - pydantic>=2.1
   - pip
   - pandas>=2.0
-  - pooch>=1.2
+  - pooch>=1.3
   - xarray
   - pre-commit
   - h5py

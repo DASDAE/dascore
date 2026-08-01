@@ -27,14 +27,13 @@ authors = [
 description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
 license = { file="docs/LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: WebAssembly",
     "Environment :: WebAssembly :: Emscripten",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Topic :: Scientific/Engineering",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -52,7 +51,7 @@ dependencies = [
      "numpy>=1.24",
      "packaging",
      "pandas>=2.0",
-     "pooch>=1.2",
+     "pooch>=1.3",  # retry_if_failed was added in 1.3
      "pydantic>2.1",
      "rich",
       "typing_extensions>=4.12",

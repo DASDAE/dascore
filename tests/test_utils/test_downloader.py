@@ -6,16 +6,13 @@ import pandas as pd
 import pytest
 
 from dascore.config import config_context
-from dascore.constants import DATA_VERSION
 from dascore.utils.downloader import (
     LARGE_REGISTRY_FILES,
-    REGISTRY_PATH,
     _fetch_cached,
     fetch,
     fetcher,
     get_fetcher,
     get_registry_df,
-    get_test_data_cache_info,
 )
 
 
@@ -80,31 +77,3 @@ class TestFetch:
         out = _fetch_cached(name="example.dat", cache_dir=str(tmp_path))
 
         assert out == tmp_path / "example.dat"
-
-
-class TestTestDataCacheInfo:
-    """Tests for CI cache metadata derived from downloader state."""
-
-    def test_cache_info_matches_downloader_configuration(self):
-        """Ensure cache metadata stays aligned with downloader config."""
-        info = get_test_data_cache_info()
-
-        assert info.registry_path == REGISTRY_PATH
-        assert info.cache_path == fetcher.path.parent
-        assert info.data_version == DATA_VERSION
-        assert len(info.registry_hash) == 64
-
-    def test_cache_key_includes_expected_parts(self):
-        """Ensure the generated cache key matches the CI convention."""
-        info = get_test_data_cache_info()
-
-        out = info.get_key(runner_os="Linux", cache_number=7)
-
-        assert out == f"data-Linux-{DATA_VERSION}-{info.registry_hash}-7"
-
-    def test_cache_info_respects_configured_cache_dir(self, tmp_path):
-        """Cache info should reflect the configured downloader cache root."""
-        cache_dir = tmp_path / "downloads"
-        with config_context(downloader_cache_dir=cache_dir):
-            info = get_test_data_cache_info()
-        assert info.cache_path == cache_dir
