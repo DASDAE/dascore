@@ -33,9 +33,10 @@ def iter_rows(df: pd.DataFrame, row_type: type[_RowType]) -> Iterator[_RowType]:
     row_type
         A NamedTuple declaring the columns the caller reads. Pandas builds
         the row tuple dynamically, so this only names the shape for
-        readers (and type checkers); it is never instantiated.
+        readers (and type checkers); it is never instantiated. The frame's
+        index is left out so the declared fields line up with the row's.
     """
-    return cast(Iterator[_RowType], df.itertuples())
+    return cast(Iterator[_RowType], df.itertuples(index=False))
 
 
 @cache

@@ -202,7 +202,12 @@ class PatchResolver(abc.ABC):
         """
 
     def live_entries(self) -> dict[str, dc.Patch]:
-        """Return the live patches this resolver serves (path -> patch)."""
+        """
+        Return the live patches this resolver serves (path -> patch).
+
+        This is the registry itself, not a copy: dropping an entry from it
+        is how a removed source's live patch stops being served.
+        """
         return {}
 
 

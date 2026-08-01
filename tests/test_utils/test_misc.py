@@ -25,6 +25,7 @@ from dascore.utils.misc import (
     deep_equality_check,
     get_2d_line_intersection,
     get_buffer_size,
+    get_parent_code_name,
     get_stencil_coefs,
     iterate,
     maybe_get_items,
@@ -689,6 +690,22 @@ class Test2DLineIntersection:
         p4 = np.array([1.0, 2.0])
         out = get_2d_line_intersection(p1, p2, p3, p4)
         assert np.isnan(out).all()
+
+
+class TestGetParentCodeName:
+    """Tests for naming the calling scope."""
+
+    def test_gets_caller(self):
+        """Level 1 names the calling scope, level 2 the one above it."""
+
+        def inner():
+            return get_parent_code_name(levels=1), get_parent_code_name(levels=2)
+
+        assert inner() == ("inner", "test_gets_caller")
+
+    def test_above_stack_top(self):
+        """Asking for a frame above the top of the stack has no name."""
+        assert get_parent_code_name(levels=10_000) == "<unknown>"
 
 
 class TestGetBufferSize:

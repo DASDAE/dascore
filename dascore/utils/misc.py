@@ -576,8 +576,8 @@ def get_parent_code_name(levels: int = 2) -> str:
     frame = inspect.currentframe()
     for _ in range(levels):
         frame = frame.f_back if frame is not None else None
-    # frames only run out past the top of the stack, well above any caller.
-    assert frame is not None
+    if frame is None:  # asked for a frame above the top of the stack
+        return "<unknown>"
     return frame.f_code.co_name
 
 
@@ -1010,11 +1010,10 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
     fid
         A buffered reader, e.g. from open(file) as fid.
     """
-    # File objects backed by memory (BytesIO and friends) have no name;
-    # they fall through to the in-memory read below.
-    name = getattr(fid, "name", None)
     try:
-        raw = np.memmap(name, dtype=dtype, mode="r")
+        # File objects backed by memory (BytesIO and friends) have no
+        # usable name; those fall through to the in-memory read below.
+        raw = np.memmap(getattr(fid, "name", None), dtype=dtype, mode="r")
     except (AttributeError, TypeError, ValueError):
         # Fallback: read into memory
         fid.seek(0)
