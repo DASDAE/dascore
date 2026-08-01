@@ -278,7 +278,7 @@ class PatchRow(NamedTuple):
     n_dims: int
     dims: str
     shape: str
-    sample_count_total: int
+    sample_count_total: int | None
     time_min: int | None
     time_max: int | None
     time_step: int | None
@@ -295,7 +295,7 @@ class CoordDefRow(NamedTuple):
     fingerprint: str | None
     value_kind: str
     dtype: str
-    length: int
+    length: int | None
     units: str | None
     min_num: float | None
     max_num: float | None

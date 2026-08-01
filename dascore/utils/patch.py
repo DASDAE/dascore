@@ -76,6 +76,11 @@ def _format_values(val):
     return out
 
 
+def _func_name(func: Callable) -> str:
+    """Name a callable for the history string; partials have no __name__."""
+    return getattr(func, "__name__", str(func))
+
+
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     """Get a str rep of the function and input args."""
     # getcallargs is deprecated, but Signature.bind is not a drop-in
@@ -94,9 +99,7 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
         f"{k}={_format_values(v)!r}" for k, v in kwargs_.items() if v is not None
     ]
     arguments.sort()
-    # partials and other callables without a name still get a history entry.
-    name = getattr(func, "__name__", str(func))
-    out = f"{name}("
+    out = f"{_func_name(func)}("
     if arguments:
         out += f"{','.join(arguments)}"
     return out + ")"
@@ -126,7 +129,7 @@ def _get_history_str(
     if _history == "full":
         history_str = _func_and_kwargs_str(func, patch, *args, **kwargs)
     else:
-        history_str = str(func.__name__)
+        history_str = _func_name(func)
     return history_str
 
 
