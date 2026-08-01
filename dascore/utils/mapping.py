@@ -30,7 +30,7 @@ class FrozenDict(ABCMap[K, V]):
     """
 
     def __init__(self, *args, **kwargs):
-        self._dict: dict[K, V] = dict(*args, **kwargs)
+        self._dict = dict(*args, **kwargs)
         self._hash = None
 
     def __getitem__(self, key: K) -> V:

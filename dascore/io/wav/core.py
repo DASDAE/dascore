@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from scipy.io.wavfile import write
 
+from dascore.compat import UPath
 from dascore.constants import ONE_SECOND, SpoolType
 from dascore.exceptions import ParameterError
 from dascore.io.core import FiberIO
@@ -20,7 +21,11 @@ class WavIO(FiberIO):
     name = "WAV"
 
     def write(
-        self, spool: SpoolType, resource: str | Path, resample_frequency=None, **kwargs
+        self,
+        spool: SpoolType,
+        resource: str | Path | UPath,
+        resample_frequency=None,
+        **kwargs,
     ):
         """
         Write the contents of the patch to one or more wav files.

@@ -484,6 +484,7 @@ def build_chunk_plan(
         )
         raise ParameterError(msg)
     if not merge_mode:
+        assert value is not None  # pd.isnull(None) is True, so merge_mode covers it
         zero = to_timedelta64(0) if is_timedelta64(value) else 0
         if value <= zero:
             msg = "Chunk value must be greater than 0."

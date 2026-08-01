@@ -191,6 +191,7 @@ class PatchAssembler:
                 axis = patch.get_axis(merge_dim)
             elif patch.dims != dims:
                 patch = patch.transpose(*dims)
+            assert axis is not None  # set on the first pass through the loop
             data = patch.data
             if buffer is None:
                 shape = list(data.shape)

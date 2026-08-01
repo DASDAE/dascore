@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 from contextlib import suppress
+from typing import TypeGuard
 
 import numpy as np
 from h5py import Dataset as H5Dataset
@@ -94,7 +95,7 @@ def array(array):
     return _make_immutable(out)
 
 
-def is_array(maybe_array):
+def is_array(maybe_array) -> TypeGuard[np.ndarray]:
     """
     Determine if an object is a numpy array.
     """

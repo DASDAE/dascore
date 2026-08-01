@@ -341,7 +341,7 @@ def patches_to_df(
     plus a field called 'patch' which contains a reference to the patches.
     """
     # Handle spool case
-    if hasattr(patches, "get_contents"):
+    if isinstance(patches, dc.BaseSpool):
         df = patches.get_contents()
         # get_contents() carries only metadata; embed the patches so the
         # flat-dump path can serve them (the "patch" column is the point).

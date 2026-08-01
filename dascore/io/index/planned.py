@@ -125,7 +125,9 @@ def _coord_record_from_row(
         units = None
     length = None
     if step is not None:
-        length = int(round((hi - lo) / step)) + 1
+        # lo, hi, and step always share a time kind (or are all floats), but
+        # ty unions the branch types and rejects the mixed combinations.
+        length = int(round((hi - lo) / step)) + 1  # ty: ignore[unsupported-operator]
     key = row.get(f"_{name}_def_key")
     fingerprint = None
     if isinstance(key, str) and key.startswith("fp:"):

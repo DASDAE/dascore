@@ -103,7 +103,9 @@ def _read_base_header(fid):
     """Return the first 3 elements of the sintela header."""
     data = fid.read(base_header_dtypes.itemsize)
     array = np.frombuffer(data, dtype=base_header_dtypes, count=1)
-    out = {x: y for x, y in zip(array.dtype.names, array[0])}
+    names = array.dtype.names
+    assert names is not None  # structured dtypes always have field names
+    out = {x: y for x, y in zip(names, array[0])}
     return out
 
 
@@ -130,7 +132,9 @@ def _read_remaining_header(fid, base):
     dtype = _HEADER_DTYPES[version]
     data = fid.read(dtype.itemsize)
     buf = np.frombuffer(data, dtype=dtype, count=1)
-    header = {x: y for x, y in zip(buf.dtype.names, buf[0])}
+    names = buf.dtype.names
+    assert names is not None  # structured dtypes always have field names
+    header = {x: y for x, y in zip(names, buf[0])}
     assert version == "3", "only 3 support for now,"
     header["num_packets"] = _get_number_of_packets(fid, header, header_size)
     header["dtype"] = "<f4"

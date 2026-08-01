@@ -84,7 +84,8 @@ def fbe(
     check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if step is None:
-        step = to_float(1 / sample_rate)
+        # to_float's scalar path returns a float despite its ndarray hint.
+        step = float(to_float(1 / sample_rate))
 
     patch = patch.pass_filter(**kwargs)
 

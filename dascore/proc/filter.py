@@ -596,7 +596,7 @@ def slope_filter(
             filt = filt * dc.get_quantity(units)
         if not isinstance(filt, dc.units.Quantity):
             return filt
-        array, units = filt.magnitude, filt.units
+        array, units = np.asarray(filt.magnitude), filt.units
         coord_unit_1 = dft_patch.get_coord(freq_dims[-1]).units
         coord_unit_2 = dft_patch.get_coord(freq_dims[-2]).units
         if not (coord_unit_1 and coord_unit_2):

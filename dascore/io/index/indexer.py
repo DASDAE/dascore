@@ -127,7 +127,7 @@ class DBDirectoryIndexer:
 
     def __init__(
         self,
-        path: str | Path,
+        path: str | Path | UPath,
         index_path: str | Path | None = None,
     ):
         path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)

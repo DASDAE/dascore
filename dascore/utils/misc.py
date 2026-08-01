@@ -51,7 +51,7 @@ def register_func(list_or_dict: list | dict, key=None):
 
     def wrapper(func):
         name = key or func.__name__
-        if hasattr(list_or_dict, "append"):
+        if isinstance(list_or_dict, list):
             list_or_dict.append(name)
         else:
             list_or_dict[name] = func
@@ -752,7 +752,7 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
     if size is None:
-        size = len(spool) / os.cpu_count()
+        size = len(spool) / (os.cpu_count() or 1)
     spools = list(spool.split(size=size))
     # this is a hack to get the progress bar to work. Essentially, we just
     # add a secret flag to all but one spool so that progress bar is only

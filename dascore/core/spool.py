@@ -539,6 +539,7 @@ class Spool(BaseSpool):
     def __iter__(self):
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
+        assert self._catalog is not None  # __init__ always sets the catalog
         yield from self._catalog
 
     # --- selection and presentation specs -------------------------------

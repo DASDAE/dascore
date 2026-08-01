@@ -41,10 +41,10 @@ class SegyV1_0(FiberIO):  # noqa
         be implemented as well.
         """
         segyio = optional_import(self._package_name)
-        path = str(path)
-        with segyio.open(path, ignore_geometry=True) as fi:
+        path_str = str(path)
+        with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self, include_source=True)
+            attrs = _get_attrs(fi, coords, path_str, self, include_source=True)
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
@@ -61,10 +61,10 @@ class SegyV1_0(FiberIO):  # noqa
         Returns lightweight scan metadata without loading the data array.
         """
         segyio = optional_import(self._package_name)
-        path = str(path)
-        with segyio.open(path, ignore_geometry=True) as fi:
+        path_str = str(path)
+        with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
+            attrs = _get_attrs(fi, coords, path_str, self)
             dtype = str(fi.dtype)
         return [
             {

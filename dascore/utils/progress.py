@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Generator, Sized
+from collections.abc import Iterable
 from contextlib import suppress
 
 import rich.progress as prog
@@ -38,7 +38,7 @@ def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
 
 
 def track(
-    sequence: Sized | Generator,
+    sequence: Iterable,
     description: str,
     progress: PROGRESS_LEVELS | Progress = "standard",
     length: int | None = None,

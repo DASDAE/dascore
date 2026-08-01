@@ -102,7 +102,9 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
             out_func = decorated
         else:
             out_func = numba.jit(**compiler_kwargs)(func)
-        out_func.func = func  # make original func accessible via .func
+        # Make the original func accessible via .func; function objects accept
+        # new attributes even though their declared type does not.
+        out_func.func = func  # ty: ignore[invalid-assignment]
         return out_func
 
     return _wrapper
