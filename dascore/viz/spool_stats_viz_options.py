@@ -24,6 +24,7 @@ Use a predefined layout::
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
-from scipy import stats
+from rich import print as rich_print
 
 OutlierMethod = Literal["mode", "mean", "median"]
 PlotName = Literal["gap", "duration", "gap_hist", "duration_hist"]
@@ -105,7 +106,7 @@ def _as_dataframe(spool) -> pd.DataFrame:
 def _find_outliers(
     gap: np.ndarray,
     duration: np.ndarray,
-    method: OutlierMethod = "mode",
+    method: OutlierMethod = "median",
     tolerance_percent: float = 20,
 ) -> np.ndarray:
     """Identify large file gaps relative to a duration reference value."""
@@ -117,7 +118,8 @@ def _find_outliers(
         )
 
     if method == "mode":
-        reference_value = stats.mode(duration, keepdims=False).mode
+        pass  # TODO: implement mode-based outlier detection.  See
+        # reference_value = stats.mode(duration, keepdims=False).mode
     elif method == "mean":
         reference_value = np.mean(duration)
     else:  # method == "median"
@@ -322,7 +324,7 @@ def viz_spool(
     *,
     plots: str | Iterable[PlotName] | None = None,
     layout: LayoutName | None = None,
-    method: OutlierMethod = "mode",
+    method: OutlierMethod = "median",
     tolerance_percent: float = 20,
     annotate_gaps: bool = True,
     figsize: tuple[float, float] | None = None,
@@ -372,20 +374,30 @@ def viz_spool(
     _, axs = _make_axes(plot_names, figsize=figsize)
     for name in plot_names:
         _PLOTTERS[name](axs[name], stats_, annotate_gaps=annotate_gaps)
+        if name == "gap":
+            rich_print(
+                "Data gaps found at:\n   index\tfirst data after gap at\t\tgap length"
+            )
+            for i in stats_.outlier_index:
+                thisgap = datetime.timedelta(seconds=stats_.gap[i])
+                rich_print(f"{i:8d}\t{stats_.filestart[i]}\t{thisgap}")
 
     return axs, stats_.duration, stats_.gap, stats_.outlier_index
 
 
 if __name__ == "__main__":
     # Example usage:
-    #
+
     from dascore.utils.hdf5 import HDFPatchIndexManager
 
-    tmpfile = Path(r"C:\path\to\_dascore_index.hdf5")
     tmpfile = Path(
-        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Aurland.hdf5"
+        r"C:\\Users\\andreasw\\OneDrive - NORSAR\\Fiber_Group"
+        + r"\\FYBR_PROJECTS\\FibreEyes_NFR\\spools\\_dascore_index_Aurland.hdf5"
     )
-
+    tmpfile = Path(
+        r"C:\\Users\\andreasw\\OneDrive - NORSAR\\Fiber_Group"
+        + r"\\FYBR_PROJECTS\\FibreEyes_NFR\\spools\\_dascore_index_Hoyanger.hdf5"
+    )
     df = HDFPatchIndexManager(tmpfile).get_index()
     viz_spool(df, plots=["gap", "duration"])
     pass

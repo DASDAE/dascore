@@ -77,16 +77,15 @@ def _build_calendar_matrix(df, starttime=None, endtime=None, method="gap"):
     day_in_ns = np.timedelta64(np.timedelta64(1, "D"), "ns")
     row = -1
     for i, this_day in enumerate(days):
-        if (this_day.date() < first_data_day) | (this_day.date() > last_data_day):
-            continue
-
         month_key = (this_day.year, this_day.month)
         if month_key != current_month:
             current_month = month_key
             row += 1
         col = this_day.day - 1
-
         next_day = this_day + pd.Timedelta(days=1)
+
+        if (this_day.date() < first_data_day) | (this_day.date() > last_data_day):
+            continue
 
         # idx = (filestarts >= this_day) & (filestarts < next_day)
 
@@ -259,35 +258,20 @@ if __name__ == "__main__":
     from dascore.utils.hdf5 import HDFPatchIndexManager
 
     tmpfile = Path(
-        r"O:\Staff\andreasw\Dev\FibreEyes\Aurland\_dascore_index_Aurland.hdf5"
+        r"C:\\Users\\andreasw\\OneDrive - NORSAR\\Fiber_Group"
+        + r"\\FYBR_PROJECTS\\FibreEyes_NFR\\spools\\_dascore_index_Aurland.hdf5"
     )
     tmpfile = Path(
-        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Aurland.hdf5"
-    )
-    tmpfile = Path(
-        r"C:\Users\andreasw\Downloads\Spool_Visualisation\_dascore_index_Hoyanger.hdf5"
+        r"C:\\Users\\andreasw\\OneDrive - NORSAR\\Fiber_Group"
+        + r"\\FYBR_PROJECTS\\FibreEyes_NFR\\spools\\_dascore_index_Hoyanger.hdf5"
     )
 
     df = HDFPatchIndexManager(tmpfile).get_index()  # time_min="2026-01-16T14:00:00")
     df = df.sort_values(by="time_min")
 
-    calendar(df, starttime="2025-11-27", endtime=None)
-
-
-# %%
-"""
-    filestart = df["time_min"].to_numpy()
-    fileend = df["time_max"].to_numpy()
-
-    target_day = np.datetime64('2026-05-25')
-
-    # 3. Find all timestamps on the target day
-    mask = (dates >= target_day) & (dates < target_day + np.timedelta64(1, 'D'))
-    filtered_dates = dates[mask]
-
-
-    #%%
-    dt = df["time_step"].to_numpy()
-    fsamp = np.timedelta64(1, "s") / dt
-    gap = np.diff(filestart) / np.timedelta64(1, "s")
-"""
+    calendar(df, starttime="2025-11-16", endtime=None, method="gap")
+    plt.show()
+    calendar(df, starttime="2025-11-16", endtime=None, method="percent")
+    plt.show()
+    calendar(df, starttime="2025-11-16", endtime=None, method="number")
+    plt.show()
