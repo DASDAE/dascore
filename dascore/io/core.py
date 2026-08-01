@@ -819,7 +819,7 @@ class FiberIO:
 
     name: str = ""
     version: str = ""
-    preferred_extensions: tuple[str] = ()
+    preferred_extensions: tuple[str, ...] = ()
     # Specifies if this fiber IO expects a directory or single file
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.

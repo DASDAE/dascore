@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Protocol, TypeVar, runtime_checkable
+from typing import Literal, Protocol, TypeVar, get_args, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -64,7 +64,7 @@ ONE_BILLION = 1_000_000_000
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
 # Valid strings for "datatype" attribute
-VALID_DATA_TYPES = (
+DataType = Literal[
     "",  # unspecified
     "velocity",
     "strain_rate",
@@ -88,10 +88,12 @@ VALID_DATA_TYPES = (
     "dispersion",
     "phase_weighted_stack",
     "otdr",
-)
+]
+VALID_DATA_TYPES = get_args(DataType)
 
 # Valid categories (of instruments)
-VALID_DATA_CATEGORIES = ("", "DAS", "DTS", "DSS")
+DataCategory = Literal["", "DAS", "DTS", "DSS"]
+VALID_DATA_CATEGORIES = get_args(DataCategory)
 
 max_lens = {
     "path": 120,

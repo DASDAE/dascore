@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from functools import partial
 from math import prod
 from operator import mul, truediv
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.fft as nft
@@ -37,7 +37,10 @@ from dascore.utils.patch import (
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 
-ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
+if TYPE_CHECKING:
+    from scipy.signal import ShortTimeFFT
+else:
+    ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
 get_window = lazy_import("scipy.signal.windows", "get_window")
 
 DFT_OUTPUT_DATA_TYPE_MAP = {

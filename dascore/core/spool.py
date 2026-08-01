@@ -321,7 +321,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         self,
         size: int | None = None,
         count: int | None = None,
-    ) -> Generator[Self, None, None]:
+    ) -> Generator[BaseSpool, None, None]:
         """
         Yield sub-patches based on specified parameters.
 
@@ -369,7 +369,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
     def map(
         self,
-        func: Callable[[dc.Patch, ...], T],
+        func: Callable[..., T],
         *,
         client: ExecutorType | None = None,
         size: int | None = None,
@@ -575,7 +575,7 @@ class Spool(BaseSpool):
         self,
         size: int | None = None,
         count: int | None = None,
-    ) -> Generator[Self, None, None]:
+    ) -> Generator[BaseSpool, None, None]:
         """{doc}."""
         if not ((count is not None) ^ (size is not None)):
             msg = "Spool.split requires either spool_count or spool_size."

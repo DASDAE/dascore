@@ -54,9 +54,7 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     return self.new(coords=cm)
 
 
-def pipe(
-    self: PatchType, func: Callable[[PatchType, ...], PatchType], *args, **kwargs
-) -> PatchType:
+def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
     """
     Pipe the patch to a function.
 

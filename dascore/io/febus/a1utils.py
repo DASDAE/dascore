@@ -22,13 +22,13 @@ from dascore.utils.misc import (
 # --- Getting format/version
 
 _FebusSlice = namedtuple(
-    "FebusSlice",
+    "_FebusSlice",
     ["group", "group_name", "source", "source_name", "zone", "zone_name", "data_name"],
 )
 
 
 _FebusTime = namedtuple(
-    "FebusTime",
+    "_FebusTime",
     ["block_time", "time_step", "idx_start", "idx_stop"],
 )
 

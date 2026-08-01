@@ -17,7 +17,8 @@ from collections.abc import Sized
 from contextlib import suppress
 from functools import cache
 from operator import gt, lt
-from typing import Any, Literal, TypeVar
+from types import EllipsisType
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -74,10 +75,10 @@ from dascore.utils.time import (
     to_int,
 )
 
-# Valid values for min/max
-min_max_type = TypeVar("min_max_type")
-
-step_type = TypeVar("step_type")
+# Values for min/max/step. The CoordSummary validator coerces these to match
+# the summary dtype (datetime64, float, etc.) so they are open-ended here.
+min_max_type = Any
+step_type = Any
 
 CoordKind = Literal["string", "empty", "single", "array", "range"]
 
@@ -841,7 +842,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def get_slice_tuple(
         self,
-        select: slice | None | type(Ellipsis) | tuple[Any, Any],
+        select: slice | None | EllipsisType | tuple[Any, Any],
         relative=False,
     ) -> tuple[Any, Any]:
         """
@@ -2779,7 +2780,7 @@ def get_coord(
     step=None,
     units: None | Unit | Quantity | str = None,
     shape: None | int | tuple[int, ...] = None,
-    dtype: str | np.dtype = None,
+    dtype: str | np.dtype | None = None,
     segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
 ) -> BaseCoord:
     """

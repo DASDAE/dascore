@@ -52,7 +52,7 @@ from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
-_DimAxisValue = namedtuple("DimAxisValue", ["dim", "axis", "value"])
+_DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
 
 def _format_values(val):
@@ -78,7 +78,11 @@ def _format_values(val):
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     """Get a str rep of the function and input args."""
-    callargs = inspect.getcallargs(func, patch, *args, **kwargs)
+    # getcallargs is deprecated, but Signature.bind is not a drop-in
+    # replacement (different handling of self and defaults); keep it for now.
+    callargs = inspect.getcallargs(  # ty: ignore[deprecated]
+        func, patch, *args, **kwargs
+    )
     callargs.pop("patch", None)
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
@@ -289,7 +293,7 @@ def patch_function(
                 coords=required_coords,
             )
             check_patch_attrs(patch, required_attrs)
-            out: PatchType = func(patch, *args, **kwargs)
+            out = func(patch, *args, **kwargs)
             attr_updates = {}
             if data_type is not None:
                 attr_updates["data_type"] = data_type
@@ -648,8 +652,8 @@ def get_dim_axis_value(
     patch: PatchType,
     *,
     args: tuple = tuple(),
-    kwargs: dict = FrozenDict(),
-    arg_keys: tuple[str] = ("dim", "coord", "dims", "coords"),
+    kwargs: Mapping = FrozenDict(),
+    arg_keys: tuple[str, ...] = ("dim", "coord", "dims", "coords"),
     allow_multiple: bool = False,
     allow_extra: bool = False,
 ) -> tuple[_DimAxisValue, ...]:
