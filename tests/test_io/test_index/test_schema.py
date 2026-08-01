@@ -5,33 +5,29 @@ from __future__ import annotations
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-from typing import get_args, get_type_hints
 
 import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
 from dascore.io.index import get_backend
-from dascore.io.index.schema import INDEX_VERSION, TABLE_ROWS, TABLES
-
-# The python type each logical storage type surfaces as.
-_STORAGE_TYPES = {"int64": int, "float64": float, "str": str, "bool": bool}
+from dascore.io.index.schema import INDEX_VERSION, TABLES
 
 
-class TestRowViews:
-    """The row views index code reads must match the stored columns."""
+class TestSchemaDeclaration:
+    """The row classes are the schema; check they reach SQLite intact."""
 
-    @pytest.mark.parametrize("table", sorted(TABLE_ROWS))
-    def test_fields_match_columns(self, table):
-        """Each row view declares exactly its table's columns, in order."""
-        assert TABLE_ROWS[table]._fields == tuple(TABLES[table])
-
-    @pytest.mark.parametrize("table", sorted(TABLE_ROWS))
-    def test_field_types_match_storage(self, table):
-        """Each field's type is its column's storage type, nullable or not."""
-        hints = get_type_hints(TABLE_ROWS[table])
-        for column, storage in TABLES[table].items():
-            declared = set(get_args(hints[column])) or {hints[column]}
-            assert declared - {type(None)} == {_STORAGE_TYPES[storage]}
+    def test_stored_columns_match_declaration(self, tmp_path):
+        """A created index has each table's declared columns and types."""
+        backend = get_backend(tmp_path / "index.sqlite3")
+        dialect = backend.dialect
+        for table, columns in TABLES.items():
+            info = backend._con.execute(f'PRAGMA table_info("{table}")').fetchall()
+            stored = {row[1]: row[2] for row in info}
+            expected = {
+                name: dialect.type_map[logical] for name, logical in columns.items()
+            }
+            assert stored == expected
+        backend.close()
 
 
 class TestSchemaValidation:
