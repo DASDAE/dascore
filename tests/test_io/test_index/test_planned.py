@@ -47,6 +47,13 @@ class TestHelpers:
         assert record.value_kind == "time"
         assert record.min_ns == _ns(lo)
 
+    def test_coord_record_half_null_timedelta(self):
+        """A one-sided timedelta envelope keeps NaT rather than raising."""
+        row = {"time_min": pd.Timedelta(seconds=1), "time_max": pd.NaT}
+        record = _coord_record_from_row(row, "time")
+        assert record.min_ns == pd.Timedelta(seconds=1).value
+        assert pd.isnull(np.timedelta64(record.max_ns, "ns"))
+
     def test_coord_record_zero_step_length(self):
         """A degenerate step leaves length unknown instead of raising."""
         row = {"time_min": 0.0, "time_max": 1.0, "time_step": 0.0}

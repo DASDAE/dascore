@@ -6,7 +6,7 @@ import abc
 from collections.abc import Callable, Generator, Sequence
 from functools import singledispatch
 from pathlib import Path
-from typing import ClassVar, Literal, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -43,6 +43,9 @@ from dascore.utils.patch import (
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
+
+if TYPE_CHECKING:
+    from dascore.io.index.catalog import PatchCatalog
 
 T = TypeVar("T")
 
@@ -458,8 +461,8 @@ class Spool(BaseSpool):
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
     _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
-    # The catalog backing this spool.
-    _catalog = None
+    # The catalog backing this spool; every construction path sets one.
+    _catalog: PatchCatalog
     # single-file provenance (set by from_file; drives update())
     _file_path = None
     _file_format = None
@@ -539,7 +542,6 @@ class Spool(BaseSpool):
     def __iter__(self):
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
-        assert self._catalog is not None  # __init__ always sets the catalog
         yield from self._catalog
 
     # --- selection and presentation specs -------------------------------
@@ -915,7 +917,7 @@ class Spool(BaseSpool):
     @property
     def indexer(self):
         """The directory syncer, or None for non-directory spools."""
-        return None if self._catalog is None else self._catalog._syncer
+        return self._catalog._syncer
 
     @property
     def spool_path(self):
@@ -930,8 +932,7 @@ class Spool(BaseSpool):
     @property
     def has_live_patches(self) -> bool:
         """True when any of this spool's patches live in memory."""
-        catalog = self._catalog
-        return catalog is not None and bool(catalog.resolver.live_entries())
+        return bool(self._catalog.resolver.live_entries())
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
@@ -954,7 +955,7 @@ class Spool(BaseSpool):
             "Update the root spool and re-apply the operations, e.g. "
             "root = root.update(); view = root.select(...)."
         )
-        if catalog is None or catalog.is_view:
+        if catalog.is_view:
             raise InvalidSpoolError(derived_msg)
         if catalog._syncer is not None:
             catalog.update(progress=progress)

@@ -2027,6 +2027,13 @@ class TestGetNextIndex:
         expected_above = int((max_value + step - min_value) / step)
         assert above_max_idx == expected_above  # Should be len(coord)
 
+    def test_string_coord_raises(self):
+        """Sorted strings have no value spacing to index into."""
+        coord = get_coord(values=np.array(["a", "b", "c"]))
+        assert coord.sorted
+        with pytest.raises(CoordError, match="does not support indexing by value"):
+            coord.get_next_index("b")
+
     def test_exact_values(self, evenly_sampled_coord):
         """Ensure using exact values contained in coord return index."""
         coord = evenly_sampled_coord

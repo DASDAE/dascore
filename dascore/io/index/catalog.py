@@ -485,8 +485,8 @@ class PatchCatalog:
     def __init__(
         self,
         *,
+        resolver: PatchResolver,
         backend=None,
-        resolver: PatchResolver | None = None,
         syncer=None,
         queries: tuple[Query, ...] = (),
         residuals: tuple[tuple[dict, bool], ...] = (),
@@ -689,7 +689,7 @@ class PatchCatalog:
         # presentation order, so a rebuilt registry keeps the view's
         # ordering.
         resolver = self.resolver
-        if self.is_view and resolver is not None and resolver.live_entries():
+        if self.is_view and resolver.live_entries():
             df = self.to_df()
             paths = list(dict.fromkeys(df["path"].astype(str)))
             entries = resolver.live_entries()
@@ -976,7 +976,6 @@ class PatchCatalog:
                     }
                 )
         trim_hint.update(extra_trim or {})
-        assert self.resolver is not None  # rows only exist once one is set
         patch = self.resolver.resolve(row, **trim_hint)
         return apply_exact_residuals(patch, self._residuals)
 
@@ -1039,7 +1038,7 @@ class PatchCatalog:
             self.backend.delete_sources(source_paths, base_uri=base_uri)
             # The live registry is the store for in-memory patches; it must
             # stay in step with the backend rows (pickling rebuilds from it).
-            registry = self.resolver.live_entries() if self.resolver else {}
+            registry = self.resolver.live_entries()
             for path in source_paths:
                 registry.pop(path, None)
             self._invalidate()
