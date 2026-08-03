@@ -38,16 +38,16 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
-    COORD_DEFS,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
-    PATCH_COORDS,
-    PATCHES,
-    SOURCES,
     TABLE_CONSTRAINTS,
     TABLES,
     WHAT_IS_THIS,
+    CoordDefRow,
+    PatchCoordRow,
+    PatchRow,
+    SourceRow,
 )
 from dascore.units import convert_units
 from dascore.utils.pd import resolve_selector_namespaces
@@ -404,7 +404,7 @@ class SQLIndexBackend(abc.ABC):
             )
             mapping[key] = next_id
             next_id += 1
-        self._bulk_insert("coord_defs", tuple(COORD_DEFS), def_rows)
+        self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
         return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
@@ -511,14 +511,14 @@ class SQLIndexBackend(abc.ABC):
                         link_rows.append((patch_id, c.coord_name, c.coord_dims, key))
                     patch_id += 1
                 source_id += 1
-            self._bulk_insert("sources", tuple(SOURCES), source_rows)
-            self._bulk_insert("patches", tuple(PATCHES), patch_rows)
+            self._bulk_insert("sources", SourceRow._fields, source_rows)
+            self._bulk_insert("patches", PatchRow._fields, patch_rows)
             for columns, rows in attr_groups.items():
                 self._bulk_insert("attrs", ("patch_id", *columns), rows)
             def_ids = self._ensure_coord_defs(defs_needed)
             self._bulk_insert(
                 "patch_coords",
-                tuple(PATCH_COORDS),
+                PatchCoordRow._fields,
                 [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
             )
             # meta_data.last_indexed_ns is the initial-update-complete

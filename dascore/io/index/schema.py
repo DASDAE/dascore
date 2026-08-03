@@ -198,15 +198,9 @@ def _columns(row_type: type[NamedTuple]) -> MappingProxyType[str, str]:
     return MappingProxyType(out)
 
 
+# The logical columns of each table, in declaration order; the DDL and
+# every insert's column list are built from these.
 TABLES = MappingProxyType({name: _columns(row) for name, row in TABLE_ROWS.items()})
-
-META_DATA = TABLES["meta_data"]
-SOURCES = TABLES["sources"]
-PATCHES = TABLES["patches"]
-ATTRS_BASE = TABLES["attrs"]
-ATTR_META = TABLES["attr_meta"]
-COORD_DEFS = TABLES["coord_defs"]
-PATCH_COORDS = TABLES["patch_coords"]
 
 # Keeping constraints beside the logical columns makes the stored contract
 # explicit and keeps dynamic attr-column DDL separate from table identity.
