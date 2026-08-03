@@ -11,8 +11,9 @@ timestamp types.
 The row classes are the single source of truth: `TABLES` (the logical
 column types the DDL is built from) is derived from them, and index code
 reads rows through them with `iter_rows(df, Row)` (see dascore.utils.pd),
-which names the row shape pandas builds dynamically in `itertuples`. They
-are never instantiated. A frame holding only some of a table's columns
+which names — for readers and type checkers, not at runtime — the row
+shape pandas builds dynamically in `itertuples`. The classes are never
+instantiated. A frame holding only some of a table's columns
 still uses its table's row class; only the columns actually fetched can
 be read, and nullable ones may arrive as NaN rather than None (reading
 code guards with `pd.isnull`).

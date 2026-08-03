@@ -1010,8 +1010,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         Get the index a value would occupy in the coordinate.
 
-        Overridden by the coords that can search their values; the rest
-        (unordered arrays, string coords) have no such position to report.
+        Overridden by the coords that index by value. Unordered arrays
+        have no such position, and string coords deliberately keep out of
+        positional semantics (see _raise_string_coord_error).
         """
         msg = f"{type(self).__name__} does not support indexing by value."
         raise CoordError(msg)

@@ -2028,7 +2028,7 @@ class TestGetNextIndex:
         assert above_max_idx == expected_above  # Should be len(coord)
 
     def test_string_coord_raises(self):
-        """Sorted strings have no value spacing to index into."""
+        """String coords stay out of positional semantics, sorted or not."""
         coord = get_coord(values=np.array(["a", "b", "c"]))
         assert coord.sorted
         with pytest.raises(CoordError, match="does not support indexing by value"):
