@@ -766,6 +766,16 @@ class TestMaybeMemMap:
         assert not isinstance(array, np.memmap)
         assert array.size == 0
 
+    def test_name_no_longer_on_disk(self, tmp_path):
+        """An open handle whose path is gone still reads through the handle."""
+        path = tmp_path / "unlinked.bin"
+        path.write_bytes(b"1234")
+        with open(path, "rb") as fid:
+            path.unlink()
+            array = maybe_mem_map(fid)
+        assert not isinstance(array, np.memmap)
+        assert array.size == 4
+
     def test_bytes_io_nonzero_position(self):
         """Fallback should read entire buffer even if pointer is not at 0."""
         bio = BytesIO()

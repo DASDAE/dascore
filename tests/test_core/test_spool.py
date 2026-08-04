@@ -610,6 +610,11 @@ class TestSplit:
         assert len(split[0]) == 2
         assert len(split[1]) == 1
 
+    def test_non_integral_size(self, random_spool_len_10):
+        """A size which isn't a whole number rounds up rather than raising."""
+        split = list(random_spool_len_10.split(size=2.5))
+        assert [len(x) for x in split] == [3, 3, 3, 1]
+
     def test_spool_count(self, random_spool_len_10):
         """Ensure we can split based on the desired number of spools."""
         split = list(random_spool_len_10.split(count=3))

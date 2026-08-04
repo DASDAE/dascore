@@ -1018,9 +1018,10 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
     if name is not None:
         try:
             return np.memmap(name, dtype=dtype, mode="r")
-        except (AttributeError, TypeError, ValueError):
-            # A name which is not a mappable path (an fd number, an empty
-            # file) also falls back rather than failing the read.
+        except (AttributeError, OSError, TypeError, ValueError):
+            # A name which is not a mappable path -- an fd number, an empty
+            # file, a path already unlinked, a filesystem which cannot map --
+            # falls back rather than failing a read the handle can still do.
             pass
     fid.seek(0)
     return np.frombuffer(fid.read(), dtype=dtype)
