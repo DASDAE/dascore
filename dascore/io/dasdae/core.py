@@ -83,8 +83,12 @@ class DASDAEV1(FiberIO):
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         # Validate chunk dims against the data up front so a typo raises before
         # anything is written rather than silently producing an un-chunked file.
+        # Dims come from scan metadata: iterating a lazy spool here would load
+        # every data array once for validation and again in the write loop.
         if storage.chunks:
-            all_dims = {dim for patch in patches for dim in patch.dims}
+            scan_df = dc.scan_to_df(patches)
+            dims_rows = scan_df["dims"] if "dims" in scan_df.columns else ()
+            all_dims = {dim for row in dims_rows for dim in str(row).split(",") if dim}
             storage._validate_chunk_dims(all_dims)
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")

@@ -263,6 +263,24 @@ class TestWriteDASDAE:
         loaded = dc.read(path)[0]
         assert loaded.data.dtype.kind == "U"
         assert np.array_equal(loaded.data, data)
+        # The selective-read branch decodes through the same attr-aware path.
+        selected = dc.read(path, distance=(0.0, 0.0))[0]
+        assert selected.data.dtype.kind == "U"
+        assert np.array_equal(selected.data, data[:1])
+
+    def test_datetime_patch_data_selective_read(self, tmp_path_factory):
+        """Datetime data arrays keep their dtype through selective reads."""
+        path = tmp_path_factory.mktemp("dasdae_datetime_data") / "out.h5"
+        data = to_datetime64(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"])
+        patch = dc.Patch(
+            data=data.reshape(2, 2),
+            coords={"distance": [0.0, 1.0], "time": [0.0, 1.0]},
+            dims=("distance", "time"),
+        )
+        patch.io.write(path, "dasdae", storage="compressed")
+        selected = dc.read(path, distance=(0.0, 0.0))[0]
+        assert np.issubdtype(selected.data.dtype, np.datetime64)
+        assert np.array_equal(selected.data, data.reshape(2, 2)[:1])
 
     def test_write_with_chunks(self, tmp_path_factory, random_patch):
         """DASDAE storage can specify a per-dimension chunk layout."""
@@ -286,6 +304,29 @@ class TestWriteDASDAE:
             # Default storage is uncompressed.
             assert group["data"].compression is None
         assert dc.read(path)[0].equals(random_patch)
+
+    def test_chunk_validation_does_not_load_patches(
+        self, tmp_path_factory, random_patch, monkeypatch
+    ):
+        """Chunk-dim validation must use scan metadata, not load patch data."""
+        src = tmp_path_factory.mktemp("dasdae_lazy_src") / "src.h5"
+        out = tmp_path_factory.mktemp("dasdae_lazy_out") / "out.h5"
+        dc.write(random_patch, src, "DASDAE")
+        lazy_spool = dc.spool(src)
+
+        calls = []
+        original = dasdae_mod.core._read_patch
+
+        def counting_read_patch(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        # Patch the name bound in core, which both read paths call through.
+        monkeypatch.setattr(dasdae_mod.core, "_read_patch", counting_read_patch)
+        dc.write(lazy_spool, out, "DASDAE", storage={"chunks": {"time": 100}})
+        # One read per patch for the write itself; validation adds none.
+        assert len(calls) == 1
+        assert dc.read(out)[0].equals(random_patch)
 
     def test_typoed_chunk_dim_raises_on_write(self, tmp_path_factory, random_patch):
         """A chunk dim that isn't a real patch dim raises instead of no-op."""
