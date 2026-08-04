@@ -30,6 +30,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     ParameterError,
 )
+from dascore.utils.attrs import validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
 from dascore.utils.pd import _remove_overlaps, get_interval_columns
@@ -474,6 +475,9 @@ def build_chunk_plan(
             f"kwargs: {kwargs}"
         )
         raise ParameterError(msg)
+    # Fail here rather than later at assembly, so the error points at the
+    # offending chunk call. See #804.
+    validate_conflict(conflict)
     ((name, value),) = kwargs.items()
     value = None if value is Ellipsis else value
     merge_mode = pd.isnull(value)
@@ -491,9 +495,6 @@ def build_chunk_plan(
             raise ParameterError(msg)
     if missing_dim not in ("raise", "drop"):
         msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
-        raise ParameterError(msg)
-    if conflict not in ("drop", "raise", "keep_first"):
-        msg = "conflict must be 'drop', 'raise', or 'keep_first', " f"got {conflict!r}"
         raise ParameterError(msg)
 
     min_name, max_name = f"{name}_min", f"{name}_max"
