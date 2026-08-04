@@ -59,7 +59,7 @@ spool = (
     # Index the directory contents
     .update()
     # Sub-select a specific time range
-    .select(time_min=('2020-01-01', ...))
+    .select(time=('2020-01-01', ...))
     # Specify chunk of the output patches
     .chunk(time=60, overlap=10)
 )
