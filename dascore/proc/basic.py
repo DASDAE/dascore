@@ -114,8 +114,9 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)
-    out = dict(coords=self.coords, attrs=validated, dims=self.dims)
-    return self.__class__(self._data, **out)
+    return self.__class__(
+        self._data, coords=self.coords, attrs=validated, dims=self.dims
+    )
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:

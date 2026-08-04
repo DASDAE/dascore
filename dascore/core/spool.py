@@ -31,7 +31,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.display import get_dascore_text, get_nice_text
-from dascore.utils.docs import compose_docstring
+from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
@@ -364,7 +364,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         """
         return self
 
-    @compose_docstring(desc=concatenate_patches.__doc__)
+    @compose_docstring(desc=get_docstring(concatenate_patches))
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs):
         """{desc}"""
         msg = f"spool of type {self.__class__} has no concatenate implementation"
@@ -502,7 +502,7 @@ class Spool(BaseSpool):
         """The realized flat relation (cached by the catalog)."""
         return self._catalog.to_df()
 
-    @compose_docstring(doc=BaseSpool.get_contents.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.get_contents))
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
         return _copy_public_dataframe(self._df)
@@ -546,7 +546,7 @@ class Spool(BaseSpool):
 
     # --- selection and presentation specs -------------------------------
 
-    @compose_docstring(doc=BaseSpool.select.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.select))
     def select(
         self,
         *,
@@ -566,14 +566,14 @@ class Spool(BaseSpool):
         )
         return self._new_from_catalog(catalog)
 
-    @compose_docstring(doc=BaseSpool.sort.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.sort))
     def sort(self, attribute) -> Self:
         """{doc}."""
         # a lazy ORDER BY spec (D2): no copy, no realization; the
         # ordinal contract supplies the deterministic tiebreak
         return self._new_from_catalog(self._catalog.order_by(attribute))
 
-    @compose_docstring(doc=BaseSpool.split.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.split))
     def split(
         self,
         size: int | None = None,
@@ -761,7 +761,7 @@ class Spool(BaseSpool):
             **kwargs,
         )
 
-    @compose_docstring(doc=BaseSpool.chunk.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.chunk))
     def chunk(
         self,
         overlap: numeric_types | timeable_types | None = None,
@@ -804,7 +804,7 @@ class Spool(BaseSpool):
         )
         return self._new_from_catalog(catalog)
 
-    @compose_docstring(desc=concatenate_patches.__doc__)
+    @compose_docstring(desc=get_docstring(concatenate_patches))
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
         from dascore.io.index.planned import derived_catalog
@@ -944,7 +944,7 @@ class Spool(BaseSpool):
         """True when any of this spool's patches live in memory."""
         return bool(self._catalog.resolver.live_entries())
 
-    @compose_docstring(doc=BaseSpool.update.__doc__)
+    @compose_docstring(doc=get_docstring(BaseSpool.update))
     def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         {doc}

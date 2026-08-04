@@ -24,6 +24,10 @@ from dascore.utils.misc import optional_import
 
 bn = optional_import("bottleneck", on_missing="ignore")
 
+# The engines which can back a moving window operation. "auto" prefers
+# bottleneck and falls back to whichever of the two is installed.
+MOVING_ENGINE = Literal["auto", "scipy", "bottleneck"]
+
 # Operation registry mapping operations to engine implementations
 OPERATION_REGISTRY = {
     "median": {
@@ -241,7 +245,7 @@ def moving_window(
     window: int,
     operation: str,
     axis: int = 0,
-    engine: Literal["auto", "scipy", "bottleneck"] = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -319,7 +323,7 @@ def move_median(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -343,7 +347,7 @@ def move_mean(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -367,7 +371,7 @@ def move_std(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     min_count: int = 1,
     ddof: int = 0,
 ) -> np.ndarray:
@@ -381,7 +385,7 @@ def move_sum(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -405,7 +409,7 @@ def move_min(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -429,7 +433,7 @@ def move_max(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,

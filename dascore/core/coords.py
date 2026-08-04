@@ -50,7 +50,7 @@ from dascore.utils.array import (
     hash_array,
 )
 from dascore.utils.display import get_nice_text
-from dascore.utils.docs import compose_docstring
+from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
@@ -1290,7 +1290,7 @@ class CoordPartial(BaseCoord):
             return self._select_by_array(args, relative=relative, samples=samples)
         return self._select_by_samples(args)
 
-    @compose_docstring(doc=BaseCoord.order.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.order))
     def order(
         self, array, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
@@ -1300,7 +1300,7 @@ class CoordPartial(BaseCoord):
         self._check_order_and_select(relative, samples)
         return super().order(array, relative=relative, samples=samples)
 
-    @compose_docstring(doc=BaseCoord.change_length.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.change_length))
     def change_length(self, length: int) -> Self:
         """
         {doc}
@@ -1601,7 +1601,7 @@ class CoordRange(BaseCoord):
         fraction = func(np.round((array - start) / step, decimals=10))
         return fraction.astype(np.int64)
 
-    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """{doc}."""
         if all(x is not None for x in [min, max, step]):
@@ -1661,7 +1661,7 @@ class CoordRange(BaseCoord):
         # the min/max are needed for reverse sorted coord.
         return np.max([self.stop - self.step, self.start])
 
-    @compose_docstring(doc=BaseCoord.change_length.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.change_length))
     def change_length(self, length: int) -> Self:
         """
         {doc}
@@ -1784,7 +1784,7 @@ class CoordArray(BaseCoord):
         out = CoordRange(start=start, stop=stop, step=step, units=self.units)
         return out.change_length(len(self))
 
-    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """{doc}."""
         if sum(x is not None for x in [min, max, step]) > 1:
@@ -2317,7 +2317,7 @@ class CoordSegmented(BaseCoord):
         )
         return self.new(segments=segments), slice(None, None, -1)
 
-    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """{doc}."""
         if step is not None:
@@ -2438,7 +2438,7 @@ class CoordSegmented(BaseCoord):
             return None
         return candidate
 
-    @compose_docstring(doc=BaseCoord.get_discontinuities.__doc__)
+    @compose_docstring(doc=get_docstring(BaseCoord.get_discontinuities))
     def get_discontinuities(self, kind="all", tolerance=None) -> pd.DataFrame:
         """{doc}."""
         if kind not in ("all", "gaps"):

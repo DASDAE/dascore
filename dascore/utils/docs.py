@@ -42,6 +42,19 @@ def format_dtypes(dtype_dict: dict[str, Any]) -> str:
     return out
 
 
+def get_docstring(obj) -> str:
+    """
+    Return an object's docstring.
+
+    `__doc__` is `str | None` on anything, but the callers here compose a
+    documented function's docstring into their own, so a missing one means
+    the docstring was deleted, not that there is nothing to compose.
+    """
+    docstring = obj.__doc__
+    assert docstring is not None, f"{obj} has no docstring to compose."
+    return docstring
+
+
 def compose_docstring(**kwargs: str | Sequence[str]):
     """
     Decorator for composing docstrings.

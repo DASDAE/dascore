@@ -126,8 +126,15 @@ PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]
 
-# Options for handling specific warnings
-WARN_LEVELS = Literal["warn", "raise", None]
+# Options for handling specific warnings. "ignore" and None both mean
+# "do nothing"; warn_or_raise has always accepted either.
+WARN_LEVELS = Literal["warn", "raise", "ignore", None]
+
+# The actions warnings.simplefilter and warnings.filterwarnings accept.
+# Spelled out because the standard library's alias for them is stub-only.
+WARNING_ACTIONS = Literal[
+    "default", "error", "ignore", "always", "all", "module", "once"
+]
 
 # A map from the unit name to the code used in numpy.timedelta64. The codes
 # are spelled out in the annotation because numpy's unit parameter accepts

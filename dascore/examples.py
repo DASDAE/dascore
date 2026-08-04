@@ -102,9 +102,7 @@ def random_patch(
         )
     coords = dict(distance=dist_array, time=time_array)
     # assemble and output.
-    out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
-    patch = dc.Patch(**out)
-    return patch
+    return dc.Patch(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
 
 
 @register_func(EXAMPLE_PATCHES, key="patch_with_null")

@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.constants import WARN_LEVELS
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -311,7 +312,7 @@ class PlanResolver(PatchResolver):
         merge_kwargs: Mapping,
         parent_residuals: tuple = (),
         mode: str = "chunk",
-        check_behavior: str = "warn",
+        check_behavior: WARN_LEVELS = "warn",
         origin_path=None,
     ):
         if "output_id" not in member_rows.columns:
@@ -410,7 +411,7 @@ def derived_catalog(
     parent: PatchCatalog | None,
     merge_kwargs: Mapping,
     mode: str = "chunk",
-    check_behavior: str = "warn",
+    check_behavior: WARN_LEVELS = "warn",
     origin_path=None,
 ) -> PatchCatalog:
     """

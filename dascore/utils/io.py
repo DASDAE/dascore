@@ -302,13 +302,12 @@ def xarray_to_patch(data_array) -> PatchType:
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
 
-    params = dict(
+    return dc.Patch(
         coords={i: (x.dims, x.values) for i, x in data_array.coords.items()},
         attrs=dict(data_array.attrs.items()),
         dims=data_array.dims,
         data=data_array.data,
     )
-    return dc.Patch(**params)
 
 
 def patch_to_obspy(patch: PatchType):

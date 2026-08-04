@@ -12,6 +12,7 @@ from dascore.examples import EXAMPLE_PATCHES
 from dascore.utils.docs import (
     compose_docstring,
     format_dtypes,
+    get_docstring,
     get_plugin_table,
     objs_to_doc_df,
 )
@@ -98,6 +99,26 @@ class TestDocsting:
 
                 {params}
                 """
+
+
+class TestGetDocstring:
+    """Tests for pulling a docstring out of an object."""
+
+    def test_returns_docstring(self):
+        """The docstring of a documented object is returned unchanged."""
+
+        def documented():
+            """Some words."""
+
+        assert get_docstring(documented) == documented.__doc__
+
+    def test_raises_when_undocumented(self):
+        """An object with no docstring is a source error, not a None value."""
+
+        def undocumented(): ...
+
+        with pytest.raises(AssertionError, match="has no docstring"):
+            get_docstring(undocumented)
 
 
 class TestGetPluginTable:

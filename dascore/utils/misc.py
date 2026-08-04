@@ -25,7 +25,7 @@ from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
 from dascore.config import config_context, get_config
-from dascore.constants import WARN_LEVELS
+from dascore.constants import WARN_LEVELS, WARNING_ACTIONS
 from dascore.exceptions import (
     FilterValueError,
     MissingOptionalDependencyError,
@@ -65,7 +65,7 @@ def register_func(list_or_dict: list | dict, key=None):
 def suppress_warnings(
     category=Warning,
     message: str | None = None,
-    action: str = "ignore",
+    action: WARNING_ACTIONS = "ignore",
     record: bool = False,
 ):
     """
@@ -109,7 +109,8 @@ def warn_or_raise(
     warning
         The type of warning to use. Must be a subclass of Warning.
     behavior
-        If None, do nothing. If
+        "warn" to issue the warning, "raise" to raise the exception, and
+        "ignore" (or None) to do nothing.
     """
     if not behavior or behavior == "ignore":
         return
