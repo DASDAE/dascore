@@ -129,8 +129,13 @@ PROGRESS_LEVELS = Literal["standard", "basic", None]
 # Options for handling specific warnings
 WARN_LEVELS = Literal["warn", "raise", None]
 
-# A map from the unit name to the code used in numpy.timedelta64
-NUMPY_TIME_UNIT_MAPPING = {
+# A map from the unit name to the code used in numpy.timedelta64. The codes
+# are spelled out in the annotation because numpy's unit parameter accepts
+# only those literals, not str.
+NUMPY_TIME_UNIT_MAPPING: Mapping[
+    str,
+    Literal["h", "m", "s", "ms", "us", "ns", "ps", "fs", "as", "Y", "M", "W", "D"],
+] = {
     "hour": "h",
     "minute": "m",
     "second": "s",

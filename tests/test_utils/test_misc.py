@@ -756,6 +756,16 @@ class TestMaybeMemMap:
         assert isinstance(array, np.ndarray)
         assert array.size == 4
 
+    def test_unmappable_file(self, tmp_path):
+        """A named file numpy cannot map still reads into memory."""
+        path = tmp_path / "empty.bin"
+        path.touch()
+        with open(path, "rb") as fid:
+            array = maybe_mem_map(fid)
+        assert isinstance(array, np.ndarray)
+        assert not isinstance(array, np.memmap)
+        assert array.size == 0
+
     def test_bytes_io_nonzero_position(self):
         """Fallback should read entire buffer even if pointer is not at 0."""
         bio = BytesIO()

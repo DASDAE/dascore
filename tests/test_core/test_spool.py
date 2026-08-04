@@ -603,12 +603,18 @@ class TestSplit:
             patch = spool[0]
             assert isinstance(patch, dc.Patch)
 
-    def test_spool_count(self, random_spool):
-        """Ensure we can split based on desired size of spool."""
+    def test_uneven_size(self, random_spool):
+        """Ensure a size which doesn't divide evenly leaves a short last spool."""
         split = list(random_spool.split(size=2))
         assert len(split) == 2
         assert len(split[0]) == 2
         assert len(split[1]) == 1
+
+    def test_spool_count(self, random_spool_len_10):
+        """Ensure we can split based on the desired number of spools."""
+        split = list(random_spool_len_10.split(count=3))
+        assert len(split) == 3
+        assert sum(len(x) for x in split) == 10
 
     def test_base_split_raises(self, random_spool):
         """Ensure BaseSpool split raises NoteImplementedError."""

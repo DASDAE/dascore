@@ -580,12 +580,12 @@ def _base_attrs(
 def _get_band_attr_data_type(band_def: tuple[tuple[Any, ...], ...]) -> tuple[str, str]:
     """Return patch-level BAND data type/units."""
     mapped = [_BAND_DATA_TYPE_MAP.get(int(item[0])) for item in band_def]
-    if any(item is None for item in mapped):
-        return "frequency_band_energy", ""
+    # Only bands which all map to the same known data type carry its units;
+    # an unmapped band is None, which no mapped band compares equal to.
     first = mapped[0]
-    if all(item == first for item in mapped):
-        return "frequency_band_energy", first[1]
-    return "frequency_band_energy", ""
+    if first is None or any(item != first for item in mapped):
+        return "frequency_band_energy", ""
+    return "frequency_band_energy", first[1]
 
 
 def _assert_equal(name: str, values: list[Any]):

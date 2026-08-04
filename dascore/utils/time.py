@@ -135,10 +135,9 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
         array = array.astype("datetime64[ns]")
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
-        if not array.shape:  # dealing with degenerate (0-D( array
-            out = np.datetime64(array, "ns")
-        else:
-            out = array.astype("datetime64[ns]")
+        out = array.astype("datetime64[ns]")
+        if not array.shape:  # unpack degenerate (0-D) array to a scalar
+            out = out[()]
     # dealing with numerical data
     elif np.issubdtype(array.dtype, np.timedelta64) or np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -243,17 +242,16 @@ def _pass_time_delta(time_delta):
 @to_timedelta64.register(np.ndarray)
 @to_timedelta64.register(list)
 @to_timedelta64.register(tuple)
-def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
-    """Convert an array of floating point timestamps to an array of np.datatime64."""
+def _array_to_timedelta64(array: np.ndarray) -> np.timedelta64 | np.ndarray:
+    """Convert an array of floating point durations to np.timedelta64."""
     array = np.asarray(array)
     # convert pure object arrays into float so sign casting works.
     if np.issubdtype(array.dtype, np.dtype(object)):
         array = array.astype(np.float64)
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
-        if not array.shape:  # unpack degenerate array
-            return np.timedelta64(array, "ns")
-        else:
-            return array.astype("timedelta64[ns]")
+        out = array.astype("timedelta64[ns]")
+        # unpack degenerate (0-D) array to a scalar
+        return out[()] if not array.shape else out
     # Need to just get the ns form datetime64
     elif np.issubdtype(array.dtype, np.datetime64):
         int_array = array.view(np.int64)

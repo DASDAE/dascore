@@ -7,6 +7,7 @@ import functools
 import importlib
 import inspect
 import itertools
+import math
 import os
 import re
 import warnings
@@ -770,7 +771,8 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
     if size is None:
-        size = len(spool) / (os.cpu_count() or 1)
+        # split takes a patch count, so round up rather than hand it a float.
+        size = math.ceil(len(spool) / (os.cpu_count() or 1))
     spools = list(spool.split(size=size))
     # this is a hack to get the progress bar to work. Essentially, we just
     # add a secret flag to all but one spool so that progress bar is only
@@ -1010,15 +1012,18 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
     fid
         A buffered reader, e.g. from open(file) as fid.
     """
-    try:
-        # File objects backed by memory (BytesIO and friends) have no
-        # usable name; those fall through to the in-memory read below.
-        raw = np.memmap(getattr(fid, "name", None), dtype=dtype, mode="r")
-    except (AttributeError, TypeError, ValueError):
-        # Fallback: read into memory
-        fid.seek(0)
-        raw = np.frombuffer(fid.read(), dtype=dtype)
-    return raw
+    # File objects backed by memory (BytesIO and friends) have no usable
+    # name, so there is nothing to map; they read into memory below.
+    name = getattr(fid, "name", None)
+    if name is not None:
+        try:
+            return np.memmap(name, dtype=dtype, mode="r")
+        except (AttributeError, TypeError, ValueError):
+            # A name which is not a mappable path (an fd number, an empty
+            # file) also falls back rather than failing the read.
+            pass
+    fid.seek(0)
+    return np.frombuffer(fid.read(), dtype=dtype)
 
 
 def deep_equality_check(obj1, obj2, visited=None):

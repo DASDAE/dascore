@@ -260,14 +260,11 @@ line-ending = "lf"
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
 # Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Counts as of 2026-08-03: invalid-argument-type 171,
-# invalid-return-type 69, invalid-method-override 36, no-matching-overload 13,
-# not-subscriptable 5.
+# burned down. Counts as of 2026-08-04: invalid-argument-type 166,
+# invalid-return-type 67, invalid-method-override 36.
 [tool.ty.rules]
 invalid-argument-type = "ignore"
 invalid-return-type = "ignore"
-no-matching-overload = "ignore"
-not-subscriptable = "ignore"
 invalid-method-override = "ignore"
 
 # These files lazily import optional or untyped modules (xarray, numba,
