@@ -2,12 +2,44 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
-from _render_api import to_quarto_code  # noqa
+from _render_api import get_type_hints, to_quarto_code  # noqa
+
+
+class TestGetTypeHints:
+    """Tests for resolving the type hints of documented objects."""
+
+    def test_resolvable_hints(self):
+        """Annotations which resolve should still return their objects."""
+
+        def func(a: int) -> str:
+            """A documented function."""
+
+        hints = get_type_hints(func)
+        assert hints["a"] is int
+        assert hints["return"] is str
+
+    def test_type_checking_only_annotation(self):
+        """
+        Annotations imported only under TYPE_CHECKING can't be resolved when
+        the docs are built, but they shouldn't break the build.
+        """
+
+        class Klass:
+            """A class annotated with a name missing at runtime."""
+
+            attr: OnlyImportedWhileTypeChecking  # noqa: F821
+
+        # The un-guarded call is what used to kill the doc build.
+        with pytest.raises(NameError):
+            typing.get_type_hints(Klass)
+        assert get_type_hints(Klass) == {"attr": "OnlyImportedWhileTypeChecking"}
 
 
 class TestToQuartoCode:

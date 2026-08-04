@@ -140,6 +140,20 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     return out.strip()
 
 
+def get_type_hints(obj) -> dict:
+    """
+    Get an object's type hints, tolerating names missing at runtime.
+
+    Annotations only imported under `TYPE_CHECKING` cannot be resolved when
+    the docs are built, so fall back to the unevaluated annotations rather
+    than failing the entire build.
+    """
+    try:
+        return typing.get_type_hints(obj)
+    except NameError:
+        return dict(inspect.get_annotations(obj))
+
+
 def build_signature(data, data_dict, address_dict):
     """Return html of signature block."""
     sentinel = object()  # to know missing values
@@ -192,7 +206,7 @@ def build_signature(data, data_dict, address_dict):
     def get_sig_dict(data):
         """Create a dict of render-able signature stuff."""
         sig = data["signature"]
-        annotations = typing.get_type_hints(data["object"])
+        annotations = get_type_hints(data["object"])
         out = dict(
             params=get_params(sig, annotations),
             return_line=get_return_line(sig),
