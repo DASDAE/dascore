@@ -874,7 +874,7 @@ class FiberIO:
         }
     )
 
-    def read(self, resource, **kwargs) -> SpoolType:
+    def read(self, resource, /, **kwargs) -> SpoolType:
         """
         Load data from a path.
 
@@ -886,7 +886,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, snap: bool = True, **kwargs) -> list[ScanPayload]:
+    def scan(self, resource, /, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Return patch-local metadata and exact coords for a resource.
 
@@ -925,12 +925,12 @@ class FiberIO:
             raise NotImplementedError(msg)
         return [_patch_to_scan_payload(pa) for pa in spool]
 
-    def write(self, spool: SpoolType, resource, **kwargs):
+    def write(self, spool: SpoolType, resource, /, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource, /, **kwargs) -> tuple[str, str] | bool:
         """
         Return a tuple of (format_name, version_numbers).
 
