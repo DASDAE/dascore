@@ -284,9 +284,34 @@ def _filter_equality(query_dict, df, bool_index):
     return bool_index
 
 
+def _check_misdirected_range_query(key, val, df):
+    """
+    Raise if a range query was aimed at an interval column.
+
+    Columns like time_min/time_max hold the limits of each row, and a
+    collection of values applied to one is a membership (isin) check. An open
+    bound (... or None) in such a collection is meaningless, and signals a
+    range query which belongs on the dimension instead, eg
+    time_min=(t1, ...) should be time=(t1, ...). Without this the query would
+    silently match nothing.
+    """
+    base = key[:-4] if key.endswith(("_min", "_max")) else None
+    if base is None or not {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
+        return
+    if not any(x is ... or x is None for x in val):
+        return
+    msg = (
+        f"An open bound (... or None) is not valid in the query for column "
+        f"'{key}'; a collection of values is an isin check, not a range. "
+        f"Use {base}=(min, max) to query a range of {base} values."
+    )
+    raise ParameterError(msg)
+
+
 def _filter_contains(query_dict, df, bool_index):
     """Filter based on rows containing specified values."""
     for key, val in query_dict.items():
+        _check_misdirected_range_query(key, val, df)
         bool_index = np.logical_and(bool_index, df[key].isin(val))
     return bool_index
 
@@ -320,6 +345,16 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _convert_range_bounds(range_tuple, func):
+    """
+    Apply a time conversion to each bound of a range.
+
+    Unbounded (None) ends are left alone; converting them would produce NaT,
+    which compares False against everything and would silently empty the query.
+    """
+    return tuple(None if x is None else func(x) for x in range_tuple)
+
+
 def _convert_times(df, some_dict):
     """Convert query values to datetime/timedelta values."""
     if not some_dict:
@@ -331,12 +366,12 @@ def _convert_times(df, some_dict):
         non_min_max_cols & set(some_dict)
     )
     for key in datetime_keys:
-        some_dict[key] = to_datetime64(some_dict[key])
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_datetime64)
     # convert queries related to time delta into timedelta64
     timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
     timedelta_keys = timedelta_cols & set(some_dict)
     for key in timedelta_keys:
-        some_dict[key] = to_timedelta64(some_dict[key])
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_timedelta64)
     return some_dict
 
 

@@ -187,10 +187,10 @@ import numpy as np
 spool = dc.get_example_spool()
 
 # Get an array of integers which indicate the index of included patches
-bool_array = np.array([2, 0])
+index_array = np.array([2, 0])
 
 # create a new spool with patch 2 and patch 0.
-new = spool[bool_array]
+new = spool[index_array]
 ```
 
 # get_contents
@@ -282,7 +282,7 @@ print(merged[0].coords)
 
 The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
 
-For example, calculating the maximum value for each channel (distance) for 4 second increments with 1 second overlap can be done like so:
+For example, calculating the maximum value for each channel (distance) for 5 second increments with 1 second overlap can be done like so:
 
 ```{python}
 import dascore as dc

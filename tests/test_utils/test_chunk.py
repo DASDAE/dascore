@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ChunkError
+from dascore.exceptions import ChunkError, ParameterError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import build_chunk_plan
 from dascore.utils.time import to_timedelta64
@@ -230,6 +230,11 @@ class TestChunkPlanDF:
         """An unknown chunk dimension raises a clear error."""
         with pytest.raises(ChunkError, match="Time"):
             build_chunk_plan(contiguous_df, Time=10)
+
+    def test_invalid_conflict_raises(self, contiguous_df):
+        """An unsupported conflict value raises at the chunk call. See #804."""
+        with pytest.raises(ParameterError, match="conflict must be one of"):
+            build_chunk_plan(contiguous_df, time=None, conflict="banana")
 
 
 class TestChunkPlanToMerge:
