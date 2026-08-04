@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar
@@ -83,11 +83,11 @@ class BaseSpool(NamespaceOwner, abc.ABC):
     }
 
     @abc.abstractmethod
-    def __getitem__(self, item: int | slice | np.ndarray) -> PatchType:
+    def __getitem__(self, item: int | slice | np.ndarray) -> dc.Patch:
         """Returns a patch from the spool."""
 
     @abc.abstractmethod
-    def __iter__(self) -> PatchType:
+    def __iter__(self) -> Iterator[dc.Patch]:
         """
         Iterate through the Patches in the spool.
 

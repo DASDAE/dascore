@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from dascore.constants import PatchType, SpoolType, select_values_description
+import dascore as dc
+from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import (
     CoordError,
@@ -825,7 +826,7 @@ def get_axis(self: PatchType, dim: str) -> int:
     return self.coords.get_axis(dim)
 
 
-def split_gaps(self: PatchType, dim: str | None = None) -> SpoolType:
+def split_gaps(self: PatchType, dim: str | None = None) -> dc.BaseSpool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 

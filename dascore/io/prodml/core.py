@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import SpoolType, opt_timeable_types
+from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.models import UnitQuantity, UTF8Str
 
@@ -92,6 +92,6 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(self, spool: SpoolType, resource: H5Writer, **kwargs) -> None:
+    def write(self, spool: dc.BaseSpool, resource: H5Writer, **kwargs) -> None:
         """Write one raw Patch to a standalone ProdML HDF5 file."""
         _write_prodml(spool, resource)

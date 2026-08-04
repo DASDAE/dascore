@@ -7,8 +7,9 @@ from pathlib import Path
 import numpy as np
 from scipy.io.wavfile import write
 
+import dascore as dc
 from dascore.compat import UPath
-from dascore.constants import ONE_SECOND, SpoolType
+from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
 from dascore.io.core import FiberIO
 from dascore.utils.patch import check_patch_coords
@@ -22,7 +23,7 @@ class WavIO(FiberIO):
 
     def write(
         self,
-        spool: SpoolType,
+        spool: dc.BaseSpool,
         resource: str | Path | UPath,
         resample_frequency=None,
         **kwargs,

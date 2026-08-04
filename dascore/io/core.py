@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -30,8 +30,6 @@ import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
-    PatchType,
-    SpoolType,
     path_types,
     timeable_types,
 )
@@ -64,6 +62,17 @@ from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
+
+# What the scan dispatchers accept: one resource or patch, or any
+# iterable of them (`_iterate_scan_inputs` flattens its input with
+# `iterate` before resolving each element).
+ScanInput = (
+    path_types
+    | dc.Patch
+    | dc.BaseSpool
+    | IOResourceManager
+    | Sequence[path_types | dc.Patch]
+)
 
 
 class ScanPayload(TypedDict):
@@ -874,7 +883,7 @@ class FiberIO:
         }
     )
 
-    def read(self, resource, /, **kwargs) -> SpoolType:
+    def read(self, resource, /, **kwargs) -> dc.BaseSpool:
         """
         Load data from a path.
 
@@ -925,7 +934,7 @@ class FiberIO:
             raise NotImplementedError(msg)
         return [_patch_to_scan_payload(pa) for pa in spool]
 
-    def write(self, spool: SpoolType, resource, /, **kwargs):
+    def write(self, spool: dc.BaseSpool, resource, /, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
@@ -1041,7 +1050,7 @@ def read(
     time: tuple[timeable_types | None, timeable_types | None] | None = None,
     distance: tuple[float | None, float | None] | None = None,
     **kwargs,
-) -> SpoolType:
+) -> dc.BaseSpool:
     """
     Read a fiber file.
 
@@ -1112,7 +1121,7 @@ def read(
 
 
 def scan_to_df(
-    path: path_types | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
+    path: ScanInput | pd.DataFrame,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -1263,7 +1272,7 @@ def _handle_missing_optionals(output_count, optional_dep_dict):
 
 
 def _iter_scan_results(
-    path: path_types | PatchType | SpoolType | IOResourceManager,
+    path: ScanInput,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -1393,7 +1402,7 @@ def _iter_scan_results(
 
 
 def scan_payloads(
-    path: path_types | PatchType | SpoolType | IOResourceManager,
+    path: ScanInput,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -1463,7 +1472,7 @@ def scan_payloads(
 
 
 def scan(
-    path: path_types | PatchType | SpoolType | IOResourceManager,
+    path: ScanInput,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,

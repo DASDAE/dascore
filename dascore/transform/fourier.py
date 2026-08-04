@@ -669,7 +669,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
 
 
 @patch_function()
-def istft(patch) -> PatchType:
+def istft(patch) -> dc.Patch:
     """
     Invert a short-time fourier transform.
 

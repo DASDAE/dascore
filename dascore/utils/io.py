@@ -297,7 +297,7 @@ def patch_to_xarray(patch: PatchType):
     return xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
 
 
-def xarray_to_patch(data_array) -> PatchType:
+def xarray_to_patch(data_array) -> dc.Patch:
     """Convert an xarray dataarray to a patch."""
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
@@ -362,7 +362,7 @@ def patch_to_obspy(patch: PatchType):
     return obspy.Stream(traces)
 
 
-def obspy_to_patch(stream, dim="distance") -> PatchType:
+def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     """
     Convert an obspy stream to a patch.
 

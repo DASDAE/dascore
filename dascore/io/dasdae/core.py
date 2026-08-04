@@ -7,7 +7,6 @@ import contextlib
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_ids
@@ -55,7 +54,7 @@ class DASDAEV1(FiberIO):
 
     def write(
         self,
-        spool: SpoolType,
+        spool: dc.Patch | dc.BaseSpool,
         resource: H5Writer,
         **kwargs,
     ):
@@ -112,7 +111,7 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> dc.BaseSpool:
         """Read a dascore file."""
         patches = []
         source_patch_ids = _normalize_source_patch_ids(source_patch_id)

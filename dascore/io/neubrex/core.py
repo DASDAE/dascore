@@ -9,7 +9,6 @@ import numpy as np
 import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
-from dascore.constants import SpoolType
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
@@ -55,7 +54,7 @@ class NeubrexRFSV1(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
         """
         Read a resource belonging to this format.
 
@@ -107,7 +106,7 @@ class NeubrexDASV1(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, **kwargs) -> dc.BaseSpool:
         """
         Read a resource of this format.
 

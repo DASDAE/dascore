@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
@@ -23,7 +22,7 @@ class H5Simple(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
         """
         Read a simple h5 file.
 

@@ -654,7 +654,7 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
 
 def dataframe_to_patch(
     df: pd.DataFrame, attrs: PatchAttrs | Mapping | None = None
-) -> PatchType:
+) -> dc.Patch:
     """
     Convert a dataframe to a patch.
 
