@@ -13,7 +13,7 @@ import pandas as pd
 from dascore.constants import attr_conflict_description, numeric_types, timeable_types
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_middle_value
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.pd import (
     _instructions_modified,
     _remove_overlaps,
@@ -135,6 +135,11 @@ class ChunkManager:
     keep_partial
         If True, keep segments which are shorter than chunk size (at end of
         contiguous blocks)
+    snap_coords
+        If True, joined coordinates are snapped to a constant step, so the
+        chunked segments advertise a single step. If False, segments whose
+        sources don't line up on a regular grid have no single step and
+        get a NaN step.
     tolerance
         The upper limit of a gap to tolerate in terms of the sampling
         along the desired dimension. E.G., the default value means entities
@@ -157,6 +162,7 @@ class ChunkManager:
         overlap: timeable_types | numeric_types | None = None,
         group_columns: Collection[str] | None = None,
         keep_partial=False,
+        snap_coords=True,
         tolerance=_DEFAULT_TOLERANCE,
         conflict="raise",
         **kwargs,
@@ -164,6 +170,7 @@ class ChunkManager:
         self._overlap = overlap
         self._group_columns = group_columns
         self._keep_partials = keep_partial
+        self._snap_coords = snap_coords
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
         self._attr_conflict = conflict
@@ -249,11 +256,36 @@ class ChunkManager:
             overlap = np.asarray([0], dtype=step.dtype)[0]
         return duration, overlap
 
+    def _get_group_step(self, df):
+        """
+        Get the sampling step to advertise for a group of source rows.
+
+        When snapping is disabled and the sources don't line up on a
+        regular grid, the merged coordinate keeps its uneven values, so no
+        single step describes the output; return NaN in that case.
+        """
+        steps = df[f"{self._name}_step"].values
+        step = get_middle_value(steps)
+        if self._snap_coords or len(df) < 2:
+            return step
+        mins = df[f"{self._name}_min"].values
+        maxs = df[f"{self._name}_max"].values
+        order = np.argsort(mins)
+        # The merged coord's diffs are each source's step plus the gaps
+        # between sources; apply the same evenly-sampled test get_coord
+        # uses on the concatenated values.
+        boundary_diffs = mins[order][1:] - maxs[order][:-1]
+        if all_diffs_close_enough(np.concatenate([steps, boundary_diffs])):
+            return step
+        if np.issubdtype(np.asarray(steps).dtype, np.timedelta64):
+            return np.timedelta64("NaT")
+        return np.nan
+
     def _create_df(self, df, name, start_stop, gnum):
         """Reconstruct the dataframe."""
         cols = f"{name}_min", f"{name}_max"
         out = pd.DataFrame(start_stop, columns=list(cols))
-        out[f"{name}_step"] = get_middle_value(df[f"{name}_step"].values)
+        out[f"{name}_step"] = self._get_group_step(df)
         merger = df.drop(columns=out.columns)
         # get dims to determine which columns are still compared. Some test
         # dfs don't have dims though, so it should still work without dims col.

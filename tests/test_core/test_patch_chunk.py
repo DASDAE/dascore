@@ -659,6 +659,23 @@ class TestChunkSnapCoords:
         expected = np.concatenate([p1.get_array("time"), p2.get_array("time")])
         assert np.array_equal(merged[0].get_array("time"), expected)
 
+    def test_snap_false_contents_step(
+        self, spool_irregular_boundary, adjacent_spool_no_overlap
+    ):
+        """
+        The advertised step must be NaN when a no-snap merge leaves the
+        coordinate uneven, and stay concrete for contiguous or snapped merges.
+        """
+        merged = spool_irregular_boundary.chunk(time=None, snap_coords=False)
+        assert pd.isnull(merged.get_contents()["time_step"].iloc[0])
+        assert pd.isnull(merged[0].attrs["time_step"])
+        # Snapping produces an even coordinate, so the step remains.
+        snapped = spool_irregular_boundary.chunk(time=None)
+        assert not pd.isnull(snapped.get_contents()["time_step"].iloc[0])
+        # So does merging contiguous patches without snapping.
+        contiguous = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
+        assert not pd.isnull(contiguous.get_contents()["time_step"].iloc[0])
+
     def test_snap_false_contiguous_unchanged(self, adjacent_spool_no_overlap):
         """Truly contiguous patches merge identically with snapping disabled."""
         merged = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
