@@ -260,11 +260,12 @@ class TestGetFormat:
 
     def test_random_textfile_isnt_format(self, io_instance, dummy_text_file):
         """Ensure a dummy text file the format (it isn't any fiber format)."""
-        assert not io_instance.get_format(dummy_text_file)
+        # The contract is False, not merely something falsy.
+        assert io_instance.get_format(dummy_text_file) is False
 
     def test_random_h5_isnt_format(self, io_instance, generic_hdf5):
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
-        assert not io_instance.get_format(generic_hdf5)
+        assert io_instance.get_format(generic_hdf5) is False
 
     def test_all_other_files_arent_format(self, io_instance):
         """All other data files should not show up as this format."""
