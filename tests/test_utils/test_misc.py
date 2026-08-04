@@ -766,13 +766,13 @@ class TestMaybeMemMap:
         assert not isinstance(array, np.memmap)
         assert array.size == 0
 
-    def test_name_no_longer_on_disk(self, tmp_path):
-        """An open handle whose path is gone still reads through the handle."""
-        path = tmp_path / "unlinked.bin"
-        path.write_bytes(b"1234")
-        with open(path, "rb") as fid:
-            path.unlink()
-            array = maybe_mem_map(fid)
+    def test_name_not_on_disk(self):
+        """A handle whose name is not a real path still reads through it."""
+
+        class _NamedBytesIO(BytesIO):
+            name = "not-a-real-path"
+
+        array = maybe_mem_map(_NamedBytesIO(b"1234"))
         assert not isinstance(array, np.memmap)
         assert array.size == 4
 
