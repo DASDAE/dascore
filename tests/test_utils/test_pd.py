@@ -272,6 +272,15 @@ class TestFilterDfAdvanced:
         out = filter_df(example_df_2, bp_min=tuple(vals))
         assert np.all(out == example_df_2["bp_min"].isin(vals))
 
+    @pytest.mark.parametrize("val", [[None], [100, None, 125]])
+    def test_non_range_shaped_collection_still_isin(self, example_df_2, val):
+        """
+        Only a two element sequence can be a range, so other collections stay
+        membership checks even when they contain None.
+        """
+        out = filter_df(example_df_2, bp_min=val)
+        assert np.all(out == example_df_2["bp_min"].isin(val))
+
     def test_ellipsis_kept_for_non_interval_column(self, example_df_2):
         """
         Columns with no min/max pair are plain isin checks; an ellipsis there
