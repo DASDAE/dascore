@@ -195,17 +195,14 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
-def _convert_query_value(value, func):
+def _convert_range_bounds(range_tuple, func):
     """
-    Apply a time conversion to a query value.
+    Apply a time conversion to each bound of a range.
 
-    Unbounded (None) ends of a range are left alone; converting them would
-    produce NaT, which compares False against everything and would silently
-    empty the query.
+    Unbounded (None) ends are left alone; converting them would produce NaT,
+    which compares False against everything and would silently empty the query.
     """
-    if isinstance(value, tuple | list):
-        return tuple(None if x is None else func(x) for x in value)
-    return func(value)
+    return tuple(None if x is None else func(x) for x in range_tuple)
 
 
 def _convert_times(df, some_dict):
@@ -219,12 +216,12 @@ def _convert_times(df, some_dict):
         non_min_max_cols & set(some_dict)
     )
     for key in datetime_keys:
-        some_dict[key] = _convert_query_value(some_dict[key], to_datetime64)
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_datetime64)
     # convert queries related to time delta into timedelta64
     timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
     timedelta_keys = timedelta_cols & set(some_dict)
     for key in timedelta_keys:
-        some_dict[key] = _convert_query_value(some_dict[key], to_timedelta64)
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_timedelta64)
     return some_dict
 
 
