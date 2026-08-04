@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
-import sys
-
+import numpy as np
 import pytest
 from rich.progress import Progress
 
 from dascore.config import config_context
-from dascore.utils.progress import get_progress_instance, track
+from dascore.utils.progress import get_progress_instance, get_track_length, track
+
+
+class TestGetTrackLength:
+    """Tests for deciding the total a progress bar reports."""
+
+    def test_sized_sequence_is_measured(self):
+        """A sequence with no length given is measured."""
+        assert get_track_length([1, 2, 3], None, 1) == 3
+
+    def test_given_length_is_not_remeasured(self):
+        """A length passed in is used as-is; the sequence is left alone."""
+
+        class Unmeasurable(list):
+            """A sequence which fails if anything asks for its length."""
+
+            def __len__(self):
+                raise AssertionError("the sequence should not be measured")
+
+        assert get_track_length(Unmeasurable([1, 2, 3]), 10, 1) == 10
+
+    def test_unsized_sequence_gets_no_bar(self):
+        """A generator has no length to report."""
+        assert get_track_length(iter([1, 2, 3]), None, 1) == 0
+
+    def test_sized_but_unmeasurable_gets_no_bar(self):
+        """A 0-d array is Sized but len() still raises on it."""
+        assert get_track_length(np.array(5), None, 1) == 0
+
+    def test_shorter_than_min_length_gets_no_bar(self):
+        """A sequence below the minimum is not worth a bar."""
+        assert get_track_length([1, 2], None, 5) == 0
 
 
 class TestProgressBar:
@@ -25,38 +55,6 @@ class TestProgressBar:
         """Unsized iterables without a length just skip the progress bar."""
         with config_context(debug=False):
             assert list(track(iter([1, 2, 3]), "unsized_tracker")) == [1, 2, 3]
-
-    def test_given_length_is_the_reported_total(self, monkeypatch):
-        """A length passed in is the bar's total; the sequence is not measured."""
-        seen = {}
-
-        class Unmeasurable(list):
-            """A sequence which fails if anything asks for its length."""
-
-            def __len__(self):
-                raise AssertionError("the sequence should not be measured")
-
-        class DummyProgress:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_):
-                return False
-
-            def track(self, sequence, total=None, **_):
-                seen["total"] = total
-                yield from sequence
-
-        monkeypatch.setattr(
-            "dascore.utils.progress.get_progress_instance", lambda _: DummyProgress()
-        )
-        # WebAssembly cannot start rich's refresh thread, so track skips the
-        # bar there entirely; the stand-in above needs no thread.
-        monkeypatch.setattr(sys, "platform", "linux")
-        with config_context(debug=False):
-            sequence = Unmeasurable([1, 2, 3])
-            assert list(track(sequence, "length_tracker", length=10)) == [1, 2, 3]
-        assert seen["total"] == 10
 
     def test_get_basic_progress(self):
         """Ensure we can return a basic progress bar."""

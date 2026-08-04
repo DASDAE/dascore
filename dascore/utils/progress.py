@@ -38,6 +38,23 @@ def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
     return Progress(*progress_list)
 
 
+def get_track_length(sequence: Iterable, length: int | None, min_length: int) -> int:
+    """
+    Return the total to report to the progress bar.
+
+    A length of 0 means no bar: either the sequence is too short to be
+    worth one, or it is an iterable whose length cannot be known.
+    """
+    # A generator has no length, so only measure when none was passed in.
+    if not length and isinstance(sequence, Sized):
+        # Being Sized is not a promise: len() of a 0-d array still raises.
+        with suppress(TypeError, ValueError):
+            length = len(sequence)
+    if length is None or length < min_length:
+        return 0
+    return length
+
+
 def track(
     sequence: Iterable,
     description: str,
@@ -60,23 +77,18 @@ def track(
             "basic" reduced refresh rate,
             "standard" - the normal progress bar
         can also accept a subclass of rich.progress.Progress.
+    length
+        The number of items, for sequences which cannot report their own.
     min_length
         The minimum length to emmit a progress bar.
     """
-    # A generator has no length, so only measure when none was passed in.
-    if not length and isinstance(sequence, Sized):
-        # Being Sized is not a promise: len() of a 0-d array still raises.
-        with suppress(TypeError, ValueError):
-            length = len(sequence)
-    # An unsized iterable with no length given gets no progress bar.
-    if length is None or length < min_length:
-        length = 0
+    total = get_track_length(sequence, length, min_length)
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
     # See: https://github.com/Textualize/rich/issues/1053
     # Rich progress requires a refresh thread, which WebAssembly can't start.
     no_threads = sys.platform in ("emscripten", "wasi")
-    if get_config().debug or not length or progress is None or no_threads:
+    if get_config().debug or not total or progress is None or no_threads:
         yield from sequence
         return
     update = 1.0 if isinstance(progress, str) and progress == "standard" else 5.0
@@ -84,7 +96,7 @@ def track(
     with progress:
         yield from progress.track(
             sequence,
-            total=length,
+            total=total,
             description=description,
             update_period=update,
         )
