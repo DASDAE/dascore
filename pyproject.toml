@@ -232,7 +232,9 @@ convention = "numpy"
 # Notebooks are exploratory; ruff started linting them in v0.16 and the
 # docstring rules make little sense for a scratch cell.
 [tool.ruff.lint.per-file-ignores]
-"*.ipynb" = ["D103"]
+# F401: a notebook often imports a name only used inside an IPython magic,
+# which ruff cannot see, and its autofix would delete the import.
+"*.ipynb" = ["D103", "F401"]
 
 [tool.pytest.ini_options]
 norecursedirs = [

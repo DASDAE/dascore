@@ -402,7 +402,7 @@ def merge_patches(
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,
-) -> Sequence[PatchType]:
+) -> dc.BaseSpool:
     """
     Merge all compatible patches in spool or patch list together.
 

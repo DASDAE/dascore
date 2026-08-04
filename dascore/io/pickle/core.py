@@ -35,12 +35,13 @@ class PickleIO(FiberIO):
         **kwargs,
     ) -> tuple[str, str] | Literal[False]:
         """
-        Return True if file contains a pickled Patch or Spool.
+        Return (name, version) if the file holds a pickled Patch or
+        Spool, else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A binary resource which may contain a pickled patch.
         """
         try:
             start = resource.read(100)  # read first 100 bytes, look for class names
