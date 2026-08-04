@@ -751,7 +751,9 @@ class _FiberIOManager:
                 finally:
                     # If file handle-like seek back to 0 so it can be reused.
                     getattr(func_input, "seek", lambda x: None)(0)
-                if format_version:
+                # get_format returns (name, version) or a falsy value;
+                # a bare True would carry no version to report.
+                if isinstance(format_version, tuple):
                     return format_version
             else:
                 msg = f"Could not determine file format of {man.source}"
