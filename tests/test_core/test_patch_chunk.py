@@ -473,6 +473,16 @@ class TestChunkMerge:
         patch = out[0]
         assert isinstance(patch, dc.Patch)
 
+    def test_invalid_conflict_raises(self, adjacent_spool_different_attrs):
+        """
+        An unrecognized conflict value should raise rather than silently
+        selecting undocumented behavior. See #804.
+        """
+        spool = adjacent_spool_different_attrs
+        for bad_value in ("banana", "", None):
+            with pytest.raises(ParameterError, match="conflict must be one of"):
+                spool.chunk(time=..., conflict=bad_value)
+
     def test_chunk_patches_with_non_coord(self, random_patch):
         """Tests for chunking when some patches have non coordinate dimensions."""
         patches = [random_patch.mean("time") for _ in range(3)]

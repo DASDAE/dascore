@@ -14,7 +14,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import attr_conflict_description
-from dascore.exceptions import AttributeMergeError
+from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _dict_list_diffs,
@@ -23,6 +23,16 @@ from dascore.utils.misc import (
     is_valid_coord_str,
     iterate,
 )
+
+_VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
+
+
+def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
+    """Ensure a conflict(s) argument is a supported value."""
+    if conflict not in _VALID_CONFLICT_VALUES:
+        msg = f"conflict must be one of {_VALID_CONFLICT_VALUES}, got {conflict!r}."
+        raise ParameterError(msg)
+    return conflict
 
 
 @compose_docstring(conflict_desc=attr_conflict_description)
@@ -51,6 +61,7 @@ def combine_patch_attrs(
         shortcut if it has already been computed.
     """
     # TODO this is a monstrosity! need to refactor.
+    validate_conflict(conflicts)
     model_fields = dc.core.CoordSummary.model_fields
     eq_coord_fields = set(model_fields) - {"min", "max", "step"}
 

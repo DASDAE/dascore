@@ -12,6 +12,7 @@ import pandas as pd
 
 from dascore.constants import attr_conflict_description, numeric_types, timeable_types
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
+from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
@@ -168,7 +169,7 @@ class ChunkManager:
         self._snap_coords = snap_coords
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
-        self._attr_conflict = conflict
+        self._attr_conflict = validate_conflict(conflict)
         self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
