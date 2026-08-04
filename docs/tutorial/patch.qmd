@@ -784,9 +784,9 @@ patch_reduced = patch.add.reduce("distance")
 ```
 
 
-```{.note}
-PatchUFunc.reduce/accumulate accept dim (mapped internally to axis), while numpy ufuncs accept axis.
-```
+:::{.callout-note}
+`PatchUFunc.reduce`/`accumulate` accept `dim` (mapped internally to `axis`), while numpy ufuncs accept `axis`.
+:::
 
 For more advanced usage, you can create patch ufuncs.
 

@@ -120,21 +120,27 @@ sorted_data = data[indexer, :]
 ```
 
 ### Snap
-['snap'](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged. 
+[`snap`](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged.
+
+Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), `snap` returns only a new coordinate; no indexer is needed since the values, not their order, are what change.
 
 ```{python}
 import numpy as np
 
 from dascore.core import get_coord
 
-random_array = np.random.rand(10) 
+random_array = np.random.rand(10)
 random_coord = get_coord(data=random_array)
 
-sorted_coord, indexer = random_coord.sort()
+# Snap returns a single, evenly sampled coordinate.
+snapped_coord = random_coord.snap()
 
-# The data array can be updated like so:
-data = np.random.rand(10, 20)
-sorted_data = data[indexer, :] 
+print(f"before snapping, evenly sampled: {random_coord.evenly_sampled}")
+print(f"after snapping, evenly sampled: {snapped_coord.evenly_sampled}")
+
+# The min and max are unchanged (up to floating point precision).
+assert np.isclose(random_coord.min(), snapped_coord.min())
+assert np.isclose(random_coord.max(), snapped_coord.max())
 ```
 
 
@@ -254,7 +260,7 @@ coord_dict = {
 }
 
 cm_many_coords = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
-print(cm)
+print(cm_many_coords)
 ```
 
 ### Update
