@@ -122,7 +122,7 @@ sorted_data = data[indexer, :]
 ### Snap
 [`snap`](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged.
 
-Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), `snap` returns only a new coordinate; no indexer is needed since the values, not their order, are what change.
+Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), `snap` returns only a new coordinate, not an indexer. Since snapping an unsorted coordinate also reorders it, use [`CoordManager.snap`](`dascore.core.coordmanager.CoordManager.snap`) instead when an associated data array needs to stay aligned.
 
 ```{python}
 import numpy as np
@@ -132,7 +132,7 @@ from dascore.core import get_coord
 random_array = np.random.rand(10)
 random_coord = get_coord(data=random_array)
 
-# Snap returns a single, evenly sampled coordinate.
+# Snap returns a single, evenly sampled (and sorted) coordinate.
 snapped_coord = random_coord.snap()
 
 print(f"before snapping, evenly sampled: {random_coord.evenly_sampled}")
@@ -304,8 +304,10 @@ and drop or disassociate coordinates.
 # Disassociate "new_coord" from dimension distance.
 new_cm_3 = new_cm_1.update(new_coord=(None, new_coord))
 
-# Drop coordinate "new_coord".
-new_cm_4 = cm.update(new_coord=None)
+# Drop coordinate "new_coord". Note this must be done on a coord manager
+# which actually has "new_coord"; dropping a missing coord is a no-op.
+new_cm_4 = new_cm_1.update(new_coord=None)
+assert "new_coord" not in new_cm_4.coord_map
 
 # Drop dimension "time".
 new_cm_5 = cm.update(time=None)
