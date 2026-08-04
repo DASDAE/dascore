@@ -628,6 +628,84 @@ class TestChunkMerge:
         assert len(out) == 1
 
 
+class TestChunkSnapCoords:
+    """Tests for the snap_coords argument of chunk. See #803."""
+
+    @pytest.fixture(scope="class")
+    def spool_irregular_boundary(self, random_patch):
+        """
+        Two patches whose boundary is 1.4 samples apart: within the default
+        tolerance of 1.5, so chunk merges them.
+        """
+        p1 = random_patch
+        time = p1.get_coord("time")
+        p2 = p1.update_attrs(time_min=time.max() + time.step * 1.4)
+        return dc.spool([p1, p2])
+
+    def test_snap_false_preserves_values(self, spool_irregular_boundary):
+        """snap_coords=False must keep the original coordinate values."""
+        p1, p2 = spool_irregular_boundary[0], spool_irregular_boundary[1]
+        merged = spool_irregular_boundary.chunk(time=None, snap_coords=False)
+        assert len(merged) == 1
+        expected = np.concatenate([p1.get_array("time"), p2.get_array("time")])
+        assert np.array_equal(merged[0].get_array("time"), expected)
+
+    def test_snap_true_evenly_samples(self, spool_irregular_boundary):
+        """The default (snap_coords=True) still re-grids to a constant step."""
+        merged = spool_irregular_boundary.chunk(time=None)
+        assert len(merged) == 1
+        time = merged[0].get_array("time")
+        assert len(np.unique(np.diff(time))) == 1
+
+    def test_snap_false_materialized_merge(self, spool_irregular_boundary, monkeypatch):
+        """snap_coords=False must also work on the non-streaming merge path."""
+        import dascore.core.spool as spool_module
+
+        p1, p2 = spool_irregular_boundary[0], spool_irregular_boundary[1]
+        monkeypatch.setattr(
+            spool_module, "_estimate_merge_samples", lambda df, dim: None
+        )
+        merged = spool_irregular_boundary.chunk(time=None, snap_coords=False)
+        expected = np.concatenate([p1.get_array("time"), p2.get_array("time")])
+        assert np.array_equal(merged[0].get_array("time"), expected)
+
+    def test_snap_false_contents_step(
+        self, spool_irregular_boundary, adjacent_spool_no_overlap
+    ):
+        """
+        The advertised step must be NaN when a no-snap merge leaves the
+        coordinate uneven, and stay concrete for contiguous or snapped merges.
+        """
+        merged = spool_irregular_boundary.chunk(time=None, snap_coords=False)
+        assert pd.isnull(merged.get_contents()["time_step"].iloc[0])
+        assert pd.isnull(merged[0].attrs["time_step"])
+        # Snapping produces an even coordinate, so the step remains.
+        snapped = spool_irregular_boundary.chunk(time=None)
+        assert not pd.isnull(snapped.get_contents()["time_step"].iloc[0])
+        # So does merging contiguous patches without snapping.
+        contiguous = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
+        assert not pd.isnull(contiguous.get_contents()["time_step"].iloc[0])
+
+    def test_snap_false_distance_merge(self, random_patch):
+        """Float-typed coords also keep values and get a NaN step. See #803."""
+        p1 = random_patch.update_coords(
+            distance=random_patch.get_array("distance").astype(np.float64)
+        )
+        dist = p1.get_coord("distance")
+        p2 = p1.update_attrs(distance_min=dist.max() + dist.step * 1.4)
+        spool = dc.spool([p1, p2]).chunk(distance=None, snap_coords=False)
+        assert np.isnan(spool.get_contents()["distance_step"].iloc[0])
+        expected = np.concatenate([p1.get_array("distance"), p2.get_array("distance")])
+        assert np.array_equal(spool[0].get_array("distance"), expected)
+
+    def test_snap_false_contiguous_unchanged(self, adjacent_spool_no_overlap):
+        """Truly contiguous patches merge identically with snapping disabled."""
+        merged = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
+        snapped = adjacent_spool_no_overlap.chunk(time=None)
+        assert len(merged) == len(snapped) == 1
+        assert np.array_equal(merged[0].get_array("time"), snapped[0].get_array("time"))
+
+
 class TestStreamingMerge:
     """
     Tests for the streaming merge path, which copies each patch into a
