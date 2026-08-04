@@ -21,6 +21,17 @@ _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
 _EPOCH_DATETIME64 = np.datetime64(0, "ns")
 
 
+def _is_degenerate(array) -> bool:
+    """
+    Return True for a 0-D array.
+
+    The array converters index and iterate their input, which a 0-D array
+    supports for neither. Callers reshape it to the length-one array it
+    stands for, then unpack the scalar back out.
+    """
+    return array.ndim == 0
+
+
 def _float_array_to_ns(array):
     """Convert seconds as floats to signed integer nanoseconds."""
     # Integer inputs must be widened first; the default integer is only
@@ -126,6 +137,9 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.asarray(array)
+    degenerate = _is_degenerate(array)
+    if degenerate:
+        array = array.reshape(1)
     nans = pd.isnull(array)
     # dealing with objects
     if np.issubdtype(array.dtype, np.dtype(object)):
@@ -136,8 +150,6 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
         out = array.astype("datetime64[ns]")
-        if not array.shape:  # unpack degenerate (0-D) array to a scalar
-            out = out[()]
     # dealing with numerical data
     elif np.issubdtype(array.dtype, np.timedelta64) or np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -147,7 +159,7 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
             out = _float_array_to_ns(array).astype("datetime64[ns]")
         # fill NaN Back in
         out[nans] = _NAT_DATETIME64
-    return out
+    return out[0] if degenerate else out
 
 
 @to_datetime64.register(pd.Series)
@@ -245,30 +257,30 @@ def _pass_time_delta(time_delta):
 def _array_to_timedelta64(array: np.ndarray) -> np.timedelta64 | np.ndarray:
     """Convert an array of floating point durations to np.timedelta64."""
     array = np.asarray(array)
+    degenerate = _is_degenerate(array)
+    if degenerate:
+        array = array.reshape(1)
     # convert pure object arrays into float so sign casting works.
     if np.issubdtype(array.dtype, np.dtype(object)):
         array = array.astype(np.float64)
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
         out = array.astype("timedelta64[ns]")
-        # unpack degenerate (0-D) array to a scalar
-        return out[()] if not array.shape else out
     # Need to just get the ns form datetime64
     elif np.issubdtype(array.dtype, np.datetime64):
-        int_array = array.view(np.int64)
-        return np.array(int_array).astype("timedelta64[ns]")
-
-    assert np.isreal(array[0])
-    invalid = pd.isnull(array) | ~np.isfinite(array)
-    # Need to make copy to 1) not change original array and 2) handle
-    # immutable arrays. See #575.
-    if np.any(invalid):
-        array = np.array(array)
-        array[invalid] = 0
-    # inf/NaN complain, salience these types of warnings for this block.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = _float_array_to_ns(array).astype("timedelta64[ns]")
-        out[invalid] = _NAT_TIMEDELTA64
-    return out
+        out = np.array(array.view(np.int64)).astype("timedelta64[ns]")
+    else:
+        assert np.isreal(array[0])
+        invalid = pd.isnull(array) | ~np.isfinite(array)
+        # Need to make copy to 1) not change original array and 2) handle
+        # immutable arrays. See #575.
+        if np.any(invalid):
+            array = np.array(array)
+            array[invalid] = 0
+        # inf/NaN complain, salience these types of warnings for this block.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = _float_array_to_ns(array).astype("timedelta64[ns]")
+            out[invalid] = _NAT_TIMEDELTA64
+    return out[0] if degenerate else out
 
 
 @to_timedelta64.register(pd.Series)

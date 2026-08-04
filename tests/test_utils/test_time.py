@@ -417,6 +417,32 @@ class TestToTimeDelta64:
             assert np.issubdtype(time.dtype, "m8")
 
 
+class TestDegenerateArrays:
+    """Tests for 0-D array inputs to the array converters."""
+
+    values = (
+        np.datetime64("2020-01-01", "s"),
+        np.timedelta64(5, "s"),
+        5.0,
+        5,
+    )
+
+    @pytest.mark.parametrize("func", (to_datetime64, to_timedelta64))
+    @pytest.mark.parametrize("value", values)
+    def test_matches_length_one_array(self, func, value):
+        """A 0-D array converts like the length-one array it stands for."""
+        out = func(np.array(value))
+        assert np.shape(out) == ()
+        assert out == func(np.array([value]))[0]
+
+    @pytest.mark.parametrize("func", (to_datetime64, to_timedelta64))
+    def test_nan_becomes_nat(self, func):
+        """A 0-D NaN converts to NaT rather than an epoch value."""
+        out = func(np.array(np.nan))
+        assert np.shape(out) == ()
+        assert pd.isnull(out)
+
+
 class TestToInt:
     """Tests for converting time-like types to ints, or passing through reals."""
 
