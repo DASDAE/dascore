@@ -416,6 +416,14 @@ class TestToTimeDelta64:
             time = to_timedelta64(array_no_nan)
             assert np.issubdtype(time.dtype, "m8")
 
+    @pytest.mark.parametrize("unit", ("D", "s", "ms", "ns"))
+    def test_datetime_array_is_epoch_offset(self, unit):
+        """A datetime becomes its offset from the epoch, whatever its unit."""
+        value = np.datetime64("2020-01-01", unit)
+        expected = np.timedelta64(1577836800, "s")
+        assert to_timedelta64(np.array([value])) == expected
+        assert to_timedelta64(np.array(value)) == expected
+
 
 class TestDegenerateArrays:
     """Tests for 0-D array inputs to the array converters."""

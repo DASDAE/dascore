@@ -21,17 +21,6 @@ _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
 _EPOCH_DATETIME64 = np.datetime64(0, "ns")
 
 
-def _is_degenerate(array) -> bool:
-    """
-    Return True for a 0-D array.
-
-    The array converters index and iterate their input, which a 0-D array
-    supports for neither. Callers reshape it to the length-one array it
-    stands for, then unpack the scalar back out.
-    """
-    return array.ndim == 0
-
-
 def _float_array_to_ns(array):
     """Convert seconds as floats to signed integer nanoseconds."""
     # Integer inputs must be widened first; the default integer is only
@@ -137,7 +126,9 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.asarray(array)
-    degenerate = _is_degenerate(array)
+    # 0-D arrays cannot be indexed or iterated, which the branches below do;
+    # use the length-one array it stands for and unpack the scalar at the end.
+    degenerate = array.ndim == 0
     if degenerate:
         array = array.reshape(1)
     nans = pd.isnull(array)
@@ -257,7 +248,8 @@ def _pass_time_delta(time_delta):
 def _array_to_timedelta64(array: np.ndarray) -> np.timedelta64 | np.ndarray:
     """Convert an array of floating point durations to np.timedelta64."""
     array = np.asarray(array)
-    degenerate = _is_degenerate(array)
+    # See the note in _array_to_datetime64.
+    degenerate = array.ndim == 0
     if degenerate:
         array = array.reshape(1)
     # convert pure object arrays into float so sign casting works.
@@ -265,9 +257,11 @@ def _array_to_timedelta64(array: np.ndarray) -> np.timedelta64 | np.ndarray:
         array = array.astype(np.float64)
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
         out = array.astype("timedelta64[ns]")
-    # Need to just get the ns form datetime64
+    # A datetime becomes its offset from the epoch. The unit has to be
+    # normalized first, or viewing e.g. datetime64[s] as int64 would label
+    # its second count as nanoseconds.
     elif np.issubdtype(array.dtype, np.datetime64):
-        out = np.array(array.view(np.int64)).astype("timedelta64[ns]")
+        out = array.astype("datetime64[ns]").view("timedelta64[ns]")
     else:
         assert np.isreal(array[0])
         invalid = pd.isnull(array) | ~np.isfinite(array)
