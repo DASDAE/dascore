@@ -1191,6 +1191,10 @@ class CoordPartial(BaseCoord):
     A coordinate which only contains partial information.
     """
 
+    # Redeclared without a default: a partial coord is nothing but its
+    # shape, and it is the one coord which cannot re-derive it on the way
+    # back from a model_dump(exclude_defaults=True).
+    shape: tuple[int, ...]
     start: Any = np.nan
     stop: Any = np.nan
     step: Any = np.nan

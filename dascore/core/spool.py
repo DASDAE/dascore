@@ -588,7 +588,7 @@ class Spool(BaseSpool):
             step = int(np.ceil(len(self) / count))
         else:
             assert size is not None  # the check above sets exactly one of them
-            step = size
+            step = int(np.ceil(size))  # tolerate a non-integral size
         while start < len(self):
             yield self[start : start + step]
             start += step
