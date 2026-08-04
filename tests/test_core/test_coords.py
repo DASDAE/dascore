@@ -1687,6 +1687,18 @@ class TestPartialCoord:
         """Ensure non coords are equal to themselves."""
         assert basic_non_coord == basic_non_coord
 
+    def test_set_units_positionally(self, basic_non_coord):
+        """Units are set the same way as on any other coord."""
+        out = basic_non_coord.set_units("m")
+        assert out.units == dc.get_quantity("m")
+        assert isinstance(out, CoordPartial)
+
+    def test_update_limits_only_touches_metadata(self, basic_non_coord):
+        """There are no values to limit, so only the metadata changes."""
+        out = basic_non_coord.update_limits(units="m")
+        assert out.units == dc.get_quantity("m")
+        assert isinstance(out, CoordPartial)
+
     def test_dimensionless_shape_survives_dump(self):
         """A partial coord keeps its shape when defaults are excluded."""
         coord = get_coord(shape=())

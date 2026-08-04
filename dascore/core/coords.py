@@ -347,7 +347,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return tuple(iterate(value))
 
     @abc.abstractmethod
-    def convert_units(self, unit) -> Self:
+    def convert_units(self, units) -> Self:
         """Convert from one unit to another. Set units if None are set."""
 
     def _get_value_index(self, coord_array, values_to_find):
@@ -433,8 +433,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @abc.abstractmethod
     def select(
-        self, arg, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
@@ -442,7 +442,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def order(
         self, array, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Order coordinate according to array values or samples.
 
@@ -700,7 +700,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
 
-    def snap(self) -> CoordRange:
+    def snap(self) -> BaseCoord:
         """
         Snap the coordinates to evenly sampled grid points.
 
@@ -766,7 +766,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return pd.DataFrame(columns=columns)
 
     @abc.abstractmethod
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """
         Update the limits or sampling of the coordinates.
 
@@ -796,7 +796,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         data: ArrayLike | np.ndarray | None = None,
         values: ArrayLike | np.ndarray | None = None,
         **kwargs,
-    ) -> Self:
+    ) -> BaseCoord:
         """
         Update the data of the coordinate.
 
@@ -903,7 +903,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out = self.min() + value if pos else self.max() + value
         return out
 
-    def empty(self, axes=None) -> Self:
+    def empty(self, axes=None) -> BaseCoord:
         """
         Empty out the coordinate.
 
@@ -922,7 +922,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         data = np.empty(tuple(new_shape), dtype=self.dtype)
         return get_coord(data=data)
 
-    def index(self, indexer, axis: int | None = None) -> Self:
+    def index(self, indexer, axis: int | None = None) -> BaseCoord:
         """
         Index the coordinate and return new coordinate.
 
@@ -1145,7 +1145,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 return True
         return all_close(self.values, other.values)
 
-    def change_length(self, length: int) -> Self:
+    def change_length(self, length: int) -> BaseCoord:
         """
         Adjust the length of the coordinate by changing the end value.
 
@@ -1240,9 +1240,16 @@ class CoordPartial(BaseCoord):
         """No values to change so update can just call new."""
         return self.new(**kwargs)
 
-    # Other operations that normally modify data do not in this case.
-    update_limits = update
-    set_units = update
+    # Other operations that normally modify data do not in this case;
+    # they are spelled out rather than aliased so each keeps the
+    # signature its base declares.
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
+        """No values to change, so only the metadata in kwargs is applied."""
+        return self.update(min=min, max=max, step=step, **kwargs)
+
+    def set_units(self, units) -> Self:
+        """No values to change, so this only records the new units."""
+        return self.update(units=units)
 
     def convert_units(self, units) -> Self:
         """Convert scalar metadata units, or set units if none exist."""
@@ -1307,7 +1314,7 @@ class CoordPartial(BaseCoord):
     @compose_docstring(doc=get_docstring(BaseCoord.order))
     def order(
         self, array, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         {doc}.
         """
@@ -1315,7 +1322,7 @@ class CoordPartial(BaseCoord):
         return super().order(array, relative=relative, samples=samples)
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
-    def change_length(self, length: int) -> Self:
+    def change_length(self, length: int) -> BaseCoord:
         """
         {doc}
         """
@@ -1616,7 +1623,7 @@ class CoordRange(BaseCoord):
         return fraction.astype(np.int64)
 
     @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """{doc}."""
         if all(x is not None for x in [min, max, step]):
             msg = "At most two parameters can be specified in update_limits."
@@ -1676,7 +1683,7 @@ class CoordRange(BaseCoord):
         return np.max([self.stop - self.step, self.start])
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
-    def change_length(self, length: int) -> Self:
+    def change_length(self, length: int) -> BaseCoord:
         """
         {doc}
         """
@@ -1730,7 +1737,7 @@ class CoordArray(BaseCoord):
 
     def select(
         self, args, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
             return self._select_by_array(args, relative=relative, samples=samples)
@@ -1800,7 +1807,7 @@ class CoordArray(BaseCoord):
         return out.change_length(len(self))
 
     @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """{doc}."""
         if sum(x is not None for x in [min, max, step]) > 1:
             msg = "At most one parameter can be specified in update_limits."
@@ -1863,7 +1870,7 @@ class CoordMonotonicArray(CoordArray):
 
     def select(
         self, args, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
             return self._select_by_array(args, relative=relative, samples=samples)
@@ -2332,7 +2339,7 @@ class CoordSegmented(BaseCoord):
         return self.new(segments=segments), slice(None, None, -1)
 
     @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """{doc}."""
         if step is not None:
             msg = (
@@ -2363,7 +2370,7 @@ class CoordSegmented(BaseCoord):
             segments.append(new)
         return self.new(segments=tuple(segments))
 
-    def snap(self) -> CoordRange:
+    def snap(self) -> BaseCoord:
         """
         Snap the coordinates to evenly sampled grid points.
 
@@ -2708,9 +2715,9 @@ class CoordString(BaseCoord):
         values["step"] = None
         return values
 
-    def convert_units(self, unit) -> Self:
+    def convert_units(self, units) -> Self:
         """String coordinates cannot be converted between units."""
-        if unit not in (None, ""):
+        if units not in (None, ""):
             _raise_string_coord_error("unit conversion")
         return self
 
@@ -2730,7 +2737,7 @@ class CoordString(BaseCoord):
 
     def select(
         self, args, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """Select by exact values, wildcard patterns, regexes, samples, or masks."""
         if relative:
             _raise_string_coord_error("relative selection")
@@ -2779,7 +2786,7 @@ class CoordString(BaseCoord):
             return False
         return bool(np.all(values[:-1] >= values[1:]))
 
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """Reject numeric limit updates on string coords."""
         # Deliberately match BaseCoord/CoordRange parameter names for API parity.
         unsupported_kwargs = set(kwargs) - {"data"}

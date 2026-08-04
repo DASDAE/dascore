@@ -1321,6 +1321,20 @@ class TestSnap:
         assert snapped.coord_map["time"].step == expected_dt
 
 
+class TestSetUnits:
+    """Tests for setting coordinate units."""
+
+    def test_set_units_on_valueless_coord(self):
+        """A dim coord with no values takes units like any other."""
+        cm = get_coord_manager(
+            {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
+            dims=("time", "distance"),
+        )
+        assert isinstance(cm.coord_map["time"], CoordPartial)
+        out = cm.set_units(time="s")
+        assert out.coord_map["time"].units == get_quantity("s")
+
+
 class TestConvertUnits:
     """Tests for converting coordinate units."""
 
