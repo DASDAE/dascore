@@ -260,7 +260,7 @@ line-ending = "lf"
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
 # Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Counts as of 2026-08-04: invalid-argument-type 166,
+# burned down. Counts as of 2026-08-04: invalid-argument-type 129,
 # invalid-return-type 67, invalid-method-override 36.
 [tool.ty.rules]
 invalid-argument-type = "ignore"

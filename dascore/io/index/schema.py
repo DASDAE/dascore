@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
