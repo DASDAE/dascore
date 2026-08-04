@@ -9,11 +9,13 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
+from dascore.io.core import _coerce_storage
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
+from .storage import DASDAEStorage
 from .utils import (
     _get_contents_from_patch_groups_generic,
     _get_patch_attrs,
@@ -57,6 +59,7 @@ class DASDAEV1(FiberIO):
         self,
         spool: SpoolType,
         resource: H5Writer,
+        storage: DASDAEStorage | dict | str | None = None,
         **kwargs,
     ):
         """
@@ -68,11 +71,21 @@ class DASDAEV1(FiberIO):
             A collection of patches or a spool (same thing).
         resource
             The path to the file.
+        storage
+            DASDAE storage options controlling compression and chunk layout.
+            May be a ``DASDAEStorage``, a preset name (e.g. ``"compressed"``),
+            or a dict of storage kwargs. The default writes uncompressed arrays.
         """
         # write out patches
+        storage = _coerce_storage(storage, self)
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
+        # Validate chunk dims against the data up front so a typo raises before
+        # anything is written rather than silently producing an un-chunked file.
+        if storage.chunks:
+            all_dims = {dim for patch in patches for dim in patch.dims}
+            storage._validate_chunk_dims(all_dims)
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
@@ -87,7 +100,7 @@ class DASDAEV1(FiberIO):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name)
+            _save_patch(patch, waveforms, unique_name, storage)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""
