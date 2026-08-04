@@ -227,6 +227,52 @@ class TestFilterDfAdvanced:
         out = filter_df(df, time_step_min=0.5, time_step_max=2)
         assert out.all()
 
+    def test_open_ended_datetime_range(self, example_df_2):
+        """
+        An unbounded end of a range on a datetime column should not exclude
+        everything. See #808.
+        """
+        # 'time' must be a plain column, ie not paired with time_min/time_max.
+        df = pd.DataFrame({"time": example_df_2["time_min"]})
+        cutoff = df["time"].iloc[2]
+        assert np.all(filter_df(df, time_min=cutoff) == (df["time"] >= cutoff))
+        assert np.all(filter_df(df, time_max=cutoff) == (df["time"] <= cutoff))
+
+    def test_open_ended_timedelta_range(self, example_df_2):
+        """Same as above, but for timedelta columns."""
+        df = example_df_2.assign(step=example_df_2["time_step"] * range(5))
+        cutoff = df["step"].iloc[2]
+        assert np.all(filter_df(df, step_min=cutoff) == (df["step"] >= cutoff))
+        assert np.all(filter_df(df, step_max=cutoff) == (df["step"] <= cutoff))
+
+    @pytest.mark.parametrize("val", [("2020-01-03", ...), (..., "2020-01-03")])
+    def test_ellipsis_in_column_query_raises(self, example_df_2, val):
+        """
+        An ellipsis in a membership query matches nothing; it should raise
+        rather than silently return an empty result. See #808.
+        """
+        with pytest.raises(ParameterError, match="Ellipsis"):
+            filter_df(example_df_2, time_min=val)
+
+    def test_ellipsis_error_suggests_dimension(self, example_df_2):
+        """The error should point at the dimension form of the query."""
+        with pytest.raises(ParameterError, match=r"Use time=\(min, max\)"):
+            filter_df(example_df_2, time_min=("2020-01-03", ...))
+
+    def test_ellipsis_error_non_interval_column(self, example_df_2):
+        """Columns without min/max pairs still raise, just with no suggestion."""
+        with pytest.raises(ParameterError, match="Ellipsis") as exc:
+            filter_df(example_df_2, first_name=("Jason", ...))
+        assert "Use " not in str(exc.value)
+
+    def test_ellipsis_ignored_for_unknown_column(self, example_df_2):
+        """
+        Unknown columns are forwarded to patch level select, so an ellipsis
+        in one of them must not raise here.
+        """
+        out = filter_df(example_df_2, not_a_column=(1, ...), ignore_bad_kwargs=True)
+        assert out.all()
+
 
 class TestAdjustSegments:
     """Tests for adjusting segments of dataframes."""

@@ -134,9 +134,31 @@ def _filter_equality(query_dict, df, bool_index):
     return bool_index
 
 
+def _raise_on_ellipsis_membership(key, val, df):
+    """
+    Raise a helpful error for an open-ended range applied to a column.
+
+    A collection of values is a membership (isin) check, so an ellipsis in it
+    matches nothing. This is nearly always a range query aimed at the wrong
+    key, which would otherwise fail silently by returning an empty result.
+    """
+    msg = (
+        f"Ellipsis (...) is not valid in the query for column '{key}'; a "
+        f"collection of values is an isin check, not a range."
+    )
+    # Suggest the dimension name when the column is an interval column,
+    # eg time_min=(t1, ...) should be time=(t1, ...).
+    base = key[:-4] if key.endswith(("_min", "_max")) else None
+    if base and {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
+        msg += f" Use {base}=(min, max) to query a range of {base} values."
+    raise ParameterError(msg)
+
+
 def _filter_contains(query_dict, df, bool_index):
     """Filter based on rows containing specified values."""
     for key, val in query_dict.items():
+        if any(x is ... for x in val):
+            _raise_on_ellipsis_membership(key, val, df)
         bool_index = np.logical_and(bool_index, df[key].isin(val))
     return bool_index
 
@@ -170,6 +192,19 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _convert_query_value(value, func):
+    """
+    Apply a time conversion to a query value.
+
+    Unbounded (None) ends of a range are left alone; converting them would
+    produce NaT, which compares False against everything and would silently
+    empty the query.
+    """
+    if isinstance(value, tuple | list):
+        return tuple(None if x is None else func(x) for x in value)
+    return func(value)
+
+
 def _convert_times(df, some_dict):
     """Convert query values to datetime/timedelta values."""
     if not some_dict:
@@ -181,12 +216,12 @@ def _convert_times(df, some_dict):
         non_min_max_cols & set(some_dict)
     )
     for key in datetime_keys:
-        some_dict[key] = to_datetime64(some_dict[key])
+        some_dict[key] = _convert_query_value(some_dict[key], to_datetime64)
     # convert queries related to time delta into timedelta64
     timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
     timedelta_keys = timedelta_cols & set(some_dict)
     for key in timedelta_keys:
-        some_dict[key] = to_timedelta64(some_dict[key])
+        some_dict[key] = _convert_query_value(some_dict[key], to_timedelta64)
     return some_dict
 
 
