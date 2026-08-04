@@ -86,8 +86,7 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
         group = (group,) if isinstance(group, str) else tuple(group)
         if missing := [x for x in group if x not in columns]:
             msg = (
-                f"group attribute(s) {missing} do not exist on any patch "
-                "in the spool."
+                f"group attribute(s) {missing} do not exist on any patch in the spool."
             )
             raise InvalidSpoolQueryError(msg)
         return group
@@ -252,7 +251,7 @@ def _partition(
     tolerance merged patches the default would have kept apart (#662);
     the caller owns warning about it.
     """
-    start, stop, step = get_interval_columns(df, name)
+    _start, _stop, step = get_interval_columns(df, name)
     cols = [x for x in group_attrs if x in df.columns]
     if "dims" in df.columns:
         cols.append("dims")
@@ -470,8 +469,7 @@ def build_chunk_plan(
     """
     if len(kwargs) != 1:
         msg = (
-            "Chunking only supported along one dimension. You passed "
-            f"kwargs: {kwargs}"
+            f"Chunking only supported along one dimension. You passed kwargs: {kwargs}"
         )
         raise ParameterError(msg)
     ((name, value),) = kwargs.items()
@@ -493,7 +491,7 @@ def build_chunk_plan(
         msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
         raise ParameterError(msg)
     if conflict not in ("drop", "raise", "keep_first"):
-        msg = "conflict must be 'drop', 'raise', or 'keep_first', " f"got {conflict!r}"
+        msg = f"conflict must be 'drop', 'raise', or 'keep_first', got {conflict!r}"
         raise ParameterError(msg)
 
     min_name, max_name = f"{name}_min", f"{name}_max"

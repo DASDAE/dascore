@@ -62,7 +62,7 @@ class TestWriteWav:
         """Ensure resampling changes sampling rate in file."""
         path = tmp_path_factory.mktemp("wav_resample") / "resampled.wav"
         dc.write(audio_patch, path, "wav", resample_frequency=1000)
-        (sr, ar) = read_wav(str(path))
+        (sr, _ar) = read_wav(str(path))
         assert sr == 1000
 
     def test_write_non_distance_dims(
@@ -80,7 +80,7 @@ class TestWriteWav:
         for mic_val in patch.coords.get_array("microphone"):
             assert path / f"microphone_{mic_val}.wav" in wavs
             # Verify content of first file
-            sr, data = read_wav(str(wavs[0]))
+            sr, _data = read_wav(str(wavs[0]))
         assert sr == int(ONE_SECOND / patch.get_coord("time").step)
 
     def test_write_remote_directory(self, audio_patch_non_distance_dim):

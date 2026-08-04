@@ -311,9 +311,9 @@ class TestWaterfall:
         expected_label = f"{data_type}{expected_dunits} - log_10"
 
         # Check if the colorbar label matches the expected label
-        assert (
-            cb_label == expected_label
-        ), f"Expected '{expected_label}', but got '{cb_label}'"
+        assert cb_label == expected_label, (
+            f"Expected '{expected_label}', but got '{cb_label}'"
+        )
 
     def test_incomplete_time_coord(self):
         """Test waterfall plot with incomplete time coordinates (issue #534)."""

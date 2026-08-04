@@ -195,12 +195,12 @@ class TestHampelFilter:
                 approximate_spike = abs(result_approximate.data[time_idx, dist_idx])
 
                 # Both methods should reduce the spike magnitude
-                assert (
-                    standard_spike < original_spike
-                ), f"Standard method didn't reduce spike at ({time_idx}, {dist_idx})"
-                assert (
-                    approximate_spike < original_spike
-                ), f"Approximate method didn't reduce spike at ({time_idx}, {dist_idx})"
+                assert standard_spike < original_spike, (
+                    f"Standard method didn't reduce spike at ({time_idx}, {dist_idx})"
+                )
+                assert approximate_spike < original_spike, (
+                    f"Approximate did not reduce spike at ({time_idx}, {dist_idx})"
+                )
 
                 # Both should achieve similar spike reduction (within 50% of each other)
                 reduction_ratio = min(standard_spike, approximate_spike) / max(

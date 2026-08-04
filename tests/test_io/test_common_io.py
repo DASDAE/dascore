@@ -481,9 +481,9 @@ class TestScan:
         for summary in scanned_summaries:
             for coord_name, coord in summary.coords.items():
                 with suppress(TypeError):  # incomparable types (e.g. NaT/NaN)
-                    assert (
-                        coord.min <= coord.max
-                    ), f"{coord_name}: min ({coord.min}) > max ({coord.max})"
+                    assert coord.min <= coord.max, (
+                        f"{coord_name}: min ({coord.min}) > max ({coord.max})"
+                    )
 
     def test_no_bytes(self, scanned_summaries):
         """Sometimes bytes are returned from scanning, we need str."""

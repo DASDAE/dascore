@@ -838,7 +838,7 @@ class TestSelect:
         """A sub-array should allow indexing."""
         values = long_coord.values
         sub = values[1:-1]
-        out, reduction = long_coord.select(sub)
+        _out, reduction = long_coord.select(sub)
         assert reduction.sum() == len(sub)
 
     def test_overlapping_array(self, long_coord):
@@ -855,7 +855,7 @@ class TestSelect:
     def test_duplicate_array_samples(self, long_coord):
         """Ensure duplicate do nothing."""
         inds = np.array([0, 0, 0])
-        coord, reduction = long_coord.select(inds, samples=True)
+        coord, _reduction = long_coord.select(inds, samples=True)
         assert len(coord) == len(np.unique(inds))
         assert np.all(coord.values == coord.values[0])
 
@@ -870,7 +870,7 @@ class TestSelect:
         """Ensure duplicate values don't cause duplicates in array."""
         second_value = long_coord.values[1]
         array = np.array([second_value, second_value])
-        coord, reduction = long_coord.select(array)
+        coord, _reduction = long_coord.select(array)
         assert len(coord) == len(np.unique(array))
         assert np.all(array == second_value)
 
@@ -957,7 +957,7 @@ class TestSelect:
 
     def test_percentage(self, coord):
         """Ensure selecting by percentage works."""
-        out, indexer = coord.select((10 * percent, -20 * percent))
+        out, _indexer = coord.select((10 * percent, -20 * percent))
         if coord.evenly_sampled:
             assert abs((len(out) / len(coord)) - 0.70) < len(coord) / 100.0
 
@@ -992,7 +992,7 @@ class TestOrder:
     def test_duplicate_array_samples(self, long_coord):
         """Ensure duplicate indices cause duplicates in array."""
         inds = np.array([0, 0, 0])
-        coord, reduction = long_coord.order(inds, samples=True)
+        coord, _reduction = long_coord.order(inds, samples=True)
         assert len(coord) == len(inds)
         assert np.all(coord.values == coord.values[0])
 
@@ -1007,14 +1007,14 @@ class TestOrder:
         """Ensure duplicate values cause duplicates in array."""
         second_value = long_coord.values[1]
         array = np.array([second_value, second_value])
-        coord, reduction = long_coord.order(array)
+        coord, _reduction = long_coord.order(array)
         assert len(coord) == len(array)
         assert np.all(array == second_value)
 
     def test_sorted_by_values(self, long_coord):
         """Ensure the output is sorted by values given to select."""
         vals = long_coord.values[np.array([4, 2, 1, 3])]
-        coord, reduction = long_coord.order(vals)
+        coord, _reduction = long_coord.order(vals)
         assert vals.shape == coord.shape
         assert np.all(vals == coord.values)
 
@@ -1065,7 +1065,7 @@ class TestOrder:
         old_values = coord_with_duplicates.values
         to_find = [0, 1, 1]
         expected_len = sum((old_values == x).sum() for x in to_find)
-        out, inds = coord_with_duplicates.order(to_find)
+        out, _inds = coord_with_duplicates.order(to_find)
         assert len(out) == expected_len
 
     def test_order_samples_non_int_aray(self, evenly_sampled_coord):
@@ -1193,13 +1193,13 @@ class TestCoordRange:
     def test_identity_slice_ints(self, evenly_sampled_coord):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_coord
-        new, sliced = coord.select((coord.start, coord.stop))
+        new, _sliced = coord.select((coord.start, coord.stop))
         assert new == coord
 
     def test_identity_slice_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_float_coord_with_units
-        new, sliced = coord.select((coord.start, coord.stop))
+        new, _sliced = coord.select((coord.start, coord.stop))
         assert new == coord
 
     def test_float_basics(self):
@@ -1214,7 +1214,7 @@ class TestCoordRange:
         coord = evenly_sampled_float_coord_with_units
         value_ft = 100
         value_m = value_ft * 0.3048
-        new, sliced = coord.select((value_ft * dc.get_unit("ft"), ...))
+        new, _sliced = coord.select((value_ft * dc.get_unit("ft"), ...))
         # ensure value is surrounded.
         assert new.start + new.step >= value_m
         assert new.start - new.step <= value_m
@@ -1249,7 +1249,7 @@ class TestCoordRange:
         """Ensure string selection works with datetime objects."""
         coord = evenly_sampled_date_coord
         date_str = "1970-01-01T12"
-        new, sliced = coord.select((date_str, ...))
+        new, _sliced = coord.select((date_str, ...))
         datetime = dc.to_datetime64(date_str)
         assert new.start + new.step >= datetime
         assert new.start - new.step <= datetime
@@ -1314,7 +1314,7 @@ class TestCoordRange:
     def test_test_select_end_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure we can select right up to the end of the array."""
         coord = evenly_sampled_float_coord_with_units
-        new_coord, out = coord.select((coord.min(), coord.max()))
+        new_coord, _out = coord.select((coord.min(), coord.max()))
         assert len(new_coord) == len(coord)
         assert np.allclose(new_coord.values, coord.values)
 
@@ -1580,13 +1580,13 @@ class TestMonotonicCoord:
         lims = coord.limits
         dur = lims[1] - lims[0]
         select_range = (lims[0] - 2 * dur, lims[1] + dur)
-        wide_coord, inds = coord.select(select_range)
+        wide_coord, _inds = coord.select(select_range)
         # coord should be unchanged
         assert len(wide_coord) == len(coord)
         assert wide_coord == coord
-        wide_coord, inds = coord.select((select_range[0], None))
+        wide_coord, _inds = coord.select((select_range[0], None))
         assert wide_coord == coord
-        wide_coord, inds = coord.select((None, select_range[1]))
+        wide_coord, _inds = coord.select((None, select_range[1]))
         assert wide_coord == coord
 
     def test_properties_mono(self, monotonic_float_coord):
@@ -1625,13 +1625,13 @@ class TestNonOrderedArrayCoords:
         min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
         dist = max_v - min_v
         val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
-        new, ind_array = random_coord.select((val1, val2))
+        new, _ind_array = random_coord.select((val1, val2))
         assert np.all(new.values >= val1)
         assert np.all(new.values <= val2)
 
     def test_sort(self, random_coord):
         """Ensure the coord can be ordered."""
-        new, ordering = random_coord.sort()
+        new, _ordering = random_coord.sort()
         assert isinstance(new, CoordMonotonicArray)
 
     def test_snap(self, random_coord):
@@ -1747,7 +1747,7 @@ class TestPartialCoord:
     def test_order_by_samples(self, basic_non_coord):
         """Ensure coord can be ordered by samples."""
         order = [0, 1]
-        out, ind = basic_non_coord.order(order, samples=True)
+        out, _ind = basic_non_coord.order(order, samples=True)
         assert len(order) == len(out)
 
     def test_to_summary(self, basic_non_coord):
@@ -1886,7 +1886,7 @@ class TestCoercion:
     def test_date_str(self, evenly_sampled_date_coord):
         """Ensure date strings get coerced."""
         drange = ("1970-01-01T00:00:01", 10)
-        out, indexer = evenly_sampled_date_coord.select(drange)
+        out, _indexer = evenly_sampled_date_coord.select(drange)
         assert isinstance(out, evenly_sampled_date_coord.__class__)
         assert out.dtype == evenly_sampled_date_coord.dtype
 
@@ -1894,7 +1894,7 @@ class TestCoercion:
         """Ensure date strings get coerced."""
         coord = evenly_sampled_time_delta_coord
         drange = (10, 2_000)
-        out, indexer = coord.select(drange)
+        out, _indexer = coord.select(drange)
         assert isinstance(out, coord.__class__)
         assert out.dtype == coord.dtype
 
@@ -2191,9 +2191,9 @@ class TestAlignTo:
         """Ensure when non_coords are compatible original coords returned."""
         coord = evenly_sampled_coord
         non_coord = get_coord(data=1)
-        c1, c2, s1, s2 = coord.align_to(non_coord)
+        c1, _c2, _s1, _s2 = coord.align_to(non_coord)
         assert c1 == coord
-        c1, c2, s1, s2 = non_coord.align_to(coord)
+        c1, _c2, _s1, _s2 = non_coord.align_to(coord)
         assert c1 == non_coord
 
     def test_incompatible_non_coords(self, basic_non_coord):

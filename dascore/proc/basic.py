@@ -200,7 +200,7 @@ def bool_patch(self: PatchType):
 def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
-    coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
+    coords: dict[str | Sequence[str], ArrayLike] | CoordManager | None = None,
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
 ) -> PatchType:

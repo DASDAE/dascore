@@ -90,7 +90,7 @@ class TestDocsting:
 
     def test_raises_when_some_placeholders_are_unused(self):
         """Providing extra substitution keys should fail loudly."""
-        with pytest.raises(ValueError, match="unused keys.*extra"):
+        with pytest.raises(ValueError, match=r"unused keys.*extra"):
 
             @compose_docstring(params="value", extra="not-used")
             def dummy_func():

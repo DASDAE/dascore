@@ -109,7 +109,7 @@ class TestUpdateLifecycle:
 
     def test_no_change_update_uses_narrow_projection(self, fresh, monkeypatch):
         """A no-op update reads only the stat columns, not the wide table."""
-        path, spool = fresh
+        _path, spool = fresh
         backend = spool.indexer._backend
 
         def _boom(self):

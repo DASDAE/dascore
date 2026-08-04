@@ -39,7 +39,7 @@ from .g1utils import (
 )
 from .t1utils import _get_t1_patch, _is_t1_file, _scan_t1
 
-_float_select_type = tuple[float | None | EllipsisType, float | None | EllipsisType]
+_float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
 _time_select_type = tuple[
     opt_timeable_types | EllipsisType,
     opt_timeable_types | EllipsisType,

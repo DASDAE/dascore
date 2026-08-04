@@ -86,15 +86,15 @@ class RSFV1(FiberIO):
         length = len(axis_lengs)
         hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
         for i in range(length):
-            hdr_info.append(f"n{i+1}={axis_lengs[i]}")
+            hdr_info.append(f"n{i + 1}={axis_lengs[i]}")
             if axis_names[i] == "time":
-                hdr_info.append(f"o{i+1}=0.0")
+                hdr_info.append(f"o{i + 1}=0.0")
                 hdr_info.append(f"starttime={axis_origs[i]}")
             else:
-                hdr_info.append(f"o{i+1}={axis_origs[i]}")
-            hdr_info.append(f"d{i+1}={axis_steps[i]}")
-            hdr_info.append(f'label{i+1}="{axis_names[i]}"')
-            hdr_info.append(f'unit{i+1}="{axis_units[i]}"')
+                hdr_info.append(f"o{i + 1}={axis_origs[i]}")
+            hdr_info.append(f"d{i + 1}={axis_steps[i]}")
+            hdr_info.append(f'label{i + 1}="{axis_names[i]}"')
+            hdr_info.append(f'unit{i + 1}="{axis_units[i]}"')
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
