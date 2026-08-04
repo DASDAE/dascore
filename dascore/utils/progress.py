@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sized
 from contextlib import suppress
 
 import rich.progress as prog
@@ -20,7 +20,6 @@ def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
     # If a progress class is passed in, just use it.
     if isinstance(progress, Progress):
         return progress
-    kwargs = {}
     progress_list = [
         prog.SpinnerColumn(),
         prog.TextColumn("[progress.description]{task.description}"),
@@ -32,9 +31,11 @@ def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
     ]
     if progress == "basic":
         # set the refresh rate very low and eliminate the spinner
-        kwargs["refresh_per_second"] = get_config().progress_basic_refresh_per_second
-        progress_list = progress_list[1:]
-    return Progress(*progress_list, **kwargs)
+        return Progress(
+            *progress_list[1:],
+            refresh_per_second=get_config().progress_basic_refresh_per_second,
+        )
+    return Progress(*progress_list)
 
 
 def track(
@@ -62,13 +63,13 @@ def track(
     min_length
         The minimum length to emmit a progress bar.
     """
-    # In the case of a generator we need to make sure this just exists
-    guess_len = length if length is not None else 0
-    with suppress(TypeError, ValueError):
-        length = len(sequence) if not guess_len else guess_len
-    if length is None:  # unsized iterable with no length given; no progress bar
-        length = 0
-    if length < min_length:
+    # A generator has no length, so only measure when none was passed in.
+    if not length and isinstance(sequence, Sized):
+        # Being Sized is not a promise: len() of a 0-d array still raises.
+        with suppress(TypeError, ValueError):
+            length = len(sequence)
+    # An unsized iterable with no length given gets no progress bar.
+    if length is None or length < min_length:
         length = 0
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
@@ -83,7 +84,7 @@ def track(
     with progress:
         yield from progress.track(
             sequence,
-            total=length or len(sequence),
+            total=length,
             description=description,
             update_period=update,
         )

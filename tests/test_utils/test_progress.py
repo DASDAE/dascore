@@ -24,6 +24,28 @@ class TestProgressBar:
         with config_context(debug=False):
             assert list(track(iter([1, 2, 3]), "unsized_tracker")) == [1, 2, 3]
 
+    def test_given_length_wins_over_the_sequence(self, monkeypatch):
+        """A length passed in is reported as the total, not the sequence's own."""
+        seen = {}
+
+        class DummyProgress:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def track(self, sequence, total=None, **_):
+                seen["total"] = total
+                yield from sequence
+
+        monkeypatch.setattr(
+            "dascore.utils.progress.get_progress_instance", lambda _: DummyProgress()
+        )
+        with config_context(debug=False):
+            assert list(track([1, 2, 3], "length_tracker", length=10)) == [1, 2, 3]
+        assert seen["total"] == 10
+
     def test_get_basic_progress(self):
         """Ensure we can return a basic progress bar."""
         pbar = get_progress_instance("basic")
