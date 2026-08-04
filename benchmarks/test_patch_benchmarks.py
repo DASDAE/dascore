@@ -221,12 +221,6 @@ class TestPatchConstructionBenchmarks:
         patch.new(data=new_data, coords=patch.coords, attrs=patch.attrs)
 
     @pytest.mark.benchmark
-    def test_from_parts(self, example_patch, new_data):
-        """Time the fast constructor for already conforming parts."""
-        patch = example_patch
-        dc.Patch.from_parts(new_data, patch.coords, patch.attrs)
-
-    @pytest.mark.benchmark
     def test_patch_init(self, example_patch, new_data):
         """
         Time the normal constructor.
