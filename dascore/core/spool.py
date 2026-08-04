@@ -187,7 +187,9 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             This often occurs because of data gaps or at end of chunks.
         snap_coords
             If True, snap the coords on joined patches such that the spacing
-            remains constant.
+            remains constant. If False, keep the original coordinate values
+            of the joined patches, which can result in unevenly sampled
+            patches.
         tolerance
             The maximum number of samples a block of data can be spaced (gap) and
             still be considered contiguous.
@@ -630,13 +632,17 @@ class DataFrameSpool(BaseSpool):
                 f"{merge_dim} but found {found_dim}."
             )
             raise CoordMergeError(msg)
-        conf = self._merge_kwargs.get("conflicts", None)
+        merge_kwargs = dict(self._merge_kwargs)
+        # snap_coords controls coordinate merging, not attr merging, so it
+        # must not be passed on to combine_patch_attrs.
+        snap = merge_kwargs.pop("snap_coords", True)
+        conf = merge_kwargs.get("conflicts", None)
         drop_conflicting = conf in {"drop", "keep_first"}
-        new_coord = _get_merged_coord(summary_df, merge_dim, coords, drop_conflicting)
-        coord = new_coord.coord_map[merge_dim]
-        new_attrs = combine_patch_attrs(
-            attrs, merge_dim, coord=coord, **self._merge_kwargs
+        new_coord = _get_merged_coord(
+            summary_df, merge_dim, coords, drop_conflicting, snap=snap
         )
+        coord = new_coord.coord_map[merge_dim]
+        new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _get_dummy_dataframes(self, current):
@@ -688,7 +694,6 @@ class DataFrameSpool(BaseSpool):
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
-            snap_coords=snap_coords,
             group_columns=self._group_columns,
             tolerance=tolerance,
             conflict=conflict,
@@ -703,7 +708,7 @@ class DataFrameSpool(BaseSpool):
             out_df,
             source_df=self._source_df,
             instruction_df=instructions,
-            merge_kwargs={"conflicts": conflict},
+            merge_kwargs={"conflicts": conflict, "snap_coords": snap_coords},
         )
 
     def new_from_df(

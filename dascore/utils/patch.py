@@ -416,13 +416,13 @@ def _maybe_expected_step(df, dim):
     return None
 
 
-def _get_merged_coord(df, merge_dim, coords, drop_conflicting=False):
+def _get_merged_coord(df, merge_dim, coords, drop_conflicting=False, snap=True):
     """Get merged coordinates, also validate anticipated sampling."""
     new_coord = merge_coord_managers(
         coords, dim=merge_dim, drop_conflicting=drop_conflicting
     )
     expected_step = _maybe_expected_step(df, merge_dim)
-    if not pd.isnull(expected_step):
+    if snap and not pd.isnull(expected_step):
         new_coord = new_coord.snap(merge_dim)[0]
         # TODO slightly different dt can be produced, let pass for now
         # need to think more about how the merging should work.
@@ -438,7 +438,10 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_dim(df)
-    merge_kwargs = merge_kwargs if merge_kwargs is not None else {}
+    merge_kwargs = dict(merge_kwargs) if merge_kwargs is not None else {}
+    # snap_coords controls coordinate merging, not attr merging, so it
+    # must not be passed on to combine_patch_attrs.
+    snap = merge_kwargs.pop("snap_coords", True)
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
@@ -454,7 +457,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     # Determine if conflicting non-dimensional coords should be dropped.
     conf = merge_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords)
+    new_coord = _get_merged_coord(df, merge_dim, coords, drop_conf_coords, snap=snap)
     coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
     new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
