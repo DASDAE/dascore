@@ -135,9 +135,9 @@ class TestDeltaPatch:
         assert isinstance(patch, dc.Patch), "delta_patch should return a Patch instance"
 
         dims = patch.dims
-        assert (
-            "time" in dims and "distance" in dims
-        ), "Patch must have 'time' and 'distance' dimensions"
+        assert "time" in dims and "distance" in dims, (
+            "Patch must have 'time' and 'distance' dimensions"
+        )
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_delta_location(self, dim):
@@ -158,9 +158,9 @@ class TestDeltaPatch:
         # Replace the center value with zero and ensure all zeros remain
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_with_patch(self, dim):
@@ -180,9 +180,9 @@ class TestDeltaPatch:
         assert data[mid_idx] == 1.0, "Center sample should be 1.0"
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )
 
     @pytest.mark.parametrize("dim", ["lag_time", "distance"])
     def test_delta_patch_with_3d_patch(self, dim):
@@ -201,6 +201,6 @@ class TestDeltaPatch:
         assert data[mid_idx] == 1.0, "Center sample should be 1.0"
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )

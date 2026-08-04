@@ -536,10 +536,7 @@ class Spool(BaseSpool):
                 np.issubdtype(array.dtype, np.bool_)
                 or np.issubdtype(array.dtype, np.integer)
             ):
-                msg = (
-                    "Only bool or int dtypes are supported for spool "
-                    "array selection."
-                )
+                msg = "Only bool or int dtypes are supported for spool array selection."
                 raise ValueError(msg)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:

@@ -339,7 +339,7 @@ class TestPlanMembers:
     def test_modified_flag_no_chunk(self, contiguous_df):
         """Rows whose limits don't change aren't modified."""
         time_diff = contiguous_df["time_max"] - contiguous_df["time_min"]
-        df = contiguous_df.assign(time_max=lambda x: (x["time_max"] - x["time_step"]))
+        df = contiguous_df.assign(time_max=lambda x: x["time_max"] - x["time_step"])
         plan = build_chunk_plan(
             df, overlap=0, time=time_diff.iloc[0], keep_partial=True
         )

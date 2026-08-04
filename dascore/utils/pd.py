@@ -637,9 +637,9 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
     """
     dims = patch.dims
     # ensure a 2D patch is passed
-    assert (
-        len(dims) == 2
-    ), "Patch must have exactly 2 dimensions to convert to dataframe"
+    assert len(dims) == 2, (
+        "Patch must have exactly 2 dimensions to convert to dataframe"
+    )
     # get arrays with dimensional values
     index_values = patch.get_coord(dims[0]).values
     col_values = patch.get_coord(dims[1]).values

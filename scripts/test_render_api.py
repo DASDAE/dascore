@@ -10,7 +10,7 @@ import pytest
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
-from _render_api import build_signature, get_type_hints, to_quarto_code  # noqa
+from _render_api import build_signature, get_type_hints, to_quarto_code
 
 
 class TestGetTypeHints:

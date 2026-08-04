@@ -377,10 +377,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def _order_by_sample_array(self, array):
         """Select based on index values."""
         if not np.issubdtype(array.dtype, np.integer):
-            msg = (
-                "Using an array input for select "
-                "with samples requires integer dtype."
-            )
+            msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
         array = array[np.abs(array) < len(self)]
@@ -863,7 +860,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def get_slice_tuple(
         self,
-        select: slice | None | EllipsisType | tuple[Any, Any],
+        select: slice | EllipsisType | tuple[Any, Any] | None,
         relative=False,
     ) -> tuple[Any, Any]:
         """
@@ -1005,7 +1002,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
-                f"value of {value} with samples={samples } results in a window "
+                f"value of {value} with samples={samples} results in a window "
                 f"larger than coordinate length of {len(self)}."
             )
             raise ParameterError(msg)
@@ -1991,8 +1988,7 @@ def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
     for seg in segments:
         if not isinstance(seg, CoordRange | CoordMonotonicArray):
             msg = (
-                "Segments must be CoordRange or CoordMonotonicArray, "
-                f"got {type(seg)}."
+                f"Segments must be CoordRange or CoordMonotonicArray, got {type(seg)}."
             )
             raise CoordError(msg)
         if not len(seg):
@@ -2810,15 +2806,15 @@ class CoordString(BaseCoord):
 
 def get_coord(
     *,
-    data: ArrayLike | None | np.ndarray | BaseCoord = None,
-    values: ArrayLike | None | np.ndarray = None,
+    data: ArrayLike | np.ndarray | BaseCoord | None = None,
+    values: ArrayLike | np.ndarray | None = None,
     start=None,
     min=None,
     stop=None,
     max=None,
     step=None,
-    units: None | Unit | Quantity | str = None,
-    shape: None | int | tuple[int, ...] = None,
+    units: Unit | Quantity | str | None = None,
+    shape: int | tuple[int, ...] | None = None,
     dtype: str | np.dtype | None = None,
     segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
 ) -> BaseCoord:

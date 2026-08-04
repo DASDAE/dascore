@@ -174,8 +174,8 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 def convert_units(
     data: numeric | Quantity,
-    to_units: None | str | Quantity,
-    from_units: None | str | Quantity = None,
+    to_units: str | Quantity | None,
+    from_units: str | Quantity | None = None,
 ) -> numeric:
     """
     Convert units in array from one type of units to another.
@@ -325,7 +325,7 @@ def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
     to_unit: str | Quantity,
-    dim: None | str = None,
+    dim: str | None = None,
 ) -> tuple[float, float]:
     """
     Get a tuple for applying filter based on dimension coordinates.

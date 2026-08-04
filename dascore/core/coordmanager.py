@@ -529,10 +529,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = dict(self.dim_map)
         for old_dim, new_dim in kwargs.items():
             if new_dim not in coord_map or old_dim not in dims:
-                msg = (
-                    f"{old_dim} is not a dimension or {new_dim} is not a "
-                    f"coordinate."
-                )
+                msg = f"{old_dim} is not a dimension or {new_dim} is not a coordinate."
                 raise CoordError(msg)
             # ensure coords have the same shape
             old_coord, new_coord = coord_map[old_dim], coord_map[new_dim]
@@ -696,7 +693,7 @@ class CoordManager(DascoreBaseModel):
         """
         used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
         if len(set(used_dims)) < len(used_dims):
-            msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+            msg = f"Cannot use {kwargs} for query; some coords share a dimension."
             raise CoordError(msg)
 
     def __rich__(self) -> str:

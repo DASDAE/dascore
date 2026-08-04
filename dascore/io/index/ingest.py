@@ -359,7 +359,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             step_num=step_num,
             **common,
         )
-    if dtype.kind in "US" or dtype == object:
+    if dtype.kind in "USO":
         return CoordRecord(
             value_kind="str",
             min_str=str(summary.min),

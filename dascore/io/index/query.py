@@ -102,7 +102,7 @@ def _to_target_unit(typed, target_units: str | None, name: str):
 def _range_bounds(
     value,
     target_kinds: set[str],
-    target_units: str | None | object = _UNSET,
+    target_units: str | object | None = _UNSET,
     name: str = "value",
 ):
     """

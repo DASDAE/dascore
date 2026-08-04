@@ -229,6 +229,11 @@ max-complexity = 10
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
+# Notebooks are exploratory; ruff started linting them in v0.16 and the
+# docstring rules make little sense for a scratch cell.
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["D103"]
+
 [tool.pytest.ini_options]
 norecursedirs = [
     "*.egg",
