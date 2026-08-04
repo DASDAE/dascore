@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import typing
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
-from _render_api import get_type_hints, to_quarto_code  # noqa
+from _render_api import build_signature, get_type_hints, to_quarto_code  # noqa
 
 
 class TestGetTypeHints:
@@ -40,6 +41,19 @@ class TestGetTypeHints:
         with pytest.raises(NameError):
             typing.get_type_hints(Klass)
         assert get_type_hints(Klass) == {"attr": "OnlyImportedWhileTypeChecking"}
+
+    def test_signature_of_type_checking_annotated_class(self):
+        """Spool annotates a TYPE_CHECKING-only import; it must still render."""
+        from dascore.core.spool import Spool
+
+        data = {
+            "signature": inspect.signature(Spool),
+            "object": Spool,
+            "name": "Spool",
+        }
+        out = build_signature(data, {}, {})
+        assert "<b>Spool</b>" in out
+        assert "data" in out
 
 
 class TestToQuartoCode:
