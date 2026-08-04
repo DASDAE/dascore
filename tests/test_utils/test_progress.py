@@ -24,9 +24,15 @@ class TestProgressBar:
         with config_context(debug=False):
             assert list(track(iter([1, 2, 3]), "unsized_tracker")) == [1, 2, 3]
 
-    def test_given_length_wins_over_the_sequence(self, monkeypatch):
-        """A length passed in is reported as the total, not the sequence's own."""
+    def test_given_length_is_the_reported_total(self, monkeypatch):
+        """A length passed in is the bar's total; the sequence is not measured."""
         seen = {}
+
+        class Unmeasurable(list):
+            """A sequence which fails if anything asks for its length."""
+
+            def __len__(self):
+                raise AssertionError("the sequence should not be measured")
 
         class DummyProgress:
             def __enter__(self):
@@ -43,7 +49,8 @@ class TestProgressBar:
             "dascore.utils.progress.get_progress_instance", lambda _: DummyProgress()
         )
         with config_context(debug=False):
-            assert list(track([1, 2, 3], "length_tracker", length=10)) == [1, 2, 3]
+            sequence = Unmeasurable([1, 2, 3])
+            assert list(track(sequence, "length_tracker", length=10)) == [1, 2, 3]
         assert seen["total"] == 10
 
     def test_get_basic_progress(self):
