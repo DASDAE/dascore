@@ -245,33 +245,53 @@ class TestFilterDfAdvanced:
         assert np.all(filter_df(df, step_min=cutoff) == (df["step"] >= cutoff))
         assert np.all(filter_df(df, step_max=cutoff) == (df["step"] <= cutoff))
 
-    @pytest.mark.parametrize("val", [("2020-01-03", ...), (..., "2020-01-03")])
-    def test_ellipsis_in_column_query_raises(self, example_df_2, val):
+    @pytest.mark.parametrize(
+        "val",
+        [
+            ("2020-01-03", ...),
+            (..., "2020-01-03"),
+            ("2020-01-03", None),
+            (None, "2020-01-03"),
+        ],
+    )
+    def test_open_bound_on_interval_column_raises(self, example_df_2, val):
         """
-        An ellipsis in a membership query matches nothing; it should raise
-        rather than silently return an empty result. See #808.
+        An open bound in a membership query on an interval column is a range
+        query aimed at the wrong key; it should raise rather than silently
+        return an empty result. See #808.
         """
-        with pytest.raises(ParameterError, match="Ellipsis"):
+        with pytest.raises(ParameterError, match=r"Use time=\(min, max\)"):
             filter_df(example_df_2, time_min=val)
 
-    def test_ellipsis_error_suggests_dimension(self, example_df_2):
-        """The error should point at the dimension form of the query."""
-        with pytest.raises(ParameterError, match=r"Use time=\(min, max\)"):
-            filter_df(example_df_2, time_min=("2020-01-03", ...))
-
-    def test_ellipsis_error_non_interval_column(self, example_df_2):
-        """Columns without min/max pairs still raise, just with no suggestion."""
-        with pytest.raises(ParameterError, match="Ellipsis") as exc:
-            filter_df(example_df_2, first_name=("Jason", ...))
-        assert "Use " not in str(exc.value)
-
-    def test_ellipsis_ignored_for_unknown_column(self, example_df_2):
+    def test_closed_range_on_interval_column_still_isin(self, example_df_2):
         """
-        Unknown columns are forwarded to patch level select, so an ellipsis
+        Without an open bound the query is ambiguous, so the documented isin
+        behavior is kept.
+        """
+        vals = list(example_df_2["bp_min"].iloc[:2])
+        out = filter_df(example_df_2, bp_min=tuple(vals))
+        assert np.all(out == example_df_2["bp_min"].isin(vals))
+
+    def test_ellipsis_kept_for_non_interval_column(self, example_df_2):
+        """
+        Columns with no min/max pair are plain isin checks; an ellipsis there
+        contributes nothing but must not break the rest of the collection.
+        """
+        out = filter_df(example_df_2, first_name=("Jason", ...))
+        assert np.all(out == example_df_2["first_name"].isin(["Jason"]))
+
+    def test_open_bound_ignored_for_unknown_column(self, example_df_2):
+        """
+        Unknown columns are forwarded to patch level select, so an open bound
         in one of them must not raise here.
         """
         out = filter_df(example_df_2, not_a_column=(1, ...), ignore_bad_kwargs=True)
         assert out.all()
+
+    def test_spool_select_open_bound_on_interval_column(self, random_spool):
+        """The user facing path which prompted this: spool.select(time_min=...)."""
+        with pytest.raises(ParameterError, match=r"Use time=\(min, max\)"):
+            random_spool.select(time_min=("2020-01-01", ...))
 
 
 class TestAdjustSegments:

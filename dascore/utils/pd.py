@@ -134,31 +134,34 @@ def _filter_equality(query_dict, df, bool_index):
     return bool_index
 
 
-def _raise_on_ellipsis_membership(key, val, df):
+def _check_misdirected_range_query(key, val, df):
     """
-    Raise a helpful error for an open-ended range applied to a column.
+    Raise if a range query was aimed at an interval column.
 
-    A collection of values is a membership (isin) check, so an ellipsis in it
-    matches nothing. This is nearly always a range query aimed at the wrong
-    key, which would otherwise fail silently by returning an empty result.
+    Columns like time_min/time_max hold the limits of each row, and a
+    collection of values applied to one is a membership (isin) check. An open
+    bound (... or None) in such a collection is meaningless, and signals a
+    range query which belongs on the dimension instead, eg
+    time_min=(t1, ...) should be time=(t1, ...). Without this the query would
+    silently match nothing.
     """
-    msg = (
-        f"Ellipsis (...) is not valid in the query for column '{key}'; a "
-        f"collection of values is an isin check, not a range."
-    )
-    # Suggest the dimension name when the column is an interval column,
-    # eg time_min=(t1, ...) should be time=(t1, ...).
     base = key[:-4] if key.endswith(("_min", "_max")) else None
-    if base and {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
-        msg += f" Use {base}=(min, max) to query a range of {base} values."
+    if base is None or not {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
+        return
+    if not any(x is ... or x is None for x in val):
+        return
+    msg = (
+        f"An open bound (... or None) is not valid in the query for column "
+        f"'{key}'; a collection of values is an isin check, not a range. "
+        f"Use {base}=(min, max) to query a range of {base} values."
+    )
     raise ParameterError(msg)
 
 
 def _filter_contains(query_dict, df, bool_index):
     """Filter based on rows containing specified values."""
     for key, val in query_dict.items():
-        if any(x is ... for x in val):
-            _raise_on_ellipsis_membership(key, val, df)
+        _check_misdirected_range_query(key, val, df)
         bool_index = np.logical_and(bool_index, df[key].isin(val))
     return bool_index
 
