@@ -38,16 +38,16 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
-    COORD_DEFS,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
-    PATCH_COORDS,
-    PATCHES,
-    SOURCES,
     TABLE_CONSTRAINTS,
     TABLES,
     WHAT_IS_THIS,
+    CoordDefRow,
+    PatchCoordRow,
+    PatchRow,
+    SourceRow,
 )
 from dascore.units import convert_units
 from dascore.utils.pd import resolve_selector_namespaces
@@ -306,15 +306,11 @@ class SQLIndexBackend(abc.ABC):
         failing the whole index update.
         """
         meta = self._attr_meta()
-        mapping = {
-            (row.attr_name, row.value_kind): row.column_name
-            for row in meta.itertuples()
-        }
+        keys = list(zip(meta["attr_name"], meta["value_kind"], strict=True))
+        mapping = dict(zip(keys, meta["column_name"], strict=True))
         stored_units = {
-            (row.attr_name, row.value_kind): (
-                None if pd.isnull(row.units) else row.units
-            )
-            for row in meta.itertuples()
+            key: (None if pd.isnull(units) else units)
+            for key, units in zip(keys, meta["units"], strict=True)
         }
         taken = set(mapping.values())
         observed: dict[tuple[str, str], set[str | None]] = {}
@@ -408,7 +404,7 @@ class SQLIndexBackend(abc.ABC):
             )
             mapping[key] = next_id
             next_id += 1
-        self._bulk_insert("coord_defs", tuple(COORD_DEFS), def_rows)
+        self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
         return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
@@ -515,14 +511,14 @@ class SQLIndexBackend(abc.ABC):
                         link_rows.append((patch_id, c.coord_name, c.coord_dims, key))
                     patch_id += 1
                 source_id += 1
-            self._bulk_insert("sources", tuple(SOURCES), source_rows)
-            self._bulk_insert("patches", tuple(PATCHES), patch_rows)
+            self._bulk_insert("sources", SourceRow._fields, source_rows)
+            self._bulk_insert("patches", PatchRow._fields, patch_rows)
             for columns, rows in attr_groups.items():
                 self._bulk_insert("attrs", ("patch_id", *columns), rows)
             def_ids = self._ensure_coord_defs(defs_needed)
             self._bulk_insert(
                 "patch_coords",
-                tuple(PATCH_COORDS),
+                PatchCoordRow._fields,
                 [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
             )
             # meta_data.last_indexed_ns is the initial-update-complete
@@ -563,9 +559,9 @@ class SQLIndexBackend(abc.ABC):
                     f"WHERE source_path IN ({marks}) AND base_uri = ?",
                     [*chunk, base_uri],
                 )
-                for row in df.itertuples():
-                    if not pd.isnull(row.ordinal):
-                        out[(base_uri, row.source_path)] = int(row.ordinal)
+                for path, ordinal in zip(df["source_path"], df["ordinal"], strict=True):
+                    if not pd.isnull(ordinal):
+                        out[(base_uri, path)] = int(ordinal)
         return out
 
     def renumber_ordinals_by_time(self) -> None:
@@ -647,10 +643,11 @@ class SQLIndexBackend(abc.ABC):
             # attr name -> [(kind, column)] once; per-move dataframe
             # filtering dominated large renames.
             kinds_by_name: dict[str, list[tuple[str, str]]] = {}
-            for row in self._attr_meta().itertuples():
-                kinds_by_name.setdefault(row.attr_name, []).append(
-                    (row.value_kind, row.column_name)
-                )
+            meta = self._attr_meta()
+            for name, kind, column in zip(
+                meta["attr_name"], meta["value_kind"], meta["column_name"], strict=True
+            ):
+                kinds_by_name.setdefault(name, []).append((kind, column))
             now = time.time_ns()
             ids: dict[str, int] = {}
             for chunk, marks in self._iter_in_batches(list(moves)):
@@ -866,22 +863,24 @@ class SQLIndexBackend(abc.ABC):
             kinds = set(rows["value_kind"])
             multi_kind = len(rows) > 1
             series = None
-            for row in rows.itertuples():
-                if row.column_name not in out:
+            for column, kind in zip(
+                rows["column_name"], rows["value_kind"], strict=True
+            ):
+                if column not in out:
                     continue
-                col = out[row.column_name]
-                if row.value_kind == "time":
+                col = out[column]
+                if kind == "time":
                     col = _ns_to_time(col, "datetime")
-                elif row.value_kind == "dur":
+                elif kind == "dur":
                     col = _ns_to_time(col, "timedelta")
-                elif row.value_kind == "bool":
+                elif kind == "bool":
                     col = col.astype("boolean")
                 if multi_kind:
                     # multi-kind attrs coalesce in object space; typed
                     # extension arrays refuse cross-dtype fills
                     col = col.astype(object).where(col.notna(), np.nan)
                 series = col if series is None else series.where(series.notna(), col)
-                cols_to_drop.append(row.column_name)
+                cols_to_drop.append(column)
             if series is not None:
                 if kinds == {"str"}:
                     # flat-contract convention: missing strings are ""

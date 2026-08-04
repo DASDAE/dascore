@@ -15,7 +15,7 @@ from functools import cache
 from io import IOBase
 from pathlib import Path
 from types import ModuleType
-from typing import Literal
+from typing import Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -432,6 +432,22 @@ def iterate(obj):
     return obj if isinstance(obj, Iterable) else (obj,)
 
 
+@overload
+def optional_import(
+    package_name: str,
+    on_missing: Literal["raise"] = "raise",
+    required_for: str = "the requested functionality",
+) -> ModuleType: ...
+
+
+@overload
+def optional_import(
+    package_name: str,
+    on_missing: Literal["warn", "ignore"],
+    required_for: str = "the requested functionality",
+) -> ModuleType | None: ...
+
+
 def optional_import(
     package_name: str,
     on_missing: Literal["raise", "warn", "ignore"] = "raise",
@@ -557,10 +573,12 @@ def get_stencil_coefs(order, derivative=2):
 
 def get_parent_code_name(levels: int = 2) -> str:
     """Get the name of the calling function/class levels up in stack."""
-    stack = inspect.currentframe()
+    frame = inspect.currentframe()
     for _ in range(levels):
-        stack = stack.f_back
-    return stack.f_code.co_name
+        frame = frame.f_back if frame is not None else None
+    if frame is None:  # asked for a frame above the top of the stack
+        return "<unknown>"
+    return frame.f_code.co_name
 
 
 def to_str(val):
@@ -993,7 +1011,9 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
         A buffered reader, e.g. from open(file) as fid.
     """
     try:
-        raw = np.memmap(fid.name, dtype=dtype, mode="r")
+        # File objects backed by memory (BytesIO and friends) have no
+        # usable name; those fall through to the in-memory read below.
+        raw = np.memmap(getattr(fid, "name", None), dtype=dtype, mode="r")
     except (AttributeError, TypeError, ValueError):
         # Fallback: read into memory
         fid.seek(0)

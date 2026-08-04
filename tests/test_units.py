@@ -257,6 +257,16 @@ class TestGetFilterUnits:
         with pytest.raises(UnitError):
             get_filter_units(1.0 * s, 10.0 * hz, s)
 
+    def test_impure_to_unit_raises(self):
+        """to_unit names a unit; a scaled quantity has no filter meaning."""
+        s = get_unit("s")
+        match = "must be a unit of magnitude 1"
+        with pytest.raises(UnitError, match=match):
+            get_filter_units(1.0 * s, 10.0 * s, 2 * s)
+
+        with pytest.raises(UnitError, match=match):
+            get_filter_units(1.0 * s, 10.0 * s, "")
+
     def test_incompatible_units_raise(self):
         """The units must be the same or it should raise."""
         s, m = get_unit("s"), get_unit("m")

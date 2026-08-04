@@ -1,14 +1,28 @@
 """
 Logical schema for the spool index.
 
-The schema uses four primitive storage types (int64, float64, str, bool).
-Times and durations are always epoch/plain nanoseconds stored as int64,
-never engine-native timestamp types.
+Each stored table is declared once, as a NamedTuple naming its columns in
+order. The column types are the four primitive storage types (int64,
+float64, str, bool), written as the python type each surfaces as and
+marked with None where the column is nullable; times and durations are
+always epoch/plain nanoseconds stored as int64, never engine-native
+timestamp types.
+
+The row classes are the single source of truth: `TABLES` (the logical
+column types the DDL is built from) is derived from them, and index code
+reads rows through them with `iter_rows(df, Row)` (see dascore.utils.pd),
+which names — for readers and type checkers, not at runtime — the row
+shape pandas builds dynamically in `itertuples`. The classes are never
+instantiated. A frame holding only some of a table's columns
+still uses its table's row class; only the columns actually fetched can
+be read, and nullable ones may arrive as NaN rather than None (reading
+code guards with `pd.isnull`).
 """
 
 from __future__ import annotations
 
 from types import MappingProxyType
+from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
 INDEX_VERSION = 4
@@ -28,125 +42,166 @@ KIND_STORAGE = MappingProxyType(
     }
 )
 
-META_DATA = MappingProxyType(
+# The logical storage type each declared python type maps to.
+_STORAGE_TYPES = MappingProxyType(
+    {int: "int64", float: "float64", str: "str", bool: "bool"}
+)
+
+
+class MetaDataRow(NamedTuple):
+    """A row of the meta_data table (the index's identity and version)."""
+
+    what_is_this: str
+    index_version: int
+    dascore_version: str
+    last_indexed_ns: int
+
+
+class SourceRow(NamedTuple):
+    """A row of the sources table (one scan unit)."""
+
+    source_id: int
+    base_uri: str
+    source_path: str
+    source_format: str
+    format_version: str
+    mtime_ns: int | None
+    size_bytes: int | None
+    # JSON dict of hive-style key=value attrs parsed from the stored
+    # path's directory segments; NULL when the path carries none.
+    # Records which attr values are path-derived so moves can rewrite
+    # them and patch loading can stamp them without re-parsing paths
+    # (derived/union catalogs absolutize paths, losing the segments).
+    path_attrs: str | None
+    last_indexed_ns: int
+    # The catalog's explicit ordering contract: patch rows present in
+    # (ordinal, patch_id) order. Assigned at ingest (insertion
+    # sequence); a replaced source keeps its position while new
+    # sources append, so merging catalogs concatenates and
+    # deduplication keeps first-occurrence position with
+    # last-occurrence metadata (dict-merge semantics). The directory
+    # syncer renumbers to time order after each sync, preserving the
+    # conventional time-ordered presentation of file archives.
+    ordinal: int
+
+
+class PatchRow(NamedTuple):
+    """
+    A row of the patches table.
+
+    Frozen structural table; nothing dynamic is ever added here. The
+    time/distance envelopes are cached summaries of the two conventional
+    dims (hot path), not attr promotion.
+    """
+
+    patch_id: int
+    source_id: int
+    source_patch_id: str
+    n_dims: int
+    dims: str
+    shape: str
+    sample_count_total: int | None
+    time_min: int | None  # epoch ns; NULL for relative-time patches
+    time_max: int | None
+    time_step: int | None
+    distance_min: float | None  # canonical SI (m)
+    distance_max: float | None
+    distance_step: float | None
+
+
+class AttrsRow(NamedTuple):
+    """
+    The fixed part of an attrs row.
+
+    The table starts with only the key; typed columns (`<name>__<kind>`)
+    are added lazily at ingest, so a fetched row carries more than this.
+    """
+
+    patch_id: int
+
+
+class AttrMetaRow(NamedTuple):
+    """A row of the attr_meta table (one indexed attr name and kind)."""
+
+    attr_name: str  # original (unsanitized) attr name
+    value_kind: str
+    column_name: str  # sanitized column in the attrs table
+    units: str | None  # canonical unit for num kinds
+
+
+class CoordDefRow(NamedTuple):
+    """
+    A row of the coord_defs table.
+
+    Unique coordinate summaries, deduplicated across patches. Range
+    coordinates use a semantic fingerprint supplied by the scan or
+    reconstructed exactly from the range summary. Non-range coordinates
+    without a fingerprint use a summary hash for storage deduplication,
+    but it is not exposed as value identity.
+    """
+
+    coord_def_id: int
+    def_key: str
+    fingerprint: str | None  # semantic hash from CoordSummary
+    value_kind: str  # num | time | str
+    dtype: str
+    length: int | None
+    units: str | None  # original unit string; numeric values stored SI
+    min_num: float | None
+    max_num: float | None
+    step_num: float | None
+    min_ns: int | None
+    max_ns: int | None
+    step_ns: int | None
+    min_str: str | None
+    max_str: str | None
+    is_monotonic: bool | None
+    is_relative: bool | None
+
+
+class PatchCoordRow(NamedTuple):
+    """
+    A row of the patch_coords table.
+
+    Links a patch to its coord defs; the name and dims are patch-level
+    semantics (two patches can share values under different names).
+    """
+
+    patch_id: int
+    coord_name: str
+    coord_dims: str
+    coord_def_id: int
+
+
+# The row class declaring each stored table.
+TABLE_ROWS = MappingProxyType(
     {
-        "what_is_this": "str",
-        "index_version": "int64",
-        "dascore_version": "str",
-        "last_indexed_ns": "int64",
+        "meta_data": MetaDataRow,
+        "sources": SourceRow,
+        "patches": PatchRow,
+        "attrs": AttrsRow,
+        "attr_meta": AttrMetaRow,
+        "coord_defs": CoordDefRow,
+        "patch_coords": PatchCoordRow,
     }
 )
 
-SOURCES = MappingProxyType(
-    {
-        "source_id": "int64",
-        "base_uri": "str",
-        "source_path": "str",
-        "source_format": "str",
-        "format_version": "str",
-        "mtime_ns": "int64",
-        "size_bytes": "int64",
-        # JSON dict of hive-style key=value attrs parsed from the stored
-        # path's directory segments; NULL when the path carries none.
-        # Records which attr values are path-derived so moves can rewrite
-        # them and patch loading can stamp them without re-parsing paths
-        # (derived/union catalogs absolutize paths, losing the segments).
-        "path_attrs": "str",
-        "last_indexed_ns": "int64",
-        # The catalog's explicit ordering contract: patch rows present in
-        # (ordinal, patch_id) order. Assigned at ingest (insertion
-        # sequence); a replaced source keeps its position while new
-        # sources append, so merging catalogs concatenates and
-        # deduplication keeps first-occurrence position with
-        # last-occurrence metadata (dict-merge semantics). The directory
-        # syncer renumbers to time order after each sync, preserving the
-        # conventional time-ordered presentation of file archives.
-        "ordinal": "int64",
-    }
-)
 
-# Frozen structural table; nothing dynamic is ever added here. The
-# time/distance envelopes are cached summaries of the two conventional
-# dims (hot path), not attr promotion.
-PATCHES = MappingProxyType(
-    {
-        "patch_id": "int64",
-        "source_id": "int64",
-        "source_patch_id": "str",
-        "n_dims": "int64",
-        "dims": "str",
-        "shape": "str",
-        "sample_count_total": "int64",
-        "time_min": "int64",  # epoch ns; NULL for relative-time patches
-        "time_max": "int64",
-        "time_step": "int64",
-        "distance_min": "float64",  # canonical SI (m)
-        "distance_max": "float64",
-        "distance_step": "float64",
-    }
-)
+def _columns(row_type: type[NamedTuple]) -> MappingProxyType[str, str]:
+    """Return a row class's {column: logical storage type} mapping."""
+    out = {}
+    for name, hint in get_type_hints(row_type).items():
+        # Nullability is not part of the storage type; a nullable column
+        # is declared as `<type> | None` for readers of the row.
+        types = set(get_args(hint)) - {type(None)} or {hint}
+        assert len(types) == 1, f"{row_type.__name__}.{name} needs one storage type"
+        out[name] = _STORAGE_TYPES[types.pop()]
+    return MappingProxyType(out)
 
-# attrs table starts with only the key; typed columns (`<name>__<kind>`)
-# are added lazily at ingest.
-ATTRS_BASE = MappingProxyType({"patch_id": "int64"})
 
-ATTR_META = MappingProxyType(
-    {
-        "attr_name": "str",  # original (unsanitized) attr name
-        "value_kind": "str",
-        "column_name": "str",  # sanitized column in the attrs table
-        "units": "str",  # canonical unit for num kinds, nullable
-    }
-)
-
-# Unique coordinate summaries, deduplicated across patches. Range coordinates
-# use a semantic fingerprint supplied by the scan or reconstructed exactly
-# from the range summary. Non-range coordinates without a fingerprint use a
-# summary hash for storage deduplication, but it is not exposed as value identity.
-COORD_DEFS = MappingProxyType(
-    {
-        "coord_def_id": "int64",
-        "def_key": "str",
-        "fingerprint": "str",  # nullable; semantic hash from CoordSummary
-        "value_kind": "str",  # num | time | str
-        "dtype": "str",
-        "length": "int64",
-        "units": "str",  # original unit string; numeric values stored SI
-        "min_num": "float64",
-        "max_num": "float64",
-        "step_num": "float64",
-        "min_ns": "int64",
-        "max_ns": "int64",
-        "step_ns": "int64",
-        "min_str": "str",
-        "max_str": "str",
-        "is_monotonic": "bool",
-        "is_relative": "bool",
-    }
-)
-
-# Links a patch to its coord defs; the name and dims are patch-level
-# semantics (two patches can share values under different names).
-PATCH_COORDS = MappingProxyType(
-    {
-        "patch_id": "int64",
-        "coord_name": "str",
-        "coord_dims": "str",
-        "coord_def_id": "int64",
-    }
-)
-
-TABLES = MappingProxyType(
-    {
-        "meta_data": META_DATA,
-        "sources": SOURCES,
-        "patches": PATCHES,
-        "attrs": ATTRS_BASE,
-        "attr_meta": ATTR_META,
-        "coord_defs": COORD_DEFS,
-        "patch_coords": PATCH_COORDS,
-    }
-)
+# The logical columns of each table, in declaration order; the DDL and
+# every insert's column list are built from these.
+TABLES = MappingProxyType({name: _columns(row) for name, row in TABLE_ROWS.items()})
 
 # Keeping constraints beside the logical columns makes the stored contract
 # explicit and keeps dynamic attr-column DDL separate from table identity.

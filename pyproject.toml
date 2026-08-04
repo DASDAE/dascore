@@ -260,12 +260,11 @@ line-ending = "lf"
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
 # Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Counts as of 2026-08-01: invalid-argument-type 179,
-# unresolved-attribute 138, invalid-return-type 72, invalid-method-override 35,
-# not-subscriptable 19, no-matching-overload 12.
+# burned down. Counts as of 2026-08-03: invalid-argument-type 171,
+# invalid-return-type 69, invalid-method-override 36, no-matching-overload 13,
+# not-subscriptable 5.
 [tool.ty.rules]
 invalid-argument-type = "ignore"
-unresolved-attribute = "ignore"
 invalid-return-type = "ignore"
 no-matching-overload = "ignore"
 not-subscriptable = "ignore"

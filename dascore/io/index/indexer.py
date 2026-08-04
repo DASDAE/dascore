@@ -356,13 +356,15 @@ class DBDirectoryIndexer:
         stats and rewritten in place, never rescanned (see _detect_moves).
         """
         files = self._walk()
+        stats = self._backend.source_stats()
         stored = {
-            row.source_path: (
-                None
-                if pd.isnull(row.mtime_ns)
-                else (int(row.mtime_ns), int(row.size_bytes))
+            path: (None if pd.isnull(mtime) else (int(mtime), int(size)))
+            for path, mtime, size in zip(
+                stats["source_path"],
+                stats["mtime_ns"],
+                stats["size_bytes"],
+                strict=True,
             )
-            for row in self._backend.source_stats().itertuples()
         }
         stale = [path for path in stored if path not in files]
         changed = [

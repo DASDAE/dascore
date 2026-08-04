@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -290,6 +290,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     step: Any = None
     shape: tuple[int, ...] | None = None
     dtype: Any = None
+
+    if TYPE_CHECKING:
+        # Every coord exposes its values, but the array-backed coords store
+        # them in a pydantic field while the rest compute them in a property.
+        # Pydantic refuses to let a field shadow an inherited property (and a
+        # field here would make values a required init argument), so the
+        # shared interface is only declared for type checkers.
+        @property
+        def values(self) -> ArrayLike:
+            """The coordinate's values."""
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
@@ -619,17 +629,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return np.prod(self.shape)
 
     @property
-    def evenly_sampled(self) -> tuple[int, ...]:
+    def evenly_sampled(self) -> bool:
         """Returns True if the coord is evenly sampled."""
         return self._evenly_sampled
 
     @property
-    def sorted(self) -> tuple[int, ...]:
+    def sorted(self) -> bool:
         """Returns True if the coord in sorted."""
         return self._sorted
 
     @property
-    def reverse_sorted(self) -> tuple[int, ...]:
+    def reverse_sorted(self) -> bool:
         """Returns True if the coord in sorted in reverse order."""
         return self._reverse_sorted
 
@@ -996,6 +1006,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return samples
 
+    def _get_index(self, value, forward=True):
+        """
+        Get the index a value would occupy in the coordinate.
+
+        Overridden by the coords that index by value. Unordered arrays
+        have no such position, and string coords deliberately keep out of
+        positional semantics (see _raise_string_coord_error).
+        """
+        msg = f"{type(self).__name__} does not support indexing by value."
+        raise CoordError(msg)
+
     def get_next_index(
         self, value, samples=False, allow_out_of_bounds=False, relative=False
     ) -> int:
@@ -1097,9 +1118,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return self == other
         if any(non_coords):
             return False
-        # Evenly sampled coords with identical start/stop/step have identical
-        # values; this avoids materializing and comparing the value arrays.
-        if self._evenly_sampled and other._evenly_sampled:
+        # Ranges (the evenly sampled coords) with identical start/stop/step
+        # have identical values; this avoids materializing and comparing
+        # the value arrays.
+        if isinstance(self, CoordRange) and isinstance(other, CoordRange):
             same = (
                 self.start == other.start
                 and self.stop == other.stop
@@ -2255,6 +2277,7 @@ class CoordSegmented(BaseCoord):
                 sub, seg_lo, seg_hi = seg, 0, len(seg)
             else:  # boundary segment; delegate the exact trim
                 sub, indexer = seg.select((v1, v2))
+                assert isinstance(indexer, slice)  # a value window is contiguous
                 seg_lo, seg_hi, _ = indexer.indices(len(seg))
                 if seg_hi <= seg_lo:
                     continue

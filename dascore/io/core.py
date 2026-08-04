@@ -8,12 +8,20 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal, NotRequired, TypedDict, get_type_hints
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    cast,
+    get_type_hints,
+)
 
 import numpy as np
 import pandas as pd
@@ -713,7 +721,7 @@ class _FiberIOManager:
                 # may happen in each fiber_ios get_format method, many of which
                 # may be third party code.
                 func = fiber_io.get_format
-                required_type = func._required_type
+                required_type = _required_resource_type(func)
                 func_input = None
                 try:
                     # Get resource has to be in the try block because it can also
@@ -750,6 +758,27 @@ class _FiberIOManager:
 
 
 # ------------- Protocol for File Format support
+
+
+class _TypeCasterMethod(Protocol):
+    """
+    A FiberIO method wrapped by the type caster.
+
+    The caster stamps these markers onto the wrapped method so the io
+    machinery can find the original function and the resource type the
+    method wants its input coerced to.
+    """
+
+    func: Callable
+    _type_caster_wrapped: bool
+    _required_type: type | None
+
+    def __call__(self, *args, **kwargs): ...
+
+
+def _required_resource_type(method) -> type | None:
+    """Return the resource type a FiberIO method's caster coerces its input to."""
+    return cast(_TypeCasterMethod, method)._required_type
 
 
 def _type_caster(func, sig, required_type, arg_name):
@@ -791,14 +820,15 @@ def _type_caster(func, sig, required_type, arg_name):
         return out
 
     # attach the function and required type for later use
-    _wrapper.func = func
+    caster = cast(_TypeCasterMethod, _wrapper)
+    caster.func = func
     # subclasses of FIBERIO subclasses can wrap this twice, so we mark
     # it to avoid that scenario.
-    _wrapper._type_caster_wrapped = True
+    caster._type_caster_wrapped = True
     # also specify required type
-    _wrapper._required_type = required_type
+    caster._required_type = required_type
 
-    return _wrapper
+    return caster
 
 
 def _is_wrapped_func(func1, func2):
@@ -979,8 +1009,9 @@ class FiberIO:
             msg = "You must specify the file format with the name field."
             raise InvalidFiberIOError(msg)
         # register fiber_io
-        manager: _FiberIOManager = cls.__mro__[1].manager
-        manager.register_fiberio(cls())
+        parent = cls.__mro__[1]
+        assert issubclass(parent, FiberIO)  # only FiberIO subclasses get here
+        parent.manager.register_fiberio(cls())
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
             method = getattr(cls, name)
@@ -1059,7 +1090,7 @@ def read(
             fiber_io = FiberIO.manager.get_fiberio(
                 format=file_format, version=file_version
             )
-            required_type = fiber_io.read._required_type
+            required_type = _required_resource_type(fiber_io.read)
             path = man.get_resource(required_type)
             out = fiber_io.read(
                 path,
@@ -1667,7 +1698,7 @@ def write(
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
     with IOResourceManager(path) as man:
         func = fiber_io.write
-        required_type = func._required_type
+        required_type = _required_resource_type(func)
         resource = man.get_resource(required_type)
         func(patch_or_spool, resource, _pre_cast=True, **kwargs)
     return path

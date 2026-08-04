@@ -13,6 +13,23 @@ from dascore.io.index import get_backend
 from dascore.io.index.schema import INDEX_VERSION, TABLES
 
 
+class TestSchemaDeclaration:
+    """The row classes are the schema; check they reach SQLite intact."""
+
+    def test_stored_columns_match_declaration(self, tmp_path):
+        """A created index has each table's declared columns and types."""
+        backend = get_backend(tmp_path / "index.sqlite3")
+        dialect = backend.dialect
+        for table, columns in TABLES.items():
+            info = backend._con.execute(f'PRAGMA table_info("{table}")').fetchall()
+            stored = {row[1]: row[2] for row in info}
+            expected = {
+                name: dialect.type_map[logical] for name, logical in columns.items()
+            }
+            assert stored == expected
+        backend.close()
+
+
 class TestSchemaValidation:
     """Existing files are validated without repair or implicit migration."""
 
