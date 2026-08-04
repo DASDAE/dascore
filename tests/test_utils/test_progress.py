@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from rich.progress import Progress
 
@@ -48,6 +50,9 @@ class TestProgressBar:
         monkeypatch.setattr(
             "dascore.utils.progress.get_progress_instance", lambda _: DummyProgress()
         )
+        # WebAssembly cannot start rich's refresh thread, so track skips the
+        # bar there entirely; the stand-in above needs no thread.
+        monkeypatch.setattr(sys, "platform", "linux")
         with config_context(debug=False):
             sequence = Unmeasurable([1, 2, 3])
             assert list(track(sequence, "length_tracker", length=10)) == [1, 2, 3]
