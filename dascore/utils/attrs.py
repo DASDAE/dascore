@@ -27,7 +27,7 @@ from dascore.utils.misc import (
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 
 
-def validate_conflict(conflict):
+def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
     """Ensure a conflict(s) argument is a supported value."""
     if conflict not in _VALID_CONFLICT_VALUES:
         msg = f"conflict must be one of {_VALID_CONFLICT_VALUES}, got {conflict!r}."
