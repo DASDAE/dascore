@@ -278,7 +278,7 @@ class ChunkManager:
         if all_diffs_close_enough(np.concatenate([steps, boundary_diffs])):
             return step
         if np.issubdtype(np.asarray(steps).dtype, np.timedelta64):
-            return np.timedelta64("NaT")
+            return np.timedelta64("NaT", "ns")
         return np.nan
 
     def _create_df(self, df, name, start_stop, gnum):

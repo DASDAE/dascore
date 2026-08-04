@@ -676,6 +676,18 @@ class TestChunkSnapCoords:
         contiguous = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
         assert not pd.isnull(contiguous.get_contents()["time_step"].iloc[0])
 
+    def test_snap_false_distance_merge(self, random_patch):
+        """Float-typed coords also keep values and get a NaN step. See #803."""
+        p1 = random_patch.update_coords(
+            distance=random_patch.get_array("distance").astype(np.float64)
+        )
+        dist = p1.get_coord("distance")
+        p2 = p1.update_attrs(distance_min=dist.max() + dist.step * 1.4)
+        spool = dc.spool([p1, p2]).chunk(distance=None, snap_coords=False)
+        assert np.isnan(spool.get_contents()["distance_step"].iloc[0])
+        expected = np.concatenate([p1.get_array("distance"), p2.get_array("distance")])
+        assert np.array_equal(spool[0].get_array("distance"), expected)
+
     def test_snap_false_contiguous_unchanged(self, adjacent_spool_no_overlap):
         """Truly contiguous patches merge identically with snapping disabled."""
         merged = adjacent_spool_no_overlap.chunk(time=None, snap_coords=False)
