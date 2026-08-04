@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Literal
 
 import pandas as pd
 
@@ -101,7 +102,11 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         attrs = resource.attrs

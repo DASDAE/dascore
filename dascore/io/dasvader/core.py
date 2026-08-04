@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
@@ -34,7 +36,11 @@ class DASVaderV1(FiberIO):
     preferred_extensions = ("jld2",)
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return format if file contains DASVader JLD2 data else False.
 

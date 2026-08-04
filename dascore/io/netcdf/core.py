@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -53,7 +54,11 @@ class NetCDFCFV18(FiberIO):
     version = "1.8"
     preferred_extensions = ("nc", "nc4", "netcdf")
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return format tuple if file is a CF-convention NetCDF-4, else False."""
         if not is_netcdf4_file(resource):
             return False
@@ -94,7 +99,7 @@ class NetCDFCFV18(FiberIO):
             encoding["shuffle"] = True
         return encoding
 
-    def write(self, spool: dc.BaseSpool, resource: Path, **kwargs) -> None:
+    def write(self, spool: dc.Patch | dc.BaseSpool, resource: Path, **kwargs) -> None:
         """
         Write a Spool to NetCDF-4 through xarray.
 
@@ -199,7 +204,7 @@ class NetCDFCFV18(FiberIO):
         coord_kwargs = {k: v for k, v in kwargs.items() if k in patch.coords.coord_map}
         return patch.select(**coord_kwargs) if coord_kwargs else patch
 
-    def _validate_and_extract_patch(self, spool: dc.BaseSpool) -> dc.Patch:
+    def _validate_and_extract_patch(self, spool: dc.Patch | dc.BaseSpool) -> dc.Patch:
         """Validate write input and return the single supported patch."""
         patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
         if len(patches) == 0:

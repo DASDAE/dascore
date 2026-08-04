@@ -528,6 +528,16 @@ class TestWrite:
         """Ensure the random patch can be written."""
         assert written_fiber_path.exists()
 
+    def test_accepts_patch_or_spool(self, random_patch, fiber_io_writer, tmp_path):
+        """A writer takes a bare patch or a spool; dc.write only sends spools."""
+        pre_ext = list(iterate(fiber_io_writer.preferred_extensions))
+        ext = "" if not len(pre_ext) else pre_ext[0]
+        from_patch = tmp_path / f"patch.{ext}"
+        from_spool = tmp_path / f"spool.{ext}"
+        fiber_io_writer.write(random_patch, from_patch)
+        fiber_io_writer.write(dc.spool([random_patch]), from_spool)
+        assert from_patch.exists() and from_spool.exists()
+
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
         if not fiber_io_writer.implements_read:

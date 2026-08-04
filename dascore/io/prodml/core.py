@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -35,7 +37,11 @@ class ProdMLV2_0(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains prodML version 2 data else False.
 
@@ -93,6 +99,8 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(self, spool: dc.BaseSpool, resource: H5Writer, **kwargs) -> None:
+    def write(
+        self, spool: dc.Patch | dc.BaseSpool, resource: H5Writer, **kwargs
+    ) -> None:
         """Write one raw Patch to a standalone ProdML HDF5 file."""
         _write_prodml(spool, resource)

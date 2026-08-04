@@ -4,6 +4,8 @@ Core modules for reading Neubrex data.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -48,7 +50,11 @@ class NeubrexRFSV1(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if the resource belongs to this format."""
         if rfs_utils._is_neubrex(resource):
             return self.name, self.version
@@ -100,7 +106,11 @@ class NeubrexDASV1(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if resource belongs to this format."""
         if das_utils._is_neubrex(resource):
             return self.name, self.version

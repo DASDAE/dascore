@@ -864,7 +864,6 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.BaseSpool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    import dascore as dc
     from dascore.core.coords import CoordSegmented
 
     if dim is not None and dim not in self.dims:

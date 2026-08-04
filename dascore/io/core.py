@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Mapping
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -63,15 +63,17 @@ from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
 
-# What the scan dispatchers accept: one resource or patch, or any
-# iterable of them (`_iterate_scan_inputs` flattens its input with
-# `iterate` before resolving each element).
+# What the scan dispatchers accept: one resource or patch, or a
+# collection of them (`_iterate_scan_inputs` flattens its input with
+# `iterate` before resolving each element). A one-shot iterator is
+# excluded on purpose: the dispatcher walks its input twice, once to
+# size the progress bar, so a generator would silently scan nothing.
 ScanInput = (
     path_types
     | dc.Patch
     | dc.BaseSpool
     | IOResourceManager
-    | Sequence[path_types | dc.Patch]
+    | Collection[path_types | dc.Patch | IOResourceManager]
 )
 
 
@@ -588,8 +590,9 @@ class _FiberIOManager:
             extension=extension,
         )
         fiber_io = next(iterator, None)
-        # yield_fiberio raises UnknownFiberFormatError for every input which
-        # names nothing, and at least one FiberIO is always registered.
+        # yield_fiberio raises rather than yield nothing for a format or
+        # version it does not know, and with nothing named at all it yields
+        # the whole registry, which is never empty.
         assert fiber_io is not None, "no fiber_io for the requested inputs"
         return fiber_io
 
@@ -751,9 +754,7 @@ class _FiberIOManager:
                 finally:
                     # If file handle-like seek back to 0 so it can be reused.
                     getattr(func_input, "seek", lambda x: None)(0)
-                # get_format returns (name, version) or a falsy value;
-                # a bare True would carry no version to report.
-                if isinstance(format_version, tuple):
+                if format_version:
                     return format_version
             else:
                 msg = f"Could not determine file format of {man.source}"
@@ -888,7 +889,7 @@ class FiberIO:
         }
     )
 
-    def read(self, resource, /, **kwargs) -> dc.BaseSpool:
+    def read(self, resource, **kwargs) -> dc.BaseSpool:
         """
         Load data from a path.
 
@@ -900,7 +901,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, /, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
+    def scan(self, resource, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Return patch-local metadata and exact coords for a resource.
 
@@ -939,12 +940,12 @@ class FiberIO:
             raise NotImplementedError(msg)
         return [_patch_to_scan_payload(pa) for pa in spool]
 
-    def write(self, spool: dc.BaseSpool, resource, /, **kwargs):
+    def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, resource, /, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
         """
         Return a tuple of (format_name, version_numbers).
 

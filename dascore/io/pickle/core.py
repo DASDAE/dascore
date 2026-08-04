@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from typing import Literal
 
 import dascore
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
@@ -28,7 +29,11 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains a pickled Patch or Spool.
 
@@ -53,6 +58,6 @@ class PickleIO(FiberIO):
         out = pickle.load(resource)
         return dascore.spool(out)
 
-    def write(self, patch, resource: BinaryWriter, **kwargs):
+    def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""
-        pickle.dump(patch, resource)
+        pickle.dump(spool, resource)

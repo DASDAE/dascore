@@ -30,6 +30,8 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
@@ -46,7 +48,11 @@ class MSeedV2(FiberIO):
     preferred_extensions = ("mseed", "msd", "miniseed")
     version = "2"
 
-    def get_format(self, resource: LocalPath, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: LocalPath,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if path is a MiniSEED file."""
         return _detect_format(resource)
 

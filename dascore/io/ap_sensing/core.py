@@ -4,6 +4,8 @@ Core modules for AP sensing support.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -28,7 +30,11 @@ class APSensingV10(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "10"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return format name and version string if AP sensing, else False.
 

@@ -28,7 +28,7 @@ class RSFV1(FiberIO):
     # just make another class in the same module named rsfV2.
     version = "1"
 
-    def write(self, spool, path, data_path=None, **kwargs):
+    def write(self, spool, resource, data_path=None, **kwargs):
         """
         Write a patch to RSF format.
 
@@ -37,7 +37,7 @@ class RSFV1(FiberIO):
         data_path needs to be bindata_file.rsf or /location/of/bindata_file.rsf
         (NO '@')
 
-        path needs to be hdr_file.rsf or /location/of/hdr_file.rsf
+        resource needs to be hdr_file.rsf or /location/of/hdr_file.rsf
 
         spool needs to have a single patch in it
 
@@ -48,7 +48,7 @@ class RSFV1(FiberIO):
         ----------
         spool
             The input spool to convert to rsf, must have exactly one patch.
-        path
+        resource
             Path to create the rsf file
         data_path
             If data and rsf header information are to be separate, the
@@ -104,7 +104,7 @@ class RSFV1(FiberIO):
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
             out = "\n".join(hdr_info)
-            outpath = _coerce_output_path(path)
+            outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("w") as fi:
                 fi.write(out)
@@ -112,7 +112,7 @@ class RSFV1(FiberIO):
             # outputs header and binary combined (.rsf with both hdr and bin)
             hdr_info.append('in="stdin"\n\n')
             out = "\n".join(hdr_info).encode()
-            outpath = _coerce_output_path(path)
+            outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("wb") as fi:
                 fi.write(out)

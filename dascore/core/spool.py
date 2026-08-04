@@ -6,7 +6,7 @@ import abc
 from collections.abc import Callable, Generator, Iterator, Sequence
 from functools import singledispatch
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
 
 import numpy as np
 import pandas as pd
@@ -82,9 +82,16 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         )
     }
 
+    # An int selects one patch; a slice or array selects a sub-spool.
+    @overload
+    def __getitem__(self, item: int) -> dc.Patch: ...
+
+    @overload
+    def __getitem__(self, item: slice | np.ndarray) -> BaseSpool: ...
+
     @abc.abstractmethod
-    def __getitem__(self, item: int | slice | np.ndarray) -> dc.Patch:
-        """Returns a patch from the spool."""
+    def __getitem__(self, item: int | slice | np.ndarray) -> dc.Patch | BaseSpool:
+        """Return a patch, or a spool for a slice or array of indices."""
 
     @abc.abstractmethod
     def __iter__(self) -> Iterator[dc.Patch]:
@@ -512,7 +519,13 @@ class Spool(BaseSpool):
         # relation is never realized just for a length
         return len(self._catalog)
 
-    def __getitem__(self, item) -> PatchType | BaseSpool:
+    @overload
+    def __getitem__(self, item: int) -> dc.Patch: ...
+
+    @overload
+    def __getitem__(self, item: slice | np.ndarray) -> BaseSpool: ...
+
+    def __getitem__(self, item) -> dc.Patch | BaseSpool:
         if isinstance(item, slice):
             # a lazy id-membership window (D2); never realizes the flat
             # relation, and keeps split()/map() parts cheap

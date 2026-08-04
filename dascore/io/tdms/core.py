@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -21,17 +23,21 @@ class TDMSFormatterV4713(FiberIO):
     preferred_extensions = ("tdms",)
     lead_in_length = 28
 
-    def get_format(self, stream: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return a tuple of (TDMS, version) if TDMS else False.
 
         Parameters
         ----------
-        stream
+        resource
             A path to the file which may contain silixa data.
         """
         try:
-            version_str = _get_version_str(stream)
+            version_str = _get_version_str(resource)
             if version_str:
                 return "TDMS", version_str
             else:
