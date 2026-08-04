@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 from upath import UPath
 
+import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     _iter_filesystem,
@@ -668,6 +669,21 @@ class TestSpoolMap:
         )
         assert out == [3, 3, 3]
         assert seen == ["Applying <lambda> to spool"]
+
+    def test_empty_spool_with_client(self):
+        """An empty spool asks for no work rather than a split size of zero."""
+
+        class DummyClient:
+            def map(self, func, spools):
+                return [func(spool) for spool in spools]
+
+        out = _spool_map(
+            dc.spool([]),
+            lambda patch: patch,
+            client=DummyClient(),
+            progress=False,
+        )
+        assert out == []
 
 
 class Test2DLineIntersection:

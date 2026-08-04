@@ -610,6 +610,13 @@ class TestSplit:
         assert len(split[0]) == 2
         assert len(split[1]) == 1
 
+    @pytest.mark.parametrize("kwargs", [{"size": 0}, {"size": -1}, {"count": 0}])
+    def test_non_positive_raises(self, random_spool, kwargs):
+        """A size or count of zero or less would never finish yielding."""
+        msg = "requires a positive size or count"
+        with pytest.raises(ParameterError, match=msg):
+            list(random_spool.split(**kwargs))
+
     def test_non_integral_size(self, random_spool_len_10):
         """A size which isn't a whole number rounds up rather than raising."""
         split = list(random_spool_len_10.split(size=2.5))

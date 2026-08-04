@@ -332,11 +332,11 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         ----------
         size
             The number of patches desired in each output spool. The last
-            spool may have fewer patches.
+            spool may have fewer patches. Must be greater than zero.
         count
             The number of spools to include. If count is greater than
             the length of the spool then the output will be smaller than
-            count, with one patch per spool.
+            count, with one patch per spool. Must be greater than zero.
 
         Examples
         --------
@@ -583,12 +583,18 @@ class Spool(BaseSpool):
         if not ((count is not None) ^ (size is not None)):
             msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)
+        value = count if count is not None else size
+        assert value is not None  # the check above sets exactly one of them
+        # A step of zero or less never advances start, so the loop below
+        # would yield forever.
+        if value <= 0:
+            msg = f"Spool.split requires a positive size or count, got {value}."
+            raise ParameterError(msg)
         start = 0
         if count is not None:
-            step = int(np.ceil(len(self) / count))
+            step = int(np.ceil(len(self) / value))
         else:
-            assert size is not None  # the check above sets exactly one of them
-            step = int(np.ceil(size))  # tolerate a non-integral size
+            step = int(np.ceil(value))  # tolerate a non-integral size
         while start < len(self):
             yield self[start : start + step]
             start += step
