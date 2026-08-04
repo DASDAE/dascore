@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from dascore import PatchAttrs
-from dascore.exceptions import AttributeMergeError
+from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.attrs import combine_patch_attrs, separate_coord_info
 
 
@@ -49,6 +49,12 @@ class TestMergeAttrs:
             combine_patch_attrs([pa1, pa2])
         out = combine_patch_attrs([pa1, pa2], drop_attrs="history")
         assert isinstance(out, PatchAttrs)
+
+    def test_invalid_conflicts_raises(self):
+        """An unsupported conflicts value should raise. See #804."""
+        pa1, pa2 = PatchAttrs(tag="bob"), PatchAttrs(tag="bill")
+        with pytest.raises(ParameterError, match="conflict must be one of"):
+            combine_patch_attrs([pa1, pa2], conflicts="banana")
 
     def test_conflicts(self):
         """Ensure when non-dim fields aren't equal merge raises."""
