@@ -34,6 +34,7 @@ class Terra15FormatterV4(FiberIO):
         version_str = _get_terra15_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs

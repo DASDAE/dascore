@@ -47,6 +47,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         version_str = _get_prodml_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs

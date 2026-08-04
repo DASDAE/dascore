@@ -40,6 +40,7 @@ class APSensingV10(FiberIO):
         version_str = _get_version_string(resource)
         if version_str:
             return self.name, version_str
+        return False
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan an AP sensing file, return summary info about the contents."""

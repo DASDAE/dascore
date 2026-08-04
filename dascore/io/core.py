@@ -587,8 +587,11 @@ class _FiberIOManager:
             version=version,
             extension=extension,
         )
-        for fiber_io in iterator:
-            return fiber_io
+        fiber_io = next(iterator, None)
+        # yield_fiberio raises UnknownFiberFormatError for every input which
+        # names nothing, and at least one FiberIO is always registered.
+        assert fiber_io is not None, "no fiber_io for the requested inputs"
+        return fiber_io
 
     def yield_fiberio(
         self,

@@ -42,6 +42,7 @@ class SilixaH5V1(FiberIO):
         version_str = _get_version_string(resource, self.version)
         if version_str:
             return self.name, version_str
+        return False
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
