@@ -8,7 +8,7 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -303,7 +303,7 @@ def patch_function(
     def _wrapper(func):
         if validate_call:
             config = dict(arbitrary_types_allowed=True)
-            func = pydantic.validate_call(func, config=config)
+            func = pydantic.validate_call(config=config)(func)
 
         @functools.wraps(func)
         def _func(patch, *args, **kwargs):
@@ -975,6 +975,25 @@ def _get_data_units_from_dims(patch, dims, operator):
     return data_units
 
 
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    *,
+    require_evenly_spaced: Literal[True],
+) -> tuple[tuple[float, ...], tuple[int, ...]]: ...
+
+
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    require_evenly_spaced: bool = ...,
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]: ...
+
+
 def _get_dx_or_spacing_and_axes(
     patch,
     dim,
@@ -994,6 +1013,8 @@ def _get_dx_or_spacing_and_axes(
         If True, raise an error if all requested dimensions are not sorted.
     require_evenly_spaced
         If True, raise an error if all requested dimensions are not evenly sampled.
+        Every returned value is then a scalar spacing rather than an array of
+        values, which the overloads above make visible to callers.
     """
     dims = iterate(dim if dim is not None else patch.dims)
     out = []

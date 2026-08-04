@@ -212,6 +212,7 @@ class CoordSummary(DascoreBaseModel):
             msg = "Cannot convert summary which is not evenly sampled to coord."
             raise CoordError(msg)
         step = self.step
+        assert step is not None  # is_range_like above rules out a null step
         # this is a reverse coord
         if np.sign(step) == -1:
             start, stop = self.max, self.min + step
@@ -288,7 +289,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     units: UnitQuantity = None
     step: Any = None
-    shape: tuple[int, ...] | None = None
+    # Every coord has a shape; each subclass derives it in a before-validator
+    # from the values or range it was built with. The default exists only
+    # because those validators are invisible to type checkers, which would
+    # otherwise want shape passed at every construction site.
+    shape: tuple[int, ...] = ()
     dtype: Any = None
 
     if TYPE_CHECKING:
@@ -1186,6 +1191,10 @@ class CoordPartial(BaseCoord):
     A coordinate which only contains partial information.
     """
 
+    # Redeclared without a default: a partial coord is nothing but its
+    # shape, and it is the one coord which cannot re-derive it on the way
+    # back from a model_dump(exclude_defaults=True).
+    shape: tuple[int, ...]
     start: Any = np.nan
     stop: Any = np.nan
     step: Any = np.nan

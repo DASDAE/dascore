@@ -777,8 +777,14 @@ class _TypeCasterMethod(Protocol):
 
 
 def _required_resource_type(method) -> type | None:
-    """Return the resource type a FiberIO method's caster coerces its input to."""
-    return cast(_TypeCasterMethod, method)._required_type
+    """
+    Return the resource type a FiberIO method's caster coerces its input to.
+
+    None when the method's resource parameter carries no type hint, or
+    when the method was never wrapped at all (only the base FiberIO's
+    own methods, which __init_subclass__ does not visit).
+    """
+    return getattr(method, "_required_type", None)
 
 
 def _type_caster(func, sig, required_type, arg_name):
@@ -1218,7 +1224,7 @@ def _get_fiber_io_and_req_type(
     fiber_io_hint = FiberIO.manager.get_fiberio(
         format=file_format_, version=file_version_
     )
-    req_type = getattr(fiber_io_hint.scan, "_required_type", None)
+    req_type = _required_resource_type(fiber_io_hint.scan)
     resource = manager.get_resource(req_type)
     # this will get the required resource type to pass to scan.
     return fiber_io_hint, resource

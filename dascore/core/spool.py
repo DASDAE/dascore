@@ -584,7 +584,11 @@ class Spool(BaseSpool):
             msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)
         start = 0
-        step = int(np.ceil(len(self) / count if count else size))
+        if count is not None:
+            step = int(np.ceil(len(self) / count))
+        else:
+            assert size is not None  # the check above sets exactly one of them
+            step = int(np.ceil(size))  # tolerate a non-integral size
         while start < len(self):
             yield self[start : start + step]
             start += step

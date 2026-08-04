@@ -77,7 +77,7 @@ def _coerce_scalar(value, target_kinds: set[str]):
         raise InvalidSpoolQueryError(msg)
     if typed.kind == "str" and "time" in target_kinds:
         try:
-            retyped = typed_value(np.datetime64(pd.Timestamp(value), "ns"))
+            retyped = typed_value(pd.Timestamp(value).to_datetime64())
             return retyped
         except (ValueError, TypeError):
             pass

@@ -1687,6 +1687,13 @@ class TestPartialCoord:
         """Ensure non coords are equal to themselves."""
         assert basic_non_coord == basic_non_coord
 
+    def test_dimensionless_shape_survives_dump(self):
+        """A partial coord keeps its shape when defaults are excluded."""
+        coord = get_coord(shape=())
+        dumped = coord.model_dump(exclude_defaults=True)
+        assert dumped["shape"] == ()
+        assert CoordPartial(**dumped) == coord
+
     def test_empty_update_equal(self, basic_non_coord):
         """Empty update should produce an equal coord."""
         out = basic_non_coord.update()
