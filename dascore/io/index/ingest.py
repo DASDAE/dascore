@@ -13,7 +13,9 @@ import hashlib
 import json
 import re
 import warnings
+from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
+from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -48,6 +50,17 @@ class TypedValue:
 
     def __post_init__(self):
         assert self.kind in KINDS
+
+
+class _CommonCoordFields(TypedDict):
+    """The CoordRecord fields every value kind carries."""
+
+    coord_name: str
+    dtype: str
+    coord_dims: str
+    length: int | None
+    units: str | None
+    coord_hash: str | None
 
 
 @dataclass(frozen=True)
@@ -162,6 +175,18 @@ def _base_unit_info(value, unit_str: str | None = None) -> tuple[float, str]:
     return float(quant.magnitude), str(quant.units)
 
 
+def _to_ns(value) -> int:
+    """
+    Return a time or duration as a plain int of nanoseconds.
+
+    `to_int` hands back a numpy scalar. Records hold plain python
+    scalars, and CoordRecord.def_key hashes their reprs, so a numpy
+    scalar here would give a coord one summary key on a fresh scan and
+    another when the same coord is read back out of an index.
+    """
+    return int(to_int(value))
+
+
 def _is_missing(value) -> bool:
     """Return True for values that mean 'not present'."""
     if value is None or (isinstance(value, str) and value == ""):
@@ -189,9 +214,9 @@ def typed_value(value) -> TypedValue | None:
     if isinstance(value, bool | np.bool_):
         return TypedValue("bool", bool(value))
     if isinstance(value, np.datetime64):
-        return TypedValue("time", to_int(value))
+        return TypedValue("time", _to_ns(value))
     if isinstance(value, np.timedelta64):
-        return TypedValue("dur", to_int(value))
+        return TypedValue("dur", _to_ns(value))
     # pint scalar quantity or unit.
     if hasattr(value, "units"):
         magnitude = getattr(value, "magnitude", 1)
@@ -205,7 +230,7 @@ def typed_value(value) -> TypedValue | None:
         return TypedValue("str", value)
     # datetime/timedelta and anything datetime-like numpy missed.
     try:
-        return TypedValue("time", to_int(to_datetime64(value)))
+        return TypedValue("time", _to_ns(to_datetime64(value)))
     except Exception:
         pass
     return None  # complex attrs (sequences, dicts, ...) are skipped
@@ -292,7 +317,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     # reuse it below (a Quantity-keyed cache is unsafe — 1 m == 100 cm with
     # equal hashes but different strings).
     units_str = str(summary.units) if summary.units is not None else None
-    common = dict(
+    common = _CommonCoordFields(
         coord_name=name,
         dtype=summary.dtype,
         coord_dims=",".join(summary.dims),
@@ -310,9 +335,9 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         return CoordRecord(
             value_kind="time",
             is_relative=not is_datetime,
-            min_ns=to_int(convert(summary.min)),
-            max_ns=to_int(convert(summary.max)),
-            step_ns=None if pd.isnull(step) else to_int(to_timedelta64(step)),
+            min_ns=_to_ns(convert(summary.min)),
+            max_ns=_to_ns(convert(summary.max)),
+            step_ns=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
             **common,
         )
     if np.issubdtype(dtype, np.number):
@@ -475,6 +500,11 @@ _PATCH_ROW_FIELDS = tuple(
 )
 
 
+def _int_key(key: Hashable) -> int:
+    """Return a groupby key as an int; the id columns grouped on are integral."""
+    return int(cast("SupportsInt", key))
+
+
 def _py_scalar(value):
     """Convert a fetched cell to the plain python scalar records use."""
     if value is None or pd.isnull(value):
@@ -531,10 +561,12 @@ def assemble_source_records(
         else {}
     )
     link_groups = (
-        {int(k): v for k, v in links.groupby("patch_id")} if not links.empty else {}
+        {_int_key(k): v for k, v in links.groupby("patch_id")}
+        if not links.empty
+        else {}
     )
     patches_by_source = (
-        {int(k): v for k, v in patches.groupby("source_id")}
+        {_int_key(k): v for k, v in patches.groupby("source_id")}
         if not patches.empty
         else {}
     )
