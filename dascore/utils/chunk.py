@@ -31,6 +31,8 @@ from dascore.utils.time import (
 
 _DEFAULT_TOLERANCE = 1.5
 
+_VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
+
 
 def get_intervals(
     start,
@@ -168,8 +170,18 @@ class ChunkManager:
         self._snap_coords = snap_coords
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
-        self._attr_conflict = conflict
+        self._attr_conflict = self._validate_conflict(conflict)
         self._validate_chunker()
+
+    def _validate_conflict(self, conflict):
+        """Ensure conflict is a supported value."""
+        if conflict not in _VALID_CONFLICT_VALUES:
+            msg = (
+                f"conflict must be one of {_VALID_CONFLICT_VALUES}, "
+                f"got {conflict!r}."
+            )
+            raise ParameterError(msg)
+        return conflict
 
     def _validate_kwargs(self, kwargs):
         """Ensure kwargs is len one and has a valid."""
