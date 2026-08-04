@@ -148,7 +148,9 @@ def _check_misdirected_range_query(key, val, df):
     base = key[:-4] if key.endswith(("_min", "_max")) else None
     if base is None or not {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
         return
-    if not any(x is ... or x is None for x in val):
+    # Only a two element sequence can be a range. Anything else is a
+    # membership check, where None may be a legitimate value to match.
+    if len(val) != 2 or not any(x is ... or x is None for x in val):
         return
     msg = (
         f"An open bound (... or None) is not valid in the query for column "
