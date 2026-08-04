@@ -498,6 +498,11 @@ _PATCH_ROW_FIELDS = tuple(
     for f in fields(PatchRecord)
     if f.name not in ("source_patch_id", "dims", "shape", "attrs", "coords")
 )
+# Backends with no boolean type hand these columns back as 0/1, which
+# def_key would hash differently than the bool a scan produced.
+_COORD_DEF_BOOLS = frozenset(
+    f.name for f in fields(CoordRecord) if str(f.type).startswith("bool")
+)
 
 
 def _int_key(key: Hashable) -> int:
@@ -505,11 +510,11 @@ def _int_key(key: Hashable) -> int:
     return int(cast("SupportsInt", key))
 
 
-def _py_scalar(value):
+def _py_scalar(value, as_bool: bool = False):
     """Convert a fetched cell to the plain python scalar records use."""
     if value is None or pd.isnull(value):
         return None
-    if isinstance(value, np.bool_ | bool):
+    if as_bool or isinstance(value, np.bool_ | bool):
         return bool(value)
     if isinstance(value, np.integer | int):
         return int(value)
@@ -593,7 +598,10 @@ def assemble_source_records(
                         coord_name=link.coord_name,
                         coord_dims=link.coord_dims,
                         coord_hash=_py_scalar(cdef.fingerprint),
-                        **{f: _py_scalar(getattr(cdef, f)) for f in _COORD_DEF_FIELDS},
+                        **{
+                            f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
+                            for f in _COORD_DEF_FIELDS
+                        },
                     )
                 )
             patch_records.append(

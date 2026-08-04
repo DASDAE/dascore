@@ -15,7 +15,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 import pytest
-from test_index_contract import make_summaries
+from test_index_contract import _time_coord, make_summaries
 
 import dascore as dc
 from dascore.core.summary import PatchSummary
@@ -1065,6 +1065,29 @@ class TestCoordDeduplication:
         record = _coord_record("distance", summary.coords["distance"])
         assert record.coord_hash == patch.get_coord("distance").fingerprint()
         assert record.def_key.startswith("fp:")
+
+    def test_summary_key_stable_through_export(self, tmp_path):
+        """A summary-keyed coord dedups against its own exported records."""
+        # Without a step the coord is not range-like, so it has no
+        # fingerprint to key on and falls back to hashing its stored fields.
+        summary = PatchSummary(
+            attrs={"tag": "raw"},
+            coords={"time": {**_time_coord("2024-01-01T00:00:00", 60), "step": None}},
+            dims=("time",),
+            shape=(15000,),
+            dtype="float32",
+            source_path="sum/one.h5",
+            source_format="DASDAE",
+            source_version="1",
+        )
+        fresh = _coord_record("time", summary.coords["time"])
+        assert fresh.def_key.startswith("sum:")
+        back = get_backend(tmp_path / "sum.sqlite3")
+        back.write_sources(summaries_to_records([summary]))
+        exported = back.export_records()
+        back.close()
+        (coord,) = exported[0].patches[0].coords
+        assert coord.def_key == fresh.def_key
 
     def test_orphan_defs_tolerated(self, tmp_path):
         """Deleting sources leaves defs behind without breaking queries."""
