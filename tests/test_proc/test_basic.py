@@ -18,6 +18,13 @@ OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
 TEST_OPS = tuple(getattr(operator, x) for x in OP_NAMES)
 
 
+def _patch_with_nan(patch, index=(0, 0)):
+    """Return a float patch with a single NaN so slice contamination shows."""
+    data = np.asarray(patch.data, dtype=np.float64).copy()
+    data[index] = np.nan
+    return patch.new(data=data)
+
+
 @pytest.fixture(scope="session")
 def random_complex_patch(random_patch):
     """Swap out data for complex data."""
@@ -198,6 +205,56 @@ class TestNormalize:
             assert np.all(norm.data[0, :] == 0.0)
             assert np.all(norm.data[:, 0] == 0.0)
 
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim, norm):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.normalize(dim, norm=norm)
+        assert np.isnan(out.data).sum() == 1
+
+    @pytest.mark.filterwarnings("ignore:All-NaN slice encountered")
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_all_nan_slice_stays_null(self, random_patch, dim, norm):
+        """A completely null slice should stay null rather than become zeros."""
+        data = np.asarray(random_patch.data, dtype=np.float64).copy()
+        # Null the first slice reduced by norm (patch is 2D, so the other axis).
+        other_axis = 1 - random_patch.get_axis(dim)
+        null_slice = tuple(0 if i == other_axis else slice(None) for i in range(2))
+        data[null_slice] = np.nan
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize(dim, norm=norm)
+
+        assert np.all(np.isnan(out.data[null_slice]))
+        assert not np.any(np.isnan(np.delete(out.data, 0, axis=other_axis)))
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
+    def test_null_in_zero_slice_stays_null(self, random_patch, norm):
+        """A null in an otherwise zero slice should stay null, not become zero."""
+        data = np.zeros(random_patch.shape, dtype=np.float64)
+        data[0, 0] = np.nan
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize("time", norm=norm)
+
+        assert np.isnan(out.data[0, 0])
+        assert np.all(out.data[0, 1:] == 0)
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
+    def test_int_data(self, random_patch, norm):
+        """Integer data should normalize to floats without overflowing."""
+        # 100 is large enough that squaring it overflows int8.
+        data = np.full(random_patch.shape, 100, dtype=np.int8)
+        samples = data.shape[random_patch.get_axis("time")]
+        expected = {"l1": 1 / samples, "l2": 1 / np.sqrt(samples), "max": 1, "bit": 1}
+
+        out = random_patch.new(data=data).normalize("time", norm=norm)
+
+        assert np.issubdtype(out.data.dtype, np.floating)
+        assert np.allclose(out.data, expected[norm])
+
 
 class TestStandardize:
     """Tests for standardization."""
@@ -210,6 +267,16 @@ class TestStandardize:
         # test along the time axis
         out = random_patch.standardize("time")
         assert not np.any(pd.isnull(out.data))
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.standardize(dim)
+        axis = out.get_axis(dim)
+        assert np.isnan(out.data).sum() == 1
+        assert np.allclose(np.nanmean(out.data, axis=axis), 0)
+        assert np.allclose(np.nanstd(out.data, axis=axis), 1)
 
     def test_std(self, random_patch):
         """Ensure after operation standard deviations are 1."""
@@ -861,6 +928,15 @@ class TestDemedian:
         medians = np.median(dem.data, axis=dem.get_axis(dim))
         assert np.allclose(medians, 0)
 
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.demedian(dim=dim)
+        assert np.isnan(out.data).sum() == 1
+        medians = np.nanmedian(out.data, axis=out.get_axis(dim))
+        assert np.allclose(medians, 0)
+
 
 class TestDemean:
     """Tests for demean of data."""
@@ -872,4 +948,13 @@ class TestDemean:
         # perform detrend, ensure all mean values are close to zero
         dem = new.demean(dim=dim)
         means = np.mean(dem.data, axis=dem.get_axis(dim))
+        assert np.allclose(means, 0)
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.demean(dim=dim)
+        assert np.isnan(out.data).sum() == 1
+        means = np.nanmean(out.data, axis=out.get_axis(dim))
         assert np.allclose(means, 0)

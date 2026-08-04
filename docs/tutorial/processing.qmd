@@ -161,7 +161,7 @@ Here is an example of using a rolling mean to smooth along the time axis:
 import dascore as dc
 
 patch = dc.get_example_patch("example_event_1")
-# Apply moving mean window over every 10 samples
+# Apply moving mean window over every 50 samples
 dt = patch.get_coord('time').step
 
 smoothed = patch.rolling(time=50*dt).mean()

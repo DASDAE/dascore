@@ -18,7 +18,12 @@ from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.core.summary import PatchSummary
-from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
+from dascore.exceptions import (
+    CoordDataError,
+    CoordError,
+    ParameterError,
+    PatchAttributeError,
+)
 from dascore.io.core import (
     _scan_result_to_summary,
     _select_patch_from_spool,
@@ -98,31 +103,6 @@ class TestInit:
         dims = ("distance", "time")
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
-
-    @pytest.fixture(scope="class")
-    def test_conflicting_attrs_coords_raises(self):
-        """Patch for testing conflicting coordinates/attributes."""
-        array = random_state.random((10, 10))
-        # create attrs with coordinate metadata; these should now be rejected.
-        attrs = dict(
-            distance_step=10,
-            time_step=dc.to_timedelta64(1),
-            distance_min=1000,
-            distance_max=2002,
-            time_min=dc.to_datetime64("2017-01-01"),
-            time_max=dc.to_datetime64("2019-01-01"),
-        )
-        # create coords
-        coords = dict(
-            time=dc.to_datetime64(np.cumsum(random_state.random(10))),
-            distance=random_state.random(10),
-        )
-        # assemble and output.
-        dims = ("distance", "time")
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
-        msg = "coordinate metadata"
-        with pytest.raises(ValueError, match=msg):
-            dc.Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
@@ -387,6 +367,36 @@ class TestNew:
         dims = ("tom", "jerry")
         out = random_patch.new(dims=dims)
         assert out.dims == dims
+
+    def test_new_data_only_validates_shape(self, random_patch):
+        """New should still reject data which doesn't match the coords."""
+        data = random_patch.data[:-1]
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=data)
+
+    def test_new_coords_validates_shape(self, random_patch):
+        """New should reject data which doesn't match passed coords."""
+        coords = random_patch.coords
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=random_patch.data[:, :-1], coords=coords)
+
+    def test_new_same_coords_matches_default(self, random_patch):
+        """Passing the patch's own coords should match passing nothing."""
+        data = random_patch.data * 2
+        out1 = random_patch.new(data=data)
+        out2 = random_patch.new(data=data, coords=random_patch.coords)
+        assert out1.equals(out2, only_required_attrs=False)
+
+    def test_new_no_args_equals_input(self, random_patch):
+        """New with no arguments should reproduce the patch."""
+        assert random_patch.new().equals(random_patch, only_required_attrs=False)
+
+    def test_new_from_patch_takes_over_metadata(self, random_patch):
+        """Passing a patch as data should adopt its coords and attrs."""
+        other = random_patch.decimate(time=2)
+        out = random_patch.new(data=other)
+        assert out.coords == other.coords
+        assert out.shape == other.shape
 
 
 class TestPatchSummary:

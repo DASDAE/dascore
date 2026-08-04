@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
-from h5py import h5r
 from h5py.h5r import Reference, dereference
 
 import dascore as dc
@@ -77,15 +76,18 @@ def _raise_legacy_ref_error(h5, field_name: str) -> None:
 
 
 def _dereference(h5, value, field_name: str):
-    """Resolve an HDF5 reference, rejecting legacy anonymous DASVader refs."""
+    """Resolve an HDF5 reference or raise a clear compatibility error."""
     if not isinstance(value, Reference):
         return value
-    if h5r.get_name(value, h5.id) is None:
-        _raise_legacy_ref_error(h5, field_name)
     try:
         return h5[value]
     except KeyError:
-        return h5py.Dataset(dereference(value, h5.id))
+        # The high-level lookup fails for some references HDF5 can still
+        # resolve directly, so try that before giving up.
+        try:
+            return h5py.Dataset(dereference(value, h5.id))
+        except Exception:
+            _raise_legacy_ref_error(h5, field_name)
 
 
 # --- Metadata parsing
