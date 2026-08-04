@@ -771,8 +771,9 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
     if size is None:
-        # split takes a patch count, so round up rather than hand it a float.
-        size = math.ceil(len(spool) / (os.cpu_count() or 1))
+        # split takes a positive patch count, so round up rather than hand
+        # it a float, and keep an empty spool from asking for zero.
+        size = max(1, math.ceil(len(spool) / (os.cpu_count() or 1)))
     spools = list(spool.split(size=size))
     # this is a hack to get the progress bar to work. Essentially, we just
     # add a secret flag to all but one spool so that progress bar is only
