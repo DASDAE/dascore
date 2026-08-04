@@ -108,7 +108,7 @@ class BinaryReader(io.BytesIO):
     @classmethod
     def get_handle(cls, resource):
         """Get the handle object from various sources."""
-        if isinstance(resource, cls | io.BufferedIOBase):
+        if isinstance(resource, (cls, io.BufferedIOBase)):
             if cls.reset_offset:
                 resource.seek(0)  # reset byte offset
             return resource
@@ -128,7 +128,7 @@ class LocalBinaryReader(BinaryReader):
     @classmethod
     def get_handle(cls, resource):
         """Get the binary handle, materializing remote resources if needed."""
-        if isinstance(resource, cls | io.BufferedIOBase):
+        if isinstance(resource, (cls, io.BufferedIOBase)):
             if cls.reset_offset:
                 resource.seek(0)
             return resource
@@ -150,7 +150,7 @@ class TextReader(BinaryReader):
     @classmethod
     def get_handle(cls, resource):
         """Get a text handle from a resource."""
-        if isinstance(resource, cls | io.TextIOBase):
+        if isinstance(resource, (cls, io.TextIOBase)):
             if cls.reset_offset:
                 resource.seek(0)
             return resource
