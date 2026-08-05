@@ -68,7 +68,7 @@ filtered_time = patch.pass_filter(time=(1, 5))
 filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
 ```
 
-However, the meaning of the values depends on the function, e.g. both frequency and period might make sense in the example above. For [pass_filter](`dascore.proc.filter.pass_filter`), bare numbers mean frequency (Hz) along `time` and wavenumber (1/m) along `distance`, so `distance=(0.1, 0.2)` above keeps spatial wavelengths of 5 m to 10 m.
+However, the meaning of the values depends on the function, e.g. both frequency and period might make sense in the example above. For [pass_filter](`dascore.proc.filter.pass_filter`), bare numbers mean frequency (Hz) along `time` and wavenumber along `distance`. Note that the wavenumber is the inverse of the *distance coordinate's own units*, so it is 1/m only while that coordinate is in meters. The example patch's distance is in meters, so `distance=(0.1, 0.2)` above keeps spatial wavelengths of 5 m to 10 m.
 
 Attaching units removes the guesswork, and lets the same band be stated as a wavelength instead:
 
@@ -79,12 +79,18 @@ from dascore.units import m
 
 patch = dc.get_example_patch()
 
-# Wavenumbers of 0.01 to 0.1 (1/m) and wavelengths of 10 m to 100 m
-# are two ways of describing the same band.
+# This patch's distance is in meters, so bare numbers are 1/m.
+# Wavenumbers of 0.01 to 0.1 and wavelengths of 10 m to 100 m are two
+# ways of describing the same band.
 by_wavenumber = patch.pass_filter(distance=(0.01, 0.1))
 by_wavelength = patch.pass_filter(distance=(10 * m, 100 * m))
 
 assert np.allclose(by_wavenumber.data, by_wavelength.data)
+
+# With units attached the query means the same thing regardless of what
+# units the coordinate happens to be in.
+in_feet = patch.convert_units(distance="ft")
+assert np.allclose(in_feet.pass_filter(distance=(10 * m, 100 * m)).data, by_wavelength.data)
 ```
 
 When in doubt, be explicit with units and read the docs for the function in question!
