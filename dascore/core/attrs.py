@@ -138,9 +138,11 @@ class PatchAttrs(DascoreBaseModel):
             out = model_dump()
         else:
             out = attr_map
-        if isinstance(out, Mapping):
-            out = dict(out)
-            out.pop("dims", None)
+        # Anything not already a mapping came from model_dump, which
+        # returns one, so this only restates the contract for the checker.
+        assert isinstance(out, Mapping), "attr_map must resolve to a mapping"
+        out = dict(out)
+        out.pop("dims", None)
         return cls(**out)
 
     def update(self, **kwargs) -> Self:

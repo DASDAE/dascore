@@ -84,7 +84,7 @@ def _flatten_coord_summary(
     exclude: set[str] | None = None,
 ) -> dict[str, Any]:
     """Flatten a single coord summary into scan/index-style fields."""
-    exclude = set() if exclude is None else exclude
+    exclude = set[str]() if exclude is None else exclude
     summary_dict = _coord_summary_to_dict(summary)
     out = {}
     if dim_tuple and coord_name not in exclude:

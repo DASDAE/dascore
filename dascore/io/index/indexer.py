@@ -33,7 +33,11 @@ from dascore.io.index.ingest import (
 )
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
 from dascore.utils.misc import _iter_filesystem
-from dascore.utils.paths import directory_writable, requires_local_directory
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    directory_writable,
+    requires_local_directory,
+)
 
 
 def _path_digest(path) -> str:
@@ -132,7 +136,7 @@ class DBDirectoryIndexer:
     ):
         path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)
         requires_local_directory(path, label="DBDirectoryIndexer")
-        self.path = Path(path).absolute()
+        self.path = coerce_to_local_path(path).absolute()
         self.index_path = Path(self._find_index_path(index_path))
         try:
             self._backend = get_backend(self.index_path)
@@ -284,7 +288,7 @@ class DBDirectoryIndexer:
             signal = None
             if candidate is None:  # the reply to a "skip" send
                 continue
-            path = Path(candidate)
+            path = coerce_to_local_path(candidate)
             if path.is_dir():
                 if self._directory_format(path):
                     signal = "skip"

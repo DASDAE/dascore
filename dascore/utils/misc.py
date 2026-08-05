@@ -31,7 +31,12 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_local_path,
+    is_pathlike,
+)
 from dascore.utils.progress import track
 
 _T = TypeVar("_T")
@@ -224,7 +229,7 @@ def _iter_filesystem(
     if is_pathlike(paths):
         if is_local_path(paths):
             yield from _iter_local_filesystem(
-                Path(paths),
+                coerce_to_local_path(paths),
                 ext=ext,
                 timestamp=timestamp,
                 skip_hidden=skip_hidden,

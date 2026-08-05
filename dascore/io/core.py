@@ -234,8 +234,8 @@ def _scan_payload_to_summary(
         shape=tuple(payload.get("shape", ())),
         dtype=str(payload["dtype"]),
         source_path=source_path,
-        source_format=source_format,
-        source_version=source_version,
+        source_format=source_format or "",
+        source_version=source_version or "",
         source_patch_id=(
             normalize_source_patch_id(source_patch_id)
             or normalize_source_patch_id(payload.get("source_patch_id"))
@@ -694,7 +694,7 @@ class _FiberIOManager:
 
     def _get_format(
         self,
-        path: str | Path | IOResourceManager,
+        path: path_types | IOResourceManager,
         file_format: str | None = None,
         file_version: str | None = None,
         fiber_io_hint: dict[str, FiberIO] | None = None,
