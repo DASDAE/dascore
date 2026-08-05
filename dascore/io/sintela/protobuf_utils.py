@@ -43,7 +43,7 @@ Building descriptors at runtime through the lower-level, more stable
 from __future__ import annotations
 
 import struct
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from functools import cache
 from typing import Any
 
@@ -464,7 +464,7 @@ def _common_header_time(common_header) -> np.datetime64 | None:
 
 
 def _parse_records(
-    records: list[EnvelopeRecord], *, scan_mode: bool = False
+    records: Iterable[EnvelopeRecord], *, scan_mode: bool = False
 ) -> tuple[list[Any], ParsedMeta]:
     """Decode protobuf payloads and return messages plus selected META."""
     messages = _get_proto_messages(include_sample_fields=not scan_mode)
@@ -530,8 +530,12 @@ def _get_distance_coord(start_channel: int, spacing: float, count: int, step: in
     )
 
 
-def _get_times(times: list[np.datetime64]):
-    """Build a time coordinate from packet timestamps."""
+def _get_times(times: list[np.datetime64 | None]):
+    """
+    Build a time coordinate from packet timestamps.
+
+    A packet whose common header carries no time contributes NaT.
+    """
     return get_coord(data=np.asarray(times, dtype="datetime64[ns]"))
 
 
@@ -557,7 +561,7 @@ def _base_attrs(
     Each packet family supplies its own ``data_type``/``data_units`` via
     ``extra``; the fields below are shared across all families.
     """
-    attrs = dict(
+    attrs = SintelaProtobufAttrs(
         data_category="DAS",
         packet_type=packet_type,
         recorder_namespace=meta.recorder_namespace,
@@ -572,9 +576,7 @@ def _base_attrs(
         start_channel=int(getattr(common_header, "start_channel", 0)),
         channel_step=None,
     )
-    if extra:
-        attrs.update(extra)
-    return SintelaProtobufAttrs(**attrs)
+    return attrs.new(**extra) if extra else attrs
 
 
 def _get_band_attr_data_type(band_def: tuple[tuple[Any, ...], ...]) -> tuple[str, str]:

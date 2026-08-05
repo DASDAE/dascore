@@ -1133,7 +1133,7 @@ class CoordManager(DascoreBaseModel):
 
 def get_coord_manager(
     coords: CoordManagerInput | CoordManager | None = None,
-    dims: tuple[str, ...] | None = None,
+    dims: Sequence[str] | None = None,
     shape=None,
 ) -> CoordManager:
     """
@@ -1175,6 +1175,8 @@ def get_coord_manager(
     >>> cm = get_coord_manager(coords=coords, dims=dims)
     """
     # return coords if we already have a coord manager.
+    # A list of dims would never compare equal to a CoordManager's tuple.
+    dims = None if dims is None else tuple(dims)
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.
         if dims is not None and dims != coords.dims:

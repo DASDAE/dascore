@@ -16,7 +16,11 @@ import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    CoordManager,
+    CoordManagerInput,
+    get_coord_manager,
+)
 from dascore.core.coords import BaseCoord
 from dascore.core.summary import PatchSummary
 from dascore.utils.array import (
@@ -77,7 +81,7 @@ class Patch(NamespaceOwner):
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike | BaseCoord] | CoordManager | None = None,
+        coords: CoordManagerInput | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):
