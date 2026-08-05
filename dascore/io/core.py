@@ -1826,12 +1826,8 @@ def _validate_write_kwargs(fiber_io, kwargs) -> None:
     names = [x for x in params if x != "self"]
     # The first two parameters (the spool and resource) are filled by write();
     # everything else the writer names is a valid user option.
-    allowed = {
-        name
-        for name in names[2:]
-        if params[name].kind
-        in (params[name].POSITIONAL_OR_KEYWORD, params[name].KEYWORD_ONLY)
-    }
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    allowed = {name for name in names[2:] if params[name].kind in named}
     unknown = set(kwargs) - allowed
     if unknown:
         unknown_str = ", ".join(sorted(unknown))
