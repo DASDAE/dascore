@@ -16,7 +16,7 @@ from functools import cache
 from io import IOBase
 from pathlib import Path
 from types import ModuleType
-from typing import Literal, overload
+from typing import Literal, TypeVar, overload
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,8 @@ from dascore.exceptions import (
 )
 from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
 from dascore.utils.progress import track
+
+_T = TypeVar("_T")
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -527,10 +529,15 @@ def all_diffs_close_enough(diffs):
     return np.allclose(diffs, med, rtol=0.001)
 
 
-def unbyte(byte_or_str: bytes | str) -> str:
-    """Ensure a string is given by str or possibly bytes."""
+def unbyte(byte_or_str: _T | bytes) -> _T | str:
+    """
+    Decode a bytes value, passing anything else through unchanged.
+
+    Callers use this to normalize values which may or may not have come
+    from a binary file, so the non-bytes case is the common one.
+    """
     if isinstance(byte_or_str, bytes | np.bytes_):
-        byte_or_str = byte_or_str.decode("utf8")
+        return byte_or_str.decode("utf8")
     return byte_or_str
 
 

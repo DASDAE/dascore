@@ -21,7 +21,6 @@ from dascore.core.coordmanager import (
     CoordManagerInput,
     get_coord_manager,
 )
-from dascore.core.coords import BaseCoord
 from dascore.core.summary import PatchSummary
 from dascore.utils.array import (
     PatchUFunc,

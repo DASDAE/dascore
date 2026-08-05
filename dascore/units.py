@@ -113,8 +113,15 @@ def _str_to_quant(qunat_str):
         return ureg.Quantity(qunat_str)
 
 
+# Anything get_quantity can resolve: a unit or quantity, a string naming
+# one, a numpy time value, or a bare number (which is dimensionless).
+quantity_like = (
+    str | Quantity | Unit | np.datetime64 | np.timedelta64 | int | float | None
+)
+
+
 def get_quantity(
-    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+    value: quantity_like,
 ) -> Quantity | None:
     """
     Convert a value to a pint quantity.
@@ -174,8 +181,8 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 def convert_units(
     data: numeric | Quantity,
-    to_units: str | Quantity | None,
-    from_units: str | Quantity | None = None,
+    to_units: quantity_like,
+    from_units: quantity_like = None,
 ) -> numeric:
     """
     Convert units in array from one type of units to another.
@@ -254,7 +261,7 @@ def _unit_to_str(unit: Unit) -> str:
         return str(unit)
 
 
-def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
+def get_quantity_str(quant_value: quantity_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
 
