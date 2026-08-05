@@ -12,7 +12,7 @@ import pooch
 from dascore.config import get_config
 from dascore.constants import DATA_VERSION
 
-REGISTRY_PATH = Path(files("dascore").joinpath("data_registry.txt"))
+REGISTRY_PATH = Path(str(files("dascore").joinpath("data_registry.txt")))
 LARGE_REGISTRY_FILES = frozenset({"whale_1.hdf5"})
 
 

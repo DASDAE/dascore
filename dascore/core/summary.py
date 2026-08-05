@@ -261,7 +261,7 @@ class PatchSummary(DascoreBaseModel):
 
     def flat_dump(self, dim_tuple: bool = False, exclude=None) -> dict[str, Any]:
         """Return a flat dict suitable for indexing/dataframes."""
-        exclude = set(() if exclude is None else exclude)
+        exclude = set[str](() if exclude is None else exclude)
         # Build flattened attrs first, then overlay coord summaries so coord-
         # derived fields win over any attr using the same simplified key.
         out = self.attrs.flat_dump(exclude=exclude)
