@@ -507,6 +507,27 @@ def select(
       multiple rows/columns need to be repeated,
       See [`Patch.order`](`dascore.Patch.order`).
 
+    - A range of values includes both of its endpoints, but a range of
+      samples excludes its upper bound, like python's slicing. This means
+      -1 at the end of a sample range excludes the last sample, even
+      though -1 on its own selects it.
+      For example, with 2000 time samples:
+
+      >>> import dascore as dc
+      >>> patch = dc.get_example_patch()
+      >>> # Both endpoints included; 11 channels.
+      >>> len(patch.select(distance=(0, 10)).get_array("distance"))
+      11
+      >>> # Upper bound excluded; 10 samples.
+      >>> len(patch.select(time=(0, 10), samples=True).get_array("time"))
+      10
+      >>> # -1 as a range end drops the last sample.
+      >>> len(patch.select(time=(0, -1), samples=True).get_array("time"))
+      1999
+      >>> # But -1 on its own selects it.
+      >>> len(patch.select(time=-1, samples=True).get_array("time"))
+      1
+
     """
     # Check for and raise on invalid kwargs.
     if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
