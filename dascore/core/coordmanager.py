@@ -42,7 +42,7 @@ print(new_cm)
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
 from typing import Annotated, Any
@@ -447,7 +447,7 @@ class CoordManager(DascoreBaseModel):
 
     def drop_coords(
         self,
-        *coords: str | Collection[str],
+        *coords: str,
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """

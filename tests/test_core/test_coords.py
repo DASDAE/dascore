@@ -1693,10 +1693,12 @@ class TestPartialCoord:
         assert out.units == dc.get_quantity("m")
         assert isinstance(out, CoordPartial)
 
-    def test_update_limits_only_touches_metadata(self, basic_non_coord):
-        """There are no values to limit, so only the metadata changes."""
-        out = basic_non_coord.update_limits(units="m")
+    def test_update_limits_only_touches_metadata(self):
+        """There are no values to limit, so the stored scalars survive."""
+        coord = get_coord(shape=(4,), step=1.0, dtype="float64")
+        out = coord.update_limits(units="m")
         assert out.units == dc.get_quantity("m")
+        assert out.step == coord.step
         assert isinstance(out, CoordPartial)
 
     def test_dimensionless_shape_survives_dump(self):

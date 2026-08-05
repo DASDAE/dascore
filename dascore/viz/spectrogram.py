@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
 
-import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
@@ -41,7 +40,7 @@ def _get_new_original_coord(old_coord, array):
 
 def _get_transformed_coord(coord, freqs):
     """Get the transformed coordinates."""
-    units = dc.get_quantity(1 / coord.units) if coord.units is not None else None
+    units = 1 / coord.units if coord.units is not None else None
     return get_coord(data=freqs, units=units)
 
 

@@ -152,6 +152,11 @@ class TestIterFS:
         }
         assert out == expected
 
+    def test_local_file_uri(self, simple_dir):
+        """A local path carrying a file:// scheme walks like a plain one."""
+        out = set(_iter_filesystem(simple_dir.as_uri()))
+        assert out == set(_iter_filesystem(simple_dir))
+
     def test_extension(self, simple_dir):
         """Test filtering based on extension."""
         out = set(_iter_filesystem(simple_dir, ext=".txt"))

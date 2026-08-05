@@ -534,7 +534,15 @@ def all_diffs_close_enough(diffs):
     return np.allclose(diffs, med, rtol=0.001)
 
 
-def unbyte(byte_or_str: _T | bytes) -> _T | str:
+@overload
+def unbyte(byte_or_str: bytes) -> str: ...
+
+
+@overload
+def unbyte(byte_or_str: _T) -> _T: ...
+
+
+def unbyte(byte_or_str):
     """
     Decode a bytes value, passing anything else through unchanged.
 

@@ -136,7 +136,7 @@ class DBDirectoryIndexer:
     ):
         path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)
         requires_local_directory(path, label="DBDirectoryIndexer")
-        self.path = coerce_to_local_path(path).absolute()
+        self.path = Path(coerce_to_local_path(path)).absolute()
         self.index_path = Path(self._find_index_path(index_path))
         try:
             self._backend = get_backend(self.index_path)
@@ -288,7 +288,7 @@ class DBDirectoryIndexer:
             signal = None
             if candidate is None:  # the reply to a "skip" send
                 continue
-            path = coerce_to_local_path(candidate)
+            path = Path(candidate)
             if path.is_dir():
                 if self._directory_format(path):
                     signal = "skip"

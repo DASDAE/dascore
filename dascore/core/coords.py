@@ -1145,7 +1145,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 return True
         return all_close(self.values, other.values)
 
-    def change_length(self, length: int) -> BaseCoord:
+    def change_length(self, length: int) -> Self:
         """
         Adjust the length of the coordinate by changing the end value.
 
@@ -1240,16 +1240,15 @@ class CoordPartial(BaseCoord):
         """No values to change so update can just call new."""
         return self.new(**kwargs)
 
-    # Other operations that normally modify data do not in this case;
-    # they are spelled out rather than aliased so each keeps the
-    # signature its base declares.
+    # update_limits is spelled out rather than aliased to update so it keeps
+    # the signature its base declares. It must forward only what the caller
+    # supplied: a None reaching _validate_nullish_to_nan would overwrite the
+    # stored start, stop or step with nan.
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
-        """No values to change, so only the metadata in kwargs is applied."""
-        return self.update(min=min, max=max, step=step, **kwargs)
-
-    def set_units(self, units) -> Self:
-        """No values to change, so this only records the new units."""
-        return self.update(units=units)
+        """No values to limit, so only what was passed is applied."""
+        limits = {"min": min, "max": max, "step": step}
+        passed = {i: v for i, v in limits.items() if v is not None}
+        return self.update(**passed, **kwargs)
 
     def convert_units(self, units) -> Self:
         """Convert scalar metadata units, or set units if none exist."""
@@ -1322,7 +1321,7 @@ class CoordPartial(BaseCoord):
         return super().order(array, relative=relative, samples=samples)
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
-    def change_length(self, length: int) -> BaseCoord:
+    def change_length(self, length: int) -> Self:
         """
         {doc}
         """
@@ -1683,7 +1682,7 @@ class CoordRange(BaseCoord):
         return np.max([self.stop - self.step, self.start])
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
-    def change_length(self, length: int) -> BaseCoord:
+    def change_length(self, length: int) -> Self:
         """
         {doc}
         """
@@ -2370,7 +2369,7 @@ class CoordSegmented(BaseCoord):
             segments.append(new)
         return self.new(segments=tuple(segments))
 
-    def snap(self) -> BaseCoord:
+    def snap(self) -> CoordRange:
         """
         Snap the coordinates to evenly sampled grid points.
 

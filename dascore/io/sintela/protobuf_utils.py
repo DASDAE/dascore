@@ -534,7 +534,9 @@ def _get_times(times: list[np.datetime64 | None]):
     """
     Build a time coordinate from packet timestamps.
 
-    A packet whose common header carries no time contributes NaT.
+    Callers reject a packet with no header time before getting here; the
+    None in the signature is what the list comprehension produces, not a
+    supported input.
     """
     return get_coord(data=np.asarray(times, dtype="datetime64[ns]"))
 

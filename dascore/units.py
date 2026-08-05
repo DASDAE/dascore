@@ -6,6 +6,7 @@ import shutil
 from collections.abc import Sequence
 from functools import cache
 from threading import RLock
+from types import EllipsisType
 from typing import Any, TypeVar
 
 import numpy as np
@@ -116,17 +117,19 @@ def _str_to_quant(qunat_str):
 
 # Anything get_quantity can resolve: a unit or quantity, a string naming
 # one, a numpy time value, or a bare number (which is dimensionless).
-# PlainUnit is the base pint builds its registry Unit from, and is what
-# a quantity's .units is statically.
+# PlainUnit is the base pint builds its registry Unit from (so it covers
+# Unit too), and is what a quantity's .units is statically. bytes and
+# Ellipsis are the two cases get_quantity opens by handling.
 quantity_like = (
     str
+    | bytes
     | Quantity
-    | Unit
     | PlainUnit
     | np.datetime64
     | np.timedelta64
     | int
     | float
+    | EllipsisType
     | None
 )
 
@@ -272,7 +275,12 @@ def _unit_to_str(unit: Unit) -> str:
         return str(unit)
 
 
-def get_quantity_str(quant_value: quantity_like) -> str | None:
+# The subset of quantity_like which names a unit; a numpy time value
+# would come back stringified as a date rather than a unit.
+unit_like = str | bytes | Quantity | PlainUnit | None
+
+
+def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
 
@@ -342,7 +350,7 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
-    to_unit: quantity_like,
+    to_unit: unit_like,
     dim: str | None = None,
 ) -> tuple[float, float]:
     """
