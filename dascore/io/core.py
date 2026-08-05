@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Collection, Generator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -63,17 +63,18 @@ from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
 
-# What the scan dispatchers accept: one resource or patch, or a
-# collection of them (`_iterate_scan_inputs` flattens its input with
-# `iterate` before resolving each element). A one-shot iterator is
-# excluded on purpose: the dispatcher walks its input twice, once to
-# size the progress bar, so a generator would silently scan nothing.
+# What the scan dispatchers accept: one resource or patch, or an
+# iterable of them (`_iterate_scan_inputs` flattens its input with
+# `iterate` before resolving each element). The dispatcher walks its
+# input twice, once to size the progress bar, so one-shot iterators
+# (e.g. generators) are materialized up front rather than silently
+# scanning nothing (see #818).
 ScanInput = (
     path_types
     | dc.Patch
     | dc.BaseSpool
     | IOResourceManager
-    | Collection[path_types | dc.Patch | IOResourceManager]
+    | Iterable[path_types | dc.Patch | IOResourceManager]
 )
 
 
@@ -1293,6 +1294,11 @@ def _iter_scan_results(
     fiber_io_hint: dict[str, FiberIO] = {}
     # A dict for keeping track of missing optional dependencies.
     missing_optional_deps = defaultdict(lambda: 0)
+    # A one-shot iterator (e.g. a generator) can't survive both walks
+    # below, so materialize it once up front (see #818). The cast just
+    # keeps the element type ty loses when narrowing the union.
+    if isinstance(path, Iterator):
+        path = list(cast("Iterable[path_types | dc.Patch | IOResourceManager]", path))
     # Unfortunately, we have to iterate the scan candidates twice to get
     # an estimate for the progress bar length. Maybe there is a better way...
     _generator = _iterate_scan_inputs(
