@@ -8,7 +8,7 @@ execute:
 This page covers advanced DASCore features. Most users will be fine with only the coordinate material presented in the [patch tutorial](patch.qmd#coords).
 :::
 
-In order to manage coordinate labels and array manipulations, DASCore implements two classes, [BaseCoordinate](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
+In order to manage coordinate labels and array manipulations, DASCore implements two classes, [`BaseCoord`](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
 
 # Coordinates
 
@@ -114,7 +114,7 @@ coord = get_coord(start=start, stop=stop, step=step)
 new_data = coord.values + np.timedelta64(10, "s")
 coord_new_data = coord.update(data=new_data)
 
-# Update step, keeping length and start but shorting end time.
+# Update step, keeping length and start but shortening end time.
 coord_new_step = coord.update(step=np.timedelta64(1800, 's'))
 
 # Change maximum value, keeping length the same and changing step.
