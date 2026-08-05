@@ -15,6 +15,7 @@ DASCore's built-in codecs are always available; plugins are merged on top.
 from __future__ import annotations
 
 import functools
+import warnings
 
 from dascore.exceptions import InvalidFiberIOError
 from dascore.io.core import BaseCodec
@@ -54,9 +55,21 @@ def get_codec_registry() -> dict[str, type[BaseCodec]]:
     registry: dict[str, type[BaseCodec]] = {}
     for codec_cls in (Gzip,):
         registry[_codec_name(codec_cls)] = codec_cls
-    for loader in get_entry_point_loaders(_CODEC_ENTRY_POINT_GROUP).values():
-        codec_cls = loader()
-        registry[_codec_name(codec_cls)] = codec_cls
+    for ep_name, loader in get_entry_point_loaders(_CODEC_ENTRY_POINT_GROUP).items():
+        # A broken third-party registration must not poison the registry for
+        # the built-in codecs; warn and skip like the FiberIO plugin loader.
+        try:
+            codec_cls = loader()
+            registry[_codec_name(codec_cls)] = codec_cls
+        except Exception as exc:
+            msg = (
+                f"Failed to load codec plugin {ep_name!r} "
+                f"({exc.__class__.__name__}: {exc}); skipping it. "
+                "This can happen when an entry point from a previous install "
+                "is stale; reinstalling dascore (or the package providing the "
+                "plugin) may fix it."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
     return registry
 
 

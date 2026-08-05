@@ -791,6 +791,11 @@ class TestCoerceStorage:
         """Storage dictionaries are validated into the format storage model."""
         assert _coerce_storage({}, _StorageImplementer()) == _TestStorage()
 
+    def test_codec_instance_as_storage_rejected_with_hint(self):
+        """Passing a codec where storage is expected points at the fix."""
+        with pytest.raises(InvalidFiberIOError, match="wrap it in storage"):
+            _coerce_storage(Gzip(level=5), _StorageImplementer())
+
 
 class TestBaseCodec:
     """Tests for the base IO codec model."""
@@ -825,8 +830,8 @@ class TestCodecRegistry:
         """A plugged-in HDF5 codec appears in DASDAE's supported codecs."""
         assert plugin_codec in get_codecs("DASDAE", "1")
 
-    def test_nameless_plugin_codec_raises(self, monkeypatch):
-        """A codec registered without a 'name' default fails loudly."""
+    def test_nameless_plugin_codec_warns_and_skips(self, monkeypatch):
+        """A codec registered without a 'name' default is skipped with a warning."""
         from dascore.io import codec as codec_mod
 
         class _NamelessCodec(HDF5Codec):
@@ -841,9 +846,33 @@ class TestCodecRegistry:
 
         monkeypatch.setattr(codec_mod, "get_entry_point_loaders", _fake_loaders)
         get_codec_registry.cache_clear()
-        with pytest.raises(InvalidFiberIOError, match="name"):
-            get_codec_registry()
+        try:
+            with pytest.warns(UserWarning, match="Failed to load codec plugin"):
+                registry = get_codec_registry()
+            # Built-in codecs survive the broken registration.
+            assert registry["gzip"] is Gzip
+        finally:
+            get_codec_registry.cache_clear()
+
+    def test_broken_plugin_entry_point_warns_and_skips(self, monkeypatch):
+        """A stale/broken codec entry point must not poison the registry."""
+        from dascore.io import codec as codec_mod
+
+        def _broken_loader():
+            raise ModuleNotFoundError("No module named 'dascore_daspack'")
+
+        def _fake_loaders(group):
+            if group == "dascore.codec":
+                return {"DASPACK": _broken_loader}
+            return {}
+
+        monkeypatch.setattr(codec_mod, "get_entry_point_loaders", _fake_loaders)
         get_codec_registry.cache_clear()
+        try:
+            with pytest.warns(UserWarning, match="Failed to load codec plugin"):
+                assert get_codec("gzip") is Gzip
+        finally:
+            get_codec_registry.cache_clear()
 
 
 class TestGetStorage:

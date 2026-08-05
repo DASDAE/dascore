@@ -333,9 +333,17 @@ class TestWriteDASDAE:
         path = tmp_path_factory.mktemp("dasdae_chunk_typo") / "out.h5"
         with pytest.raises(ValueError, match="Unknown chunk dimension"):
             random_patch.io.write(path, "DASDAE", storage={"chunks": {"tim": 500}})
-        # Validation happens before any patch data is written.
+        # Validation happens before any content, so no DASDAE-stamped stub
+        # is left behind for dc.get_format to misidentify.
         with h5py.File(path) as h5:
             assert "waveforms" not in h5
+            assert "__format__" not in h5.attrs
+
+    def test_empty_spool_with_chunks_writes(self, tmp_path_factory):
+        """An empty spool with chunk config writes like any empty write."""
+        path = tmp_path_factory.mktemp("dasdae_empty_chunks") / "out.h5"
+        dc.write(dc.spool([]), path, "DASDAE", storage={"chunks": {"time": 100}})
+        assert len(dc.spool(path).get_contents()) == 0
 
     def test_chunks_without_codec(self, tmp_path_factory, random_patch):
         """Chunks apply even without a codec (chunked-uncompressed layout)."""
@@ -462,6 +470,11 @@ class TestDASDAEStorage:
     def test_get_codecs(self):
         """DASDAE reports the registered HDF5 codecs it can store."""
         assert set(DASDAEStorage.get_codecs()) == {Gzip}
+
+    def test_codec_name_as_preset_gets_hint(self):
+        """Mistaking a codec name for a preset points at the codec spelling."""
+        with pytest.raises(ValueError, match="codec name, not a preset"):
+            DASDAEStorage.from_preset("gzip")
 
 
 class TestReadDASDAE:

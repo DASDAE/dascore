@@ -406,7 +406,7 @@ class BaseStorage(DascoreBaseModel):
 
     name: ClassVar[str] = ""
     # Named presets mapping a preset name to storage kwargs, e.g.
-    # {"compressed": {"codec": {"name": "blosc:zstd"}}}.
+    # {"compressed": {"codec": {"name": "gzip", "level": 5}}}.
     presets: ClassVar[dict[str, dict]] = {}
     # Codec base classes this storage can physically store. A registered codec
     # is usable here only if it subclasses one of these.
@@ -428,6 +428,15 @@ class BaseStorage(DascoreBaseModel):
                 f"Unknown storage preset {name!r} for {cls.__name__}. "
                 f"Valid presets: {valid}."
             )
+            # A common slip is passing a codec name as the preset string;
+            # point at the working spelling instead of a dead end.
+            from dascore.io.codec import get_codec_registry
+
+            if name in get_codec_registry():
+                msg += (
+                    f" Note: {name!r} is a codec name, not a preset; pass it "
+                    f"as storage={{'codec': {name!r}}}."
+                )
             raise InvalidFiberIOError(msg)
         return cls.model_validate(cls.presets[name])
 
@@ -1798,6 +1807,14 @@ def _coerce_storage(storage, fiber_io):
     if storage_cls is None:
         msg = f"Format {fiber_io.name} does not support storage options."
         raise InvalidFiberIOError(msg)
+    if isinstance(storage, BaseCodec):
+        msg = (
+            f"Got codec {type(storage).__name__} for the storage argument; "
+            f"wrap it in storage options, e.g. "
+            f"storage={storage_cls.__name__}(codec=...) or "
+            "storage={'codec': ...}."
+        )
+        raise InvalidFiberIOError(msg)
     if isinstance(storage, storage_cls):
         return storage
     if isinstance(storage, str):
@@ -1833,6 +1850,15 @@ def write(
         format which supports multiple patches per file. If False (default)
         such patches raise a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
+    **kwargs
+        Format-specific write options forwarded to the format's writer.
+        Most notably ``storage``: for formats that support it (see
+        [`get_storage`](`dascore.io.core.get_storage`)), storage options
+        controlling compression and on-disk layout. Accepts a storage
+        instance, a preset name string (e.g. ``storage="compressed"``), or
+        a dict of storage kwargs such as
+        ``storage={"codec": {"name": "gzip", "level": 5}, "chunks": {"time": 2000}}``.
+        Formats without storage support reject an explicit ``storage``.
 
     Raises
     ------

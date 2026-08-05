@@ -78,18 +78,22 @@ class DASDAEV1(FiberIO):
         """
         # write out patches
         storage = _coerce_storage(storage, self)
-        _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
-        # Validate chunk dims against the data up front so a typo raises before
-        # anything is written rather than silently producing an un-chunked file.
-        # Dims come from scan metadata: iterating a lazy spool here would load
-        # every data array once for validation and again in the write loop.
+        # Validate chunk dims before writing any content so a typo raises
+        # instead of silently producing an un-chunked file (or leaving a
+        # DASDAE-stamped stub behind). Dims come from scan metadata:
+        # iterating a lazy spool here would load every data array once for
+        # validation and again in the write loop.
         if storage.chunks:
             scan_df = dc.scan_to_df(patches)
             dims_rows = scan_df["dims"] if "dims" in scan_df.columns else ()
             all_dims = {dim for row in dims_rows for dim in str(row).split(",") if dim}
-            storage._validate_chunk_dims(all_dims)
+            # An empty spool has nothing to chunk; write it like any other
+            # empty write rather than rejecting every chunk dim.
+            if len(scan_df):
+                storage._validate_chunk_dims(all_dims)
+        _write_meta(resource, self.version)
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
