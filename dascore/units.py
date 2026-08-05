@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+from pint.facets.plain import PlainUnit
 from platformdirs import user_cache_path
 
 import dascore as dc
@@ -115,8 +116,18 @@ def _str_to_quant(qunat_str):
 
 # Anything get_quantity can resolve: a unit or quantity, a string naming
 # one, a numpy time value, or a bare number (which is dimensionless).
+# PlainUnit is the base pint builds its registry Unit from, and is what
+# a quantity's .units is statically.
 quantity_like = (
-    str | Quantity | Unit | np.datetime64 | np.timedelta64 | int | float | None
+    str
+    | Quantity
+    | Unit
+    | PlainUnit
+    | np.datetime64
+    | np.timedelta64
+    | int
+    | float
+    | None
 )
 
 
@@ -236,7 +247,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str | Quantity | None) -> Quantity | None:
+def invert_quantity(unit: quantity_like) -> Quantity | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
@@ -331,7 +342,7 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
-    to_unit: str | Quantity,
+    to_unit: quantity_like,
     dim: str | None = None,
 ) -> tuple[float, float]:
     """
