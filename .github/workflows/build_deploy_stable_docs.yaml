@@ -16,9 +16,11 @@ permissions:
   deployments: write
   id-token: write
 
-# Allow one concurrent deployment
+# Allow one concurrent deployment. A pre-release build never deploys, so it
+# gets its own group rather than cancelling (or being cancelled by) a real
+# Pages deployment, which shares the "pages" group with the master docs.
 concurrency:
-  group: "pages"
+  group: ${{ github.event.release.prerelease && 'pages-prerelease' || 'pages' }}
   cancel-in-progress: true
 
 jobs:
@@ -34,10 +36,14 @@ jobs:
       - name: Set manual stable docs version
         if: github.event_name == 'workflow_dispatch'
         run: |
-          # Manually set DASCore version based on last tag. 
-          tag="$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          # Manually set DASCore version based on the last stable tag.
+          # Match only final releases: git's version sort places a
+          # pre-release (v0.2.0b1) above its final (v0.2.0), so an
+          # unfiltered list would publish beta docs as stable.
+          tag="$(git tag --list 'v[0-9]*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
           if [ -z "$tag" ]; then
-            echo "::error::No release tag matching v[0-9]* exists."
+            echo "::error::No stable release tag matching vX.Y.Z exists."
             exit 1
           fi
           echo "DASCORE_DOC_VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -79,6 +85,10 @@ jobs:
           files: docs.zip
 
   deploy:
+    # Stable docs describe the latest stable release, so a pre-release (eg a
+    # beta cut from dev) must not replace them. github.event.release is absent
+    # for workflow_dispatch, so manual runs still deploy.
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     needs: build
     environment:
