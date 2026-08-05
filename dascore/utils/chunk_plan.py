@@ -87,8 +87,7 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
         group = (group,) if isinstance(group, str) else tuple(group)
         if missing := [x for x in group if x not in columns]:
             msg = (
-                f"group attribute(s) {missing} do not exist on any patch "
-                "in the spool."
+                f"group attribute(s) {missing} do not exist on any patch in the spool."
             )
             raise InvalidSpoolQueryError(msg)
         return group
@@ -253,7 +252,7 @@ def _partition(
     tolerance merged patches the default would have kept apart (#662);
     the caller owns warning about it.
     """
-    start, stop, step = get_interval_columns(df, name)
+    _start, _stop, step = get_interval_columns(df, name)
     cols = [x for x in group_attrs if x in df.columns]
     if "dims" in df.columns:
         cols.append("dims")
@@ -471,8 +470,7 @@ def build_chunk_plan(
     """
     if len(kwargs) != 1:
         msg = (
-            "Chunking only supported along one dimension. You passed "
-            f"kwargs: {kwargs}"
+            f"Chunking only supported along one dimension. You passed kwargs: {kwargs}"
         )
         raise ParameterError(msg)
     # Fail here rather than later at assembly, so the error points at the

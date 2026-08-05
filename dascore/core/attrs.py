@@ -94,9 +94,7 @@ class PatchAttrs(DascoreBaseModel):
             return data
         data = dict(data)
         if "coords" in data and not isinstance(data["coords"], str):
-            msg = (
-                "PatchAttrs no longer accepts coordinate metadata. " "Received: coords."
-            )
+            msg = "PatchAttrs no longer accepts coordinate metadata. Received: coords."
             raise ValueError(msg)
         data.pop("dims", None)
         return data

@@ -50,10 +50,7 @@ def merge_coord_managers(
         """Ensure all managers have same dimensions."""
         dims = {x.dims for x in managers}
         if len(dims) != 1:
-            msg = (
-                "Can't merge coord managers, they don't all have the "
-                "same dimensions!"
-            )
+            msg = "Can't merge coord managers, they don't all have the same dimensions!"
             raise CoordMergeError(msg)
         return managers[0].dims
 
@@ -108,8 +105,7 @@ def merge_coord_managers(
             # snap is too far off, bail out.
             elif diff > tolerance:
                 msg = (
-                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)}"
-                    f" not met"
+                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)} not met"
                 )
                 raise CoordMergeError(msg)
         return coord_list

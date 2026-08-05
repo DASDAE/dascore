@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -37,7 +39,11 @@ class SentekV5(FiberIO):
         # tend to be quite small.
         return dc.spool(patch).select(time=time, distance=distance)
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Auto detect sentek format."""
         return _get_version(resource)
 

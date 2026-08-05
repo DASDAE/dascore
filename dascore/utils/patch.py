@@ -21,7 +21,6 @@ from dascore.constants import (
     DEFAULT_ATTRS_TO_IGNORE,
     WARN_LEVELS,
     PatchType,
-    SpoolType,
     check_behavior_description,
 )
 from dascore.exceptions import (
@@ -346,7 +345,7 @@ def patch_function(
 
 
 def patches_to_df(
-    patches: Sequence[PatchType] | SpoolType | pd.DataFrame,
+    patches: Sequence[dc.Patch] | dc.BaseSpool | pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Return a dataframe.
@@ -399,11 +398,11 @@ def patches_to_df(
     removed_in="0.2.0",
 )
 def merge_patches(
-    patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
+    patches: Sequence[dc.Patch] | pd.DataFrame | dc.BaseSpool,
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,
-) -> Sequence[PatchType]:
+) -> dc.BaseSpool:
     """
     Merge all compatible patches in spool or patch list together.
 
@@ -1434,7 +1433,7 @@ def concatenate_patches(
 @compose_docstring(check_desc=check_behavior_description)
 def stack_patches(
     patches, dim_vary=None, check_behavior: WARN_LEVELS = "warn"
-) -> PatchType:
+) -> dc.Patch:
     """
     Stack (add) all patches compatible with first patch together.
 

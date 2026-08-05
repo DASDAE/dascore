@@ -223,7 +223,7 @@ class H5Reader(_H5CasterBase):
         h5py can consume a binary file object via the
         ``fileobj`` driver, so remote UPath inputs stay streaming-based here.
         """
-        if isinstance(resource, cls | _ManagedH5pyFile):
+        if isinstance(resource, (cls, _ManagedH5pyFile)):
             return resource
         return open_h5_resource(
             resource,

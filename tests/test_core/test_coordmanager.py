@@ -343,7 +343,7 @@ class TestDrop:
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(cm_multidim.shape)
         axis = cm_multidim.get_axis("time")
-        cm, new_array = cm_multidim.drop_coords("time", array=array)
+        _cm, new_array = cm_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
     def test_drop_non_dim_coord(self, cm_multidim):
@@ -412,7 +412,7 @@ class TestSelect:
     def test_filter_array(self, cm_basic):
         """Ensure an array can be filtered."""
         data = np.ones(cm_basic.shape)
-        new, trim = cm_basic.select(distance=(100, 400), array=data)
+        _new, trim = cm_basic.select(distance=(100, 400), array=data)
         assert trim.shape == trim.shape
 
     def test_select_emptying_dim(self, cm_basic):
@@ -501,7 +501,7 @@ class TestSelect:
         """Ensure trim also trims related dimensions."""
         cm = cm_multidim
         data = np.empty(cm.shape)
-        out, new_data = cm.select(array=data, time=slice(2, 4), samples=True)
+        out, _new_data = cm.select(array=data, time=slice(2, 4), samples=True)
         for name, coord in out.coord_map.items():
             dims = cm.dim_map[name]
             if "time" not in dims:

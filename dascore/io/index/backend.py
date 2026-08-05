@@ -201,7 +201,7 @@ class SQLIndexBackend(abc.ABC):
                 )
             for index_name, table, column in INDEXES:
                 self._execute(
-                    f"CREATE INDEX IF NOT EXISTS {index_name} " f"ON {table} ({column})"
+                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
                 )
             self._execute(
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",

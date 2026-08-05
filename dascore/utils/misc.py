@@ -598,7 +598,7 @@ def yield_sub_sequences(sequence, length=None):
 
 
 def maybe_get_items(
-    obj, attr_map: Mapping[str, str], unpack_names: None | set[str] = None
+    obj, attr_map: Mapping[str, str], unpack_names: set[str] | None = None
 ):
     """
     Maybe get items from a mapping (if they exist).

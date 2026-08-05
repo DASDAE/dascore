@@ -6,7 +6,7 @@ import datetime
 import mmap
 import struct
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -102,8 +102,8 @@ def parse_time_stamp(fractions, seconds):
         return None
 
 
-def _get_version_str(tdms_file, lead_in_length=28) -> str:
-    """Return True if we have the right file type."""
+def _get_version_str(tdms_file, lead_in_length=28) -> str | Literal[False]:
+    """Return the version string for a TDMS file, else False."""
     lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     # [string of length 4][int32][int32][int64][int64]

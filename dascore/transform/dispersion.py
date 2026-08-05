@@ -16,8 +16,8 @@ from dascore.utils.patch import patch_function
 def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
-    approx_resolution: None | float = None,
-    approx_freq: None | tuple[float, float] = None,
+    approx_resolution: float | None = None,
+    approx_freq: tuple[float, float] | None = None,
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method.

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import warnings
 from types import EllipsisType
+from typing import Literal
 
 import numpy as np
 
@@ -38,7 +39,7 @@ from .g1utils import (
 )
 from .t1utils import _get_t1_patch, _is_t1_file, _scan_t1
 
-_float_select_type = tuple[float | None | EllipsisType, float | None | EllipsisType]
+_float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
 _time_select_type = tuple[
     opt_timeable_types | EllipsisType,
     opt_timeable_types | EllipsisType,
@@ -87,7 +88,11 @@ class Febus2(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "2"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains febus version 8 data else False.
 
@@ -157,7 +162,11 @@ class FebusG1CSV1(FiberIO):
     preferred_extensions = ("bsl", "mtx")
     version = "1"
 
-    def get_format(self, resource: TextReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: TextReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Get the name/version of a G1 file else return False."""
         is_g1_file = _is_g1_file(resource)
         resource.seek(0)  # proactively set resource back to position 0.
@@ -196,7 +205,11 @@ class FebusMTXH5V1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Get the name/version of an MTX HDF5 file else return False."""
         version = _mtx_version(resource)
         return (self.name, self.version) if version == self.version else False
@@ -254,7 +267,11 @@ class FebusBSLH5V1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Get the name/version of a BSL HDF5 file else return False."""
         version = _bsl_version(resource)
         return (self.name, self.version) if version == self.version else False
@@ -321,9 +338,11 @@ class FebusT1V1(FiberIO):
 
     preferred_extensions = ("hdf5", "h5")
 
-    def get_format(self, fi: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self, resource: H5Reader, **kwargs
+    ) -> tuple[str, str] | Literal[False]:
         """Return (name, version) if this is a FEBUS T1 file, else False."""
-        return (self.name, self.version) if _is_t1_file(fi) else False
+        return (self.name, self.version) if _is_t1_file(resource) else False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs

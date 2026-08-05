@@ -199,7 +199,7 @@ def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
 @patch_function()
 def dft(
     patch: PatchType,
-    dim: str | None | Sequence[str],
+    dim: str | Sequence[str] | None,
     *,
     real: str | bool | None = None,
     pad: bool = True,
@@ -411,7 +411,7 @@ def _check_dft_output_invertible(patch):
 
 
 @patch_function()
-def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
+def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     """
     Perform the inverse discrete Fourier transform (idft) on specified dimension(s).
 
@@ -669,7 +669,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
 
 
 @patch_function()
-def istft(patch) -> PatchType:
+def istft(patch) -> dc.Patch:
     """
     Invert a short-time fourier transform.
 

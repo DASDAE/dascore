@@ -8,8 +8,9 @@ overview attributes MetadataStandard and RawDataStandard.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.gdr.utils_das import (
     _get_attrs_coords_and_data,
@@ -36,11 +37,15 @@ class GDR_V1(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if the resource belongs to this format."""
         return _get_version(resource)
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
         """
         Read a resource belonging to this format.
 

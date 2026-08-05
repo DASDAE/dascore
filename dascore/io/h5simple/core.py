@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
@@ -17,13 +18,17 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if is simple h5 format."""
         if _is_h5simple(resource):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
         """
         Read a simple h5 file.
 

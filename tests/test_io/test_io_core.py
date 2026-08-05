@@ -6,7 +6,7 @@ import copy
 import io
 import threading
 from pathlib import Path
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 import h5py
 import numpy as np
@@ -98,6 +98,19 @@ class _FiberCaster(FiberIO):
     def scan(self, not_path: BinaryReader):
         """Ensure an off-name still works for type casting."""
         assert isinstance(not_path, io.BufferedReader)
+
+
+class _FiberInheritsScan(FiberIO):
+    """A FiberIO which implements only read, as the docs allow."""
+
+    name = "_InheritsScan"
+    version = "1"
+    seen_snap: ClassVar[list] = []
+
+    def read(self, resource, snap=True, **kwargs):
+        """Record what the inherited scan forwarded."""
+        self.seen_snap.append(snap)
+        return dc.spool([dc.get_example_patch()])
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
@@ -351,6 +364,21 @@ class TestFormatManager:
         """Deep copy manager to avoid changing state used by other objects."""
         manager = copy.deepcopy(FiberIO.manager)
         return manager
+
+    def test_inherited_scan_delegates_to_read(self):
+        """A FiberIO which implements only read still scans, snap and all."""
+        fiber_io = _FiberInheritsScan()
+        fiber_io.seen_snap.clear()
+        assert len(fiber_io.scan("ignored")) == 1
+        assert len(fiber_io.scan(resource="ignored", snap=False)) == 1
+        assert fiber_io.seen_snap == [True, False]
+
+    def test_get_fiberio_needs_a_registry(self):
+        """get_fiberio promises a FiberIO; an empty registry cannot supply one."""
+        manager = _FiberIOManager("dascore.fiber_io")
+        manager.__dict__["_eps"] = pd.Series({}, dtype=object)
+        with pytest.raises(AssertionError, match="no fiber_io"):
+            manager.get_fiberio()
 
     def test_specific_format_and_version(self, format_manager):
         """
@@ -784,6 +812,22 @@ class TestScan:
         random_patch.io.write(path_2, "dasdae")
         random_patch.io.write(path_3, "dasdae")
         return out
+
+    @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
+    def test_scan_accepts_a_collection(self, func, tmp_path, random_patch):
+        """A collection of resources scans as the sum of its members."""
+        path_1 = tmp_path / "patch_1.h5"
+        path_2 = tmp_path / "patch_2.h5"
+        random_patch.io.write(path_1, "dasdae")
+        random_patch.io.write(path_2, "dasdae")
+        expected = len(func(path_1)) + len(func(path_2))
+        assert len(func([path_1, path_2])) == expected
+        # A set is a collection too, and the dispatcher does not index.
+        assert len(func({path_1, path_2})) == expected
+
+    def test_scan_accepts_a_collection_of_patches(self, random_patch):
+        """Patches can be scanned directly, one summary each."""
+        assert len(dc.scan([random_patch, random_patch])) == 2
 
     def test_scan_no_good_files(self, tmp_path):
         """Scan with no fiber files should return []."""
