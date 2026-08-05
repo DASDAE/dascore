@@ -330,7 +330,7 @@ class PlanResolver(PatchResolver):
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
 
-    def live_entries(self) -> Mapping[str, dc.Patch]:
+    def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
         return self.loader.live_entries()
 

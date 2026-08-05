@@ -1687,6 +1687,10 @@ class TestPartialCoord:
         """Ensure non coords are equal to themselves."""
         assert basic_non_coord == basic_non_coord
 
+    def test_shape_accepts_an_int(self):
+        """A partial coord coerces an int shape like every other coord."""
+        assert CoordPartial(shape=5, dtype="float64").shape == (5,)
+
     def test_set_units_positionally(self, basic_non_coord):
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")

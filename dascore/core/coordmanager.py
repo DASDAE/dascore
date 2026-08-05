@@ -425,7 +425,7 @@ class CoordManager(DascoreBaseModel):
         assert out.shape == self.shape
         return out, array
 
-    def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
+    def new(self, dims=None, coord_map=None, dim_map=None, **kwargs) -> Self:
         """
         Return a new coordmanager with specified attributes replaced.
 
@@ -442,6 +442,7 @@ class CoordManager(DascoreBaseModel):
             dims=dims if dims is not None else self.dims,
             coord_map=coord_map if coord_map is not None else self.coord_map,
             dim_map=dim_map if dim_map is not None else self.dim_map,
+            **kwargs,
         )
         return out
 

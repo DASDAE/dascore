@@ -341,7 +341,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @field_validator("shape", mode="before")
     @classmethod
-    def _validate_nullish_to_nan(cls, value):
+    def _validate_shape_to_tuple(cls, value):
         """Ensure shape is a tuple."""
         # This also allows shape to be an int.
         return tuple(iterate(value))
