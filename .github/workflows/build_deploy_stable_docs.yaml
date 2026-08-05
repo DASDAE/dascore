@@ -16,11 +16,14 @@ permissions:
   deployments: write
   id-token: write
 
-# Allow one concurrent deployment. A pre-release build never deploys, so it
-# gets its own group rather than cancelling (or being cancelled by) a real
-# Pages deployment, which shares the "pages" group with the master docs.
+# Allow one concurrent deployment. Only runs which can deploy need to
+# serialize, so they share the "pages" group with the master docs workflow.
+# A pre-release never deploys; it is grouped per tag so that publishing one
+# pre-release cannot cancel another's build before it attaches docs.zip.
 concurrency:
-  group: ${{ github.event.release.prerelease && 'pages-prerelease' || 'pages' }}
+  group: >-
+    ${{ github.event.release.prerelease
+    && format('pages-prerelease-{0}', github.ref) || 'pages' }}
   cancel-in-progress: true
 
 jobs:
