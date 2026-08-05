@@ -73,7 +73,7 @@ index_path = Path(tempfile.mkdtemp()) / "index.h5"
 spool = dc.spool(directory_path, index_path=index_path).update()
 ```
 
-New spools created using the same directory will know where to find the index file, **unless** there is a valid index file already in the directory.
+A new spool created for the same directory will find this index file automatically. The exception is when a valid index file already exists inside the data directory itself, which takes precedence.
 
 :::{.callout-warning}
 If you remove files from a directory that has already been indexed, you should delete the index file and then call `update` again on the spool like this:
@@ -204,7 +204,6 @@ spool = dc.get_example_spool()
 
 # Return dataframe with contents of spool (each row has metadata of a patch)
 contents = spool.get_contents()
-print(contents)
 ```
 
 ```{python}
