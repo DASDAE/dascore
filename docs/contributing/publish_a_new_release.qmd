@@ -22,6 +22,19 @@ The GitHub releases page can generate release notes automatically, but maintaine
 
 Then click 'Publish Release'. This will kick off the doc-build and publishing task automatically, as well as publish the tagged source code to PyPI.
 
+## Pre-releases
+
+A pre-release (alpha, beta, or release candidate) lets users try in-progress work without affecting anyone who installs DASCore normally. Publishing one differs from a stable release in four ways:
+
+1. **Set the release Target to the branch the code lives on**, usually `dev`. The Target defaults to `master`, and workflows run from the tagged commit, so tagging the wrong branch publishes the wrong code.
+2. **Use a [PEP 440](https://peps.python.org/pep-0440/) pre-release tag**, appending `aN`, `bN`, or `rcN` to the version being worked toward for an alpha, beta, or release candidate: `v0.2.0a1`, `v0.2.0b1`, `v0.2.0rc1`. Do not use the plain `v0.2.0` tag, which belongs to the final release. `pip install dascore` ignores pre-releases, so only users who ask for one with `pip install --pre dascore` will get it.
+3. **Tick the "Set as a pre-release" checkbox.** This is load-bearing, not cosmetic: `BuildDeployStableDocs` keys on it to skip deploying, so an unticked pre-release replaces the stable documentation site with pre-release docs.
+4. **Skip the conda-forge section entirely.** conda has no equivalent of `--pre` and orders `0.2.0b1` above `0.1.20`, so publishing a pre-release to the main channel would serve it to every conda user. conda-forge handles pre-releases through a separate `rc` branch and label.
+
+`BuildDeployStableDocs` still runs for a pre-release and still takes ~30 minutes. It builds the docs and attaches `docs.zip` to the release, but the deploy step is skipped by design, so the stable documentation site is expected to stay unchanged. Do not re-dispatch the workflow to "fix" this.
+
+Because pre-releases exist to gather feedback, say plainly in the notes that it is a pre-release, how to install it (`pip install --pre dascore==0.2.0b1`), that it is not available on conda-forge, and where to report problems. Call out breaking changes against the last stable release explicitly, including any public API that has been removed.
+
 ## Verify package and docs publishing
 
 After publishing, open [GitHub Actions](https://github.com/DASDAE/dascore/actions) and confirm the release workflows complete successfully.
@@ -29,7 +42,14 @@ After publishing, open [GitHub Actions](https://github.com/DASDAE/dascore/action
 - `PublishPackage` builds the distributions and uploads DASCore to [PyPI](https://pypi.org/project/dascore/).
 - `BuildDeployStableDocs` builds the stable documentation, deploys it to GitHub Pages, and uploads `docs.zip` to the GitHub release. This may take 30 minutes or more.
 
-Once the workflows finish, check that PyPI shows the new version and that the stable documentation site reflects the release. If a workflow fails, fix the underlying issue on `master`, publish a new patch release if the tag has already been distributed, and avoid moving or replacing a public release tag.
+Once the workflows finish, check that PyPI shows the new version and that the stable documentation site reflects the release. For a pre-release the documentation site is expected to be unchanged; check the `docs.zip` asset on the release instead.
+
+If a workflow fails, first check whether PyPI already has the files, since the recovery differs:
+
+- **Transient failure, nothing uploaded.** Re-run the job. Release workflows check out the release tag rather than the branch it was cut from, so a re-run builds the same commit and produces the same version even if the branch has moved on. Note PyPI refuses to replace a file it already has, so a re-run after a partial upload fails on the files that did land.
+- **A source change is needed.** Publish a new release with a new tag, bumping the patch version (`v0.1.21`) or the pre-release number (`v0.2.0b2`). Fix the underlying issue on the branch the release came from.
+
+Never move or replace a public release tag, and never delete a version from PyPI expecting to re-upload it: PyPI does not allow a filename to be reused, even after deletion.
 
 ## Conda-forge
 
