@@ -22,6 +22,7 @@ from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
+    ParameterError,
     RemoteCacheError,
     UnknownFiberFormatError,
 )
@@ -823,6 +824,36 @@ class TestCoerceStorage:
         """Passing a codec where storage is expected points at the fix."""
         with pytest.raises(InvalidFiberIOError, match="wrap it in storage"):
             _coerce_storage(Gzip(level=5), _StorageImplementer())
+
+
+class TestWriteKwargValidation:
+    """dc.write must not silently swallow undeclared write options."""
+
+    def test_misspelled_storage_kwarg_raises(self, tmp_path, random_patch):
+        """A typo in the storage kwarg name raises instead of writing plain."""
+        with pytest.raises(ParameterError, match="stroage"):
+            random_patch.io.write(tmp_path / "out.h5", "dasdae", stroage="compressed")
+
+    def test_error_lists_supported_options(self, tmp_path, random_patch):
+        """The rejection names the writer's real options."""
+        with pytest.raises(ParameterError, match="storage"):
+            dc.write(random_patch, tmp_path / "out.h5", "dasdae", nope=1)
+
+    def test_format_without_options_rejects_any_kwarg(self, tmp_path, random_patch):
+        """Formats whose writers declare no options reject all extras."""
+        with pytest.raises(ParameterError, match=r"\(none\)"):
+            dc.write(random_patch, tmp_path / "out.pkl", "pickle", anything=1)
+
+    def test_declared_options_still_pass(self, tmp_path, random_patch):
+        """Declared writer options are unaffected by the validation."""
+        path = tmp_path / "out.h5"
+        dc.write(random_patch, path, "dasdae", storage="compressed")
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_storage_on_pickle_keeps_specific_error(self, tmp_path, random_patch):
+        """Storage on a storage-less format keeps its targeted message."""
+        with pytest.raises(InvalidFiberIOError, match="does not support storage"):
+            dc.write(random_patch, tmp_path / "out.pkl", "pickle", storage="compressed")
 
 
 class TestBaseCodec:

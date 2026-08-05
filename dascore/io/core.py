@@ -1812,6 +1812,38 @@ def get_codecs(
     return storage_cls.get_codecs()
 
 
+def _validate_write_kwargs(fiber_io, kwargs) -> None:
+    """
+    Reject write kwargs the format's writer does not declare.
+
+    Writers accept ``**kwargs`` for interface tolerance, so a misspelled
+    option name (e.g. ``stroage=``) would otherwise be silently swallowed
+    and produce a file that ignores what the caller asked for.
+    """
+    if not kwargs:
+        return
+    params = inspect.signature(fiber_io.write).parameters
+    names = [x for x in params if x != "self"]
+    # The first two parameters (the spool and resource) are filled by write();
+    # everything else the writer names is a valid user option.
+    allowed = {
+        name
+        for name in names[2:]
+        if params[name].kind
+        in (params[name].POSITIONAL_OR_KEYWORD, params[name].KEYWORD_ONLY)
+    }
+    unknown = set(kwargs) - allowed
+    if unknown:
+        unknown_str = ", ".join(sorted(unknown))
+        valid = ", ".join(sorted(allowed)) or "(none)"
+        msg = (
+            f"Unknown write option(s) {unknown_str} for format "
+            f"{fiber_io.name} version {fiber_io.version}. "
+            f"Supported options: {valid}."
+        )
+        raise ParameterError(msg)
+
+
 def _coerce_storage(storage, fiber_io):
     """
     Coerce a user-supplied storage argument to the format's storage model.
@@ -1872,12 +1904,14 @@ def write(
         such patches raise a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
     **kwargs
-        Format-specific write options forwarded to the format's writer.
-        Most notably ``storage``: for formats that support it (see
-        [`get_storage`](`dascore.io.core.get_storage`)), storage options
-        controlling compression and on-disk layout. Accepts a storage
-        instance, a preset name string (e.g. ``storage="compressed"``), or
-        a dict of storage kwargs such as
+        Format-specific write options forwarded to the format's writer;
+        options the target writer does not declare raise a
+        [`ParameterError`](`dascore.exceptions.ParameterError`) rather than
+        being silently ignored. Most notably ``storage``: for formats that
+        support it (see [`get_storage`](`dascore.io.core.get_storage`)),
+        storage options controlling compression and on-disk layout. Accepts
+        a storage instance, a preset name string (e.g.
+        ``storage="compressed"``), or a dict of storage kwargs such as
         ``storage={"codec": {"name": "gzip", "level": 5}, "chunks": {"time": 2000}}``.
         Formats without storage support reject an explicit ``storage``.
 
@@ -1899,8 +1933,11 @@ def write(
     >>> path.unlink()
     """
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    # Coerce storage first so unsupported-storage formats give the specific
+    # "does not support storage options" error rather than the generic one.
     if "storage" in kwargs:
         kwargs["storage"] = _coerce_storage(kwargs["storage"], fiber_io)
+    _validate_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.BaseSpool):
         patch_or_spool = dc.spool([patch_or_spool])
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
