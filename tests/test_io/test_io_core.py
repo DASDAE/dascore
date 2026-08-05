@@ -829,6 +829,22 @@ class TestScan:
         """Patches can be scanned directly, one summary each."""
         assert len(dc.scan([random_patch, random_patch])) == 2
 
+    @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
+    def test_scan_accepts_a_one_shot_iterable(self, func, tmp_path, random_patch):
+        """A generator input scans every element, not silently nothing (#818)."""
+        path_1 = tmp_path / "patch_1.h5"
+        path_2 = tmp_path / "patch_2.h5"
+        random_patch.io.write(path_1, "dasdae")
+        random_patch.io.write(path_2, "dasdae")
+        expected = len(func([path_1, path_2]))
+        assert expected == 2
+        assert len(func(p for p in [path_1, path_2])) == expected
+        assert len(func(iter([path_1, path_2]))) == expected
+
+    def test_scan_accepts_a_generator_of_patches(self, random_patch):
+        """A generator of patches yields one summary each (#818)."""
+        assert len(dc.scan(p for p in [random_patch, random_patch])) == 2
+
     def test_scan_no_good_files(self, tmp_path):
         """Scan with no fiber files should return []."""
         dummy_file = tmp_path / "data.txt"
