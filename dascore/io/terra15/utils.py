@@ -179,8 +179,7 @@ def _get_time_coord(data_node, snap_dims=True):
     """Get the time coordinate."""
     t_min, t_max, _time_len, d_time = _get_scanned_time_info(data_node)
     if snap_dims:
-        kwargs = dict(start=t_min, stop=t_max + d_time, step=d_time, units="s")
-        time_coord = get_coord(**kwargs)
+        time_coord = get_coord(start=t_min, stop=t_max + d_time, step=d_time, units="s")
     else:
         time_coord = _get_raw_time_coord(data_node)
     return time_coord

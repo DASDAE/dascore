@@ -695,7 +695,7 @@ class _FiberIOManager:
 
     def _get_format(
         self,
-        path: str | Path | IOResourceManager,
+        path: path_types | IOResourceManager,
         file_format: str | None = None,
         file_version: str | None = None,
         fiber_io_hint: dict[str, FiberIO] | None = None,

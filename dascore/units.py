@@ -6,12 +6,14 @@ import shutil
 from collections.abc import Sequence
 from functools import cache
 from threading import RLock
+from types import EllipsisType
 from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+from pint.facets.plain import PlainUnit
 from platformdirs import user_cache_path
 
 import dascore as dc
@@ -113,8 +115,27 @@ def _str_to_quant(qunat_str):
         return ureg.Quantity(qunat_str)
 
 
+# Anything get_quantity can resolve: a unit or quantity, a string naming
+# one, a numpy time value, or a bare number (which is dimensionless).
+# PlainUnit is the base pint builds its registry Unit from (so it covers
+# Unit too), and is what a quantity's .units is statically. bytes and
+# Ellipsis are the two cases get_quantity opens by handling.
+quantity_like = (
+    str
+    | bytes
+    | Quantity
+    | PlainUnit
+    | np.datetime64
+    | np.timedelta64
+    | int
+    | float
+    | EllipsisType
+    | None
+)
+
+
 def get_quantity(
-    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+    value: quantity_like,
 ) -> Quantity | None:
     """
     Convert a value to a pint quantity.
@@ -174,8 +195,8 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 def convert_units(
     data: numeric | Quantity,
-    to_units: str | Quantity | None,
-    from_units: str | Quantity | None = None,
+    to_units: quantity_like,
+    from_units: quantity_like = None,
 ) -> numeric:
     """
     Convert units in array from one type of units to another.
@@ -229,7 +250,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str | Quantity | None) -> Quantity | None:
+def invert_quantity(unit: quantity_like) -> Quantity | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
@@ -254,7 +275,12 @@ def _unit_to_str(unit: Unit) -> str:
         return str(unit)
 
 
-def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
+# The subset of quantity_like which names a unit; a numpy time value
+# would come back stringified as a date rather than a unit.
+unit_like = str | bytes | Quantity | PlainUnit | None
+
+
+def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
 
@@ -324,7 +350,7 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
-    to_unit: str | Quantity,
+    to_unit: unit_like,
     dim: str | None = None,
 ) -> tuple[float, float]:
     """

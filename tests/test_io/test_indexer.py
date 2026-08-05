@@ -134,7 +134,9 @@ class TestFindIndex:
     def test_local_upath_normalized_to_path(self, tmp_path):
         """Local UPath inputs should normalize to pathlib.Path internally."""
         out = DBDirectoryIndexer(UPath(tmp_path))
-        assert isinstance(out.path, Path)
+        # A local UPath is itself a Path subclass, so isinstance is not
+        # enough to show it was normalized.
+        assert type(out.path) is type(Path(tmp_path))
         assert out.path == Path(tmp_path).absolute()
 
     def test_index_map_dir_comes_from_config(self, tmp_path):

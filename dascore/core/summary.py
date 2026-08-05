@@ -84,7 +84,7 @@ def _flatten_coord_summary(
     exclude: set[str] | None = None,
 ) -> dict[str, Any]:
     """Flatten a single coord summary into scan/index-style fields."""
-    exclude = set() if exclude is None else exclude
+    exclude = set[str]() if exclude is None else exclude
     summary_dict = _coord_summary_to_dict(summary)
     out = {}
     if dim_tuple and coord_name not in exclude:
@@ -261,7 +261,7 @@ class PatchSummary(DascoreBaseModel):
 
     def flat_dump(self, dim_tuple: bool = False, exclude=None) -> dict[str, Any]:
         """Return a flat dict suitable for indexing/dataframes."""
-        exclude = set(() if exclude is None else exclude)
+        exclude = set[str](() if exclude is None else exclude)
         # Build flattened attrs first, then overlay coord summaries so coord-
         # derived fields win over any attr using the same simplified key.
         out = self.attrs.flat_dump(exclude=exclude)
