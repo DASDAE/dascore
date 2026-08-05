@@ -4,6 +4,7 @@ Tests specific to DASvader format.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,7 +14,11 @@ import pytest
 from h5py.h5r import Reference
 
 import dascore as dc
-from dascore.exceptions import DependencyError, UnknownFiberFormatError
+from dascore.exceptions import (
+    DASVaderCompatibilityError,
+    DependencyError,
+    UnknownFiberFormatError,
+)
 from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
 from dascore.utils.downloader import fetch
 
@@ -207,10 +212,20 @@ class TestDASVader:
         assert patch.attrs is not None
 
     def test_legacy_file_scan_warns_and_skips(self, legacy_das_vader_path):
-        """Scan should surface compatibility guidance as a warning, not an error."""
-        with pytest.warns(UserWarning, match="legacy DASVader JLD2 file"):
+        """
+        Scan should surface compatibility guidance as a warning, not an error.
+
+        On an HDF5 stack which can resolve the file's anonymous references
+        it simply scans, so only the unsupported case asserts the warning.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             out = dc.scan(legacy_das_vader_path)
-        assert out == []
+        messages = [str(x.message) for x in caught]
+        if out == []:
+            assert any("legacy DASVader JLD2 file" in x for x in messages)
+        else:
+            assert len(out) == 1
 
     def test_non_dasvader_jld2_is_not_claimed(self, tmp_path):
         """Non-DASVader JLD2/HDF5 files should not be identified as DASVader."""
@@ -280,3 +295,32 @@ class TestDASVader:
         """Non-reference values should be returned unchanged."""
         value = np.float64(5_000.0)
         assert _dereference(None, value, "PulseRateFreq") == value
+
+    def test_dereference_anonymous_reference(self, tmp_path):
+        """Anonymous references should be read when supported by HDF5."""
+        path = tmp_path / "anonymous_reference.h5"
+        with h5py.File(path, "w") as resource:
+            target = resource.create_dataset("target", data=np.array([1]))
+            resource.create_dataset("reference", data=target.ref, dtype=h5py.ref_dtype)
+            del resource["target"]
+            reference = resource["reference"][()]
+
+            assert h5py.h5r.get_name(reference, resource.id) is None
+            resolved = _dereference(resource, reference, "htime")
+
+            assert resolved[0] == 1
+
+    def test_dereference_failure(self):
+        """Failed references should raise a clear compatibility error."""
+
+        class BrokenResource:
+            """Minimal HDF5 resource whose references cannot be resolved."""
+
+            filename = "legacy.jld2"
+
+            def __getitem__(self, value):
+                raise KeyError(value)
+
+        match = r"legacy\.jld2.*'htime'.*h5py<3\.16"
+        with pytest.raises(DASVaderCompatibilityError, match=match):
+            _dereference(BrokenResource(), Reference(), "htime")

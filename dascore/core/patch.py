@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from functools import cached_property
-from typing import Final
+from typing import Any, Final
 from uuid import uuid4
 
 import numpy as np
@@ -17,7 +17,6 @@ from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import BaseCoord
 from dascore.core.summary import PatchSummary
 from dascore.utils.array import (
     PatchUFunc,
@@ -77,7 +76,7 @@ class Patch(NamespaceOwner):
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike | BaseCoord] | CoordManager | None = None,
+        coords: Mapping[str, Any] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):

@@ -343,7 +343,7 @@ class TestDrop:
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(cm_multidim.shape)
         axis = cm_multidim.get_axis("time")
-        cm, new_array = cm_multidim.drop_coords("time", array=array)
+        _cm, new_array = cm_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
     def test_drop_non_dim_coord(self, cm_multidim):
@@ -412,7 +412,7 @@ class TestSelect:
     def test_filter_array(self, cm_basic):
         """Ensure an array can be filtered."""
         data = np.ones(cm_basic.shape)
-        new, trim = cm_basic.select(distance=(100, 400), array=data)
+        _new, trim = cm_basic.select(distance=(100, 400), array=data)
         assert trim.shape == trim.shape
 
     def test_select_emptying_dim(self, cm_basic):
@@ -501,7 +501,7 @@ class TestSelect:
         """Ensure trim also trims related dimensions."""
         cm = cm_multidim
         data = np.empty(cm.shape)
-        out, new_data = cm.select(array=data, time=slice(2, 4), samples=True)
+        out, _new_data = cm.select(array=data, time=slice(2, 4), samples=True)
         for name, coord in out.coord_map.items():
             dims = cm.dim_map[name]
             if "time" not in dims:
@@ -1319,6 +1319,30 @@ class TestSnap:
         expected_dt = get_middle_value([x.get_coord("time").step for x in spool])
         snapped = cm_dt_small_diff.snap()[0]
         assert snapped.coord_map["time"].step == expected_dt
+
+
+class TestSetUnits:
+    """Tests for setting coordinate units."""
+
+    def test_set_units_on_valueless_coord(self):
+        """A dim coord with no values takes units like any other."""
+        cm = get_coord_manager(
+            {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
+            dims=("time", "distance"),
+        )
+        assert isinstance(cm.coord_map["time"], CoordPartial)
+        out = cm.set_units(time="s")
+        assert out.coord_map["time"].units == get_quantity("s")
+
+    def test_patch_set_units_on_valueless_coord(self):
+        """The same holds through the patch, which is how users reach it."""
+        cm = get_coord_manager(
+            {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
+            dims=("time", "distance"),
+        )
+        patch = dc.Patch(data=np.zeros((10, 4)), coords=cm, dims=cm.dims)
+        out = patch.set_units(time="s")
+        assert out.get_coord("time").units == get_quantity("s")
 
 
 class TestConvertUnits:

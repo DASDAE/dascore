@@ -425,7 +425,7 @@ class CoordManager(DascoreBaseModel):
         assert out.shape == self.shape
         return out, array
 
-    def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
+    def new(self, dims=None, coord_map=None, dim_map=None, **kwargs) -> Self:
         """
         Return a new coordmanager with specified attributes replaced.
 
@@ -442,12 +442,13 @@ class CoordManager(DascoreBaseModel):
             dims=dims if dims is not None else self.dims,
             coord_map=coord_map if coord_map is not None else self.coord_map,
             dim_map=dim_map if dim_map is not None else self.dim_map,
+            **kwargs,
         )
         return out
 
     def drop_coords(
         self,
-        *coords: str | Sequence[str],
+        *coords: str,
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
@@ -529,10 +530,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = dict(self.dim_map)
         for old_dim, new_dim in kwargs.items():
             if new_dim not in coord_map or old_dim not in dims:
-                msg = (
-                    f"{old_dim} is not a dimension or {new_dim} is not a "
-                    f"coordinate."
-                )
+                msg = f"{old_dim} is not a dimension or {new_dim} is not a coordinate."
                 raise CoordError(msg)
             # ensure coords have the same shape
             old_coord, new_coord = coord_map[old_dim], coord_map[new_dim]
@@ -696,7 +694,7 @@ class CoordManager(DascoreBaseModel):
         """
         used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
         if len(set(used_dims)) < len(used_dims):
-            msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+            msg = f"Cannot use {kwargs} for query; some coords share a dimension."
             raise CoordError(msg)
 
     def __rich__(self) -> str:
@@ -1136,7 +1134,7 @@ class CoordManager(DascoreBaseModel):
 
 def get_coord_manager(
     coords: CoordManagerInput | CoordManager | None = None,
-    dims: tuple[str, ...] | None = None,
+    dims: Sequence[str] | None = None,
     shape=None,
 ) -> CoordManager:
     """
@@ -1178,6 +1176,8 @@ def get_coord_manager(
     >>> cm = get_coord_manager(coords=coords, dims=dims)
     """
     # return coords if we already have a coord manager.
+    # A list of dims would never compare equal to a CoordManager's tuple.
+    dims = None if dims is None else tuple(dims)
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.
         if dims is not None and dims != coords.dims:

@@ -117,7 +117,7 @@ print(f"Data contents are\n{patch.data}")
 ```
 
 :::{.callout-note}
-The data arrays should be read-only. This means you can't modify them, but must first make a copy.
+The data arrays are read-only. This means you can't modify them in place; you must make a copy first.
 
 ```python
 import numpy as np
@@ -511,7 +511,7 @@ pa = dc.get_example_patch()
 new_data_patch = pa.update(data=pa.data * 10)
 
 # Completely replace the attributes.
-new_data_patch = pa.update(attrs=dict(station="TMU"))
+new_attrs_patch = pa.update(attrs=dict(station="TMU"))
 ```
 
 ## Update attrs
@@ -562,6 +562,7 @@ Or by specifying new min, max, or step values for a coordinate.
 import dascore as dc
 
 pa = dc.get_example_patch()
+one_second = dc.to_timedelta64(1)
 
 # Change the starting time of the array.
 new_time = pa.coords.min('time') + one_second
@@ -622,7 +623,7 @@ patch_detached_lat = patch.update_coords(latitude=(None, lat))
 
 ## Dropping coordinates
 
-Non-dimensional coordinates can be dropped using [`Patch.drop_coords`](`dascore.proc.coords.drop_coords`). Dimensional coordinates, however, cannot be dropped doing so would force the patch data to become degenerate.
+Non-dimensional coordinates can be dropped using [`Patch.drop_coords`](`dascore.proc.coords.drop_coords`). Dimensional coordinates, however, cannot be dropped since doing so would force the patch data to become degenerate.
 
 ```{python}
 import dascore as dc
@@ -876,9 +877,9 @@ patch_reduced = patch.add.reduce("distance")
 ```
 
 
-```{.note}
-PatchUFunc.reduce/accumulate accept dim (mapped internally to axis), while numpy ufuncs accept axis.
-```
+:::{.callout-note}
+`PatchUFunc.reduce`/`accumulate` accept `dim` (mapped internally to `axis`), while numpy ufuncs accept `axis`.
+:::
 
 For more advanced usage, you can create patch ufuncs.
 

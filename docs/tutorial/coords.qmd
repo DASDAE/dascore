@@ -8,7 +8,7 @@ execute:
 This page covers advanced DASCore features. Most users will be fine with only the coordinate material presented in the [patch tutorial](patch.qmd#coords).
 :::
 
-In order to manage coordinate labels and array manipulations, DASCore implements two classes, [BaseCoordinate](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
+In order to manage coordinate labels and array manipulations, DASCore implements two classes, [`BaseCoord`](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
 
 # Coordinates
 
@@ -114,7 +114,7 @@ coord = get_coord(start=start, stop=stop, step=step)
 new_data = coord.values + np.timedelta64(10, "s")
 coord_new_data = coord.update(data=new_data)
 
-# Update step, keeping length and start but shorting end time.
+# Update step, keeping length and start but shortening end time.
 coord_new_step = coord.update(step=np.timedelta64(1800, 's'))
 
 # Change maximum value, keeping length the same and changing step.
@@ -166,7 +166,7 @@ sorted_data = data[indexer, :]
 
 ### Snap
 
-[`snap`](`dascore.core.coords.BaseCoord.snap`) replaces coordinate values with an evenly sampled range spanning the same minimum and maximum. This intentionally loses interior precision and should be used only when that idealization is acceptable. For a full patch, [`Patch.snap_coords(...)`](`dascore.Patch.snap_coords`) also sorts the selected dimensions and applies the same indexing to the data.
+[`snap`](`dascore.core.coords.BaseCoord.snap`) replaces coordinate values with an evenly sampled range spanning the same minimum and maximum. This intentionally loses interior precision and should be used only when that idealization is acceptable. Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), it returns only a new coordinate and no indexer, because it replaces the values rather than permuting them, so for an unsorted coordinate the snapped values no longer label the samples they used to. When data alignment matters, use [`CoordManager.snap`](`dascore.core.coordmanager.CoordManager.snap`), which sorts the coordinate and its associated array together before snapping, or [`Patch.snap_coords(...)`](`dascore.Patch.snap_coords`), which does the same across the selected dimensions of a patch.
 
 ```{python}
 import numpy as np

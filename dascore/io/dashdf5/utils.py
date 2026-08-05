@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -20,7 +22,7 @@ _DAS_ATTR_MAPPING = {"long_name": "data_type"}
 _CRS_MAPPING = {"epsg_code": "epsg_code"}
 
 
-def _get_cf_version_str(hdf_fi) -> str | bool:
+def _get_cf_version_str(hdf_fi) -> str | Literal[False]:
     """Return the version string for dashdf5 files."""
     conventions = hdf_fi.attrs.get("Conventions", [])
     cf_str = [x for x in conventions if x.startswith("CF-")]

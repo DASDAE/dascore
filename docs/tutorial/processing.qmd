@@ -36,10 +36,10 @@ patch = dc.get_example_patch()
 # Select first distance value to make distance dim flat.
 
 flat_patch = patch.select(distance=0, samples=True)
-print(f"Pre-squeeze dims: {flat_patch.shape}")
+print(f"Pre-squeeze shape: {flat_patch.shape}")
 
 squeezed = flat_patch.squeeze()
-print(f"Post-squeeze dims: {squeezed.shape}")
+print(f"Post-squeeze shape: {squeezed.shape}")
 ```
 
 ## Dropna
@@ -161,7 +161,7 @@ Here is an example of using a rolling mean to smooth along the time axis:
 import dascore as dc
 
 patch = dc.get_example_patch("example_event_1")
-# Apply moving mean window over every 10 samples
+# Apply moving mean window over every 50 samples
 dt = patch.get_coord('time').step
 
 smoothed = patch.rolling(time=50*dt).mean()

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -34,7 +34,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import ScanPayload, _make_scan_payload
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
@@ -308,7 +308,7 @@ def _get_patch_attrs(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
     extras: dict | None = None,
-) -> dict:
+) -> ScanPayload:
     """Return patch attrs for an SR-4731 SOR file."""
     parsed = _parse_sor(resource, load_samples=False)
     coords = _get_coords(parsed)
@@ -341,7 +341,7 @@ def _get_patches(
     return [patch]
 
 
-def _get_format(resource, name: str, version: str) -> tuple[str, str] | bool:
+def _get_format(resource, name: str, version: str) -> tuple[str, str] | Literal[False]:
     """Return SR-4731 format/version if the resource is supported."""
     try:
         parsed = _parse_sor(resource, load_samples=False)

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Literal
 
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.io.core import _coerce_storage
 from dascore.utils.hdf5 import H5Reader, H5Writer
@@ -57,7 +57,7 @@ class DASDAEV1(FiberIO):
 
     def write(
         self,
-        spool: SpoolType,
+        spool: dc.Patch | dc.BaseSpool,
         resource: H5Writer,
         storage: DASDAEStorage | dict | str | None = None,
         **kwargs,
@@ -123,7 +123,11 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         attrs = resource.attrs
@@ -133,7 +137,7 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> dc.BaseSpool:
         """Read a dascore file."""
         patches = []
         source_patch_ids = _normalize_source_patch_ids(source_patch_id)

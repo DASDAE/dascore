@@ -101,7 +101,7 @@ def parse_project(obj, key=None):
 
     def get_type(
         obj, parent_is_class=False
-    ) -> None | Literal["module", "function", "method", "class"]:
+    ) -> Literal["module", "function", "method", "class"] | None:
         """Return a string of the type of object."""
         obj = _unwrap_obj(obj)
         if isinstance(obj, ModuleType):

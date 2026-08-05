@@ -4,6 +4,8 @@ Core module for reading Sintela binary format.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -35,7 +37,11 @@ class SintelaBinaryV3(FiberIO):
     preferred_extensions = ("raw",)
     version = "3"
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return name and version string or False.
 
@@ -89,7 +95,11 @@ class SintelaProtobufV1(FiberIO):
     preferred_extensions = ("pb",)
     version = "1"
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return the format/version tuple if the file is Sintela protobuf."""
         position = resource.tell()
         try:

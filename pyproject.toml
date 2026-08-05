@@ -234,6 +234,13 @@ max-complexity = 10
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
+# Notebooks are exploratory; ruff started linting them in v0.16 and the
+# docstring rules make little sense for a scratch cell.
+[tool.ruff.lint.per-file-ignores]
+# F401: a notebook often imports a name only used inside an IPython magic,
+# which ruff cannot see, and its autofix would delete the import.
+"*.ipynb" = ["D103", "F401"]
+
 [tool.pytest.ini_options]
 norecursedirs = [
     "*.egg",
@@ -265,12 +272,11 @@ line-ending = "lf"
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
 # Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Counts as of 2026-08-04: invalid-argument-type 90,
-# invalid-return-type 67, invalid-method-override 36.
+# burned down. Counts as of 2026-08-05: invalid-argument-type 34,
+# invalid-return-type 31. invalid-method-override reached zero and is on.
 [tool.ty.rules]
 invalid-argument-type = "ignore"
 invalid-return-type = "ignore"
-invalid-method-override = "ignore"
 
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
@@ -94,9 +94,7 @@ class PatchAttrs(DascoreBaseModel):
             return data
         data = dict(data)
         if "coords" in data and not isinstance(data["coords"], str):
-            msg = (
-                "PatchAttrs no longer accepts coordinate metadata. " "Received: coords."
-            )
+            msg = "PatchAttrs no longer accepts coordinate metadata. Received: coords."
             raise ValueError(msg)
         data.pop("dims", None)
         return data
@@ -143,7 +141,9 @@ class PatchAttrs(DascoreBaseModel):
         if isinstance(out, Mapping):
             out = dict(out)
             out.pop("dims", None)
-        return cls(**out)
+        # Anything else may still be unpackable -- a pandas Series, say --
+        # and the constructor has always been what rejects the rest.
+        return cls(**cast("Mapping[str, Any]", out))
 
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""

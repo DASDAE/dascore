@@ -74,12 +74,15 @@ PositiveInt = Annotated[int, Field(gt=0)]
 PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
-def sensible_model_equals(
-    self: BaseModel | Mapping, other: BaseModel | Mapping
-) -> bool:
+def sensible_model_equals(self: BaseModel | Mapping, other: object) -> bool:
     """Custom equality to not compare private attrs and handle numpy arrays."""
     d1 = self.model_dump() if isinstance(self, BaseModel) else self
-    d2 = other.model_dump() if isinstance(other, BaseModel) else other
+    if isinstance(other, BaseModel):
+        d2 = other.model_dump()
+    elif isinstance(other, Mapping):
+        d2 = other
+    else:  # nothing else can carry the same fields
+        return NotImplemented
     if not set(d1) == set(d2):  # different keys, not equal
         return False
     for name in set(x for x in d1 if not x.startswith("_")):

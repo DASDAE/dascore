@@ -4,9 +4,11 @@ Core module for reading SR-4731 OTDR SOR files.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import BinaryReader, FiberIO
+from dascore.io import BinaryReader, FiberIO, ScanPayload
 
 from .utils import SR4731PatchAttrs, _get_format, _get_patch_attrs, _get_patches
 
@@ -26,11 +28,15 @@ class SR4731V200(FiberIO):
             "file_version": self.version,
         }
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return format and version if the file is a supported SR-4731 file."""
         return _get_format(resource, self.name, self.version)
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
         """Scan an SR-4731 SOR file."""
         attrs = _get_patch_attrs(
             resource,

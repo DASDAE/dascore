@@ -1192,5 +1192,5 @@ class TestStringArrayHelpers:
         )
         with h5py.File(path, mode="w") as h5:
             group = h5.create_group("waveforms")
-            with pytest.raises(TypeError, match="Object dtype|object arrays"):
+            with pytest.raises(TypeError, match=r"Object dtype|object arrays"):
                 _save_array(data, "obj", group=group)

@@ -81,8 +81,8 @@ def _check_freq_range(fft_coord, freq_range):
 @patch_function()
 def whiten(
     patch: PatchType,
-    smooth_size: None | float = None,
-    water_level: None | float = None,
+    smooth_size: float | None = None,
+    water_level: float | None = None,
     **kwargs,
 ) -> PatchType:
     """

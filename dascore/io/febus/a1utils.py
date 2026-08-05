@@ -96,7 +96,7 @@ def _get_zone_time(feb):
     assert block_pad > 1
     overlaps_removed = extents[2] != 0
     if overlaps_removed:
-        block_no_pad = int(round(block_time / dt))
+        block_no_pad = round(block_time / dt)
     else:
         block_no_pad = int(round(block_pad / (1 + (overlap / 100)), 0))
     # Perform checks to make sure this is DAS data. If not, you need to use
@@ -131,9 +131,9 @@ def _get_block_time(feb):
     # n for others. The first might imply different times for different
     # zones? We aren't set up to handle that, but we don't know if it can happen
     # so just assert here.
-    assert np.max(time_shape) == np.prod(
-        time_shape
-    ), "Non flat 2d time vector is not supported by DASCore Febus reader."
+    assert np.max(time_shape) == np.prod(time_shape), (
+        "Non flat 2d time vector is not supported by DASCore Febus reader."
+    )
     # Get the average time spacing in each block. These can vary a bit so
     # account for outliers.
     time = np.squeeze(feb.source["time"][:])

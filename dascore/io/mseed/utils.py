@@ -9,7 +9,7 @@ from fractions import Fraction
 from itertools import groupby
 from math import ceil, floor
 from struct import unpack
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 import numpy as np
 
@@ -668,7 +668,7 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
     return valid_time and valid_offsets and sample_count > 0
 
 
-def _detect_format(path: LocalPath) -> tuple[str, str] | bool:
+def _detect_format(path: LocalPath) -> tuple[str, str] | Literal[False]:
     """Return the MiniSEED version for a path or False."""
     header = _read_file_header(path, 48)
     if header.startswith(b"MS\x03"):

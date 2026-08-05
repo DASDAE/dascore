@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
-from dascore.constants import SpoolType, opt_timeable_types
+from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.models import UnitQuantity, UTF8Str
 
@@ -35,7 +37,11 @@ class ProdMLV2_0(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains prodML version 2 data else False.
 
@@ -47,6 +53,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         version_str = _get_prodml_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs
@@ -92,6 +99,8 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(self, spool: SpoolType, resource: H5Writer, **kwargs) -> None:
+    def write(
+        self, spool: dc.Patch | dc.BaseSpool, resource: H5Writer, **kwargs
+    ) -> None:
         """Write one raw Patch to a standalone ProdML HDF5 file."""
         _write_prodml(spool, resource)

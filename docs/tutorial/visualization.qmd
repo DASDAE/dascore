@@ -17,7 +17,7 @@ import dascore as dc
 patch = dc.get_example_patch('example_event_2')
 
 # Default scaling uses IQR-based fence to handle outliers
-patch.viz.waterfall(show=True)
+patch.viz.waterfall(show=True);
 ```
 
 ### Controlling color scaling

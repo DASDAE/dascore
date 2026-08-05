@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
@@ -25,8 +27,9 @@ class DASVaderV1(FiberIO):
     Notes
     -----
     Legacy DASVader files may contain anonymous JLD2 object references. DASCore
-    detects those files and raises `DASVaderCompatibilityError` with compatibility
-    instructions instead of failing inside `h5py`. A known working stack for
+    reads these references when supported by HDF5 and raises
+    `DASVaderCompatibilityError` with compatibility instructions when
+    dereferencing fails. A known working stack for
     such legacy files is `h5py<3.16` with `HDF5 1.14.x`.
     """
 
@@ -34,7 +37,11 @@ class DASVaderV1(FiberIO):
     preferred_extensions = ("jld2",)
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return format if file contains DASVader JLD2 data else False.
 

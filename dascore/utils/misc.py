@@ -16,7 +16,7 @@ from functools import cache
 from io import IOBase
 from pathlib import Path
 from types import ModuleType
-from typing import Literal, overload
+from typing import Literal, TypeVar, overload
 
 import numpy as np
 import pandas as pd
@@ -31,8 +31,15 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_local_path,
+    is_pathlike,
+)
 from dascore.utils.progress import track
+
+_T = TypeVar("_T")
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -222,7 +229,7 @@ def _iter_filesystem(
     if is_pathlike(paths):
         if is_local_path(paths):
             yield from _iter_local_filesystem(
-                Path(paths),
+                coerce_to_local_path(paths),
                 ext=ext,
                 timestamp=timestamp,
                 skip_hidden=skip_hidden,
@@ -527,10 +534,23 @@ def all_diffs_close_enough(diffs):
     return np.allclose(diffs, med, rtol=0.001)
 
 
-def unbyte(byte_or_str: bytes | str) -> str:
-    """Ensure a string is given by str or possibly bytes."""
+@overload
+def unbyte(byte_or_str: bytes) -> str: ...
+
+
+@overload
+def unbyte(byte_or_str: _T) -> _T: ...
+
+
+def unbyte(byte_or_str):
+    """
+    Decode a bytes value, passing anything else through unchanged.
+
+    Callers use this to normalize values which may or may not have come
+    from a binary file, so the non-bytes case is the common one.
+    """
     if isinstance(byte_or_str, bytes | np.bytes_):
-        byte_or_str = byte_or_str.decode("utf8")
+        return byte_or_str.decode("utf8")
     return byte_or_str
 
 
@@ -598,7 +618,7 @@ def yield_sub_sequences(sequence, length=None):
 
 
 def maybe_get_items(
-    obj, attr_map: Mapping[str, str], unpack_names: None | set[str] = None
+    obj, attr_map: Mapping[str, str], unpack_names: set[str] | None = None
 ):
     """
     Maybe get items from a mapping (if they exist).

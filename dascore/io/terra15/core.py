@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, ScanPayload
@@ -22,7 +24,11 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains terra15 version 2 data else False.
 
@@ -34,6 +40,7 @@ class Terra15FormatterV4(FiberIO):
         version_str = _get_terra15_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs

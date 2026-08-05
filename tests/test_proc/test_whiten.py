@@ -199,9 +199,9 @@ class TestWhiten:
         whitened_patch_freq_domain = dft.whiten(smooth_size=5, time=None)
 
         # check if the returned data is in the frequency domain
-        assert np.iscomplexobj(
-            whitened_patch_freq_domain.data
-        ), "Expected the output to be complex, indicating freq. domain patch."
+        assert np.iscomplexobj(whitened_patch_freq_domain.data), (
+            "Expected the output to be complex, indicating freq. domain patch."
+        )
 
         assert "ft_time" in dft.coords.coord_map
 

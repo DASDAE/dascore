@@ -4,6 +4,8 @@ Core modules for Silixa H5 support.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -30,7 +32,11 @@ class SilixaH5V1(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return name and version string if Silixa hdf5 else False.
 
@@ -42,6 +48,7 @@ class SilixaH5V1(FiberIO):
         version_str = _get_version_string(resource, self.version)
         if version_str:
             return self.name, version_str
+        return False
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""

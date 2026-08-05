@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from xml.etree.ElementTree import ParseError
 
 import numpy as np
@@ -84,7 +85,7 @@ class XMLBinaryV1(FiberIO):
         )
         return dc.spool(patches)
 
-    def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
         """Determine if directory is an XML Binary type."""
         path = self._get_base_path(resource)
         index_path = path / self._metadata_name

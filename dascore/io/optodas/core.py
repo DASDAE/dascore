@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 import dascore as dc
@@ -28,7 +30,11 @@ class OptoDASV8(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "8"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains OptoDAS version 8 data else False.
 
@@ -40,6 +46,7 @@ class OptoDASV8(FiberIO):
         version_str = _get_opto_das_version_str(resource)
         if version_str:
             return self.name, version_str
+        return False
 
     def scan(
         self, resource: H5Reader, snap: bool = True, **kwargs
