@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
@@ -258,7 +260,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 
 
 @patch_function()
-def drop_coords(self: PatchType, *coords: str) -> PatchType:
+def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
     """
     Update the coordinates of a patch.
 
@@ -267,7 +269,8 @@ def drop_coords(self: PatchType, *coords: str) -> PatchType:
     Parameters
     ----------
     *coords
-        One or more coordinates to drop.
+        One or more coordinates to drop. Each can be a coordinate name or
+        a sequence of them.
 
     Examples
     --------
@@ -276,11 +279,14 @@ def drop_coords(self: PatchType, *coords: str) -> PatchType:
     >>> pa = dc.get_example_patch("random_patch_with_lat_lon")
     >>> # Drop non-dimensional coordinate latitude
     >>> pa_no_lat = pa.drop_coords("latitude")
+    >>> # A sequence of names works as well.
+    >>> pa_no_lat = pa.drop_coords(["latitude"])
     """
-    if dim_coords := set(coords) & set(self.dims):
+    names = {x for coord in coords for x in iterate(coord)}
+    if dim_coords := names & set(self.dims):
         msg = f"Cannot drop dimensional coordinates: {dim_coords}"
         raise ParameterError(msg)
-    new_coord, data = self.coords.drop_coords(*coords, array=self.data)
+    new_coord, data = self.coords.drop_coords(*names, array=self.data)
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 

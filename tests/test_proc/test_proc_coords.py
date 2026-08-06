@@ -154,6 +154,23 @@ class TestDropCoords:
         with pytest.raises(ParameterError, match=msg):
             random_patch.drop_coords("time")
 
+    @pytest.mark.parametrize("form", [["latitude"], ("latitude",), {"latitude"}])
+    def test_drop_sequence(self, random_patch_with_lat_lon, form):
+        """A sequence of names should drop each one."""
+        out = random_patch_with_lat_lon.drop_coords(form)
+        assert "latitude" not in out.coords.coord_map
+
+    def test_drop_mixed_args(self, random_patch_with_lat_lon):
+        """Names and sequences of names should be usable together."""
+        out = random_patch_with_lat_lon.drop_coords("latitude", ["longitude"])
+        assert not {"latitude", "longitude"} & set(out.coords.coord_map)
+
+    def test_drop_dim_in_sequence_raises(self, random_patch):
+        """A dimension inside a sequence should raise like a bare one."""
+        msg = "Cannot drop dimensional coordinates"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.drop_coords(["time"])
+
 
 class TestCoordsFromDf:
     """Tests for attaching coordinate(s) to a patch."""

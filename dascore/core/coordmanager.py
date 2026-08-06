@@ -42,7 +42,7 @@ print(new_cm)
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
 from typing import Annotated, Any
@@ -456,7 +456,7 @@ class CoordManager(DascoreBaseModel):
 
     def drop_coords(
         self,
-        *coords: str,
+        *coords: str | Collection[str],
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
@@ -468,10 +468,13 @@ class CoordManager(DascoreBaseModel):
         Parameters
         ----------
         *coords
-            The name of the coordinate or dimension.
+            The name of the coordinate or dimension, or a sequence of them.
         """
         dim_drop_list = []
-        coords_to_drop = {x for x in iterate(coords)}
+        # iterate is applied per argument; the varargs tuple is already
+        # iterable, so flattening it as a whole would leave any sequence
+        # passed in as a single unhashable element.
+        coords_to_drop = {x for coord in coords for x in iterate(coord)}
         # If there are either no coords to drop or this cm doesn't have them.
         if not coords_to_drop or not (set(self.coord_map) & coords_to_drop):
             return self, array
