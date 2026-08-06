@@ -2,7 +2,7 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm"]
+requires = [ "setuptools>=61", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
