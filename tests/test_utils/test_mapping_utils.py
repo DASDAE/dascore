@@ -85,3 +85,8 @@ class TestFrozenDict:
         """Ensure new values can be added to the dict."""
         out = frozen_dict.new(bob=10)
         assert out["bob"] == 10
+
+    def test_new_keeps_non_string_keys(self):
+        """Keys that cannot be keyword arguments must survive new."""
+        froz = FrozenDict({1: "a", 2: "b"})
+        assert dict(froz.new()) == {1: "a", 2: "b"}

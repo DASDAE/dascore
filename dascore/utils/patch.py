@@ -301,7 +301,7 @@ def patch_function(
 
     def _wrapper(func):
         if validate_call:
-            config = dict(arbitrary_types_allowed=True)
+            config = pydantic.ConfigDict(arbitrary_types_allowed=True)
             func = pydantic.validate_call(config=config)(func)
 
         @functools.wraps(func)
