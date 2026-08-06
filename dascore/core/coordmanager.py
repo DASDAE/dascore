@@ -83,10 +83,18 @@ from dascore.utils.models import (
 )
 
 MaybeArray = ArrayLike | np.ndarray | None
-CoordManagerInput = Mapping[
-    str,
-    BaseCoord | np.ndarray | tuple[str | tuple[str, ...], BaseCoord | np.ndarray],
-]
+
+# What a coord map may hold. Any sequence works as data -- a list or range is
+# converted like an array -- except a bare tuple, which is reserved for the
+# (dimension, data) form below. Mapping rather than dict so a caller's
+# narrower value type still matches.
+CoordInput = (
+    BaseCoord
+    | np.ndarray
+    | Sequence[Any]
+    | tuple[str | tuple[str, ...], BaseCoord | np.ndarray | Sequence[Any]]
+)
+CoordManagerInput = Mapping[str, CoordInput]
 
 
 def _ensure_1d_coord(coord, coord_name: str):

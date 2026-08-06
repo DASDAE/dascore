@@ -260,7 +260,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 
 
 @patch_function()
-def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
+def drop_coords(self: PatchType, *coords: str) -> PatchType:
     """
     Update the coordinates of a patch.
 
