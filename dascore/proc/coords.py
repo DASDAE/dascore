@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
-
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
