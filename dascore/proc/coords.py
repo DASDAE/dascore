@@ -528,6 +528,12 @@ def select(
       >>> len(patch.select(time=-1, samples=True).get_array("time"))
       1
 
+      A slice can be used in place of a tuple, and makes the half-open
+      behavior of sample ranges more obvious:
+
+      >>> len(patch.select(time=slice(0, -1), samples=True).get_array("time"))
+      1999
+
     """
     # Check for and raise on invalid kwargs.
     if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
