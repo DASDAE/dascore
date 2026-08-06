@@ -302,6 +302,10 @@ def patch_function(
       as dc at the top of the file where the patch function is defined so
       the forward refs can be resolved properly for type checking.
     """
+    # Handled before the wrapper is built so the rest of this function sees
+    # required_dims as the tuple of dimension names it is everywhere else.
+    if callable(required_dims):  # the decorator is used without parens
+        return patch_function()(required_dims)
 
     def _wrapper(func):
         if validate_call:
@@ -341,9 +345,6 @@ def patch_function(
         patch_func.__wrapped__ = func
 
         return patch_func
-
-    if callable(required_dims):  # the decorator is used without parens
-        return patch_function()(required_dims)
 
     return _wrapper
 
