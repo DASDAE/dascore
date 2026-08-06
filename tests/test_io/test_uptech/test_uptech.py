@@ -1,4 +1,5 @@
 """Tests for the Uptech HDF5 reader."""
+
 from __future__ import annotations
 
 import h5py
@@ -13,8 +14,16 @@ def test_uptech_read_and_scan(tmp_path):
     with h5py.File(path, "w") as h5:
         group = h5.create_group("Acquisition")
         data = group.create_dataset("StrainRate", data=np.arange(12.0).reshape(4, 3))
-        data.attrs.update(acquisition_frequency=2.0, fiber_length=12800.0, gauge_length=10.0, sampling_interval=2.5, spatial_resolution=2.0)
-        group.create_dataset("Time", data=np.array([1e9, 1e9 + 0.5, 1e9 + 1, 1e9 + 1.5]))
+        data.attrs.update(
+            acquisition_frequency=2.0,
+            fiber_length=12800.0,
+            gauge_length=10.0,
+            sampling_interval=2.5,
+            spatial_resolution=2.0,
+        )
+        group.create_dataset(
+            "Time", data=np.array([1e9, 1e9 + 0.5, 1e9 + 1, 1e9 + 1.5])
+        )
     io = UptechH5V1()
     assert io.get_format(path) == ("Uptech_H5", "1")
     patch = io.read(path, distance=(2.5, None))[0]
