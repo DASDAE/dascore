@@ -222,6 +222,13 @@ class TestConvenientImport:
         with pytest.raises(ImportError):
             from dascore.utils import bob  # noqa
 
+    def test_empty_name_raises(self):
+        """The empty string is the one name get_quantity maps to None."""
+        import dascore.units
+
+        with pytest.raises(AttributeError):
+            getattr(dascore.units, "")
+
 
 class TestGetFilterUnits:
     """Tests for getting units that can be used for filtering."""

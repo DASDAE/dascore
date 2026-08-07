@@ -339,12 +339,15 @@ class TestDrop:
         out, _ = cm_multidim.drop_coords("bob")
         assert out == cm_multidim
 
-    @pytest.mark.parametrize("wrap", [list, tuple, set])
+    @pytest.mark.parametrize("wrap", [list, tuple, set, iter])
     def test_drop_sequence(self, cm_multidim, wrap):
-        """A sequence of names should drop each one."""
+        """A sequence of names should behave exactly like the bare name."""
         dim = "distance"
         coords, _ = cm_multidim.drop_coords(wrap([dim]))
+        expected, _ = cm_multidim.drop_coords(dim)
         assert dim not in coords.dims
+        # Compared to the bare-name call so that dropping too much fails too.
+        assert coords == expected
 
     def test_trims_array(self, cm_multidim):
         """Trying to drop a dim that doesnt exist should just return."""

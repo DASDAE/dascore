@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -260,7 +260,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 
 
 @patch_function()
-def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
+def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
     """
     Update the coordinates of a patch.
 

@@ -7,8 +7,8 @@ import inspect
 import sys
 import warnings
 from collections import namedtuple
-from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -48,10 +48,6 @@ from dascore.utils.misc import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
-
-if TYPE_CHECKING:
-    # Imported lazily; dascore.io.core imports this module.
-    from dascore.io.core import ScanInput
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -557,8 +553,11 @@ def get_start_stop_step(patch: PatchType, dim):
 
 def get_patch_names(
     # Forwarded straight to scan_to_df, so anything it scans works here,
-    # including a plain list of patches.
-    patch_data: pd.DataFrame | ScanInput,
+    # including a plain list of patches. Spelled out rather than reusing
+    # io.core.ScanInput: importing that is circular, and hiding it behind
+    # TYPE_CHECKING leaves the annotation unresolvable at runtime, which
+    # breaks get_type_hints and the API doc renderer.
+    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool | Iterable[dc.Patch],
     prefix="DAS",
     attrs=("network", "station", "tag"),
     coords=("time",),

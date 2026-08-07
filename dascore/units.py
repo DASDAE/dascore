@@ -531,8 +531,11 @@ def __getattr__(name: str) -> Quantity:
     from dascore.units import get_quantity
     m = get_quantity("m")
 
-    A name is always a non-empty identifier here, so this either resolves
-    to a quantity or raises UndefinedUnitError; it never returns None the
-    way get_quantity does for None or an empty string.
+    Any non-empty name either resolves to a quantity or raises
+    UndefinedUnitError, so the cast holds. The empty string is the one input
+    get_quantity maps to None, and attribute access is the right place to
+    reject it.
     """
+    if not name:
+        raise AttributeError(name)
     return cast("Quantity", get_quantity(name))

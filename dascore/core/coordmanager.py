@@ -42,7 +42,7 @@ print(new_cm)
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
 from typing import Annotated, Any
@@ -84,17 +84,13 @@ from dascore.utils.models import (
 
 MaybeArray = ArrayLike | np.ndarray | None
 
-# What a coord map may hold. Any sequence works as data -- a list or range is
-# converted like an array -- except a bare tuple, which is reserved for the
-# (dimension, data) form below. Mapping rather than dict so a caller's
-# narrower value type still matches.
-CoordInput = (
-    BaseCoord
-    | np.ndarray
-    | Sequence[Any]
-    | tuple[str | tuple[str, ...], BaseCoord | np.ndarray | Sequence[Any]]
-)
-CoordManagerInput = Mapping[str, CoordInput]
+# What a coord map may hold, kept identical to the Patch constructor's coords.
+# The value stays Any on purpose: get_coord_manager also accepts an int or a
+# Quantity (a partial coord), a mapping of start/stop/step, and a
+# (dimension, data) tuple, and every union narrow enough to be worth writing
+# rejected one of those first-party forms. Mapping rather than dict so a
+# caller's narrower value type still matches.
+CoordManagerInput = Mapping[str, Any]
 
 
 def _ensure_1d_coord(coord, coord_name: str):
@@ -456,7 +452,7 @@ class CoordManager(DascoreBaseModel):
 
     def drop_coords(
         self,
-        *coords: str | Collection[str],
+        *coords: str | Iterable[str],
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
