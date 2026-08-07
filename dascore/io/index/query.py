@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,21 @@ from dascore.units import convert_units
 from dascore.utils.misc import is_range
 
 _GLOB_CHARS = frozenset("*?[")
-_UNSET = object()
+
+
+class _Unset(Enum):
+    """Sentinel for "no target units given", which None cannot express.
+
+    None means "this coordinate is unitless", which _to_target_unit
+    rejects for a query carrying units, so the two must stay distinct. An
+    enum member rather than object() so that testing against it narrows
+    the parameter to the str | None it otherwise holds.
+    """
+
+    UNSET = auto()
+
+
+_UNSET = _Unset.UNSET
 
 
 @dataclass(frozen=True)
@@ -102,7 +117,7 @@ def _to_target_unit(typed, target_units: str | None, name: str):
 def _range_bounds(
     value,
     target_kinds: set[str],
-    target_units: str | object | None = _UNSET,
+    target_units: str | _Unset | None = _UNSET,
     name: str = "value",
 ):
     """

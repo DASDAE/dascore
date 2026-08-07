@@ -101,6 +101,11 @@ def _coord_record_from_row(
             max_str=None if hi is None or pd.isnull(hi) else str(hi),
             coord_hash=fingerprint,
         )
+    # Only the str envelope above represents a missing max. Every producer
+    # writes {name}_min and {name}_max together -- _output_records feeds
+    # whole dataframe rows (a missing value is NaN, not None) and the aux
+    # info dict always sets both -- so a max cannot be absent past here.
+    assert hi is not None
     if isinstance(lo, pd.Timestamp | np.datetime64):
         lo, hi = pd.Timestamp(lo).to_datetime64(), pd.Timestamp(hi).to_datetime64()
         dtype = "datetime64[ns]"
