@@ -187,12 +187,7 @@ Any dimension name can be passed as key, and the values can be:
       `True` indicates values to keep.
 
 When `samples=True`, the values are indices along the coordinate rather
-than values in it. Note that `samples` means an index here and in
-[`order`](`dascore.Patch.order`), but a *count* of samples in most other
-patch functions, such as [`rolling`](`dascore.Patch.rolling`),
-[`pad`](`dascore.Patch.pad`), and [`roll`](`dascore.Patch.roll`). For
-instance, `distance=10, samples=True` selects channel number 10 here, but
-means ten channels wide in [`rolling`](`dascore.Patch.rolling`).
+than values in it.
 """
 
 check_behavior_description = """
