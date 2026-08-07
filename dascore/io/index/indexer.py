@@ -288,7 +288,9 @@ class DBDirectoryIndexer:
             signal = None
             if candidate is None:  # the reply to a "skip" send
                 continue
-            path = Path(candidate)
+            # Not Path(candidate): the generator's yield type includes UPath,
+            # which is not os.PathLike unless it resolved to a local path.
+            path = coerce_to_local_path(candidate)
             if path.is_dir():
                 if self._directory_format(path):
                     signal = "skip"
