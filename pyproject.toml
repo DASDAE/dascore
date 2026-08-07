@@ -2,11 +2,8 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm", "scikit-build"]
+requires = [ "setuptools>=61", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools-git-versioning]
-enabled = true
 
 [tool.setuptools]
 include-package-data = true
@@ -18,7 +15,7 @@ packages = ["dascore"]
 
 [project]
 name = "dascore"
-dynamic = ["version"]  # version is fetched by setuptools-git-versioning
+dynamic = ["version"]  # version is derived from git tags by setuptools_scm
 
 authors = [
   { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
