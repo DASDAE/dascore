@@ -184,10 +184,8 @@ Any dimension name can be passed as key, and the values can be:
     - an array of values to select, which must be a subset of the
       coordinate array.
     - an array of booleans of the same length as the coordinate where
-      `True` indicates values to keep.
-
-When `samples=True`, the values are indices along the coordinate rather
-than values in it.
+      `True` indicates values to keep. This form does not support
+      `samples=True`.
 """
 
 check_behavior_description = """

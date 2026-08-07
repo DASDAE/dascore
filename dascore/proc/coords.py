@@ -510,8 +510,8 @@ def select(
     - A range of values includes both of its endpoints, but a range of
       samples excludes its upper bound, like python's slicing. This means
       -1 at the end of a sample range excludes the last sample, even
-      though -1 on its own selects it.
-      For example, with 2000 time samples:
+      though -1 on its own selects it. Using the example patch, which has
+      300 distance channels and 2000 time samples:
 
       >>> import dascore as dc
       >>> patch = dc.get_example_patch()
@@ -575,7 +575,8 @@ def order(
     relative
         If True, order values are relative to the start/end of the coordinates.
     samples
-        If True, the
+        If True, the values are indices along the coordinate rather than
+        values in it.
     **kwargs
         Used to specify the coordinate and values on which the coordinates
         are ordered.

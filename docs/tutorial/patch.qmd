@@ -394,7 +394,7 @@ A consequence worth remembering: `-1` used as the end of a range excludes the la
 
 : Range endpoints in values vs samples {.striped .hover}
 
-A slice can be used anywhere a `(min, max)` tuple can, and is worth preferring for sample ranges since `slice(0, -1)` reads exactly like `x[0:-1]`.
+`select` also accepts a slice wherever it accepts a `(min, max)` tuple, which is worth preferring for sample ranges since `slice(0, -1)` reads exactly like `x[0:-1]`. Note this is specific to `select` and `order`; processing functions such as `pass_filter` and `taper` require a tuple. Note also that the slice is still only shorthand for a range, so it needs `samples=True` just as a tuple does — without it, `-1` is a coordinate value rather than an index.
 :::
 
 ```{python}
