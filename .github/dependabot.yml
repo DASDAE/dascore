@@ -11,3 +11,9 @@ updates:
     # Wait a week before adopting a new release in case it gets yanked.
     cooldown:
       default-days: 7
+    # Bundle all action bumps into a single monthly PR instead of one PR
+    # per action.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
