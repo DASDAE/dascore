@@ -191,6 +191,32 @@ class TestFlatRelation:
         assert not nulls[: (~nulls).sum()].any()
 
 
+class TestElementDtype:
+    """The data array's dtype is recorded per patch (size-based chunking)."""
+
+    def test_dtype_round_trips(self, backend):
+        """Each patch keeps the dtype its summary reported."""
+        df = backend.query()
+        expected = {str(x.source_path): x.dtype for x in make_summaries()}
+        got = {str(k): v for k, v in zip(df["path"], df["dtype"], strict=True)}
+        assert got == expected
+
+    def test_dtype_is_private_in_flat_relation(self):
+        """The spool sees `_dtype`, never a public `dtype` column."""
+        import dascore as dc
+
+        spool = dc.get_example_spool("random_das")
+        df = spool.get_contents()
+        assert "dtype" not in df.columns
+        assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
+
+    def test_dtype_attr_is_reserved(self):
+        """An attr named `dtype` cannot shadow the structural column."""
+        from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
+
+        assert "dtype" in RESERVED_ATTR_COLUMNS
+
+
 class TestAttrPredicates:
     """Attr predicates are exact at the index."""
 

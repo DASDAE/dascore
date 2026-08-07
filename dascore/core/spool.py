@@ -216,20 +216,35 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
+            The value may also be a quantity: one of the coordinate's own
+            units (`time=10 * s`) or a data size (`time=25 * megabytes`),
+            which chunks so each patch's data array is about that large.
+            `overlap` accepts the same forms.
 
         Examples
         --------
         >>> import dascore as dc
-        >>> from dascore.units import s
+        >>> from dascore.units import s, megabytes
         >>>
         >>> spool = dc.get_example_spool("random_das")
         >>> # get spools with time duration of 10 seconds
         >>> time_chunked = spool.chunk(time=10, overlap=1)
+        >>> # the same, with the units stated explicitly
+        >>> unit_chunked = spool.chunk(time=10 * s)
+        >>> # get patches whose data arrays are at most ~1 MB
+        >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
 
         Notes
         -----
+        A data size measures the patch's data array only; coordinates and
+        attrs are extra, as are any copies a later processing step makes,
+        so the patch as a whole is somewhat larger. The sample count is
+        rounded down, so the data never exceeds the requested size, and a
+        merge of patches with different dtypes is sized against the dtype
+        they upcast to.
+
         [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) performs a
         similar operation but disregards the coordinate values.
 
@@ -818,7 +833,7 @@ class Spool(BaseSpool):
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
         from dascore.io.index.planned import derived_catalog
-        from dascore.utils.chunk_plan import ChunkPlan
+        from dascore.utils.chunk_plan import ChunkPlan, _combined_dtype
 
         if len(kwargs) != 1:
             msg = (
@@ -848,6 +863,11 @@ class Spool(BaseSpool):
             )
             member_frames.append(members)
             first = group_rows.iloc[0].to_dict()
+            if "_dtype" in group_rows.columns:
+                # concatenation upcasts like a merge does, so the group's
+                # dtype is what the members combine to, not the first row's
+                combined = _combined_dtype(group_rows["_dtype"])
+                first["_dtype"] = "" if combined is None else str(combined)
             if has_envelope:
                 first[f"{dim}_min"] = group_rows[f"{dim}_min"].min()
                 first[f"{dim}_max"] = group_rows[f"{dim}_max"].max()

@@ -72,6 +72,39 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
     dc.spool([aux]).chunk(sensor=100)
 ```
 
+## Chunking by size
+
+A chunk length may be a quantity instead of a bare number: either the coordinate's own units (`time=10 * s`, converted to the envelope's canonical units) or a quantity of information (`time=25 * megabytes`), which sizes each output by its data array. `overlap` accepts the same forms.
+
+A size resolves per partition, because the conversion needs that partition's sampling interval, its extent along the *other* dimensions, and its element dtype:
+
+```
+bytes_per_sample = itemsize * (product of the other dimensions' sample counts)
+n_samples        = floor(requested_bytes / bytes_per_sample)
+```
+
+The count is floored, so an output's data array never exceeds the request, and it is computed against the partition's *smallest* step — steps within `sampling_group_tolerance` share a partition, so sizing against the median would let a faster-sampled member overshoot. Element dtype is deliberately **not** a partition key: making it one would change which patches merge. A partition may therefore mix dtypes, and the estimate uses `np.result_type` over them, matching the upcast assembly performs. A patch relation with no dtype (a hand-built dataframe, or an index predating the column) raises `ChunkError` rather than guessing an itemsize.
+
+```{python}
+from dascore.units import megabytes
+
+target = 1 * megabytes
+sized = dc.get_example_spool("random_das").chunk(time=target)
+assert max(p.data.nbytes for p in sized) <= 1e6
+
+# The plan explains what the request resolved to.
+plan = dc.get_example_spool("random_das").chunk_plan(time=target)
+(part,) = plan.params["size"]["partitions"]
+assert part["bytes_per_sample"] == part["itemsize"] * part["slab_samples"]
+assert part["n_samples"] == int(1e6) // part["bytes_per_sample"]
+
+# The dtype carries through a chained chunk, so sizes still work.
+chained = dc.get_example_spool("random_das").chunk(distance=100).chunk(time=target)
+assert max(p.data.nbytes for p in chained) <= 1e6
+```
+
+A size measures the data array alone; coordinates, attrs, and copies made by later processing are extra. When a single sample along the chunked dimension is already larger than the request, the outputs hold one sample each and a warning says so — the request cannot be honored below one sample.
+
 ## Merged coordinates
 
 Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.

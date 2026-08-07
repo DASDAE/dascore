@@ -268,6 +268,9 @@ def _output_records(
             source_patch_id=str(output_id),
             dims=dims,
             shape="",
+            # the plan carries the element dtype privately so a chained
+            # chunk can still size patches by their memory footprint
+            dtype=str(row.get("_dtype") or ""),
             n_dims=len(dim_names),
             sample_count_total=None,
             time_min=_ns(row.get("time_min")),

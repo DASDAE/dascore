@@ -258,6 +258,20 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 merged_spool = spool.chunk(time=None)
 ```
 
+The chunk length can also be a quantity, either in the coordinate's own units or as a data size. A data size chunks so that each patch's data array is about that large, which is the usual way to keep patches inside a memory budget without working out the sample arithmetic by hand.
+
+```{python}
+from dascore.units import s, megabytes
+
+# The same 3 second chunk, with the units stated explicitly.
+unit_chunked = spool.chunk(time=3 * s)
+
+# Chunk so each patch's data array is at most ~1 MB.
+size_chunked = spool.chunk(time=1 * megabytes)
+```
+
+A data size measures the data array only; coordinates, attrs, and any copies made later during processing are extra, so the patch as a whole is somewhat larger. The sample count is rounded down, so the patch's data never exceeds the requested size, and `MB` is 10^6^ bytes while `MiB` is 2^20^. `overlap` accepts the same forms.
+
 # concatenate
 Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it is available on every spool and produces a lazy, plan-backed result.
 

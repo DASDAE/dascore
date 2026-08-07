@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ChunkError, ParameterError
+from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import build_chunk_plan
 from dascore.utils.time import to_timedelta64
@@ -350,3 +350,106 @@ class TestPlanMembers:
         )
         assert len(plan.outputs) == len(df)
         assert not plan.members["_modified"].any()
+
+
+class TestQuantityChunkValues:
+    """Chunk lengths given as quantities of the dimension's own units."""
+
+    def test_seconds_match_bare_value(self, contiguous_df):
+        """A time in seconds equals the bare (seconds) value."""
+        quant = build_chunk_plan(contiguous_df, time=5 * dc.units.s)
+        bare = build_chunk_plan(contiguous_df, time=5)
+        assert quant.outputs.equals(bare.outputs)
+
+    def test_other_time_unit(self, contiguous_df):
+        """Any time unit converts to the coordinate's own scale."""
+        quant = build_chunk_plan(contiguous_df, time=5000 * dc.units.ms)
+        bare = build_chunk_plan(contiguous_df, time=5)
+        assert quant.outputs.equals(bare.outputs)
+
+    def test_numeric_dim_unit(self, contiguous_df):
+        """Numeric envelopes are canonical SI, so mm converts to m."""
+        # one row, so chunking distance has no time envelopes to merge
+        single = contiguous_df.iloc[[0]]
+        quant = build_chunk_plan(single, distance=2000 * dc.units.mm)
+        # a quantity's magnitude is a float, so compare to the float value
+        bare = build_chunk_plan(single, distance=2.0)
+        assert quant.outputs.equals(bare.outputs)
+
+    def test_overlap_quantity(self, contiguous_df):
+        """Overlap accepts the same forms as the chunk length."""
+        quant = build_chunk_plan(
+            contiguous_df, time=5 * dc.units.s, overlap=1000 * dc.units.ms
+        )
+        bare = build_chunk_plan(contiguous_df, time=5, overlap=1)
+        assert quant.outputs.equals(bare.outputs)
+
+    def test_wrong_dimensionality_raises(self, contiguous_df):
+        """A length cannot chunk a time coordinate."""
+        with pytest.raises(UnitError, match="time-like"):
+            build_chunk_plan(contiguous_df, time=100 * dc.units.ft)
+
+    def test_percent_raises(self, contiguous_df):
+        """A percent is dimensionless but is not a data size."""
+        with pytest.raises(UnitError, match="dimensionless"):
+            build_chunk_plan(contiguous_df, time=dc.get_quantity("50%"))
+
+    @pytest.mark.parametrize(
+        "value", (0 * dc.units.s, -1 * dc.units.s, 0 * dc.units.MB, -1 * dc.units.MB)
+    )
+    def test_non_positive_raises(self, contiguous_df, value):
+        """The positive-value guard applies to quantities too."""
+        with pytest.raises(ParameterError, match="greater than 0"):
+            build_chunk_plan(contiguous_df, time=value)
+
+
+class TestSizeChunkPlanDF:
+    """Data-size chunk lengths on hand-built dataframes."""
+
+    @pytest.fixture()
+    def sized_df(self, contiguous_df):
+        """A frame carrying the structural columns a size chunk needs."""
+        return contiguous_df.assign(_dtype="float64", dims="distance,time")
+
+    def test_missing_dtype_raises(self, contiguous_df):
+        """A frame with no dtype cannot answer a size request."""
+        with pytest.raises(ChunkError, match="no dtype information"):
+            build_chunk_plan(contiguous_df, time=1 * dc.units.MB)
+
+    def test_null_dtype_raises(self, sized_df):
+        """Nulls are as unusable as an absent column."""
+        df = sized_df.assign(_dtype=None)
+        with pytest.raises(ChunkError, match="no dtype information"):
+            build_chunk_plan(df, time=1 * dc.units.MB)
+
+    def test_unknown_step_raises(self, sized_df):
+        """An unknown sampling interval makes the sample count undefined."""
+        df = sized_df.assign(distance_step=np.nan)
+        with pytest.raises(ChunkError, match="cannot be determined"):
+            build_chunk_plan(df, time=1 * dc.units.MB)
+
+    def test_sample_count(self, sized_df):
+        """The count is floor(bytes / (itemsize * slab samples))."""
+        plan = build_chunk_plan(sized_df, time=dc.get_quantity("10 kB"))
+        (part,) = plan.params["size"]["partitions"]
+        # 11 distance samples of float64 per time sample
+        assert part["slab_samples"] == 11
+        assert part["bytes_per_sample"] == 88
+        assert part["n_samples"] == 10_000 // 88
+
+    def test_params_records_request(self, sized_df):
+        """Params explain what the size request resolved to."""
+        plan = build_chunk_plan(sized_df, time=dc.get_quantity("10 kB"))
+        assert plan.params["size"]["requested_bytes"] == 10_000
+        assert plan.params["size"]["partitions"][0]["dtype"] == "float64"
+
+    def test_params_absent_without_size(self, sized_df):
+        """A plain chunk records no size diagnostics."""
+        assert "size" not in build_chunk_plan(sized_df, time=5).params
+
+    def test_mixed_dtypes_upcast(self, sized_df):
+        """A partition mixing dtypes is sized against the upcast dtype."""
+        df = sized_df.copy()
+        df.loc[df.index[0], "_dtype"] = "float32"
+        plan = build_chunk_plan(df, time=dc.get_quantity("10 kB"))
+        assert plan.params["size"]["partitions"][0]["dtype"] == "float64"

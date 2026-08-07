@@ -38,7 +38,7 @@ from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
 )
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
+from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import is_range
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
@@ -922,7 +922,7 @@ class PatchCatalog:
                     "patch_id", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
             df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore").rename(
-                columns={"patch_id": "_patch_id"}
+                columns=dict(SPOOL_PRIVATE_RENAMES)
             )
             # SQL identifies overlapping source patches. Expose the selected
             # envelopes, matching spool.get_contents() and the exact trim
