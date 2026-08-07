@@ -9,12 +9,9 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+# Write permissions are granted per job below; the default is read-only.
 permissions:
-  contents: write
-  pages: write
-  deployments: write
-  id-token: write
+  contents: read
 
 # Allow one concurrent deployment. Only runs which can deploy need to
 # serialize, so they share the "pages" group with the master docs workflow.
@@ -30,9 +27,13 @@ jobs:
   # Build job
   build:
     runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload docs.zip to the release.
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
@@ -61,11 +62,12 @@ jobs:
 
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
           environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 
@@ -73,7 +75,7 @@ jobs:
       - uses: ./.github/actions/build-docs
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
         with:
           path: 'docs/_site'
 
@@ -82,10 +84,10 @@ jobs:
         run: zip docs.zip docs/_site -r
 
       - name: Upload release docs
-        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: docs.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" docs.zip --clobber
 
   deploy:
     # Stable docs describe the latest stable release, so a pre-release (eg a
@@ -94,6 +96,10 @@ jobs:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      # Needed by actions/deploy-pages.
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -101,4 +107,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5.0.0

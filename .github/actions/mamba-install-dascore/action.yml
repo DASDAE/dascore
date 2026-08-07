@@ -33,11 +33,12 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up environment variable with date
-      shell: bash -l {0}
-      run: echo "CURRENT_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+    - name: Get current date for cache key
+      id: date
+      shell: bash
+      run: echo "current-date=$(date '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-    - uses: mamba-org/setup-micromamba@v3
+    - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39  # v3.2.1
       with:
         micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
         environment-file: ${{ inputs.environment-file }}
@@ -45,7 +46,7 @@ runs:
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ env.CURRENT_DATE }}-${{ inputs.environment-file }}
+        cache-environment-key: environment-${{ steps.date.outputs.current-date }}-${{ inputs.environment-file }}
         post-cleanup: "shell-init"
         create-args: >-
           python=${{ inputs.python-version }}
@@ -71,24 +72,27 @@ runs:
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
       shell: bash -l {0}
+      env:
+        INSTALL_GROUP_STR: ${{ inputs.install-group-str }}
       run: |
-        pip install -e .${{ inputs.install-group-str }}
+        pip install -e ".${INSTALL_GROUP_STR}"
 
-    - name: export test data cache env
+    - name: export test data cache info
+      id: data-cache
       shell: bash -el {0}
       env:
         INPUT_CACHE_NUMBER: ${{ inputs.cache-number }}
         RUNNER_OS: ${{ runner.os }}
       run: |
-        python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
+        python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_OUTPUT"
 
     - name: restore test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
       id: restore-test-data
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
       with:
-        path: ${{ env.DATA_CACHE_PATH }}
-        key: ${{ env.DATA_CACHE_KEY }}
+        path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
+        key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
 
     - name: prime test data cache
       if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
@@ -97,10 +101,10 @@ runs:
 
     - name: save test data cache
       if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
       with:
-        path: ${{ env.DATA_CACHE_PATH }}
-        key: ${{ env.DATA_CACHE_KEY }}
+        path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
+        key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
 
     # Print out the package info for current environment
     - name: print package info

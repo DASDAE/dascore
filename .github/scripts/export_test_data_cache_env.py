@@ -14,7 +14,7 @@ from dascore.utils.downloader import get_test_data_cache_info  # noqa: E402
 
 
 def main() -> None:
-    """Print cache metadata as KEY=VALUE lines for GitHub Actions env files."""
+    """Print cache metadata as KEY=VALUE lines for GitHub Actions output files."""
     runner_os = os.environ["RUNNER_OS"]
     cache_number = os.environ["INPUT_CACHE_NUMBER"]
     info = get_test_data_cache_info()

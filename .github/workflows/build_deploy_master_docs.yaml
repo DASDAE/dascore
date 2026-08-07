@@ -11,12 +11,10 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+# The docs publish to netlify with its own token, so the GITHUB_TOKEN only
+# needs to read the repo.
 permissions:
   contents: read
-  pages: write
-  deployments: write
-  id-token: write
 
 # Allow one concurrent deployment
 concurrency:
@@ -31,17 +29,19 @@ jobs:
       name: github-pages
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
           environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 

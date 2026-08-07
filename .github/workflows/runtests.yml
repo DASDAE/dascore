@@ -15,6 +15,9 @@ on:
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'
 
+permissions:
+  contents: read
+
 env:
   # used to manually trigger cache reset. Just increment if needed.
   CACHE_NUMBER: 1
@@ -35,7 +38,9 @@ jobs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -57,8 +62,9 @@ jobs:
       env_file: 'environment.yml'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
+          persist-credentials: false
           fetch-tags: 'true'
           fetch-depth: '0'
 
@@ -79,7 +85,7 @@ jobs:
         run: ./.github/test_code.sh doctest
 
       # Upload coverage files
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
