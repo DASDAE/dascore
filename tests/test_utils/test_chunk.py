@@ -447,6 +447,20 @@ class TestSizeChunkPlanDF:
         """A plain chunk records no size diagnostics."""
         assert "size" not in build_chunk_plan(sized_df, time=5).params
 
+    def test_unknown_dtype_partition_is_empty_not_nan(self, sized_df):
+        """
+        A partition with no dtype carries "", never NaN.
+
+        NaN is truthy, so it would reach the derived catalog as the
+        string "nan" and poison every later np.dtype() of the column.
+        """
+        known = sized_df.assign(station="a")
+        unknown = sized_df.assign(station="b", _dtype="")
+        both = pd.concat([known, unknown], ignore_index=True)
+        outputs = build_chunk_plan(both, time=5).outputs
+        assert not outputs["_dtype"].isna().any()
+        assert set(outputs["_dtype"]) == {"float64", ""}
+
     def test_mixed_dtypes_upcast(self, sized_df):
         """A partition mixing dtypes is sized against the upcast dtype."""
         df = sized_df.copy()

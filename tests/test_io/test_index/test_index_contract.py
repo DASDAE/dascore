@@ -210,11 +210,29 @@ class TestElementDtype:
         assert "dtype" not in df.columns
         assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
 
-    def test_dtype_attr_is_reserved(self):
-        """An attr named `dtype` cannot shadow the structural column."""
-        from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-
-        assert "dtype" in RESERVED_ATTR_COLUMNS
+    def test_dtype_attr_does_not_shadow_column(self, tmp_path):
+        """A patch attr named `dtype` is skipped, not written to the column."""
+        summary = make_summaries()[0]
+        shadowed = PatchSummary(
+            attrs=dict(summary.attrs.model_dump(), dtype="not a dtype"),
+            coords={k: v.model_dump() for k, v in summary.coords.items()},
+            dims=summary.dims,
+            shape=summary.shape,
+            dtype=summary.dtype,
+            source_path=summary.source_path,
+            source_format=summary.source_format,
+            source_version=summary.source_version,
+        )
+        path = tmp_path / "shadow.sqlite3"
+        back = get_backend(path)
+        try:
+            with pytest.warns(UserWarning, match="dtype"):
+                back.write_sources(summaries_to_records([shadowed]))
+            df = back.query()
+            # the structural column keeps the element dtype, not the attr
+            assert df["dtype"].iloc[0] == summary.dtype
+        finally:
+            back.close()
 
 
 class TestAttrPredicates:

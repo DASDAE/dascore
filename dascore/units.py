@@ -510,10 +510,11 @@ def get_byte_count(value: Quantity) -> float:
 
     Notes
     -----
-    Do not use [`to_float`](`dascore.utils.time.to_float`) for this. It
-    falls back to `float(value)`, and pint converts a dimensionless
-    quantity to its base units, which for information is *bits*, so a
-    size would come back eight times too large.
+    This is the only correct way to get a byte count from a quantity.
+    In particular [`to_float`](`dascore.utils.time.to_float`) is not:
+    pint converts a dimensionless quantity to its base units, which for
+    information is *bits*, so anything routing a size through a plain
+    `float()` conversion is eight times too large.
 
     Examples
     --------

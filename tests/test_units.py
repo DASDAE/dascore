@@ -586,11 +586,19 @@ class TestDataSize:
         """
         Guard the bits trap.
 
-        `to_float` falls back to `float(quantity)`, and pint converts a
-        dimensionless quantity to base units, where information is bits.
-        Any "simplification" of get_byte_count to to_float makes every
-        size eight times too large.
+        pint converts a dimensionless quantity to base units, and
+        information's base unit is the bit, so routing a size through
+        `float()` makes it eight times too large. Assert the byte count
+        directly rather than the wrong value, so this holds however
+        `to_float` treats quantities.
         """
         quant = get_quantity("25 MB")
         assert get_byte_count(quant) == 25_000_000
-        assert to_float(quant) == 8 * 25_000_000
+        # the trap: what a bare float() conversion would have produced
+        assert quant.to_base_units().magnitude == 8 * 25_000_000
+        # to_float is not a byte converter; it either raises or answers
+        # in seconds, but must never be mistaken for get_byte_count
+        try:
+            assert to_float(quant) != get_byte_count(quant)
+        except UnitError:
+            pass
