@@ -1,0 +1,13 @@
+# Keep SHA-pinned GitHub Actions up to date.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      # Covers .github/workflows plus the local composite actions.
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: "monthly"
+    # Wait a week before adopting a new release in case it gets yanked.
+    cooldown:
+      default-days: 7

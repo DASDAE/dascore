@@ -15,6 +15,9 @@ on:
       - '.github/workflows/run_min_dep_tests.yml'
       - '.github/actions/**/*.yml'
 
+permissions:
+  contents: read
+
 env:
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
@@ -33,7 +36,9 @@ jobs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
 
@@ -51,8 +56,9 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
