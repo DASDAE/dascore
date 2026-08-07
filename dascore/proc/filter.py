@@ -319,7 +319,17 @@ def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
     for dim, axis, value in dinfo:
         coord = patch.get_coord(dim)
         # Invert units if needed
-        if isinstance(value, dc.units.Quantity) and coord.units is not None:
+        if isinstance(value, dc.units.Quantity):
+            if coord.units is None:
+                # every quantity is rejected, dimensionless ones included:
+                # there is nothing to convert against, and reading `20 %`
+                # as 0.2 Hz (which is what used to happen) is a trap.
+                msg = (
+                    f"Cannot filter {dim!r} with {value}: the coordinate "
+                    "has no units, so a quantity cannot be interpreted "
+                    "against it. Pass a plain number instead."
+                )
+                raise UnitError(msg)
             value, _ = get_inverted_quant(value, coord.units)
         # Check valid parameters
         w0 = to_float(value)

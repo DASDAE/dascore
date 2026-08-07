@@ -12,7 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import TimeError
+from dascore.exceptions import TimeError, UnitError
 from dascore.utils.time import (
     is_datetime64,
     is_timedelta64,
@@ -704,6 +704,39 @@ class TestToFloat:
         out2 = to_float(ser2)
         assert isinstance(out1, pd.Series)
         assert isinstance(out2, pd.Series)
+
+    def test_time_quantity(self):
+        """A time quantity converts to its duration in seconds."""
+        assert to_float(dc.get_quantity("2 s")) == 2.0
+        assert to_float(dc.get_quantity("2 min")) == 120.0
+        assert to_float(dc.get_quantity("500 ms")) == 0.5
+
+    def test_time_quantity_array(self):
+        """An array-valued time quantity keeps its shape."""
+        quant = np.array([1.0, 2.0]) * dc.get_quantity("min")
+        out = to_float(quant)
+        assert np.allclose(out, [60.0, 120.0])
+
+    def test_time_quantity_returns_float(self):
+        """An integer magnitude is still widened to float."""
+        assert isinstance(to_float(dc.get_quantity("2 s")), float)
+
+    @pytest.mark.parametrize("value", ("10 m", "25 MB", "50%", "1 strain", "5", "1 Hz"))
+    def test_non_time_quantity_raises(self, value):
+        """Only time quantities have a float representation."""
+        with pytest.raises(UnitError, match="only time quantities"):
+            to_float(dc.get_quantity(value))
+
+    def test_data_size_is_not_silently_converted(self):
+        """
+        Guard the bits trap.
+
+        pint's `__float__` converts a dimensionless quantity to base
+        units, and information's base unit is the bit, so bytes used to
+        come back eight times too large instead of raising.
+        """
+        with pytest.raises(UnitError):
+            to_float(dc.get_quantity("25 MB"))
 
 
 class TestIsTimeDelta:

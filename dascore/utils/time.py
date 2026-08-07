@@ -9,13 +9,15 @@ from typing import Any, SupportsFloat, cast, overload
 
 import numpy as np
 import pandas as pd
+import pint
+from pint import DimensionalityError
 
 from dascore.constants import (
     NUMPY_TIME_UNIT_MAPPING,
     ONE_SECOND,
     timeable_types,
 )
-from dascore.exceptions import TimeError
+from dascore.exceptions import TimeError, UnitError
 
 _NAT_DATETIME64 = np.datetime64("NaT", "ns")
 _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
@@ -417,6 +419,32 @@ def _to_float(obj: timeable_types | np.ndarray) -> Any:
     return float(cast("SupportsFloat", obj))
 
 
+@_to_float.register(pint.Quantity)
+def _quantity_to_float(quant: pint.Quantity) -> float | np.ndarray:
+    """
+    Convert a time quantity to seconds.
+
+    Anything else raises: this function's output is a duration in
+    seconds, so there is no meaningful float for a length or a data
+    size. Without this, pint's `__float__` would silently convert any
+    *dimensionless* quantity to its base units — returning 2e8 for
+    `25 * MB`, whose base unit is the bit — while rejecting the time
+    quantities this function is actually for.
+    """
+    try:
+        # recurse so an array-valued quantity takes the array path and a
+        # scalar one is always widened to float (a magnitude may be int)
+        return to_float(quant.to("s").magnitude)
+    except DimensionalityError:
+        msg = (
+            f"Cannot convert {quant} to a float; only time quantities "
+            "have a float representation here (seconds). Convert "
+            "explicitly instead, eg dascore.units.convert_units or, for "
+            "data sizes, dascore.units.get_byte_count."
+        )
+        raise UnitError(msg) from None
+
+
 @_to_float.register(np.ndarray)
 @_to_float.register(list)
 @_to_float.register(tuple)
@@ -473,6 +501,10 @@ def to_float(obj: np.ndarray | list | tuple) -> np.ndarray: ...
 
 
 @overload
+def to_float(obj: pint.Quantity) -> float | np.ndarray: ...
+
+
+@overload
 def to_float(obj: Any) -> float: ...
 
 
@@ -481,9 +513,13 @@ def to_float(obj):
     Convert various datetime/timedelta things to a float.
 
     Time offsets represent seconds, and datetimes are seconds from 1970.
+    A pint quantity of time is converted to seconds as well; any other
+    quantity raises [`UnitError`](`dascore.exceptions.UnitError`), since
+    a length or a data size has no float representation here.
 
     A Series stays a Series and any other sequence becomes an array; every
-    other input, null included, comes back as a scalar.
+    other input, null included, comes back as a scalar. A quantity follows
+    its own magnitude, so an array-valued one yields an array.
     """
     return _to_float(obj)
 
