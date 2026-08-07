@@ -447,6 +447,37 @@ class TestSizeChunkPlanDF:
         """A plain chunk records no size diagnostics."""
         assert "size" not in build_chunk_plan(sized_df, time=5).params
 
+    def test_frame_without_dims_column(self, contiguous_df):
+        """A frame with no `dims` falls back to its complete envelopes."""
+        df = contiguous_df.assign(_dtype="float64")  # deliberately no dims
+        plan = build_chunk_plan(df, time=dc.get_quantity("10 kB"))
+        (part,) = plan.params["size"]["partitions"]
+        assert part["slab_samples"] == 11  # the distance envelope
+
+    def test_unknown_chunk_dim_step_raises(self, sized_df):
+        """The chunked dimension's own step must be known to size it."""
+        df = sized_df.assign(time_step=np.timedelta64("NaT"))
+        with pytest.raises(ChunkError, match="sampling interval is unknown"):
+            build_chunk_plan(df, time=dc.get_quantity("10 kB"))
+
+    def test_numeric_dim_incompatible_units_raise(self, sized_df):
+        """A numeric coordinate rejects a dimensionally wrong quantity."""
+        df = sized_df.assign(_distance_units="m")
+        with pytest.raises(UnitError, match="incompatible with"):
+            build_chunk_plan(df, distance=5 * dc.units.s)
+
+    def test_unparsable_dtype_raises(self, sized_df):
+        """A dtype string numpy cannot parse is unusable, not absent."""
+        df = sized_df.assign(_dtype="not-a-real-dtype")
+        with pytest.raises(ChunkError, match="dtype"):
+            build_chunk_plan(df, time=1 * dc.units.MB)
+
+    def test_missing_other_dim_envelope_raises(self, sized_df):
+        """A dim without a full envelope has no derivable sample count."""
+        df = sized_df.drop(columns=["distance_max"])
+        with pytest.raises(ChunkError, match="cannot be determined"):
+            build_chunk_plan(df, time=1 * dc.units.MB)
+
     def test_unknown_dtype_partition_is_empty_not_nan(self, sized_df):
         """
         A partition with no dtype carries "", never NaN.

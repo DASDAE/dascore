@@ -197,8 +197,13 @@ class TestElementDtype:
     def test_dtype_round_trips(self, backend):
         """Each patch keeps the dtype its summary reported."""
         df = backend.query()
-        expected = {str(x.source_path): x.dtype for x in make_summaries()}
-        got = {str(k): v for k, v in zip(df["path"], df["dtype"], strict=True)}
+
+        def _key(path):
+            """Compare path-independently; Windows round-trips backslashes."""
+            return str(path).replace("\\", "/")
+
+        expected = {_key(x.source_path): x.dtype for x in make_summaries()}
+        got = {_key(k): v for k, v in zip(df["path"], df["dtype"], strict=True)}
         assert got == expected
 
     def test_dtype_is_private_in_flat_relation(self):

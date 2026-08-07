@@ -64,9 +64,7 @@ def _num(value) -> float | None:
 
 def _dtype_str(value) -> str:
     """Convert a stored element dtype to its string, "" when unknown."""
-    if value is None or pd.isnull(value):
-        return ""
-    return str(value)
+    return "" if value is None or pd.isnull(value) else str(value)
 
 
 def _coord_record_from_row(

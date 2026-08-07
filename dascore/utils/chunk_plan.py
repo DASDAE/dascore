@@ -464,10 +464,8 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
     Overlapping members are excluded: `_remove_overlaps` deduplicates
     them at member-build time, so they do not add samples.
     """
-    try:
-        start, stop, step = get_interval_columns(sub, name)
-    except Exception:  # not a complete envelope; assume the grid
-        return 1.0
+    # the caller already read these columns for this partition
+    start, stop, step = get_interval_columns(sub, name)
     starts = to_float(start.values)
     order = np.argsort(starts, kind="stable")
     # relative to the first start: absolute datetimes are ~1e9 seconds,
@@ -485,8 +483,9 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
         deltas = np.maximum(deltas, spans)
         density = counts / deltas
     density = density[np.isfinite(density) & (density > 0)]
-    if not len(density):
-        return 1.0
+    # a partition whose steps are all unusable is rejected before this,
+    # so at least one member always yields a density
+    assert len(density)
     packing = float(density.max() * step_float)
     # residual float noise must not cost a sample on an exactly gridded
     # partition, whose packing is 1.0 by construction
