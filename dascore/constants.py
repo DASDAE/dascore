@@ -132,9 +132,9 @@ WARN_LEVELS = Literal["warn", "raise", "ignore", None]
 
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
 # Spelled out because the standard library's alias for them is stub-only.
-WARNING_ACTIONS = Literal[
-    "default", "error", "ignore", "always", "all", "module", "once"
-]
+# "all" is deliberately absent: Python only began accepting it in 3.14, and
+# it raises on the 3.11-3.13 interpreters this project also supports.
+WARNING_ACTIONS = Literal["default", "error", "ignore", "always", "module", "once"]
 
 # A map from the unit name to the code used in numpy.timedelta64. The codes
 # are spelled out in the annotation because numpy's unit parameter accepts
