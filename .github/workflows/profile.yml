@@ -27,7 +27,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'benchmark')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-tags: "true"
@@ -45,7 +45,7 @@ jobs:
           prepare-test-data: "true"
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@f22792bfac16f3e14eb9fbea76f4a48e9cc22b93  # v4.19.1
+        uses: CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924  # v5.0.1
         with:
           mode: simulation
           # CodSpeed does not inherit the shell activation done by the

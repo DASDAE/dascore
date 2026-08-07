@@ -89,7 +89,7 @@ runs:
     - name: restore test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
       id: restore-test-data
-      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
         key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
@@ -101,7 +101,7 @@ runs:
 
     - name: save test data cache
       if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
         key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
