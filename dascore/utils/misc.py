@@ -193,7 +193,7 @@ def _iter_filesystem(
     skip_hidden: bool = True,
     include_directories: bool = False,
     _warned_timestamp_paths: set[str] | None = None,
-) -> Generator[Path | UPath | None, str, None]:
+) -> Generator[Path | UPath | None, str | None, None]:
     """
     Iterate contents of a filesystem like thing.
 
@@ -302,7 +302,7 @@ def _iter_local_filesystem(
     skip_hidden: bool,
     include_directories: bool,
     warned_timestamp_paths: set[str],
-) -> Generator[Path | None, str, None]:
+) -> Generator[Path | None, str | None, None]:
     """Traverse one local path or directory tree."""
     # Local paths use scandir directly so we can recurse cheaply and keep the
     # hidden/timestamp checks close to the yielded entries.
@@ -348,7 +348,7 @@ def _iter_remote_filesystem(
     skip_hidden: bool,
     include_directories: bool,
     warned_timestamp_paths: set[str],
-) -> Generator[UPath | None, str, None]:
+) -> Generator[UPath | None, str | None, None]:
     """Traverse one remote path defensively across backend quirks."""
     # Remote traversal has to be more defensive because some backends have
     # partial directory support and may not expose reliable stat metadata.
