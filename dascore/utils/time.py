@@ -397,7 +397,7 @@ def to_int(obj: np.ndarray | list | tuple) -> np.ndarray: ...
 def to_int(obj: Any) -> int | np.integer | float: ...
 
 
-def to_int(obj):
+def to_int(obj) -> pd.Series | np.ndarray | int | np.integer | float:
     """
     Ensure a scalar or array is a number.
 
@@ -508,7 +508,7 @@ def to_float(obj: pint.Quantity) -> float | np.ndarray: ...
 def to_float(obj: Any) -> float: ...
 
 
-def to_float(obj):
+def to_float(obj) -> pd.Series | np.ndarray | float:
     """
     Convert various datetime/timedelta things to a float.
 
