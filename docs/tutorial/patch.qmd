@@ -378,7 +378,7 @@ new = patch.select(time=(-2, -1), relative=True)
 new = patch.select(distance=(-100 * ft, ...), relative=True)
 ```
 
-The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, sample selections are **always** relative to the data contained in the patch, so 0 refers to the first sample along the dimension and -1 refers to the last.
+The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, sample selections are **always** relative to the data contained in the patch: a single index of 0 is the first sample along the dimension and -1 is the last.
 
 :::{.callout-warning}
 Sample ranges and value ranges do not have the same end behavior. A value range includes both of its endpoints, but a sample range excludes its upper bound, like Python's slicing and `range`.
