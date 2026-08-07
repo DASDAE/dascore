@@ -391,6 +391,9 @@ def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
     Convert various datetime/timedelta things to a float.
 
     Time offsets represent seconds, and datetimes are seconds from 1970.
+    A pint quantity of time is converted to seconds as well; any other
+    quantity raises [`UnitError`](`dascore.exceptions.UnitError`), since
+    a length or a data size has no float representation here.
     """
     return float(obj)
 

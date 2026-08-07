@@ -302,11 +302,21 @@ class TestNotchFilter:
         assert isinstance(filtered_patch, dc.Patch)
         assert not np.any(np.isnan(filtered_patch.data))
 
-    def test_unitless_coord_with_quantity_raises(self, random_patch):
-        """A unit-bearing value needs a coordinate with units."""
+    @pytest.mark.parametrize(
+        "value",
+        (5 * dc.units.m, dc.get_quantity("20%"), dc.get_quantity("0.2")),
+        ids=("metres", "percent", "dimensionless"),
+    )
+    def test_unitless_coord_with_quantity_raises(self, random_patch, value):
+        """
+        A quantity needs a coordinate with units to be interpreted.
+
+        Dimensionless quantities are rejected too: `20 %` previously
+        slipped through and was read as 0.2 Hz.
+        """
         patch = random_patch.set_units(distance=None)
         with pytest.raises(UnitError, match="has no units"):
-            patch.notch_filter(distance=5 * dc.units.m, q=30)
+            patch.notch_filter(distance=value, q=30)
 
 
 class TestSavgolFilter:
