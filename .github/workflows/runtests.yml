@@ -38,7 +38,7 @@ jobs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
@@ -62,7 +62,7 @@ jobs:
       env_file: 'environment.yml'
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-tags: 'true'
@@ -85,7 +85,7 @@ jobs:
         run: ./.github/test_code.sh doctest
 
       # Upload coverage files
-      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
