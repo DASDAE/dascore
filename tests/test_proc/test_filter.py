@@ -302,6 +302,12 @@ class TestNotchFilter:
         assert isinstance(filtered_patch, dc.Patch)
         assert not np.any(np.isnan(filtered_patch.data))
 
+    def test_unitless_coord_with_quantity_raises(self, random_patch):
+        """A unit-bearing value needs a coordinate with units."""
+        patch = random_patch.set_units(distance=None)
+        with pytest.raises(UnitError, match="has no units"):
+            patch.notch_filter(distance=5 * dc.units.m, q=30)
+
 
 class TestSavgolFilter:
     """Simple tests on Savgol filter."""

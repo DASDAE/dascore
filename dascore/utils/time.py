@@ -8,13 +8,15 @@ from functools import singledispatch
 
 import numpy as np
 import pandas as pd
+import pint
+from pint import DimensionalityError
 
 from dascore.constants import (
     NUMPY_TIME_UNIT_MAPPING,
     ONE_SECOND,
     timeable_types,
 )
-from dascore.exceptions import TimeError
+from dascore.exceptions import TimeError, UnitError
 
 _NAT_DATETIME64 = np.datetime64("NaT", "ns")
 _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
@@ -391,6 +393,32 @@ def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
     Time offsets represent seconds, and datetimes are seconds from 1970.
     """
     return float(obj)
+
+
+@to_float.register(pint.Quantity)
+def _quantity_to_float(quant: pint.Quantity) -> float:
+    """
+    Convert a time quantity to seconds.
+
+    Anything else raises: this function's output is a duration in
+    seconds, so there is no meaningful float for a length or a data
+    size. Without this, pint's `__float__` would silently convert any
+    *dimensionless* quantity to its base units — returning 2e8 for
+    `25 * MB`, whose base unit is the bit — while rejecting the time
+    quantities this function is actually for.
+    """
+    try:
+        # recurse so an array-valued quantity takes the array path and a
+        # scalar one is always widened to float (a magnitude may be int)
+        return to_float(quant.to("s").magnitude)
+    except DimensionalityError:
+        msg = (
+            f"Cannot convert {quant} to a float; only time quantities "
+            "have a float representation here (seconds). Convert "
+            "explicitly instead, eg dascore.units.convert_units or, for "
+            "data sizes, dascore.units.get_byte_count."
+        )
+        raise UnitError(msg) from None
 
 
 @to_float.register(np.ndarray)
