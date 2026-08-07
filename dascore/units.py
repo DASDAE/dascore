@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from functools import cache
 from threading import RLock
 from types import EllipsisType
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -21,8 +21,6 @@ from dascore.compat import is_array
 from dascore.exceptions import UnitError
 from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
-
-numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
 def _get_unit_registry():
@@ -194,17 +192,21 @@ def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
 
 
 def convert_units(
-    data: numeric | Quantity,
+    data: Any,
     to_units: quantity_like,
     from_units: quantity_like = None,
-) -> numeric:
+) -> Any:
     """
     Convert units in array from one type of units to another.
 
     Parameters
     ----------
     data
-        The data to convert.
+        The data to convert. Anything supporting `*` and `+` works, as do a
+        Quantity and None (None is returned unchanged). Deliberately not a
+        narrower annotation: the return type follows the input rather than
+        matching it (an int in yields a float out) and callers legitimately
+        pass values the checker only knows as `object`.
     to_units
         The desired units after the conversion
     from_units
@@ -228,9 +230,7 @@ def convert_units(
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
         raise UnitError(str(e))
-    # ty cannot resolve `*` on the `numeric & ~Quantity` intersection left
-    # by the isinstance early return above.
-    return (data * mult1 + add) * mult2  # ty: ignore[unsupported-operator]
+    return (data * mult1 + add) * mult2
 
 
 def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:

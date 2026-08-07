@@ -589,9 +589,12 @@ def slope_filter(
         # Hand the units/partial units in sequence.
         units = getattr(filt, "units", None)
         try:
-            filt = np.array(filt)
+            # Bound to a new name so the except branch still sees the original
+            # ragged sequence rather than a half-assigned filt.
+            array = np.array(filt)
         except ValueError:
-            filt = quant_sequence_to_quant_array(filt)
+            array = quant_sequence_to_quant_array(filt)
+        filt = array
         if units:
             filt = filt * dc.get_quantity(units)
         if not isinstance(filt, dc.units.Quantity):
