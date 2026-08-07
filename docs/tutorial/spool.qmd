@@ -224,7 +224,7 @@ import dascore as dc
 spool = dc.get_example_spool()
 
 # Select a spool with data after Jan 3rd, 2020.
-subspool = spool.select(time=('2020-01-03T00:00:09', None))
+subspool = spool.select(time=('2020-01-03T00:00:09', ...))
 ```
 
 In addition to trimming the data along a specified dimension (as shown above), `select` can be used to filter patches that meet a specified criteria.

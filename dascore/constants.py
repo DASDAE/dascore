@@ -178,12 +178,14 @@ for each attribute.
 
 select_values_description = """
 Any dimension name can be passed as key, and the values can be:
-    - a Slice or a tuple of (min, max) for that dimension.
+    - a tuple of (min, max) for that dimension, or an equivalent slice.
       `None` and ... both indicate open intervals.
+    - an integer, when `samples=True`, to select a single row or column.
     - an array of values to select, which must be a subset of the
       coordinate array.
     - an array of booleans of the same length as the coordinate where
-      `True` indicates values to keep.
+      `True` indicates values to keep. This form does not support
+      `samples=True`.
 """
 
 check_behavior_description = """

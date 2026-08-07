@@ -378,18 +378,44 @@ new = patch.select(time=(-2, -1), relative=True)
 new = patch.select(distance=(-100 * ft, ...), relative=True)
 ```
 
-The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, sample selections are **always** relative to the data contained in the patch. For example, 0 refers to the first sample along the dimension and -1 refers to the last.
+The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, sample selections are **always** relative to the data contained in the patch: a single index of 0 is the first sample along the dimension and -1 is the last.
+
+:::{.callout-warning}
+Sample ranges and value ranges do not have the same end behavior. A value range includes both of its endpoints, but a sample range excludes its upper bound, like Python's slicing and `range`.
+
+A consequence worth remembering: `-1` used as the end of a range excludes the last sample, even though `-1` on its own selects it.
+
+| query | selects |
+|---|---|
+| `select(distance=(0, 10))` | values 0 through 10, **both included** (11 channels) |
+| `select(time=(0, 10), samples=True)` | samples 0 through 9 (10 samples) |
+| `select(time=(0, -1), samples=True)` | every sample **except** the last |
+| `select(time=-1, samples=True)` | only the last sample |
+
+: Range endpoints in values vs samples {.striped .hover}
+
+`select` also accepts a slice wherever it accepts a `(min, max)` tuple, which is worth preferring for sample ranges since `slice(0, -1)` reads exactly like `x[0:-1]`. Note this is specific to `select` and `order`; processing functions such as `pass_filter` and `taper` require a tuple. Note also that the slice is still only shorthand for a range, so it needs `samples=True` just as a tuple does — without it, `-1` is a coordinate value rather than an index.
+:::
 
 ```{python}
 import dascore as dc
 
 patch = dc.get_example_patch()
+sample_count = len(patch.get_array("time"))
 
 # Trim patch to only include first 10 time rows (or columns).
 new = patch.select(time=(..., 10), samples=True)
+assert len(new.get_array("time")) == 10
 
 # Only include the last distance column or row.
 new = patch.select(distance=-1, samples=True)
+
+# But as the end of a range, -1 excludes the last sample.
+new = patch.select(time=(0, -1), samples=True)
+assert len(new.get_array("time")) == sample_count - 1
+
+# A slice means the same thing, and makes that more obvious.
+assert len(patch.select(time=slice(0, -1), samples=True).get_array("time")) == sample_count - 1
 ```
 
 Arrays can also be passed as values in which case they will be treated like sets, meaning only coordinate elements in the array will be selected.
@@ -489,7 +515,7 @@ import dascore as dc
 patch = (
     dc.get_example_patch('example_event_1')
     .taper(time=0.05)
-    .pass_filter(time=(None, 300))
+    .pass_filter(time=(..., 300))
 )
 
 patch.viz.waterfall(show=True);

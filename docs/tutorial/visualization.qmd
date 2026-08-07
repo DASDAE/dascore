@@ -54,7 +54,7 @@ patch = (
     dc.get_example_patch('example_event_1')
     .set_units("mm/(m*s)", distance='m', time='s')
     .taper(time=0.05)
-    .pass_filter(time=(None, 300))
+    .pass_filter(time=(..., 300))
 )
 patch.viz.wiggle(scale = .5)
 ```
