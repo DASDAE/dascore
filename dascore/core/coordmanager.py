@@ -42,7 +42,7 @@ print(new_cm)
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
 from typing import Annotated, Any
@@ -83,10 +83,14 @@ from dascore.utils.models import (
 )
 
 MaybeArray = ArrayLike | np.ndarray | None
-CoordManagerInput = Mapping[
-    str,
-    BaseCoord | np.ndarray | tuple[str | tuple[str, ...], BaseCoord | np.ndarray],
-]
+
+# What a coord map may hold, kept identical to the Patch constructor's coords.
+# The value stays Any on purpose: get_coord_manager also accepts an int or a
+# Quantity (a partial coord), a mapping of start/stop/step, and a
+# (dimension, data) tuple, and every union narrow enough to be worth writing
+# rejected one of those first-party forms. Mapping rather than dict so a
+# caller's narrower value type still matches.
+CoordManagerInput = Mapping[str, Any]
 
 
 def _ensure_1d_coord(coord, coord_name: str):
@@ -448,7 +452,7 @@ class CoordManager(DascoreBaseModel):
 
     def drop_coords(
         self,
-        *coords: str,
+        *coords: str | Iterable[str],
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
@@ -460,10 +464,13 @@ class CoordManager(DascoreBaseModel):
         Parameters
         ----------
         *coords
-            The name of the coordinate or dimension.
+            The name of the coordinate or dimension, or a sequence of them.
         """
         dim_drop_list = []
-        coords_to_drop = {x for x in iterate(coords)}
+        # iterate is applied per argument; the varargs tuple is already
+        # iterable, so flattening it as a whole would leave any sequence
+        # passed in as a single unhashable element.
+        coords_to_drop = {x for coord in coords for x in iterate(coord)}
         # If there are either no coords to drop or this cm doesn't have them.
         if not coords_to_drop or not (set(self.coord_map) & coords_to_drop):
             return self, array

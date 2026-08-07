@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from functools import cache
 from threading import RLock
 from types import EllipsisType
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import numpy as np
 import pandas as pd
@@ -520,7 +520,7 @@ def maybe_convert_percent_to_fraction(obj):
     return out
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Quantity:
     """
     Allows arbitrary units (quantities) to be imported from this module.
 
@@ -530,5 +530,12 @@ def __getattr__(name):
     is the same as
     from dascore.units import get_quantity
     m = get_quantity("m")
+
+    Any non-empty name either resolves to a quantity or raises
+    UndefinedUnitError, so the cast holds. The empty string is the one input
+    get_quantity maps to None, and attribute access is the right place to
+    reject it.
     """
-    return get_quantity(name)
+    if not name:
+        raise AttributeError(name)
+    return cast("Quantity", get_quantity(name))

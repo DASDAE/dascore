@@ -219,8 +219,10 @@ def _scan_payload_to_summary(
     payload: ScanPayload | Mapping[str, Any],
     *,
     source_path: str | Path | UPath | None = None,
-    source_format: str | None = None,
-    source_version: str | None = None,
+    # PatchSummary stores these as plain strings and its validator maps a
+    # missing value to "", so default to what it would normalize None to.
+    source_format: str = "",
+    source_version: str = "",
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert one structured FiberIO scan payload into a PatchSummary."""

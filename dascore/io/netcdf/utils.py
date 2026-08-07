@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import h5py
+from collections.abc import Mapping
+from typing import Any, Protocol
+
 import numpy as np
 
 import dascore as dc
@@ -32,7 +34,18 @@ def parse_cf_version(cf_version: str) -> tuple[int, int]:
     return major, minor
 
 
-def is_netcdf4_file(h5file: h5py.File) -> bool:
+class _HasAttrs(Protocol):
+    """Anything carrying HDF5-style attrs.
+
+    The two checks below only read `attrs`, and they are handed the managed
+    handle a FiberIO caster produces rather than an `h5py.File` proper.
+    """
+
+    @property
+    def attrs(self) -> Mapping[str, Any]: ...
+
+
+def is_netcdf4_file(h5file: _HasAttrs) -> bool:
     """Return True when an HDF5 file exposes strong NetCDF/CF markers."""
     try:
         if "_NCProperties" in h5file.attrs:
@@ -45,7 +58,7 @@ def is_netcdf4_file(h5file: h5py.File) -> bool:
         return False
 
 
-def get_cf_version(h5file: h5py.File) -> str | None:
+def get_cf_version(h5file: _HasAttrs) -> str | None:
     """Extract the CF convention version string from a NetCDF file."""
     conventions = h5file.attrs.get("Conventions", "")
     if isinstance(conventions, bytes):

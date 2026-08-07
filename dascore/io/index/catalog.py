@@ -474,8 +474,15 @@ class _RevisionCache:
         self.value, self.revision = None, -1
 
 
-# sentinel: _view keeps the current order/ids spec unless told otherwise
-_KEEP = object()
+class _Keep:
+    """Sentinel: _view keeps the current order/ids spec unless told otherwise.
+
+    A dedicated class rather than a bare object so that testing against it
+    narrows the parameter to the spec type it otherwise holds.
+    """
+
+
+_KEEP = _Keep()
 
 
 class PatchCatalog:
@@ -702,7 +709,13 @@ class PatchCatalog:
             state["resolver"] = _membership_resolver(resolver, keep, paths)
         return state
 
-    def _view(self, queries, residuals, order=_KEEP, ids=_KEEP) -> PatchCatalog:
+    def _view(
+        self,
+        queries,
+        residuals,
+        order: tuple | _Keep | None = _KEEP,
+        ids: tuple | _Keep | None = _KEEP,
+    ) -> PatchCatalog:
         out = PatchCatalog(
             backend=self.backend,
             resolver=self.resolver,
@@ -710,8 +723,8 @@ class PatchCatalog:
             queries=queries,
             residuals=residuals,
             revision=self._revision,
-            order=self._order if order is _KEEP else order,
-            ids=self._ids if ids is _KEEP else ids,
+            order=self._order if isinstance(order, _Keep) else order,
+            ids=self._ids if isinstance(ids, _Keep) else ids,
             default_order=self._default_order,
         )
         return out

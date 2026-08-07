@@ -41,9 +41,11 @@ class FrozenDict(ABCMap[K, V]):
 
     def new(self, **kwargs):
         """Copy the contents  and update with new values."""
+        # Passed as a mapping rather than splatted so keys that are not
+        # strings survive the round trip.
         contents = dict(self._dict)
         contents.update(kwargs)
-        return self.__class__(**contents)
+        return self.__class__(contents)
 
     def __iter__(self) -> Iterator[K]:
         return iter(self._dict)

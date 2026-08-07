@@ -7,7 +7,7 @@ import inspect
 import sys
 import warnings
 from collections import namedtuple
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
@@ -298,10 +298,14 @@ def patch_function(
       as dc at the top of the file where the patch function is defined so
       the forward refs can be resolved properly for type checking.
     """
+    # Handled before the wrapper is built so the rest of this function sees
+    # required_dims as the tuple of dimension names it is everywhere else.
+    if callable(required_dims):  # the decorator is used without parens
+        return patch_function()(required_dims)
 
     def _wrapper(func):
         if validate_call:
-            config = dict(arbitrary_types_allowed=True)
+            config = pydantic.ConfigDict(arbitrary_types_allowed=True)
             func = pydantic.validate_call(config=config)(func)
 
         @functools.wraps(func)
@@ -337,9 +341,6 @@ def patch_function(
         patch_func.__wrapped__ = func
 
         return patch_func
-
-    if callable(required_dims):  # the decorator is used without parens
-        return patch_function()(required_dims)
 
     return _wrapper
 
@@ -551,7 +552,12 @@ def get_start_stop_step(patch: PatchType, dim):
 
 
 def get_patch_names(
-    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool,
+    # Forwarded straight to scan_to_df, so anything it scans works here,
+    # including a plain list of patches. Spelled out rather than reusing
+    # io.core.ScanInput: importing that is circular, and hiding it behind
+    # TYPE_CHECKING leaves the annotation unresolvable at runtime, which
+    # breaks get_type_hints and the API doc renderer.
+    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool | Iterable[dc.Patch],
     prefix="DAS",
     attrs=("network", "station", "tag"),
     coords=("time",),

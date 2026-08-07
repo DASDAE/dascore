@@ -838,6 +838,15 @@ class TestGetPatchName:
         out = get_patch_names([])
         assert isinstance(out, pd.Series)
 
+    def test_annotations_resolve(self):
+        """
+        The docs renderer resolves annotations at runtime and falls back to
+        raw strings for the whole signature if any name is undefined.
+        """
+        from typing import get_type_hints
+
+        assert get_type_hints(get_patch_names)
+
     def test_name_column_exists(self, random_spool):
         """If the name or path field already exist this should be used."""
         df = random_spool.get_contents().assign(name=lambda x: np.arange(len(x)))

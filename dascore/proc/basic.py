@@ -12,7 +12,11 @@ from scipy.fft import next_fast_len
 from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    CoordManager,
+    CoordManagerInput,
+    get_coord_manager,
+)
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.utils.array import _apply_binary_ufunc
@@ -200,7 +204,7 @@ def bool_patch(self: PatchType):
 def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
-    coords: dict[str | Sequence[str], ArrayLike] | CoordManager | None = None,
+    coords: CoordManagerInput | CoordManager | None = None,
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
 ) -> PatchType:
