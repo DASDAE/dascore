@@ -260,7 +260,7 @@ class TestRoundTrips:
         """Ensure a patch with an attached datetime coord works."""
         path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
         dist = random_patch.get_coord("distance")
-        dt = dc.to_datetime64(np.zeros_like(dist))
+        dt = dc.to_datetime64(np.zeros_like(dist.values))
         dt[0] = dc.to_datetime64("2017-09-17")
         new = random_patch.update_coords(dt=("distance", dt))
         new.io.write(path, "dasdae")
@@ -271,7 +271,7 @@ class TestRoundTrips:
         """Ensure a patch with an attached datetime coord with nulls works."""
         path = tmp_path_factory.mktemp("roundtrip_datetime_coord") / "out.h5"
         dist = random_patch.get_coord("distance")
-        dt = dc.to_datetime64(np.zeros_like(dist))
+        dt = dc.to_datetime64(np.zeros_like(dist.values))
         dt[~dt.astype(bool)] = np.datetime64("nat")
         dt[0] = dc.to_datetime64("2017-09-17")
         dt[-4] = dc.to_datetime64("2020-01-03")
