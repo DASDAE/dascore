@@ -430,6 +430,7 @@ class TestInventory:
 
     def test_yaml_roundtrip(self, tmp_path):
         """Yaml roundtrip."""
+        pytest.importorskip("yaml")
         inventory = build_inventory()
         path = tmp_path / "inventory.yaml"
         inventory.to_yaml(path)
@@ -461,6 +462,7 @@ class TestInventory:
 
     def test_dc_namespace(self, tmp_path):
         """Dc namespace."""
+        pytest.importorskip("yaml")
         assert isinstance(dc.inventory(), inv.Inventory)
         path = tmp_path / "inv.yaml"
         build_inventory().to_yaml(path)
@@ -665,6 +667,7 @@ class TestResourcePool:
 
     def test_yaml_roundtrip_stays_flat(self, tmp_path):
         """Serialized form holds ids, not inline copies, and round-trips."""
+        pytest.importorskip("yaml")
         cable = inv.Cable(resource_id="cable-01", name="c")
         seg = inv.FiberSegment(optical_length=100.0, container=cable)
         inventory = self._inventory_with(seg)
@@ -749,6 +752,7 @@ class TestInternalReviewRegressions:
 
     def test_keyless_dict_resource_adopts_key(self):
         """A dict resource without resource_id adopts its pool key."""
+        pytest.importorskip("yaml")
         inventory = inv.Inventory(
             resources={"cab-1": {"type": "Cable", "name": "mycable"}}
         )
@@ -842,3 +846,144 @@ class TestCodexReviewRegressions:
             inv.Geometry(distance=(0.0, np.inf), coordinates=((0.0, 0.0), (1.0, 1.0)))
         with pytest.raises(ValidationError, match="finite"):
             inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))
+
+
+class TestCoverageCompleteness:
+    """Exercise remaining branches so the patch stays fully covered."""
+
+    def test_duplicate_coordinate_labels_raise(self):
+        """Duplicate coordinate labels raise."""
+        with pytest.raises(ValidationError, match="unique"):
+            inv.CoordinateReferenceSystem(coordinate_labels=("x", "x"))
+
+    def test_distance_map_length_mismatch_raises(self):
+        """Distance map length mismatch raises."""
+        with pytest.raises(ValidationError, match="same length"):
+            inv.DistanceMap(channel=(1.0, 2.0), distance=(5.0,))
+
+    def test_distance_map_empty_raises(self):
+        """Distance map empty raises."""
+        with pytest.raises(ValidationError, match="at least one"):
+            inv.DistanceMap(channel=(), distance=())
+
+    def test_distance_map_non_increasing_raises(self):
+        """Distance map non increasing raises."""
+        with pytest.raises(ValidationError, match="input values"):
+            inv.DistanceMap(channel=(2.0, 1.0), distance=(5.0, 6.0))
+        with pytest.raises(ValidationError, match="distance values"):
+            inv.DistanceMap(channel=(1.0, 2.0), distance=(6.0, 5.0))
+
+    def test_coordinates_at_without_geometry(self):
+        """Coordinates at without geometry."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=10.0),)
+        )
+        assert np.all(np.isnan(path.coordinates_at([5.0])))
+
+    def test_select_drops_out_of_range_geometry(self):
+        """Selection drops segments entirely outside the clip."""
+        seg = dict(coordinates=((0.0, 0.0), (1.0, 1.0)))
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            geometry=(
+                inv.Geometry(distance=(0.0, 20.0), **seg),
+                inv.Geometry(distance=(80.0, 100.0), **seg),
+            ),
+        )
+        piece = path.select(distance=(40.0, 60.0))
+        assert piece.geometry == ()
+
+    def test_add_rejects_non_path(self):
+        """Add rejects non path."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=10.0),)
+        )
+        with pytest.raises(TypeError):
+            _ = path + 5
+        with pytest.raises(TypeError):
+            _ = 5 + path
+
+    def test_sum_of_paths(self):
+        """Sum of paths."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=10.0),)
+        )
+        total = sum([path, path])
+        assert np.isclose(total.optical_length, 20.0)
+
+    def test_resolve_multiple_paths_raises(self):
+        """An unchecked inventory with concurrent paths fails resolve."""
+        array = inv.FiberArray(
+            code="L001",
+            acquisitions=(inv.Acquisition(code="RAW"),),
+            optical_paths=(
+                inv.OpticalPath(name="a", start_time="2020-01-01"),
+                inv.OpticalPath(name="b", start_time="2021-01-01"),
+            ),
+        )
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(InvalidInventoryError, match="2 optical paths"):
+            inventory.resolve("DAS.L001..RAW", time="2022-01-01")
+
+    def test_replace_network_and_station_and_path(self):
+        """Replace works at network, station, and path levels."""
+        station = inv.Station(code="S1")
+        path = inv.OpticalPath(name="p", start_time="2020-01-01")
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        net = inv.Network(code="DAS", fiber_arrays=(array,), stations=(station,))
+        inventory = inv.Inventory(networks=(net,))
+        got = inventory.replace(station, station.new(name="renamed"))
+        assert got.networks[0].stations[0].name == "renamed"
+        got = inventory.replace(path, path.new(name="renamed"))
+        assert got.networks[0].fiber_arrays[0].optical_paths[0].name == "renamed"
+        got = inventory.replace(net, net.new(name="renamed"))
+        assert got.networks[0].name == "renamed"
+
+    def test_replace_missing_resource_raises(self):
+        """Replace missing resource raises."""
+        inventory = build_inventory()
+        cable = inv.Cable(resource_id="ghost")
+        with pytest.raises(InvalidInventoryError, match="not found"):
+            inventory.replace(cable, cable.new(name="x"))
+
+    def test_from_yaml_non_mapping_raises(self):
+        """From yaml non mapping raises."""
+        pytest.importorskip("yaml")
+        with pytest.raises(InvalidInventoryError, match="mapping"):
+            inv.Inventory.from_yaml("- 1\n- 2\n")
+
+    def test_model_equality_foreign_types(self):
+        """Models compare False to unrelated types and True to equal dumps."""
+        acq = inv.Acquisition(code="RAW")
+        assert acq != 5
+        assert acq == acq.model_dump()
+
+    def test_equality_array_shape_mismatch(self):
+        """Nested arrays of different shapes compare unequal."""
+        a = dc.PatchAttrs(foo={"x": np.array([1.0, 2.0])})
+        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
+        assert a != b
+
+    def test_equality_sequence_length_mismatch(self):
+        """Nested sequences of different lengths compare unequal."""
+        a = inv.Network(code="DAS", fiber_arrays=(inv.FiberArray(code="A"),))
+        b = inv.Network(code="DAS")
+        assert a != b
+
+    def test_replace_fiber_array(self):
+        """Replace fiber array."""
+        inventory = build_inventory()
+        array = inventory.networks[0].fiber_arrays[0]
+        got = inventory.replace(array, array.new(name="renamed"))
+        assert got.networks[0].fiber_arrays[0].name == "renamed"
+
+    def test_values_equal_branches(self):
+        """Null-pattern and key mismatches compare unequal."""
+        from dascore.utils.models import _values_equal
+
+        assert not _values_equal(np.array([np.nan]), np.array([1.0]))
+        assert _values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
+        assert not _values_equal({"a": 1}, {"b": 1})
+        assert _values_equal((1.0, np.nan), (1.0, np.nan))

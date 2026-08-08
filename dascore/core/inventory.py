@@ -40,6 +40,7 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
+from dascore.utils.misc import optional_import
 from dascore.utils.models import (
     DateTime64,
     InventoryModel,
@@ -881,8 +882,6 @@ class OpticalPath(TimeRangedModel):
             if s_hi <= lo or s_lo >= hi:
                 continue
             new_lo, new_hi = max(s_lo, lo), min(s_hi, hi)
-            if new_hi <= new_lo:
-                continue
             dist = np.asarray(seg.distance, dtype=float)
             inside = (dist > new_lo) & (dist < new_hi)
             new_dist = np.concatenate([[new_lo], dist[inside], [new_hi]])
@@ -1534,7 +1533,7 @@ class Inventory(InventoryModel):
 
     def to_yaml(self, path=None) -> str:
         """Serialize this inventory to YAML, optionally writing to a path."""
-        import yaml
+        yaml = optional_import("yaml", required_for="YAML inventory serialization")
 
         data = self.model_dump(mode="json", exclude_none=True)
         out = yaml.safe_dump(data, sort_keys=False)
@@ -1556,7 +1555,7 @@ class Inventory(InventoryModel):
         """
         import os
 
-        import yaml
+        yaml = optional_import("yaml", required_for="YAML inventory serialization")
 
         text = source
         if isinstance(source, os.PathLike) or (
@@ -1588,7 +1587,7 @@ def inventory(source=None) -> Inventory:
     --------
     >>> import dascore as dc
     >>> empty = dc.inventory()
-    >>> round_tripped = dc.inventory(empty.to_yaml())
+    >>> assert dc.inventory(empty) is empty
     """
     import os
 
