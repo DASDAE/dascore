@@ -264,7 +264,7 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-include = ["dascore", "tests"]
+include = ["dascore"]  # tests/ is burned down separately before it lands here.
 
 # No rule is ignored globally: invalid-method-override,
 # invalid-argument-type and invalid-return-type have each been burned down
@@ -277,34 +277,6 @@ include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/uti
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
-
-# Tests import the optional dependencies (xarray, obspy, numba, h5py.h5r)
-# that the pre-commit hook's environment lacks, and assert on unimportable
-# modules to prove a removal stuck.
-[[tool.ty.overrides]]
-include = ["tests/"]
-
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
-
-# PatchAttrs and PatchSummary are pydantic models with extra="allow", so
-# `attrs.time_min` resolves at runtime but not for a checker. Listed file
-# by file rather than across tests/ so the rule keeps catching genuinely
-# unnarrowed values elsewhere in the suite, and so that a blanket
-# __getattr__ does not have to trade away typo detection on the models
-# themselves.
-[[tool.ty.overrides]]
-include = [
-    "tests/test_core/test_attrs.py",
-    "tests/test_io/test_dasdae/test_dasdae.py",
-    "tests/test_io/test_dasvader/test_dasvader.py",
-    "tests/test_io/test_febus/test_febusg1.py",
-    "tests/test_io/test_prodml/test_prodml_write.py",
-    "tests/test_io/test_sr4731/test_sr4731.py",
-]
-
-[tool.ty.overrides.rules]
-unresolved-attribute = "ignore"
 
 [tool.typos.files]
 extend-exclude = ["docs/_static/logo.svg"]
