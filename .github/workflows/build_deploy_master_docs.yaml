@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+
 # Allow one concurrent deployment
 concurrency:
   group: "pages"

@@ -77,34 +77,14 @@ runs:
       run: |
         pip install -e ".${INSTALL_GROUP_STR}"
 
-    - name: export test data cache info
-      id: data-cache
-      shell: bash -el {0}
-      env:
-        INPUT_CACHE_NUMBER: ${{ inputs.cache-number }}
-        RUNNER_OS: ${{ runner.os }}
-      run: |
-        python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_OUTPUT"
-
-    - name: restore test data cache
+    # Normally just restores the cache primed by the calling workflow's setup
+    # job, but also self-heals (prime + save) on a miss, e.g. for single-job
+    # workflows or when a re-run can't see an evicted cache.
+    - name: prepare test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
-      id: restore-test-data
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      uses: ./.github/actions/prime-test-data-cache
       with:
-        path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
-        key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
-
-    - name: prime test data cache
-      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      shell: bash -el {0}
-      run: python .github/scripts/cache_test_data.py
-
-    - name: save test data cache
-      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-      with:
-        path: ${{ steps.data-cache.outputs.DATA_CACHE_PATH }}
-        key: ${{ steps.data-cache.outputs.DATA_CACHE_KEY }}
+        cache-number: ${{ inputs.cache-number }}
 
     # Print out the package info for current environment
     - name: print package info

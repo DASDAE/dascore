@@ -22,6 +22,9 @@ env:
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
 # Cancel previous runs when this one starts.
 concurrency:
@@ -31,6 +34,8 @@ concurrency:
 jobs:
   # Load Python version matrix from shared vars
   setup:
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
@@ -41,6 +46,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
+      # Make sure the shared cross-OS test-data cache exists before the matrix
+      # jobs start; see the same step in runtests.yml.
+      - uses: ./.github/actions/prime-test-data-cache
+        with:
+          cache-number: 1
+          lookup-only: "true"
 
   test_code_min_deps:
     needs: setup

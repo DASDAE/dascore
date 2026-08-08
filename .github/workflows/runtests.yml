@@ -21,6 +21,9 @@ permissions:
 env:
   # used to manually trigger cache reset. Just increment if needed.
   CACHE_NUMBER: 1
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
@@ -33,6 +36,8 @@ concurrency:
 jobs:
   # Load Python version matrix from shared vars
   setup:
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
@@ -43,6 +48,14 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
+      # Make sure the shared cross-OS test-data cache exists before the matrix
+      # jobs start, so at most one job builds it. On a simultaneous cold miss
+      # the other test workflow's setup job may benignly race-prime the same
+      # key; the losing save just logs a warning.
+      - uses: ./.github/actions/prime-test-data-cache
+        with:
+          cache-number: ${{ env.CACHE_NUMBER }}
+          lookup-only: "true"
 
   test_code:
     needs: setup

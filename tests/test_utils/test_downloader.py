@@ -5,14 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from dascore.constants import DATA_VERSION
-from dascore.utils.downloader import (
-    REGISTRY_PATH,
-    fetch,
-    fetcher,
-    get_registry_df,
-    get_test_data_cache_info,
-)
+from dascore.utils.downloader import fetch, get_registry_df
 
 
 @pytest.fixture()
@@ -30,6 +23,17 @@ class TestRegistryDF:
         assert len(registry_df)
         assert isinstance(registry_df, pd.DataFrame)
 
+    def test_urls_hosted_in_test_data_repo(self, registry_df):
+        """
+        All test-suite data files must be hosted in the DASDAE test_data repo;
+        CI primes its cache from a single checkout of it (see
+        .github/scripts/prime_test_data.py). Files hosted elsewhere would be
+        re-downloaded per job and bypass the shared cache.
+        """
+        pattern = r"(?i)^https?://github\.com/dasdae/test_data/raw/master/"
+        bad = registry_df[~registry_df["url"].str.match(pattern)]
+        assert bad.empty, f"URLs not hosted in DASDAE/test_data: {bad['name'].tolist()}"
+
 
 class TestFetch:
     """Tests for fetching filepaths of test files."""
@@ -43,24 +47,3 @@ class TestFetch:
         """Ensure an existing file just returns."""
         path = fetch(registry_df["name"].iloc[0])
         assert fetch(path) == path
-
-
-class TestTestDataCacheInfo:
-    """Tests for CI cache metadata derived from downloader state."""
-
-    def test_cache_info_matches_downloader_configuration(self):
-        """Ensure cache metadata stays aligned with downloader config."""
-        info = get_test_data_cache_info()
-
-        assert info.registry_path == REGISTRY_PATH
-        assert info.cache_path == fetcher.path.parent
-        assert info.data_version == DATA_VERSION
-        assert len(info.registry_hash) == 64
-
-    def test_cache_key_includes_expected_parts(self):
-        """Ensure the generated cache key matches the CI convention."""
-        info = get_test_data_cache_info()
-
-        out = info.get_key(runner_os="Linux", cache_number=7)
-
-        assert out == f"data-Linux-{DATA_VERSION}-{info.registry_hash}-7"
