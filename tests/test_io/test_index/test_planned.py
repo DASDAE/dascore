@@ -35,7 +35,8 @@ class TestHelpers:
         ts = pd.Timestamp("2020-01-01")
         assert _ns(ts) == _ns(ts.to_datetime64()) == ts.value
         td = pd.Timedelta(seconds=1)
-        assert (td_ns := _ns(td)) is not None
+        td_ns = _ns(td)
+        assert td_ns is not None
         assert td_ns == _ns(td.to_timedelta64()) == td.value
         assert _ns(None) is None
 

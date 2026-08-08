@@ -31,6 +31,7 @@ from dascore.utils.io import (
     TextReader,
     ensure_local_file,
     get_handle_from_resource,
+    xarray_to_patch,
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (

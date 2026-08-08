@@ -844,9 +844,7 @@ class TestStringArrayHelpers:
             msg = "non-string object arrays should not be string-converted"
             raise AssertionError(msg)
 
-        monkeypatch.setattr(
-            dasdae_utils, "convert_strings_to_bytes", _raise_if_called
-        )
+        monkeypatch.setattr(dasdae_utils, "convert_strings_to_bytes", _raise_if_called)
         with h5py.File(path, mode="w") as h5:
             group = h5.create_group("waveforms")
             with pytest.raises(TypeError, match=r"Object dtype|object arrays"):

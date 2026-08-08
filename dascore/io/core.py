@@ -16,10 +16,10 @@ from threading import RLock
 from typing import (
     Any,
     Literal,
-    TypeVar,
     NotRequired,
     Protocol,
     TypedDict,
+    TypeVar,
     cast,
     get_type_hints,
 )

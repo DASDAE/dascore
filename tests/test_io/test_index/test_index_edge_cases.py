@@ -278,7 +278,8 @@ class TestPureHelpers:
         from dascore.io.index.query import _UNSET, _range_bounds
 
         value = (5 * m, 10 * m)
-        assert (kind_probe := typed_value(5 * m)) is not None
+        kind_probe = typed_value(5 * m)
+        assert kind_probe is not None
         kinds = {kind_probe.kind}
         # Omitted: bounds pass through with no conversion attempted.
         _, lo, hi, _ = _range_bounds(value, kinds, _UNSET, "distance")
@@ -331,17 +332,20 @@ class TestCanonicalRange:
         """Bare numbers and quantities become SI magnitudes."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert (bare := _canonical_range((20, 60))) is not None
+        bare = _canonical_range((20, 60))
+        assert bare is not None
         assert bare.magnitudes == (20.0, 60.0)
         # 20 m .. 60 m -> SI metres
-        assert (quant := _canonical_range((20 * m, 60 * m))) is not None
+        quant = _canonical_range((20 * m, 60 * m))
+        assert quant is not None
         assert quant.magnitudes == (20.0, 60.0)
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert (half_open := _canonical_range((None, 60))) is not None
+        half_open = _canonical_range((None, 60))
+        assert half_open is not None
         assert half_open.magnitudes == (None, 60.0)
 
     @pytest.mark.parametrize(
@@ -1156,6 +1160,7 @@ class TestCompositeSourceIdentity:
         base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         records_a = summaries_to_records([one], base_uri="s3://bucket-a")
+
         # base_uri strip only applies when paths share the base; set directly
         def _rebase(record, base_uri: str):
             """Rebuild a record under a different base."""
