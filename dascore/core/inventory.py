@@ -1555,8 +1555,6 @@ class Inventory(InventoryModel):
         """
         import os
 
-        yaml = optional_import("yaml", required_for="YAML inventory serialization")
-
         text = source
         if isinstance(source, os.PathLike) or (
             isinstance(source, str) and "\n" not in source
@@ -1566,6 +1564,7 @@ class Inventory(InventoryModel):
                 raise InvalidInventoryError(msg)
             with open(source) as fh:
                 text = fh.read()
+        yaml = optional_import("yaml", required_for="YAML inventory serialization")
         data = yaml.safe_load(text)
         if not isinstance(data, dict):
             msg = f"Could not parse an inventory mapping from {source!r}."
