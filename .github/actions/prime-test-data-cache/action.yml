@@ -1,0 +1,74 @@
+name: "Prime Test Data Cache"
+description: >
+  Restore the shared cross-OS test-data cache, or build it from a checkout of
+  DASDAE/test_data on a miss. Requires dascore to be checked out at the
+  workspace root first. Jobs that run tests must also set the DFS_DATA_DIR
+  env var to .test_data_cache under the workspace so pooch reads the restored
+  files (composite actions can't set caller env vars without GITHUB_ENV,
+  which zizmor forbids).
+inputs:
+  lookup-only:
+    description: "If true, check cache existence (and prime on miss) without downloading it"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: compute test data cache key
+      id: cache-key
+      shell: bash
+      env:
+        REGISTRY_HASH: ${{ hashFiles('dascore/data_registry.txt') }}
+      run: |
+        if [ -z "$REGISTRY_HASH" ]; then
+          echo "dascore/data_registry.txt not found; checkout dascore first." >&2
+          exit 1
+        fi
+        # DATA_VERSION is part of the key because pooch reads files from a
+        # <DATA_VERSION> subdir of the cache; a version bump must invalidate.
+        data_version="$(sed -n 's/^DATA_VERSION[^=]*=[[:space:]]*"\([^"]*\)".*/\1/p' dascore/constants.py)"
+        if [ -z "$data_version" ]; then
+          echo "DATA_VERSION not found in dascore/constants.py." >&2
+          exit 1
+        fi
+        # Bump this number to manually reset the cache.
+        cache_number=1
+        echo "key=test-data-${data_version}-${REGISTRY_HASH}-${cache_number}" >> "$GITHUB_OUTPUT"
+
+    # The path/key literals must be identical in restore and save, and
+    # enableCrossOsArchive must be set on both, so one ubuntu-primed cache
+    # serves all operating systems.
+    - name: restore test data cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: .test_data_cache
+        key: ${{ steps.cache-key.outputs.key }}
+        enableCrossOsArchive: true
+        lookup-only: ${{ inputs.lookup-only }}
+
+    - name: checkout test data repo
+      if: "${{ steps.restore.outputs.cache-hit != 'true' }}"
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        repository: DASDAE/test_data
+        ref: master
+        path: .test_data_repo
+        persist-credentials: false
+
+    - name: prime test data cache
+      if: "${{ steps.restore.outputs.cache-hit != 'true' }}"
+      shell: bash
+      run: |
+        # Stdlib-only script; use whichever system interpreter this OS provides.
+        if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+        "$PY" .github/scripts/prime_test_data.py
+
+    - name: save test data cache
+      if: "${{ steps.restore.outputs.cache-hit != 'true' }}"
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: .test_data_cache
+        key: ${{ steps.cache-key.outputs.key }}
+        enableCrossOsArchive: true

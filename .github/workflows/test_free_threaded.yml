@@ -15,6 +15,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/test_free_threaded.yml'
       - '.github/scripts/**'
+      - '.github/actions/**/*.yml'
 
 # This job only reads the repository.
 permissions:
@@ -25,9 +26,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CACHE_NUMBER: 1
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
   # Keep the GIL off even if an extension module asks for it back, so a
   # dependency cannot quietly turn this job into an ordinary one.
   PYTHON_GIL: '0'
@@ -41,13 +44,13 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: '3.14t'
 
@@ -66,29 +69,8 @@ jobs:
           assert not sys._is_gil_enabled(), 'the GIL is enabled; this job proves nothing'
           "
 
-      - name: export test data cache env
-        env:
-          INPUT_CACHE_NUMBER: ${{ env.CACHE_NUMBER }}
-          RUNNER_OS: ${{ runner.os }}
-        run: python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
-
-      - name: restore test data cache
-        id: restore-test-data
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ env.DATA_CACHE_PATH }}
-          key: ${{ env.DATA_CACHE_KEY }}
-
-      - name: prime test data cache
-        if: steps.restore-test-data.outputs.cache-hit != 'true'
-        run: python .github/scripts/cache_test_data.py
-
-      - name: save test data cache
-        if: steps.restore-test-data.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.DATA_CACHE_PATH }}
-          key: ${{ env.DATA_CACHE_KEY }}
+      - name: prepare test data cache
+        uses: ./.github/actions/prime-test-data-cache
 
       - name: run test suite without the GIL
         run: python -m pytest tests -m "not network" -q --timeout=900
