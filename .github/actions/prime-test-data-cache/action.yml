@@ -2,10 +2,10 @@ name: "Prime Test Data Cache"
 description: >
   Restore the shared cross-OS test-data cache, or build it from a checkout of
   DASDAE/test_data on a miss. Requires dascore to be checked out at the
-  workspace root first. Jobs that run tests must also set
-  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache so pooch reads the
-  restored files (composite actions can't set caller env vars without
-  GITHUB_ENV, which zizmor forbids).
+  workspace root first. Jobs that run tests must also set the DFS_DATA_DIR
+  env var to .test_data_cache under the workspace so pooch reads the restored
+  files (composite actions can't set caller env vars without GITHUB_ENV,
+  which zizmor forbids).
 inputs:
   cache-number:
     description: "Cache number. Use != 1 to reset data cache"
