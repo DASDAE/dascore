@@ -384,11 +384,11 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 
 
 def get_filter_units(
-    arg1: Quantity | float,
-    arg2: Quantity | float,
+    arg1: Quantity | float | EllipsisType | None,
+    arg2: Quantity | float | EllipsisType | None,
     to_unit: unit_like,
     dim: str | None = None,
-) -> tuple[float, float]:
+) -> tuple[float | None, float | None]:
     """
     Get a tuple for applying filter based on dimension coordinates.
 

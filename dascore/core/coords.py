@@ -2841,7 +2841,8 @@ class CoordString(BaseCoord):
 
 def get_coord(
     *,
-    data: ArrayLike | np.ndarray | BaseCoord | None = None,
+    # An int names a length, producing a partial coord of that shape.
+    data: ArrayLike | np.ndarray | BaseCoord | int | None = None,
     values: ArrayLike | np.ndarray | None = None,
     start=None,
     min=None,

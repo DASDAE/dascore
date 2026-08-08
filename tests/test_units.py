@@ -373,7 +373,7 @@ class TestConvertUnits:
 
     def test_array_quantity(self):
         """Test that an array quantity works."""
-        array = np.arange(10) * get_quantity("m")
+        array = get_quantity("m") * np.arange(10)
         out = convert_units(array, to_units="ft")
         np.allclose(array.magnitude, out * 3.28084)
 
