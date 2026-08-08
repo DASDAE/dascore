@@ -29,7 +29,9 @@ from dascore.exceptions import (
     CoordMergeError,
     InvalidSpoolQueryError,
     ParameterError,
+    UnitError,
 )
+from dascore.units import DimensionalityError, Quantity, get_byte_count, is_data_size
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
@@ -317,6 +319,253 @@ def _coerce_length_overlap(value, overlap, start_dtype):
     return value, overlap
 
 
+def _validate_quantity(label: str, quant, name: str) -> None:
+    """Reject quantity chunk lengths that cannot describe a length."""
+    if not isinstance(quant, Quantity):
+        return
+    magnitude = np.asarray(quant.magnitude)
+    if magnitude.ndim:
+        msg = (
+            f"The {label} for {name!r} must be a single quantity, got an "
+            f"array of {magnitude.size}."
+        )
+        raise ParameterError(msg)
+    if not np.isfinite(magnitude):
+        msg = f"The {label} for {name!r} must be finite, got {quant}."
+        raise ParameterError(msg)
+
+
+def _needs_partition_resolution(value, overlap) -> bool:
+    """
+    True when a chunk length or overlap can only be resolved per partition.
+
+    Quantities need the partition's units, sampling interval, and (for
+    data sizes) its element dtype, none of which are known before the
+    partitions exist.
+    """
+    return isinstance(value, Quantity) or isinstance(overlap, Quantity)
+
+
+def _combined_dtype(dtypes: pd.Series) -> np.dtype | None:
+    """
+    Return the dtype an assembled merge of these members would produce.
+
+    Assembly upcasts a mixed-dtype merge with `np.result_type`, so the
+    size estimate must use the same rule. Returns None when the relation
+    carries no usable dtype; planning never fails on bad metadata here,
+    it fails later with an explanatory error.
+    """
+    values = {str(x) for x in dtypes.dropna().unique() if str(x)}
+    if not values:
+        return None
+    try:
+        return np.result_type(*(np.dtype(x) for x in sorted(values)))
+    except TypeError:
+        return None
+
+
+def _slab_samples(sub: pd.DataFrame, name: str) -> int | None:
+    """
+    Samples in one index-slab along `name`.
+
+    This is the product of the *other* dimensions' sample counts, i.e.
+    how many elements one step along `name` costs. The widest member of
+    the partition wins, so the byte estimate bounds every member rather
+    than just the first. Returns None when any count is underivable.
+    """
+    if "dims" in sub.columns:
+        dims = str(sub["dims"].iloc[0]).split(",")
+    else:  # bare frames (no dims column) fall back to complete triples
+        candidates = (x[: -len("_min")] for x in sub.columns if x.endswith("_min"))
+        dims = [
+            x for x in candidates if {f"{x}_max", f"{x}_step"}.issubset(sub.columns)
+        ]
+    total = pd.Series(1.0, index=sub.index)
+    for dim in dims:
+        if not dim or dim == name:
+            continue
+        cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
+        if not set(cols).issubset(sub.columns):
+            return None
+        mins, maxs, steps = (sub[c] for c in cols)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ratio = to_float((maxs - mins).values) / np.abs(to_float(steps.values))
+        counts = np.round(ratio) + 1
+        if not np.all(np.isfinite(counts)):
+            return None
+        total = total * counts
+    return int(total.max())
+
+
+def _size_to_length(size_quant, sub, name, size_step):
+    """
+    Convert a data size into a chunk length along `name`.
+
+    The sample count is floored so an output's data never exceeds the request,
+    and clamped to one sample when a single slab is already larger than
+    the target (reported back through the returned diagnostics).
+    """
+    dtype = _combined_dtype(sub["_dtype"]) if "_dtype" in sub.columns else None
+    if dtype is None:
+        msg = (
+            f"Cannot chunk by data size along {name!r}: the patch relation "
+            "carries no dtype information. Hand-built dataframes and spools "
+            "indexed by an older DASCore lack it; delete and rebuild the "
+            "index, or pass an explicit length instead of a size."
+        )
+        raise ChunkError(msg)
+    slab = _slab_samples(sub, name)
+    if slab is None:
+        msg = (
+            f"Cannot chunk by data size along {name!r}: the sample count of "
+            "another dimension cannot be determined from its envelope "
+            "(missing or non-uniform sampling)."
+        )
+        raise ChunkError(msg)
+    step_float = np.abs(to_float(size_step))
+    if not np.isfinite(step_float) or step_float == 0:
+        msg = (
+            f"Cannot chunk by data size along {name!r}: the sampling "
+            "interval is unknown."
+        )
+        raise ChunkError(msg)
+    bytes_per_sample = dtype.itemsize * slab
+    requested = get_byte_count(size_quant)
+    samples = int(requested // bytes_per_sample)
+    clamped = samples < 1
+    samples = max(samples, 1)
+    # An output holds the sum of its members' sample counts, which only
+    # equals span/step + 1 when the partition sits on a single grid.
+    # Members separated by less than one sample pack more samples into
+    # the same span (each contributes its own trailing sample), so the
+    # length is divided by how much denser than the grid the partition
+    # actually is. Exactly 1.0 for gridded partitions.
+    packing = _packing_factor(sub, name, step_float)
+    span_samples = max(int(samples // packing), 1)
+    diagnostics = {
+        "dtype": str(dtype),
+        "itemsize": int(dtype.itemsize),
+        "slab_samples": int(slab),
+        "bytes_per_sample": int(bytes_per_sample),
+        "n_samples": samples,
+        "packing": float(packing),
+        "clamped": clamped,
+    }
+    return span_samples * size_step, diagnostics
+
+
+def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
+    """
+    How densely a partition's members pack samples, relative to its grid.
+
+    1.0 when members tile the grid exactly. Greater when consecutive
+    members are separated by less than one sample, which happens with
+    near-contiguous files whose boundaries do not land on the grid.
+    Overlapping members are excluded: `_remove_overlaps` deduplicates
+    them at member-build time, so they do not add samples.
+    """
+    # the caller already read these columns for this partition
+    start, stop, step = get_interval_columns(sub, name)
+    starts = to_float(start.values)
+    order = np.argsort(starts, kind="stable")
+    # relative to the first start: absolute datetimes are ~1e9 seconds,
+    # where a float64 difference loses the precision a sub-sample gap
+    # lives in
+    starts = starts[order] - starts[order][0]
+    spans = to_float((stop - start).values)[order]
+    steps = np.abs(to_float(step.values))[order]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        counts = np.round(spans / steps) + 1
+        # distance to the next member's start; the last member owns its
+        # own span plus the one step its trailing sample occupies
+        deltas = np.diff(starts, append=starts[-1] + spans[-1] + steps[-1])
+        # an overlap is deduplicated, so it cannot exceed grid density
+        deltas = np.maximum(deltas, spans)
+        density = counts / deltas
+    density = density[np.isfinite(density) & (density > 0)]
+    # a partition whose steps are all unusable is rejected before this,
+    # so at least one member always yields a density
+    assert len(density)
+    packing = float(density.max() * step_float)
+    # residual float noise must not cost a sample on an exactly gridded
+    # partition, whose packing is 1.0 by construction
+    return 1.0 if packing < 1 + 1e-9 else packing
+
+
+def _quantity_to_dim_value(quant, sub, name, start_dtype):
+    """Convert a (non-size) quantity into the chunked dimension's units."""
+    if is_datetime64(start_dtype) or is_timedelta64(start_dtype):
+        try:
+            seconds = quant.to("s").magnitude
+        except DimensionalityError:
+            msg = (
+                f"Cannot chunk {name!r} by {quant}: the coordinate is "
+                "time-like, so the value must have units of time."
+            )
+            raise UnitError(msg) from None
+        return to_timedelta64(seconds)
+    units_col = f"_{name}_units"
+    if units_col in sub.columns:
+        units = sub[units_col].iloc[0]
+        if units is None or pd.isnull(units) or units == "":
+            msg = (
+                f"Cannot chunk {name!r} by {quant}: the coordinate has no "
+                "units, so a unit-bearing length is ambiguous."
+            )
+            raise UnitError(msg)
+        try:
+            return quant.to(units).magnitude
+        except DimensionalityError:
+            msg = (
+                f"Cannot chunk {name!r} by {quant}: incompatible with the "
+                f"coordinate's units of {units}."
+            )
+            raise UnitError(msg) from None
+    # bare frames carry no units column; envelopes are canonical SI.
+    return quant.to_base_units().magnitude
+
+
+def _resolve_partition_length(value, overlap, sub, name, size_step, start_dtype):
+    """
+    Resolve one partition's chunk length and overlap.
+
+    Returns (length, overlap, diagnostics); diagnostics is None unless a
+    data size was resolved.
+    """
+    diagnostics = None
+
+    def _resolve(val, is_overlap):
+        nonlocal diagnostics
+        if not isinstance(val, Quantity):
+            return val
+        if is_data_size(val):
+            # a negative overlap opens a gap; floor the magnitude so the
+            # gap widens monotonically rather than flipping direction
+            sign = -1 if val.magnitude < 0 else 1
+            length, diag = _size_to_length(abs(val), sub, name, size_step)
+            if not is_overlap:
+                diagnostics = diag
+            return sign * length
+        if val.dimensionless:
+            msg = (
+                f"Cannot chunk {name!r} by {val}: a dimensionless quantity "
+                "has no meaning as a length. Use a data size (eg '25 MB') "
+                "or the coordinate's units."
+            )
+            raise UnitError(msg)
+        return _quantity_to_dim_value(val, sub, name, start_dtype)
+
+    value_out = _resolve(value, False)
+    overlap_out = _resolve(overlap, True)
+    # a size-derived length is already in the dimension's own units; a
+    # plain number against a time-like dim still needs the usual coercion
+    if not isinstance(value, Quantity) or not is_data_size(value):
+        value_out, _ = _coerce_length_overlap(value_out, None, start_dtype)
+    if not isinstance(overlap, Quantity) or not is_data_size(overlap):
+        _, overlap_out = _coerce_length_overlap(None, overlap_out, start_dtype)
+    return value_out, overlap_out, diagnostics
+
+
 def _coord_owner(col: str, coord_names: set[str]) -> str | None:
     """
     Return the coordinate owning an envelope column, if any.
@@ -377,6 +626,28 @@ def _police_columns(sub: pd.DataFrame, name, conflict) -> dict:
         if col in sub.columns:
             carried[col] = sub[col].iloc[0]
     return carried
+
+
+def _output_dtypes(sub: pd.DataFrame, members: pd.DataFrame) -> pd.Series | None:
+    """
+    The element dtype each output assembles to, indexed by output_id.
+
+    Carried privately (see SPOOL_PRIVATE_RENAMES) because a size-based
+    chunk needs it. It is resolved per *output* rather than per
+    partition: a partition may legitimately mix dtypes, but an output
+    drawing only from its float32 members really is float32, and
+    claiming the partition-wide upcast would both over-size a later
+    chunk and make the plan row disagree with the patch it assembles
+    (which spool equality compares).
+    """
+    if "_dtype" not in sub.columns or members.empty:
+        return None
+    by_patch = sub.drop_duplicates("_patch_id").set_index("_patch_id")["_dtype"]
+    grouped = members.groupby("output_id")["_patch_id"]
+    dtypes = grouped.apply(lambda pids: _combined_dtype(by_patch.reindex(pids)))
+    # "" is the same not-known sentinel ingest writes; never leave NaN,
+    # which would reach the derived catalog as the string "nan".
+    return dtypes.map(lambda x: "" if x is None else str(x))
 
 
 def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFrame:
@@ -478,6 +749,11 @@ def build_chunk_plan(
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
     value = None if value is Ellipsis else value
+    # Police quantities before merge_mode is decided: a NaN magnitude is
+    # null, so a nan-valued size would silently merge the whole spool
+    # when the user asked for a size *cap*.
+    for label, quant in (("chunk value", value), ("overlap", overlap)):
+        _validate_quantity(label, quant, name)
     merge_mode = pd.isnull(value)
     if merge_mode and (keep_partial or overlap):
         msg = (
@@ -560,7 +836,10 @@ def build_chunk_plan(
             "may be unevenly sampled, or have their sampling rate increased."
         )
         warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
-    value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)
+    per_partition = _needs_partition_resolution(value, overlap)
+    if not per_partition:
+        value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)
+    size_diagnostics: list[dict] = []
     out_frames, member_frames = [], []
     next_id = 0
     # Deterministic partition order (spec 8): by (partition min, smallest
@@ -574,6 +853,18 @@ def build_chunk_plan(
         start, stop, step = get_interval_columns(sub, name)
         part_step = get_middle_value(step.values)  # D7: one step everywhere
         g_start, g_stop = start.min(), stop.max()
+        if per_partition and not merge_mode:
+            # The bound itself is enforced by the packing factor, which is
+            # measured in units of this step and so cancels the choice
+            # (length works out to n_samples / max density either way).
+            # The smallest step is still the better unit: it makes the
+            # flooring granularity the finest the partition allows.
+            size_step = step.abs().min()
+            value_c, overlap_c, diag = _resolve_partition_length(
+                value, overlap, sub, name, size_step, df[min_name].dtype
+            )
+            if diag is not None:
+                size_diagnostics.append({"first_output_id": next_id, **diag})
         if merge_mode:
             start_stop = np.atleast_2d(np.asarray([g_start, g_stop]))
         else:
@@ -605,8 +896,24 @@ def build_chunk_plan(
         # runtime error; it is not surfaced at all.
         fed = set(members["output_id"]) if not members.empty else set()
         outputs = outputs[outputs["output_id"].isin(fed)]
+        if (dtypes := _output_dtypes(sub_sorted, members)) is not None:
+            outputs["_dtype"] = outputs["output_id"].map(dtypes).fillna("")
         out_frames.append(outputs)
         member_frames.append(members)
+    if size_diagnostics:
+        params["size"] = {
+            "requested_bytes": get_byte_count(value),
+            "partitions": tuple(size_diagnostics),
+        }
+        # warn once per call, not once per partition
+        if clamped := sum(x["clamped"] for x in size_diagnostics):
+            msg = (
+                f"A single sample along {name!r} is larger than the requested "
+                f"size of {value} in {clamped} partition(s), so those patches "
+                "contain one sample each and exceed the request. Chunk another "
+                "dimension first to make them smaller."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     if not out_frames or all(x.empty for x in out_frames):
         msg = "Could not chunk. No segments with sufficient length found."
         raise ChunkError(msg)

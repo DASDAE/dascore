@@ -31,7 +31,7 @@ from dascore.io.index.ingest import (
     hive_path_attrs,
     summaries_to_records,
 )
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
+from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (
     coerce_to_local_path,
@@ -461,7 +461,7 @@ class DBDirectoryIndexer:
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
         df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
-        return df.rename(columns={"patch_id": "_patch_id"})
+        return df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
 
     __call__ = get_contents
 

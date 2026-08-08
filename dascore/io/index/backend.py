@@ -483,6 +483,7 @@ class SQLIndexBackend(abc.ABC):
                             patch.n_dims,
                             patch.dims,
                             patch.shape,
+                            patch.dtype,
                             patch.sample_count_total,
                             patch.time_min,
                             patch.time_max,
