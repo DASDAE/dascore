@@ -49,3 +49,4 @@ ofl100_2.sor d8787d6171e2a2b3c6443c28b724440274694d525da617202c6b7a7bb2e13a8c ht
 ofl100_3.sor d9167fffc91565eaa48b65fd55e5f0600b7a96ebac549f1b2344ffb7bacf2336 https://github.com/dasdae/test_data/raw/master/otdr/ofl100_3.sor
 sintela_protobuf_1.pb cafa038c033cb5e4cf4aa90bab203eb1e10dc05a6052c0576dc80d6a5b3b42dc https://github.com/dasdae/test_data/raw/master/das/sintela_protobuf_1.pb
 silixa_h5_ingv_1.h5 738a359fb0f7848fc352f6d2879967dd15bd5c3f04b4c3e12c553825b9df861d https://github.com/dasdae/test_data/raw/master/das/silixa_h5_ingv_1.h5
+ai4eps_1.h5 2dd3d8bd16a9d775b69601f3683dad807caa51953488f495def70388e031e731 https://github.com/dasdae/test_data/raw/master/das/ai4eps_1.h5

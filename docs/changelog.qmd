@@ -35,6 +35,7 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - With the PyTables dependency removed, `dascore.utils.hdf5` no longer provides `PyTablesReader`, `PyTablesWriter`, or their `HDF5Reader`/`HDF5Writer` aliases. Use `H5Reader`/`H5Writer` (h5py-based) instead.
 - Added `CoordSegmented` and `concat_coords(...)` for representing exact piecewise-monotonic coordinates with queryable sampling changes and gaps. `patch.split_gaps()` splits segmented dimensions into contiguous patches, and `dc.write(..., split=True)` can perform that split for multi-patch formats.
 - Added version 2 of the `Silixa_H5` fiber IO format for the Carina netCDF-shell variant (Silixa attrs on the file root, `Fiber` counts dataset placed on the fiber via `ChannelMap`), used e.g. by the INGV Mt Etna deployment in the PubDAS Global DAS Month dataset.
+- Added the `AI4EPS` fiber IO format for reading the AI4EPS earthquake DAS event files (e.g. the quakeflow_das dataset), including the event metadata (id, time, magnitude, hypocenter) as patch attributes.
 - Added `dc.scan_payloads(...)` for retrieving raw scan payloads with full coordinate managers and source provenance without loading data arrays.
 - `FiberIO.scan(...)` now standardizes `snap: bool = True`; `snap=False` requests exact stored coordinate values from formats that expose per-sample coordinate arrays.
 - `ScanPayload` now includes optional `source_path`, `source_format`, and `source_version` keys, which are populated by `dc.scan_payloads(...)` rather than format implementations.

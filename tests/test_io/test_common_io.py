@@ -24,6 +24,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import CoordError
 from dascore.io import BinaryReader
+from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
@@ -65,6 +66,7 @@ from tests.test_io._common_io_test_utils import (
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
