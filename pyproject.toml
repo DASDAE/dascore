@@ -266,11 +266,9 @@ line-ending = "lf"
 [tool.ty.src]
 include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
 
-# Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Count as of 2026-08-07: invalid-return-type 26.
-# invalid-method-override and invalid-argument-type reached zero and are on.
-[tool.ty.rules]
-invalid-return-type = "ignore"
+# No rule is ignored any more: invalid-method-override,
+# invalid-argument-type and invalid-return-type have each been burned down
+# to zero and left on. Widening [tool.ty.src] to tests/ is the next step.
 
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.

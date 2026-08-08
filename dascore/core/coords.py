@@ -512,6 +512,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __getitem__(self, item: slice | np.ndarray) -> Self: ...
 
     @abc.abstractmethod
+    # Left unannotated on purpose. An int index yields a bare value, so the
+    # honest return contains Any, and Any absorbs everything -- annotating it
+    # would not let the checker verify the overloads above, only look as if
+    # it did.
     def __getitem__(self, item):
         """Index the coord; slices return a new coord, int indices a value."""
 
