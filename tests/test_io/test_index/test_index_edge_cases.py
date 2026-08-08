@@ -327,7 +327,7 @@ class TestCanonicalRange:
 
     def test_bare_and_quantity_bounds(self):
         """Bare numbers and quantities become SI magnitudes."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.utils.misc import _canonical_range
 
         assert _canonical_range((20, 60)).magnitudes == (20.0, 60.0)
         # 20 m .. 60 m -> SI metres
@@ -335,7 +335,7 @@ class TestCanonicalRange:
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.utils.misc import _canonical_range
 
         assert _canonical_range((None, 60)).magnitudes == (None, 60.0)
 
@@ -351,7 +351,7 @@ class TestCanonicalRange:
     )
     def test_non_numeric_ranges_return_none(self, value):
         """Anything that is not a bounded numeric range yields None."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.utils.misc import _canonical_range
 
         assert _canonical_range(value) is None
 
