@@ -145,6 +145,7 @@ class TestUnitAndFactor:
     def test_quantx_units(self):
         """Tests for the quantx unit str."""
         mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
+        assert ustr is not None
         # sometimes it is "rad * π" other times "π * rad", so just use set.
         assert set(ustr) == set("rad * π")
         assert np.isclose(mag, (2 / (2**16)))
@@ -386,7 +387,7 @@ class TestQuantSequenceToQuantArray:
         meter = get_quantity("m")
         sequence = [1 * meter, 2 * meter, 3 * meter]
         result = quant_sequence_to_quant_array(sequence)
-        expected = np.array([1, 2, 3]) * meter
+        expected = meter * np.array([1, 2, 3])
         np.testing.assert_array_equal(result.magnitude, expected.magnitude)
         assert result.units == expected.units
 
@@ -396,7 +397,7 @@ class TestQuantSequenceToQuantArray:
 
         sequence = [1 * m, 100 * cm, 0.001 * km]
         result = quant_sequence_to_quant_array(sequence)
-        expected = np.array([1, 1, 1]) * m
+        expected = m * np.array([1, 1, 1])
         assert np.allclose(result.magnitude, expected.magnitude)
         assert result.units == expected.units
 

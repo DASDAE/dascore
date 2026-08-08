@@ -458,7 +458,9 @@ def get_filter_units(
     return out1, out2
 
 
-def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+def quant_sequence_to_quant_array(
+    sequence: Sequence[Quantity] | np.ndarray,
+) -> Quantity:
     """
     Convert a sequence of Quantities (eg list) to a Quantity array.
 
