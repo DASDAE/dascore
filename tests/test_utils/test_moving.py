@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -316,7 +318,8 @@ class TestMovingWindow:
         """Non-default scipy boundary options should not be ignored."""
         pytest.importorskip("bottleneck")
         data = np.array([1.0, 5.0, 2.0, 4.0, 3.0])
-        kwargs = {"mode": "constant", "cval": -10.0}
+        # Heterogeneous values, so the inferred type is too wide to splat.
+        kwargs: dict[str, Any] = {"mode": "constant", "cval": -10.0}
         result_scipy = move_median(data, 3, engine="scipy", **kwargs)
         result_bn = move_median(data, 3, engine="bottleneck", **kwargs)
         np.testing.assert_array_equal(result_bn, result_scipy)
@@ -329,7 +332,8 @@ class TestMovingWindow:
         """Non-median operations should also honor requested boundary options."""
         pytest.importorskip("bottleneck")
         data = np.array([1.0, 5.0, 2.0, 4.0, 3.0])
-        kwargs = {"mode": "constant", "cval": -10.0}
+        # Heterogeneous values, so the inferred type is too wide to splat.
+        kwargs: dict[str, Any] = {"mode": "constant", "cval": -10.0}
         result_scipy = move_mean(data, 3, engine="scipy", **kwargs)
         result_bn = move_mean(data, 3, engine="bottleneck", **kwargs)
         np.testing.assert_array_equal(result_bn, result_scipy)

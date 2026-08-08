@@ -301,9 +301,24 @@ def _unit_to_str(unit: Unit) -> str:
 unit_like = str | bytes | Quantity | PlainUnit | None
 
 
+@overload
+def get_quantity_str(quant_value: None) -> None: ...
+
+
+@overload
+def get_quantity_str(quant_value: str | bytes | Quantity | PlainUnit) -> str: ...
+
+
+@overload
+def get_quantity_str(quant_value: unit_like) -> str | None: ...
+
+
 def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
+
+    Only a null input yields None, so naming a unit is typed as producing
+    a string.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
