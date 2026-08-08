@@ -14,6 +14,9 @@ on:
       - '**.py'
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'
+      # Registry edits change the test-data cache key; run the suite so the
+      # prime script validates new entries before merge.
+      - 'dascore/data_registry.txt'
 
 permissions:
   contents: read

@@ -27,7 +27,7 @@ runs:
         fi
         # DATA_VERSION is part of the key because pooch reads files from a
         # <DATA_VERSION> subdir of the cache; a version bump must invalidate.
-        data_version="$(sed -n 's/^DATA_VERSION *= *"\([^"]*\)".*/\1/p' dascore/constants.py)"
+        data_version="$(sed -n 's/^DATA_VERSION[^=]*=[[:space:]]*"\([^"]*\)".*/\1/p' dascore/constants.py)"
         if [ -z "$data_version" ]; then
           echo "DATA_VERSION not found in dascore/constants.py." >&2
           exit 1

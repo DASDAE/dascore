@@ -3,9 +3,9 @@
 Copies every file listed in dascore's data registry from a local checkout of
 https://github.com/DASDAE/test_data into the layout pooch expects
 (.test_data_cache/<DATA_VERSION>/<name>), verifying each sha256 against the
-registry. Registry entries hosted elsewhere are skipped with a warning (old
-release tags may still contain them; a unit test forbids new ones) — pooch
-just lazy-fetches those at test time.
+registry. Registry entries hosted elsewhere are allowed but skipped with a
+warning — they aren't cached, so the test suite shouldn't depend on them;
+pooch lazy-fetches them on demand.
 
 Uses only the standard library so it can run on the runners' system python.
 """

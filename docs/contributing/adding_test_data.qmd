@@ -45,7 +45,7 @@ If, in the test code, the example patch or spool is used only once, just call th
 
 Of course, not all data can easily be generated in python. For example, testing [support for new file formats](./new_format.qmd) typically requires a test file.
 
-All test-suite data files must be hosted in [dasdae's data repo](https://github.com/DASDAE/test_data); the registry only accepts files from that repo (enforced by a unit test). Simply clone the repo, add your file, and push back to master or open a PR on a separate branch and someone will merge it. Files for other purposes (e.g. documentation examples) may be hosted elsewhere later, but they don't go in the data registry.
+All test-suite data files must be hosted in [dasdae's data repo](https://github.com/DASDAE/test_data). Simply clone the repo, add your file, and push back to master or open a PR on a separate branch and someone will merge it. Files for other purposes (e.g. documentation examples) may be hosted elsewhere and still be listed in the data registry, but CI won't cache them, so the test suite shouldn't depend on them (add them to `SKIP_DATA_FILES` in `tests/test_io/test_common_io.py`).
 
 Next, add your file to dascore's data registry (dascore/data_registry.txt).
 You will have to get the sha256 hash of your test file, for that you can simply use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html), and you can create the proper download url using the other entries as examples.
