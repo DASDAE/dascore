@@ -13,7 +13,7 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Sequence, Sized
+from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
 from functools import cache
 from operator import gt, lt
@@ -191,7 +191,9 @@ class CoordSummary(DascoreBaseModel):
     coordinates.
     """
 
-    dtype: str
+    # Defaulted because the before-validator below derives it from min
+    # whenever it is absent, so requiring it misdescribes the constructor.
+    dtype: str = ""
     min: min_max_type
     max: min_max_type
     step: step_type | None = None
@@ -209,7 +211,11 @@ class CoordSummary(DascoreBaseModel):
     @classmethod
     def get_correct_dtype_cast_values(cls, data: Any) -> Any:
         """Ensure the correct dtype is provided and value conform to it."""
-        if isinstance(data, dict):
+        # Any mapping, not just a dict: dtype has a default now, so a mapping
+        # this skipped would quietly produce an empty one rather than being
+        # derived from min. Copied because the input need not be mutable.
+        if isinstance(data, Mapping):
+            data = dict(data)
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
             data["dtype"] = str(dtype).split("[")[0]
@@ -217,6 +223,19 @@ class CoordSummary(DascoreBaseModel):
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
         return data
+
+    @model_validator(mode="after")
+    def _derive_dtype_if_unset(self) -> Self:
+        """Fill in a dtype the before-validator never saw.
+
+        That validator only fires for mapping input, so attribute-based
+        validation (``from_attributes=True``) would otherwise keep the
+        empty default, which the indexer treats as an unsupported coord.
+        """
+        if not self.dtype:
+            dtype = _get_dtype(self.min, None)
+            object.__setattr__(self, "dtype", str(dtype).split("[")[0])
+        return self
 
     def to_coord(self) -> CoordRange:
         """Convert to coord range, if possible."""

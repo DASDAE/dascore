@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -52,7 +53,7 @@ def _clear_units_if_bool_dtype(patch):
     return patch
 
 
-def _is_text_coercible_array(data: ArrayLike) -> bool:
+def _is_text_coercible_array(data: Any) -> bool:
     """Return True when an array can be normalized to text values.
 
     Arrays must expose ``dtype``; non-array inputs return ``False``. Unicode
