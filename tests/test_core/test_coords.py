@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from functools import partial
 from io import BytesIO
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -467,6 +468,15 @@ class TestCoordSummary:
                 return len(self._data)
 
         summary = CoordSummary.model_validate(_Mapping({"min": 1.0, "max": 2.0}))
+        assert summary.dtype == "float64"
+
+    def test_dtype_derived_from_attributes(self):
+        """Attribute-based validation must not keep the empty default."""
+        # The before-validator only sees mappings, so this path relies on
+        # the after-validator; an empty dtype makes the indexer skip the
+        # coordinate entirely.
+        source = SimpleNamespace(min=1.0, max=2.0)
+        summary = CoordSummary.model_validate(source, from_attributes=True)
         assert summary.dtype == "float64"
 
     def test_json_dump(self):

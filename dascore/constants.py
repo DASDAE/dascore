@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from pathlib import Path
 from types import EllipsisType, MappingProxyType
@@ -23,12 +23,14 @@ SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 class ExecutorType(Protocol):
     """Protocol for Executors that DASCore can use."""
 
-    # Spelled to match concurrent.futures: the callable is positional-only
-    # and the iterables are varargs. Declaring a named `iterables` or a
-    # **kwargs catch-all excluded ThreadPoolExecutor and ProcessPoolExecutor,
-    # which are the executors this is meant to accept -- they take neither a
-    # keyword `iterables` nor arbitrary keywords.
-    def map(self, fn, /, *iterables):
+    # Two positional-only parameters, which is exactly what DASCore calls
+    # this with. A named `iterables` plus a **kwargs catch-all excluded
+    # ThreadPoolExecutor and ProcessPoolExecutor, which provide neither;
+    # spelling the second parameter as *iterables instead would demand
+    # arbitrarily many iterables and so exclude single-iterable clients.
+    # The annotations are what stop a map() of the wrong shape (say one
+    # taking an int) from satisfying this and failing at runtime.
+    def map(self, fn: Callable, iterable: Iterable, /) -> Iterable:
         """Map function for applying concurrency of some flavor."""
 
 

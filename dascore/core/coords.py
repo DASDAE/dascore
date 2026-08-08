@@ -224,6 +224,19 @@ class CoordSummary(DascoreBaseModel):
                 data[name] = ensure_consistent_dtype(val, name, dtype)
         return data
 
+    @model_validator(mode="after")
+    def _derive_dtype_if_unset(self) -> Self:
+        """Fill in a dtype the before-validator never saw.
+
+        That validator only fires for mapping input, so attribute-based
+        validation (``from_attributes=True``) would otherwise keep the
+        empty default, which the indexer treats as an unsupported coord.
+        """
+        if not self.dtype:
+            dtype = _get_dtype(self.min, None)
+            object.__setattr__(self, "dtype", str(dtype).split("[")[0])
+        return self
+
     def to_coord(self) -> CoordRange:
         """Convert to coord range, if possible."""
         if not self.is_range_like:
