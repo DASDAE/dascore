@@ -15,6 +15,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/test_free_threaded.yml'
       - '.github/scripts/**'
+      - '.github/actions/**/*.yml'
 
 # This job only reads the repository.
 permissions:

@@ -20,6 +20,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/test_wasm.yml'
       - '.github/actions/**/*.yml'
+      - '.github/scripts/**'
 
 concurrency:
   group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
