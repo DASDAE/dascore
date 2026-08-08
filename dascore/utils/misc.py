@@ -542,7 +542,7 @@ def unbyte(byte_or_str: bytes) -> str: ...
 def unbyte(byte_or_str: _T) -> _T: ...
 
 
-def unbyte(byte_or_str):
+def unbyte(byte_or_str) -> str | _T:
     """
     Decode a bytes value, passing anything else through unchanged.
 

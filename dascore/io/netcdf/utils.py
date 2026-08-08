@@ -12,7 +12,7 @@ import dascore as dc
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
 
-def get_xarray_data_var_name(dataset) -> str:
+def get_xarray_data_var_name(dataset) -> str | None:
     """Return the main xarray data variable name."""
     if "data" in dataset.data_vars:
         return "data"

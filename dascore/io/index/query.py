@@ -186,8 +186,12 @@ def _compatible_coord_units(
     for other in query_units - {first}:
         convert_units(1.0, to_units=first, from_units=other)
     stored = {_normalize_unit(x) for x in rows.get("units", ())}
-    compatible = set()
-    for unit in stored - {None}:
+    compatible: set[str] = set()
+    for unit in stored:
+        # Skipped rather than differenced out so the unitless rows, which
+        # are handled by the check below, stay out of the result set.
+        if unit is None:
+            continue
         try:
             convert_units(1.0, to_units=unit, from_units=first)
         except UnitError:

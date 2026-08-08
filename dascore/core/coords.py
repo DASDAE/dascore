@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -512,6 +512,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __getitem__(self, item: slice | np.ndarray) -> Self: ...
 
     @abc.abstractmethod
+    # Left unannotated on purpose. An int index yields a bare value, so the
+    # honest return contains Any, and Any absorbs everything -- annotating it
+    # would not let the checker verify the overloads above, only look as if
+    # it did.
     def __getitem__(self, item):
         """Index the coord; slices return a new coord, int indices a value."""
 
@@ -613,8 +617,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self._max()
 
     @property
-    def unit_str(self) -> str:
-        """Return a unit string."""
+    def unit_str(self) -> str | None:
+        """Return a unit string, or None for a coord carrying no units."""
         return get_quantity_str(self.units)
 
     @abc.abstractmethod
@@ -640,7 +644,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @property
     def size(self) -> int:
         """Return the size of the coordinate data."""
-        return np.prod(self.shape)
+        # math rather than np.prod: the shape is a tuple of ints, and numpy
+        # hands back an np.int64 (or a float 1.0 for the empty shape).
+        return math.prod(self.shape)
 
     @property
     def evenly_sampled(self) -> bool:
@@ -1033,9 +1039,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def get_next_index(
         self, value, samples=False, allow_out_of_bounds=False, relative=False
-    ) -> int:
+    ) -> np.ndarray | np.integer:
         """
         Get the index a value would have in a coordinate.
+
+        A sized value yields an array of indices; anything else yields a
+        single index, which is a numpy integer rather than a builtin int.
 
         This returns the "next" rather than the closest, index if the exact
         value is not contained by the index.
@@ -1328,7 +1337,9 @@ class CoordPartial(BaseCoord):
         if self.ndim != 1:
             msg = "change_length only works on 1D coords."
             raise CoordError(msg)
-        return get_coord(shape=(_validate_new_length(length),))
+        # A shape-only coord is always partial, so this really is Self; the
+        # factory's declared BaseCoord return is just wider than the case.
+        return cast("Self", get_coord(shape=(_validate_new_length(length),)))
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""

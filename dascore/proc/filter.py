@@ -189,7 +189,7 @@ def sobel_filter(
     dim, mode, cval = _check_sobel_args(dim, mode, cval)
     axis = patch.get_axis(dim)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
-    return dc.Patch(data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+    return patch.new(data=out)
 
 
 def _create_size_and_axes(patch, kwargs, samples):
@@ -340,7 +340,7 @@ def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
             raise FilterValueError(msg)
         b, a = iirnotch(w0, Q=q, fs=sr)
         data = filtfilt(b, a, data, axis=axis)
-    return dc.Patch(data=data, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+    return patch.new(data=data)
 
 
 @patch_function()

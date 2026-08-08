@@ -199,7 +199,7 @@ def velocity_to_strain_rate_edgeless(
         data_units=new_data_units,
     )
 
-    return dc.Patch(data=strain_rate, coords=new_coords, attrs=new_attrs)
+    return patch.new(data=strain_rate, coords=new_coords, attrs=new_attrs)
 
 
 @patch_function()

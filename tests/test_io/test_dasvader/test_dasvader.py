@@ -19,7 +19,12 @@ from dascore.exceptions import (
     DependencyError,
     UnknownFiberFormatError,
 )
-from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
+from dascore.io.dasvader.utils import (
+    EXPECTED,
+    _dereference,
+    _is_dasvader_jld2,
+    _julia_ms_to_datetime64,
+)
 from dascore.utils.downloader import fetch
 
 
@@ -324,3 +329,16 @@ class TestDASVader:
         match = r"legacy\.jld2.*'htime'.*h5py<3\.16"
         with pytest.raises(DASVaderCompatibilityError, match=match):
             _dereference(BrokenResource(), Reference(), "htime")
+
+    def test_missing_data_name_returns_false(self):
+        """A file with no recognized data name is rejected with a real bool."""
+
+        class _Resource:
+            """Minimal resource exposing only the non-data field names."""
+
+            def get(self, name):
+                return np.zeros(1, dtype=[(x, "<f8") for x in EXPECTED])
+
+        # `is False` rather than a truthiness check: the empty intersection
+        # used to be returned directly, so the answer was the empty set.
+        assert _is_dasvader_jld2(_Resource()) is False
