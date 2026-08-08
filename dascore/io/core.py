@@ -15,16 +15,19 @@ from pathlib import Path
 from threading import RLock
 from typing import (
     Any,
+    ClassVar,
     Literal,
     NotRequired,
     Protocol,
     TypedDict,
     cast,
+    get_args,
     get_type_hints,
 )
 
 import numpy as np
 import pandas as pd
+from pydantic import ConfigDict
 
 import dascore as dc
 from dascore.compat import Progress, UPath
@@ -58,6 +61,7 @@ from dascore.utils.misc import (
     iterate,
     warn_or_raise,
 )
+from dascore.utils.models import DascoreBaseModel
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
@@ -395,6 +399,74 @@ def _get_reloadable_source_path(
         if isinstance(candidate, str | Path | UPath):
             return coerce_to_upath(candidate)
     return ""
+
+
+class BaseCodec(DascoreBaseModel):
+    """
+    Base class for array payload transform options (codecs).
+
+    Concrete codecs declare a unique ``name`` as a ``Literal`` field so they
+    can act as discriminated-union members on a storage model and round-trip
+    through ``model_dump``/``model_validate``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BaseStorage(DascoreBaseModel):
+    """Base class for format-specific storage options."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: ClassVar[str] = ""
+    # Named presets mapping a preset name to storage kwargs, e.g.
+    # {"compressed": {"codec": {"name": "gzip", "level": 5}}}.
+    presets: ClassVar[dict[str, dict]] = {}
+    # Codec base classes this storage can physically store. A registered codec
+    # is usable here only if it subclasses one of these.
+    supported_codec_bases: ClassVar[tuple[type[BaseCodec], ...]] = ()
+
+    def __init_subclass__(cls, **kwargs):
+        """Ensure storage subclasses declare their storage name."""
+        super().__init_subclass__(**kwargs)
+        if not cls.name:
+            msg = "You must specify the storage object with the name field."
+            raise InvalidFiberIOError(msg)
+
+    @classmethod
+    def from_preset(cls, name: str) -> BaseStorage:
+        """Build a storage instance from a named preset."""
+        if name not in cls.presets:
+            valid = ", ".join(sorted(cls.presets)) or "(none)"
+            msg = (
+                f"Unknown storage preset {name!r} for {cls.__name__}. "
+                f"Valid presets: {valid}."
+            )
+            # A common slip is passing a codec name as the preset string;
+            # point at the working spelling instead of a dead end.
+            from dascore.io.codec import get_codec_registry
+
+            if name in get_codec_registry():
+                msg += (
+                    f" Note: {name!r} is a codec name, not a preset; pass it "
+                    f"as storage={{'codec': {name!r}}}."
+                )
+            raise InvalidFiberIOError(msg)
+        return cls.model_validate(cls.presets[name])
+
+    @classmethod
+    def get_codecs(cls) -> tuple[type[BaseCodec], ...]:
+        """Return the registered codec classes this storage can use."""
+        if not cls.supported_codec_bases:
+            return ()
+        # Imported lazily to avoid an import cycle (codec imports from io.core).
+        from dascore.io.codec import get_codec_registry
+
+        return tuple(
+            codec
+            for codec in get_codec_registry().values()
+            if issubclass(codec, cls.supported_codec_bases)
+        )
 
 
 class _FiberIOManager:
@@ -864,6 +936,17 @@ def _is_wrapped_func(func1, func2):
     return func is func2
 
 
+def _extract_storage_type(annotation):
+    """Return the BaseStorage subclass named by a type annotation, if any.
+
+    Handles a bare type (``DASDAEStorage``) and unions (``DASDAEStorage | None``).
+    """
+    for candidate in get_args(annotation) or (annotation,):
+        if isinstance(candidate, type) and issubclass(candidate, BaseStorage):
+            return candidate
+    return None
+
+
 class FiberIO:
     """
     An interface which adds support for a given filer format.
@@ -878,6 +961,8 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # The format-specific storage options model supported by this IO.
+    storage_cls: type[BaseStorage] | None = None
 
     manager = _FiberIOManager("dascore.fiber_io")
 
@@ -995,6 +1080,7 @@ class FiberIO:
                     "get_format": fiberio.implements_get_format,
                     "read": fiberio.implements_read,
                     "write": fiberio.implements_write,
+                    "storage": fiberio.storage_cls is not None,
                 }
                 out.append(format_info)
         return pd.DataFrame(out)
@@ -1041,9 +1127,16 @@ class FiberIO:
             method = getattr(cls, name)
             sig = inspect.signature(method)
             arg_name = list(sig.parameters)[param_ind]
-            required_type = get_type_hints(method).get(arg_name)
+            hints = get_type_hints(method)
+            required_type = hints.get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
+            # Derive storage_cls from write()'s `storage` annotation so the
+            # storage type has a single source of truth (unless set explicitly).
+            if name == "write" and cls.__dict__.get("storage_cls") is None:
+                storage_type = _extract_storage_type(hints.get("storage"))
+                if storage_type is not None:
+                    cls.storage_cls = storage_type
 
 
 @_reinit_after_fork
@@ -1675,6 +1768,111 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+def get_storage(
+    file_format: str,
+    file_version: str | None = None,
+) -> type[BaseStorage] | None:
+    """
+    Return the storage options class supported by a format/version.
+
+    Unknown formats raise UnknownFiberFormatError; known formats without
+    storage support return None.
+
+    Parameters
+    ----------
+    file_format
+        The known file format.
+    file_version
+        The known file version. If not provided, the newest version of the
+        format is used.
+    """
+    fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    return fiber_io.storage_cls
+
+
+def get_codecs(
+    file_format: str,
+    file_version: str | None = None,
+) -> tuple[type[BaseCodec], ...]:
+    """
+    Return the codec classes supported by a format/version.
+
+    Unknown formats raise UnknownFiberFormatError; known formats without
+    codec support return an empty tuple.
+
+    Parameters
+    ----------
+    file_format
+        The known file format.
+    file_version
+        The known file version. If not provided, the newest version of the
+        format is used.
+    """
+    storage_cls = get_storage(file_format=file_format, file_version=file_version)
+    if storage_cls is None:
+        return ()
+    return storage_cls.get_codecs()
+
+
+def _validate_write_kwargs(fiber_io, kwargs) -> None:
+    """
+    Reject write kwargs the format's writer does not declare.
+
+    Writers accept ``**kwargs`` for interface tolerance, so a misspelled
+    option name (e.g. ``stroage=``) would otherwise be silently swallowed
+    and produce a file that ignores what the caller asked for.
+    """
+    if not kwargs:
+        return
+    params = inspect.signature(fiber_io.write).parameters
+    names = [x for x in params if x != "self"]
+    # The first two parameters (the spool and resource) are filled by write();
+    # everything else the writer names is a valid user option.
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    allowed = {name for name in names[2:] if params[name].kind in named}
+    unknown = set(kwargs) - allowed
+    if unknown:
+        unknown_str = ", ".join(sorted(unknown))
+        valid = ", ".join(sorted(allowed)) or "(none)"
+        msg = (
+            f"Unknown write option(s) {unknown_str} for format "
+            f"{fiber_io.name} version {fiber_io.version}. "
+            f"Supported options: {valid}."
+        )
+        raise ParameterError(msg)
+
+
+def _coerce_storage(storage, fiber_io):
+    """
+    Coerce a user-supplied storage argument to the format's storage model.
+
+    Accepts a storage instance, a dict of storage kwargs, or a preset name
+    string. Raises if the format declares no storage support.
+    """
+    storage_cls = fiber_io.storage_cls
+    if storage is None:
+        # Materialize the format's default storage so the write path never has
+        # to special-case None. Formats without storage support keep None (a
+        # harmless, ignored kwarg).
+        return None if storage_cls is None else storage_cls()
+    if storage_cls is None:
+        msg = f"Format {fiber_io.name} does not support storage options."
+        raise InvalidFiberIOError(msg)
+    if isinstance(storage, BaseCodec):
+        msg = (
+            f"Got codec {type(storage).__name__} for the storage argument; "
+            f"wrap it in storage options, e.g. "
+            f"storage={storage_cls.__name__}(codec=...) or "
+            "storage={'codec': ...}."
+        )
+        raise InvalidFiberIOError(msg)
+    if isinstance(storage, storage_cls):
+        return storage
+    if isinstance(storage, str):
+        return storage_cls.from_preset(storage)
+    return storage_cls.model_validate(storage)
+
+
 def write(
     patch_or_spool,
     path: path_types,
@@ -1703,6 +1901,17 @@ def write(
         format which supports multiple patches per file. If False (default)
         such patches raise a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
+    **kwargs
+        Format-specific write options forwarded to the format's writer;
+        options the target writer does not declare raise a
+        [`ParameterError`](`dascore.exceptions.ParameterError`) rather than
+        being silently ignored. Most notably ``storage``: for formats that
+        support it (see [`get_storage`](`dascore.io.core.get_storage`)),
+        storage options controlling compression and on-disk layout. Accepts
+        a storage instance, a preset name string (e.g.
+        ``storage="compressed"``), or a dict of storage kwargs such as
+        ``storage={"codec": {"name": "gzip", "level": 5}, "chunks": {"time": 2000}}``.
+        Formats without storage support reject an explicit ``storage``.
 
     Raises
     ------
@@ -1722,6 +1931,11 @@ def write(
     >>> path.unlink()
     """
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    # Coerce storage first so unsupported-storage formats give the specific
+    # "does not support storage options" error rather than the generic one.
+    if "storage" in kwargs:
+        kwargs["storage"] = _coerce_storage(kwargs["storage"], fiber_io)
+    _validate_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.BaseSpool):
         patch_or_spool = dc.spool([patch_or_spool])
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)

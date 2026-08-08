@@ -48,6 +48,34 @@ patch = dc.get_example_patch()
 patch.io.write(write_path, "dasdae")
 ```
 
+DASDAE compression is configured via the `storage` argument. The simplest form is a preset name; `"compressed"` uses the recommended general-purpose compression.
+
+```{python}
+patch.io.write(write_path, "dasdae", storage="compressed")
+```
+
+For finer control, pass a dict (no imports needed) selecting a codec and, optionally, a per-dimension chunk layout. Use the `gzip` codec for portable HDF5 compression.
+
+```{python}
+#| eval: false
+patch.io.write(
+    write_path,
+    "dasdae",
+    storage={"codec": {"name": "gzip", "level": 5}, "chunks": {"time": 2000}},
+)
+```
+
+The equivalent typed form uses `DASDAEStorage` and the codec classes, which is handy for editor completion and type checking.
+
+```{python}
+#| eval: false
+from dascore.io.dasdae import DASDAEStorage
+from dascore.io.hdf5 import Gzip
+
+storage = DASDAEStorage(codec=Gzip(level=5), chunks={"time": 2000})
+patch.io.write(write_path, "dasdae", storage=storage)
+```
+
 ```{python}
 #| echo: false
 if write_path.exists():

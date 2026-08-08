@@ -5,7 +5,7 @@ from __future__ import annotations
 import pickle
 import shutil
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import h5py
 import numpy as np
@@ -18,8 +18,10 @@ from dascore.config import config_context
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import dasdae as dasdae_mod
+from dascore.io.core import BaseCodec
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.io.dasdae.storage import DASDAEStorage
 from dascore.io.dasdae.utils import (
     _decode_attr_value,
     _decode_legacy_attr_value,
@@ -29,15 +31,23 @@ from dascore.io.dasdae.utils import (
     _get_coords,
     _get_file_version,
     _get_scan_payload_from_group,
+    _read_array,
     _save_array,
     _save_patch,
 )
+from dascore.io.hdf5 import Gzip
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
 # a list of fixture names for written DASDAE files
 WRITTEN_FILES = []
+
+
+class _UnsupportedCodec(BaseCodec):
+    """A non-HDF5 codec used to test DASDAE storage validation."""
+
+    name: Literal["unsupported"] = "unsupported"
 
 
 @pytest.fixture(scope="class")
@@ -89,6 +99,14 @@ def dasdae_v1_file_path(request):
 class TestWriteDASDAE:
     """Ensure the format can be written."""
 
+    def _assert_data_compression(self, path, *, compression, level=None):
+        """Assert the stored DASDAE data array has the expected compression."""
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert group["data"].compression == compression
+            if level is not None:
+                assert group["data"].compression_opts == level
+
     def test_file_exists(self, dasdae_v1_file_path):
         """The file should *of course* exist."""
         assert Path(dasdae_v1_file_path).exists()
@@ -137,6 +155,326 @@ class TestWriteDASDAE:
         """Ensure cross correlated patches can be written and read."""
         sp_cc = dc.spool(written_dascore_correlate)
         assert isinstance(sp_cc[0], dc.Patch)
+
+    def test_write_compressed_with_storage(self, tmp_path_factory, random_patch):
+        """DASDAE can write compressed arrays with a storage object."""
+        path = tmp_path_factory.mktemp("dasdae_compressed") / "compressed.h5"
+        storage = DASDAEStorage(codec=Gzip(level=5))
+        dc.write(random_patch, path, "DASDAE", storage=storage)
+        self._assert_data_compression(path, compression="gzip", level=5)
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_compressed_file_is_smaller(self, tmp_path_factory, random_patch):
+        """Compression must actually shrink a compressible file on disk."""
+        base = tmp_path_factory.mktemp("dasdae_size_check")
+        # Constant data compresses extremely well, so any real compression
+        # must produce a much smaller file than the uncompressed write.
+        patch = random_patch.new(data=np.ones_like(random_patch.data))
+        patch.io.write(base / "plain.h5", "DASDAE")
+        patch.io.write(base / "compressed.h5", "DASDAE", storage="compressed")
+        plain = (base / "plain.h5").stat().st_size
+        compressed = (base / "compressed.h5").stat().st_size
+        assert compressed < plain / 2
+
+    def test_direct_write_coerces_storage(self, tmp_path_factory, random_patch):
+        """Direct DASDAEV1 writes accept the same storage shorthand as dc.write."""
+        path = tmp_path_factory.mktemp("dasdae_direct_storage") / "compressed.h5"
+        with h5py.File(path, mode="w") as h5:
+            DASDAEV1().write(random_patch, h5, storage="compressed")
+        self._assert_data_compression(path, compression="gzip", level=5)
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_default_storage_skips_chunk_validation(
+        self, tmp_path_factory, random_patch, monkeypatch
+    ):
+        """Unchunked writes do not scan dims only to no-op validation."""
+        path = tmp_path_factory.mktemp("dasdae_no_chunk_validation") / "out.h5"
+
+        def raise_if_called(*args, **kwargs):
+            raise AssertionError("chunk validation should be skipped")
+
+        monkeypatch.setattr(DASDAEStorage, "_validate_chunk_dims", raise_if_called)
+        random_patch.io.write(path, "DASDAE")
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_compressed_selective_read(self, tmp_path_factory, random_patch):
+        """Selecting from a compressed file must match selecting in memory."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_select") / "out.h5"
+        random_patch.io.write(path, "DASDAE", storage="compressed")
+        dist = random_patch.get_coord("distance").values
+        select = {"distance": (dist[0], dist[len(dist) // 2])}
+        from_disk = dc.spool(path).select(**select)[0]
+        in_memory = random_patch.select(**select)
+        assert from_disk.equals(in_memory)
+
+    def test_write_compressed_empty_coord(self, tmp_path_factory, random_patch):
+        """Compressed DASDAE writes preserve zero-length arrays."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_empty") / "out.h5"
+        time = random_patch.get_coord("time")
+        empty_patch = random_patch.select(time=(time.max() + 3 * time.step, ...))
+        empty_patch.io.write(path, "dasdae", storage="compressed")
+        new_patch = dc.read(path)[0]
+        assert empty_patch.equals(new_patch)
+
+    def test_compressed_scalar_array_falls_back(self, tmp_path_factory):
+        """DASDAE compression skips scalar arrays HDF5 cannot chunk."""
+        path = tmp_path_factory.mktemp("dasdae_compressed_scalar") / "out.h5"
+        options = DASDAEStorage.from_preset("compressed")._dataset_options((), ())
+        with h5py.File(path, mode="w") as h5:
+            node = _save_array(np.array(1), "scalar", h5, options)
+            assert node.shape == ()
+            assert node.compression is None
+
+    def test_write_dict_codec_coercion(self, tmp_path_factory, random_patch):
+        """A dict/string codec shorthand is coerced by the write path."""
+        path = tmp_path_factory.mktemp("dasdae_gzip") / "gzip.h5"
+        random_patch.io.write(path, "DASDAE", storage={"codec": "gzip"})
+        self._assert_data_compression(path, compression="gzip")
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_write_compressed_with_gzip(self, tmp_path_factory, random_patch):
+        """DASDAE can use portable gzip HDF5 compression."""
+        path = tmp_path_factory.mktemp("dasdae_gzip") / "gzip.h5"
+        random_patch.io.write(path, "DASDAE", storage=DASDAEStorage(codec=Gzip()))
+        self._assert_data_compression(path, compression="gzip")
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_chunked_unicode_array_roundtrips(self, tmp_path_factory):
+        """Chunked/compressed string arrays preserve non-ASCII values."""
+        path = tmp_path_factory.mktemp("dasdae_unicode_array") / "out.h5"
+        data = np.array(["cafe", "café"], dtype="U8")
+        storage = DASDAEStorage.from_preset("compressed")
+        options = storage._dataset_options(("label",), data.shape) | {"chunks": (1,)}
+        with h5py.File(path, mode="w") as h5:
+            node = _save_array(data, "labels", h5, options)
+            assert node[:].dtype.kind == "S"
+            assert np.array_equal(_read_array(node), data)
+
+    def test_unicode_patch_data_roundtrips(self, tmp_path_factory):
+        """Compressed patches whose data is a unicode array round-trip exactly."""
+        path = tmp_path_factory.mktemp("dasdae_unicode_data") / "out.h5"
+        data = np.array([["café", "naïve"], ["日本", "ok"]], dtype="U8")
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": [0.0, 1.0], "time": [0.0, 1.0]},
+            dims=("distance", "time"),
+        )
+        patch.io.write(path, "dasdae", storage="compressed")
+        loaded = dc.read(path)[0]
+        assert loaded.data.dtype.kind == "U"
+        assert np.array_equal(loaded.data, data)
+        # The selective-read branch decodes through the same attr-aware path.
+        selected = dc.read(path, distance=(0.0, 0.0))[0]
+        assert selected.data.dtype.kind == "U"
+        assert np.array_equal(selected.data, data[:1])
+
+    def test_datetime_patch_data_selective_read(self, tmp_path_factory):
+        """Datetime data arrays keep their dtype through selective reads."""
+        path = tmp_path_factory.mktemp("dasdae_datetime_data") / "out.h5"
+        data = to_datetime64(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"])
+        patch = dc.Patch(
+            data=data.reshape(2, 2),
+            coords={"distance": [0.0, 1.0], "time": [0.0, 1.0]},
+            dims=("distance", "time"),
+        )
+        patch.io.write(path, "dasdae", storage="compressed")
+        selected = dc.read(path, distance=(0.0, 0.0))[0]
+        assert np.issubdtype(selected.data.dtype, np.datetime64)
+        assert np.array_equal(selected.data, data.reshape(2, 2)[:1])
+
+    def test_write_with_chunks(self, tmp_path_factory, random_patch):
+        """DASDAE storage can specify a per-dimension chunk layout."""
+        path = tmp_path_factory.mktemp("dasdae_chunkshape") / "chunked.h5"
+        storage = DASDAEStorage(codec=Gzip(), chunks={"distance": 10, "time": 10})
+        random_patch.io.write(path, "DASDAE", storage=storage)
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert group["data"].chunks == (10, 10)
+            # Coordinate arrays share the layout, chunked by their dim name.
+            assert group["_coord_distance"].chunks == (10,)
+            assert group["_coord_distance"].compression == "gzip"
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_explicit_storage_none_writes_default(self, tmp_path_factory, random_patch):
+        """An explicit storage=None is normalized to the default and round-trips."""
+        path = tmp_path_factory.mktemp("dasdae_storage_none") / "out.h5"
+        dc.write(random_patch, path, "DASDAE", storage=None)
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            # Default storage is uncompressed.
+            assert group["data"].compression is None
+        assert dc.read(path)[0].equals(random_patch)
+
+    def test_chunk_validation_does_not_load_patches(
+        self, tmp_path_factory, random_patch, monkeypatch
+    ):
+        """Chunk-dim validation must use scan metadata, not load patch data."""
+        src = tmp_path_factory.mktemp("dasdae_lazy_src") / "src.h5"
+        out = tmp_path_factory.mktemp("dasdae_lazy_out") / "out.h5"
+        dc.write(random_patch, src, "DASDAE")
+        lazy_spool = dc.spool(src)
+
+        calls = []
+        original = dasdae_mod.core._read_patch
+
+        def counting_read_patch(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        # Patch the name bound in core, which both read paths call through.
+        monkeypatch.setattr(dasdae_mod.core, "_read_patch", counting_read_patch)
+        dc.write(lazy_spool, out, "DASDAE", storage={"chunks": {"time": 100}})
+        # One read per patch for the write itself; validation adds none.
+        assert len(calls) == 1
+        assert dc.read(out)[0].equals(random_patch)
+
+    def test_typoed_chunk_dim_raises_on_write(self, tmp_path_factory, random_patch):
+        """A chunk dim that isn't a real patch dim raises instead of no-op."""
+        path = tmp_path_factory.mktemp("dasdae_chunk_typo") / "out.h5"
+        with pytest.raises(ValueError, match="Unknown chunk dimension"):
+            random_patch.io.write(path, "DASDAE", storage={"chunks": {"tim": 500}})
+        # Validation happens before any content, so no DASDAE-stamped stub
+        # is left behind for dc.get_format to misidentify.
+        with h5py.File(path) as h5:
+            assert "waveforms" not in h5
+            assert "__format__" not in h5.attrs
+
+    def test_empty_spool_with_chunks_writes(self, tmp_path_factory):
+        """An empty spool with chunk config writes like any empty write."""
+        path = tmp_path_factory.mktemp("dasdae_empty_chunks") / "out.h5"
+        dc.write(dc.spool([]), path, "DASDAE", storage={"chunks": {"time": 100}})
+        assert len(dc.spool(path).get_contents()) == 0
+
+    def test_chunks_without_codec(self, tmp_path_factory, random_patch):
+        """Chunks apply even without a codec (chunked-uncompressed layout)."""
+        path = tmp_path_factory.mktemp("dasdae_chunks_only") / "chunked.h5"
+        random_patch.io.write(path, "DASDAE", storage={"chunks": {"time": 500}})
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            # time is the second dim; chunk length clamps to the request.
+            assert group["data"].chunks[1] == 500
+            assert group["data"].compression is None
+        assert dc.read(path)[0].equals(random_patch)
+
+
+class TestDASDAEStorage:
+    """Tests for DASDAE storage settings."""
+
+    def test_default_is_uncompressed(self):
+        """Default storage produces no dataset options and no chunking."""
+        storage = DASDAEStorage()
+        assert storage._dataset_options(("distance", "time"), (3, 4)) == {}
+        assert storage._resolve_chunkshape(("distance", "time"), (3, 4)) is None
+
+    def test_compressed_preset_uses_default_codec(self):
+        """The compressed preset uses the DASDAE default codec."""
+        storage = DASDAEStorage.from_preset("compressed")
+        assert storage.codec == Gzip(level=5)
+        options = storage._dataset_options(("time",), (10,))
+        assert options["compression"] == "gzip"
+        assert options["compression_opts"] == 5
+
+    def test_codec_string_shorthand(self):
+        """A bare codec name is coerced to the codec instance."""
+        assert DASDAEStorage(codec="gzip").codec == Gzip()
+
+    def test_codec_dict_shorthand(self):
+        """A codec dict is dispatched by its discriminator name."""
+        assert DASDAEStorage(codec={"name": "gzip", "level": 3}).codec == Gzip(level=3)
+
+    def test_codec_dict_requires_name(self):
+        """Codec dictionaries must include the registry discriminator."""
+        with pytest.raises(ValueError, match="name"):
+            DASDAEStorage(codec={"level": 3})
+
+    def test_bad_codec_input_raises(self):
+        """Unsupported codec input types raise a clear error."""
+        with pytest.raises(ValueError, match="Cannot interpret codec"):
+            DASDAEStorage(codec=object())
+
+    def test_unsupported_codec_base_raises(self):
+        """DASDAE rejects codecs it cannot store in HDF5 arrays."""
+        with pytest.raises(ValueError, match="cannot store codec"):
+            DASDAEStorage(codec=_UnsupportedCodec())
+
+    def test_unknown_codec_name_raises(self):
+        """An unknown codec name reports it is unregistered."""
+        with pytest.raises(ValueError, match="Unknown codec"):
+            DASDAEStorage(codec="lz4")
+
+    def test_gzip_codec_maps_to_h5py_kwargs(self):
+        """Gzip codec maps to the h5py gzip dataset kwargs."""
+        options = DASDAEStorage(codec=Gzip(level=3))._dataset_options(("time",), (10,))
+        assert options == {
+            "compression": "gzip",
+            "compression_opts": 3,
+            "shuffle": True,
+        }
+
+    def test_level_zero_codec_disables_compression(self):
+        """A level-0 codec writes uncompressed without erroring."""
+        storage = DASDAEStorage(codec=Gzip(level=0))
+        assert storage._dataset_options(("time",), (10,)) == {}
+
+    def test_bare_base_codec_rejected_at_construction(self):
+        """A codec base class with no registered name fails fast, not mid-write."""
+        from dascore.io.hdf5 import HDF5Codec
+
+        with pytest.raises(ValueError, match="name"):
+            DASDAEStorage(codec=HDF5Codec(level=5))
+
+    def test_new_preserves_codec(self):
+        """Deriving a modified storage with .new() keeps the codec (GH #734)."""
+        for storage in (
+            DASDAEStorage.from_preset("compressed"),
+            DASDAEStorage(codec="gzip"),
+            DASDAEStorage(codec=Gzip(level=3)),
+            DASDAEStorage(codec={"name": "gzip", "level": 4}),
+        ):
+            new = storage.new(chunks={"time": 100})
+            assert new.codec == storage.codec
+            assert new.chunks == {"time": 100}
+
+    def test_chunkshape_resolves_by_dim_name(self):
+        """Chunks map dim names to lengths, clamped to the array shape."""
+        storage = DASDAEStorage(chunks={"time": 5})
+        # time is the second dim here; distance uses its full length.
+        assert storage._resolve_chunkshape(("distance", "time"), (3, 20)) == (3, 5)
+        # request larger than the array is clamped down.
+        assert storage._resolve_chunkshape(("time",), (4,)) == (4,)
+        # scalar/mismatched arrays are left contiguous.
+        assert storage._resolve_chunkshape((), ()) is None
+
+    def test_negative_chunk_raises(self):
+        """Chunk sizes must be positive."""
+        with pytest.raises(ValueError, match="positive"):
+            DASDAEStorage(chunks={"time": 0})
+
+    def test_unknown_chunk_dim_raises(self):
+        """A chunk dim that matches no real dimension is rejected."""
+        storage = DASDAEStorage(chunks={"tim": 5})
+        with pytest.raises(ValueError, match="Unknown chunk dimension"):
+            storage._validate_chunk_dims(("distance", "time"))
+
+    def test_known_chunk_dims_pass(self):
+        """Valid chunk dims validate without error."""
+        storage = DASDAEStorage(chunks={"time": 5})
+        # Should not raise.
+        storage._validate_chunk_dims(("distance", "time"))
+
+    def test_validate_chunk_dims_no_chunks_returns(self):
+        """Default storage has no chunk dims to validate."""
+        storage = DASDAEStorage()
+        storage._validate_chunk_dims(())
+
+    def test_get_codecs(self):
+        """DASDAE reports the registered HDF5 codecs it can store."""
+        assert set(DASDAEStorage.get_codecs()) == {Gzip}
+
+    def test_codec_name_as_preset_gets_hint(self):
+        """Mistaking a codec name for a preset points at the codec spelling."""
+        with pytest.raises(ValueError, match="codec name, not a preset"):
+            DASDAEStorage.from_preset("gzip")
 
 
 class TestReadDASDAE:
@@ -470,8 +808,13 @@ class TestDASDAEInternalHelpers:
         path = tmp_path / "overwrite_patch.h5"
         with h5py.File(path, "w") as h5:
             waveforms = h5.create_group("waveforms")
-            _save_patch(random_patch, waveforms, "patch_0")
-            _save_patch(random_patch.update_attrs(tag="new"), waveforms, "patch_0")
+            _save_patch(random_patch, waveforms, "patch_0", DASDAEStorage())
+            _save_patch(
+                random_patch.update_attrs(tag="new"),
+                waveforms,
+                "patch_0",
+                DASDAEStorage(),
+            )
             attrs = _get_attrs(waveforms["patch_0"])
             assert attrs["tag"] == "new"
 
