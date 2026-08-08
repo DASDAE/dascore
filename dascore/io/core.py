@@ -16,6 +16,7 @@ from threading import RLock
 from typing import (
     Any,
     Literal,
+    TypeVar,
     NotRequired,
     Protocol,
     TypedDict,
@@ -1683,14 +1684,19 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+# write hands back the path it was given, so the return follows the
+# argument rather than collapsing to the union: a Path in, a Path out.
+_PathT = TypeVar("_PathT", bound=path_types)
+
+
 def write(
     patch_or_spool,
-    path: path_types,
+    path: _PathT,
     file_format: str,
     file_version: str | None = None,
     split: bool = False,
     **kwargs,
-) -> path_types:
+) -> _PathT:
     """
     Write a Patch or Spool to disk.
 
