@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from functools import cache
 from threading import RLock
 from types import EllipsisType
-from typing import Any, cast, overload
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -132,27 +132,16 @@ quantity_like = (
 )
 
 
-@overload
-def get_quantity(value: None) -> None: ...
-
-
-@overload
-def get_quantity(value: str | Quantity | Unit) -> Quantity: ...
-
-
-@overload
-def get_quantity(value: quantity_like) -> Quantity | None: ...
-
-
 def get_quantity(
     value: quantity_like,
 ) -> Quantity | None:
     """
     Convert a value to a pint quantity.
 
-    Only a null-ish input (None or Ellipsis) yields None, so a string,
-    Unit or Quantity is typed as producing a Quantity and stays usable in
-    arithmetic without a narrowing check.
+    Returns None for a null-ish input: None, Ellipsis, or the empty
+    string, which is how dascore spells "carries no units". Callers doing
+    arithmetic on the result have to handle that, since an unset unit
+    reaching a multiplication is a real error rather than a typing one.
 
     Parameters
     ----------
@@ -301,24 +290,11 @@ def _unit_to_str(unit: Unit) -> str:
 unit_like = str | bytes | Quantity | PlainUnit | None
 
 
-@overload
-def get_quantity_str(quant_value: None) -> None: ...
-
-
-@overload
-def get_quantity_str(quant_value: str | bytes | Quantity | PlainUnit) -> str: ...
-
-
-@overload
-def get_quantity_str(quant_value: unit_like) -> str | None: ...
-
-
 def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
 
-    Only a null input yields None, so naming a unit is typed as producing
-    a string.
+    Returns None for a null input, including the empty string.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
