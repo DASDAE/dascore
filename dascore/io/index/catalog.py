@@ -39,7 +39,11 @@ from dascore.io.index.query import (
     Query,
 )
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
-from dascore.utils.misc import is_range
+from dascore.utils.misc import (
+    _canonical_range,
+    express_range_for_coord,
+    is_range,
+)
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
@@ -47,86 +51,6 @@ from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 # alone cannot interleave multi-patch files); ordinal and patch id stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
-
-
-class _CanonicalRange:
-    """
-    A numeric coordinate range resolved to canonical SI magnitudes.
-
-    The exact per-patch re-select defers its representation until the
-    target patch is known: unit-bearing coordinates get quantities
-    (`Patch.select` converts them to native units), unitless
-    coordinates get the bare magnitudes. A single eager form cannot
-    serve both — raw numbers trim the wrong physical interval on non-SI
-    patches, quantities break unitless coordinates.
-
-    ``units`` records the query's own base unit when the original
-    bounds carried one, so the residual preserves the query's
-    dimensionality instead of adopting each patch coordinate's — a
-    metre query must never trim a seconds coordinate as 1-2 s.
-    """
-
-    __slots__ = ("magnitudes", "units")
-
-    def __init__(self, magnitudes: tuple, units: str | None = None):
-        self.magnitudes = magnitudes
-        self.units = units
-
-    def __eq__(self, other) -> bool:
-        """Value equality so equal selections compare equal (spool __eq__)."""
-        if not isinstance(other, _CanonicalRange):
-            return NotImplemented
-        return (self.magnitudes, self.units) == (other.magnitudes, other.units)
-
-    def __hash__(self) -> int:
-        return hash((self.magnitudes, self.units))
-
-    def for_patch_coord(self, coord) -> tuple:
-        """Return the range in the representation this coord needs."""
-        from dascore.units import get_quantity
-
-        coord_units = getattr(coord, "units", None)
-        if coord_units is None:
-            # unitless coords: bare canonical magnitudes (documented policy)
-            return self.magnitudes
-        # a unit-bearing query keeps its own dimensionality; a bare
-        # numeric query means canonical SI in the coord's dimension
-        if self.units is not None:
-            base = get_quantity(self.units)
-        else:
-            coord_quant = get_quantity(str(coord_units))
-            assert coord_quant is not None  # the coord has units in this branch
-            base = coord_quant.to_base_units().units
-        return tuple(None if mag is None else mag * base for mag in self.magnitudes)
-
-
-def _canonical_range(value) -> _CanonicalRange | None:
-    """Return the canonical SI form of a numeric range, or None."""
-    if not is_range(value):
-        return None
-    magnitudes = []
-    units = None
-    for bound in value:
-        if bound is None or bound is Ellipsis:
-            magnitudes.append(None)
-        elif hasattr(bound, "units"):  # pint quantity -> SI magnitude
-            base = bound.to_base_units()
-            magnitudes.append(float(base.magnitude))
-            units = str(base.units)
-        elif isinstance(bound, bool | np.bool_):
-            return None
-        elif isinstance(bound, np.datetime64 | np.timedelta64):
-            # Time bounds are never a canonical-SI numeric range. timedelta64
-            # needs naming here because numpy makes it an np.integer subclass,
-            # so it would otherwise reach float() below and raise.
-            return None
-        elif isinstance(bound, int | float | np.integer | np.floating):
-            magnitudes.append(float(bound))
-        else:  # datetimes, strings: not a numeric range
-            return None
-    if all(mag is None for mag in magnitudes):
-        return None
-    return _CanonicalRange(tuple(magnitudes), units)
 
 
 def _envelope_range(value):
@@ -180,9 +104,7 @@ def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
     for coords, samples in residuals:
         coord_map = patch.coords.coord_map
         usable = {
-            k: (
-                v.for_patch_coord(coord_map[k]) if isinstance(v, _CanonicalRange) else v
-            )
+            k: express_range_for_coord(v, coord_map[k])
             for k, v in coords.items()
             if k in coord_map
         }

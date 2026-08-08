@@ -9,8 +9,8 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _canonical_range
 from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.utils.misc import _canonical_range
 
 
 @pytest.fixture(scope="class")
@@ -318,7 +318,7 @@ class TestCanonicalRange:
 
     def test_eq_and_hash(self):
         """Equal magnitudes compare and hash equal; other types don't."""
-        from dascore.io.index.catalog import _CanonicalRange
+        from dascore.utils.misc import _CanonicalRange
 
         r1, r2 = _CanonicalRange((1.0, 2.0)), _CanonicalRange((1.0, 2.0))
         assert r1 == r2
