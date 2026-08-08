@@ -489,9 +489,10 @@ def filter_df(
 
     Returns
     -------
-    A boolean array of the same len as df indicating if each row meets the
-    requirements. It is a Series once any filter has been applied and a
-    bare array when no query narrowed it.
+    A boolean mask of the same len as df indicating if each row meets the
+    requirements. Whether it comes back as a bare array or a Series
+    depends on which queries applied, so treat it as an opaque boolean
+    container rather than relying on either.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)

@@ -201,13 +201,21 @@ class TestIterFS:
 
     def test_no_directories(self, simple_dir):
         """Ensure no directories are included when include_directories=False."""
-        out = [x for x in _iter_filesystem(simple_dir, include_directories=False) if x]
+        raw = list(_iter_filesystem(simple_dir, include_directories=False))
+        # Only an explicit skip signal makes the generator yield None, and
+        # this loop sends none, so nothing should be dropped here.
+        out = [x for x in raw if x is not None]
+        assert len(out) == len(raw)
         has_dirs = [x.is_dir() for x in out]
         assert not any(has_dirs)
 
     def test_include_directories(self, simple_dir):
         """Ensure we can get directories back."""
-        out = [x for x in _iter_filesystem(simple_dir, include_directories=True) if x]
+        raw = list(_iter_filesystem(simple_dir, include_directories=True))
+        # Only an explicit skip signal makes the generator yield None, and
+        # this loop sends none, so nothing should be dropped here.
+        out = [x for x in raw if x is not None]
+        assert len(out) == len(raw)
         returned_dirs = [x for x in out if x.is_dir()]
         assert len(returned_dirs)
         # The top level directory should have been included

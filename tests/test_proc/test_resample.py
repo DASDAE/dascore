@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import FilterValueError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 
@@ -158,6 +158,12 @@ class TestDecimate:
 
 class TestResample:
     """Tests for resampling along a given dimension."""
+
+    def test_missing_period_raises(self, random_patch):
+        """A null sampling period is rejected rather than producing NaN."""
+        match = "requires a sampling period"
+        with pytest.raises(ParameterError, match=match):
+            random_patch.resample(time=None)
 
     def test_downsample_time(self, random_patch):
         """Test decreasing the temporal sampling rate."""
