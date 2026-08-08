@@ -534,3 +534,84 @@ class TestInventory:
         """Crs reserved labels raise."""
         with pytest.raises(ValidationError, match="reserved"):
             inv.CoordinateReferenceSystem(coordinate_labels=("x", "distance"))
+
+
+class TestReviewRegressions:
+    """Regression tests for counterpart-review findings."""
+
+    def test_far_future_open_epochs_overlap(self):
+        """Ongoing epochs overlap finite epochs beyond any sentinel date."""
+        a = inv.OpticalPath(name="a", start_time="2259-01-01")
+        b = inv.OpticalPath(name="b", start_time="2261-01-01", end_time="2262-01-01")
+        assert a.overlaps(b) and b.overlaps(a)
+
+    def test_reversed_epoch_raises(self):
+        """End before start fails at construction."""
+        with pytest.raises(ValidationError, match="must be after"):
+            inv.Acquisition(
+                code="RAW", start_time="2022-01-01", end_time="2021-01-01"
+            )
+
+    def test_replace_type_mismatch_raises(self):
+        """Replace type mismatch raises."""
+        inventory = build_inventory()
+        old = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        with pytest.raises(InvalidInventoryError, match="does not match"):
+            inventory.replace(old, "not-an-acquisition")
+
+    def test_full_select_keeps_terminal_zero_length_component(self):
+        """A terminator at the path end survives full selection and splits."""
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(optical_length=100.0),
+                inv.Terminator(optical_length=0.0),
+            ),
+        )
+        full = path.select(distance=(None, None))
+        assert len(full.optical_components) == 2
+        _, right = path.split_at(50.0)
+        assert isinstance(right.optical_components[-1], inv.Terminator)
+
+    def test_resource_key_mismatch_raises(self):
+        """Resource key mismatch raises."""
+        cable = inv.Cable(resource_id="right")
+        with pytest.raises(ValidationError, match="disagrees"):
+            inv.Inventory(resources={"wrong": cable})
+
+    def test_duplicate_resource_ids_raise(self):
+        """Duplicate resource ids raise."""
+        with pytest.raises(ValidationError, match="Duplicate resource_id"):
+            inv.Inventory(
+                resources=[inv.Cable(resource_id="x"), inv.Cable(resource_id="x")]
+            )
+
+    def test_zero_dim_geometry_raises(self):
+        """Zero dim geometry raises."""
+        with pytest.raises(ValidationError, match="nonzero"):
+            inv.Geometry(distance=(0.0, 1.0), coordinates=((), ()))
+
+    def test_dynamic_coordinate_fields(self):
+        """Stations accept CRS-label-named fields per the spec."""
+        crs = inv.CoordinateReferenceSystem()
+        station = inv.Station(
+            code="VA01", longitude=2.1, latitude=48.8, elevation=115.0
+        )
+        assert station.get_coordinates(crs) == (2.1, 48.8, 115.0)
+
+    def test_dynamic_fields_disagreeing_with_tuple_raise(self):
+        """Two spellings of coordinates must agree."""
+        crs = inv.CoordinateReferenceSystem()
+        station = inv.Station(
+            code="VA01",
+            coordinates=(2.1, 48.8, 115.0),
+            longitude=9.9, latitude=48.8, elevation=115.0,
+        )
+        with pytest.raises(InvalidInventoryError, match="disagree"):
+            station.get_coordinates(crs)
+
+    def test_unknown_dynamic_fields_raise(self):
+        """Unknown dynamic fields raise."""
+        crs = inv.CoordinateReferenceSystem()
+        station = inv.Station(code="VA01", northing=1.0)
+        with pytest.raises(InvalidInventoryError, match="do not match CRS"):
+            station.get_coordinates(crs)

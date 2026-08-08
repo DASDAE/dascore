@@ -374,8 +374,11 @@ class Geometry(InventoryModel):
             msg = "Geometry coordinates and distance must have the same length."
             raise InvalidInventoryError(msg)
         dims = {len(coord) for coord in self.coordinates}
-        if len(dims) > 1:
-            msg = "Geometry coordinate points must share one dimensionality."
+        if len(dims) > 1 or 0 in dims:
+            msg = (
+                "Geometry coordinate points must share one nonzero "
+                "dimensionality."
+            )
             raise InvalidInventoryError(msg)
         return self
 
@@ -830,7 +833,8 @@ class OpticalPath(TimeRangedModel):
             self.optical_components, self.component_intervals()
         ):
             new_lo, new_hi = max(c_lo, lo), min(c_hi, hi)
-            if new_hi > new_lo or (c_lo == c_hi and lo <= c_lo < hi):
+            at_outer = c_lo == hi == self.end_distance
+            if new_hi > new_lo or (c_lo == c_hi and (lo <= c_lo < hi or at_outer)):
                 length = max(new_hi - new_lo, 0.0)
                 components.append(comp.model_copy(update={"optical_length": length}))
         geometry = []
@@ -1014,7 +1018,53 @@ class Response(InventoryModel):
     )
 
 
-class Channel(TimeRangedModel):
+class _PointLocatedModel(TimeRangedModel):
+    """
+    Base for point-like objects accepting dynamic coordinate-label fields.
+
+    The spec allows coordinates either as the generic ``coordinates`` tuple
+    (ordered by the inventory CRS ``coordinate_labels``) or as dynamic fields
+    named by those labels (e.g. ``latitude=...``). Extra fields are collected
+    at construction; whether they match the CRS labels (and agree with any
+    ``coordinates`` tuple) is checked by ``get_coordinates``.
+    """
+
+    model_config = TimeRangedModel.model_config | {"extra": "allow"}
+
+    def get_coordinates(self, crs: CoordinateReferenceSystem):
+        """
+        Return the coordinate tuple for this object under a CRS, or None.
+
+        Dynamic label fields and an explicit ``coordinates`` tuple are two
+        spellings of one fact: both present must agree or this raises.
+        """
+        extra = self.model_extra or {}
+        unknown = set(extra) - set(crs.coordinate_labels)
+        if unknown:
+            msg = (
+                f"Fields {sorted(unknown)} do not match CRS coordinate "
+                f"labels {crs.coordinate_labels}."
+            )
+            raise InvalidInventoryError(msg)
+        from_labels = None
+        if extra:
+            missing = set(crs.coordinate_labels) - set(extra)
+            if missing:
+                msg = f"Coordinate fields incomplete; missing {sorted(missing)}."
+                raise InvalidInventoryError(msg)
+            from_labels = tuple(float(extra[x]) for x in crs.coordinate_labels)
+        explicit = self.coordinates
+        if explicit is not None and from_labels is not None:
+            if not np.allclose(explicit, from_labels):
+                msg = (
+                    f"coordinates {explicit} disagree with coordinate-label "
+                    f"fields {from_labels}."
+                )
+                raise InvalidInventoryError(msg)
+        return explicit if explicit is not None else from_labels
+
+
+class Channel(_PointLocatedModel):
     """Station-level time-series stream identity."""
 
     code: str = Field(description="Channel code used in data source identifiers.")
@@ -1046,7 +1096,7 @@ class Channel(TimeRangedModel):
         return _check_code(value, "location code", allow_blank=True)
 
 
-class Station(TimeRangedModel):
+class Station(_PointLocatedModel):
     """Point-like observing identity under a network."""
 
     code: str = Field(description="Station code used in data source identifiers.")
@@ -1215,8 +1265,21 @@ class Inventory(DascoreBaseModel):
     def _key_resources(cls, value):
         """Accept an iterable of resources, keying them by resource_id."""
         if isinstance(value, dict):
+            for key, resource in value.items():
+                rid = getattr(resource, "resource_id", None) or (
+                    resource.get("resource_id") if isinstance(resource, dict) else None
+                )
+                if rid is not None and rid != key:
+                    msg = f"Resource key {key!r} disagrees with resource_id {rid!r}."
+                    raise InvalidInventoryError(msg)
             return value
-        return {resource.resource_id: resource for resource in value}
+        out = {}
+        for resource in value:
+            if resource.resource_id in out:
+                msg = f"Duplicate resource_id {resource.resource_id!r}."
+                raise InvalidInventoryError(msg)
+            out[resource.resource_id] = resource
+        return out
 
     def validate(self) -> Self:
         """Validate the whole inventory tree."""
@@ -1288,8 +1351,15 @@ class Inventory(DascoreBaseModel):
         Return a new inventory with one component replaced.
 
         This is the correction mechanism: the change applies in place and
-        retroactively. ``old`` is matched by equality anywhere in the tree.
+        retroactively. ``old`` is matched by equality anywhere in the tree,
+        and ``new`` must be the same type.
         """
+        if type(new) is not type(old):
+            msg = (
+                f"Replacement type {type(new).__name__} does not match "
+                f"{type(old).__name__}."
+            )
+            raise InvalidInventoryError(msg)
         replaced = 0
 
         def swap(items):

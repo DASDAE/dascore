@@ -8,7 +8,14 @@ from typing import Annotated
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    PlainValidator,
+    model_validator,
+)
 from typing_extensions import Self
 
 from dascore.compat import array, is_array_like
@@ -164,6 +171,15 @@ class TimeRangedModel(InventoryModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _check_time_order(self):
+        """A set end time must follow the start time."""
+        start, end = self.start_time, self.end_time
+        if not pd.isnull(start) and not pd.isnull(end) and end <= start:
+            msg = f"end_time {end} must be after start_time {start}."
+            raise ValueError(msg)
+        return self
+
     def is_effective_at(self, time) -> bool:
         """Return True if this epoch is valid at the supplied time (half-open)."""
         from dascore.utils.time import to_datetime64
@@ -178,12 +194,14 @@ class TimeRangedModel(InventoryModel):
         return bool(after_start and before_end)
 
     def overlaps(self, other: TimeRangedModel) -> bool:
-        """Return True if two half-open validity intervals overlap."""
+        """
+        Return True if two half-open validity intervals overlap.
+
+        Unset (NaT) starts are unbounded past; unset ends are ongoing.
+        """
         s1, e1, s2, e2 = (
             self.start_time, self.end_time, other.start_time, other.end_time
         )
-        start_1 = np.datetime64("1678-01-01") if pd.isnull(s1) else s1
-        start_2 = np.datetime64("1678-01-01") if pd.isnull(s2) else s2
-        end_1 = np.datetime64("2260-01-01") if pd.isnull(e1) else e1
-        end_2 = np.datetime64("2260-01-01") if pd.isnull(e2) else e2
-        return bool(max(start_1, start_2) < min(end_1, end_2))
+        first_starts_before = pd.isnull(e2) or pd.isnull(s1) or s1 < e2
+        second_starts_before = pd.isnull(e1) or pd.isnull(s2) or s2 < e1
+        return bool(first_starts_before and second_starts_before)
