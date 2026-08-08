@@ -16,6 +16,7 @@ from dascore.io.netcdf.utils import (
     get_cf_version,
     is_netcdf4_file,
 )
+from dascore.utils.downloader import fetch
 
 pytest.importorskip("xarray")
 
@@ -573,6 +574,23 @@ class TestNetCDFIO:
         monkeypatch.setattr(importlib, "import_module", _import_module)
 
         assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
+
+    def test_get_format_rejects_silixa_carina_hdf5(self):
+        """
+        NETCDF_CF must not claim Silixa Carina/iDAS HDF5 files.
+
+        These files (e.g. the INGV Mt Etna deployment) are written through a
+        netCDF library, so they carry _NCProperties and dimension scales, but
+        their netCDF coordinate variables are empty or zeroed; the usable
+        metadata lives in Silixa attrs on the root. They have no Conventions
+        attr, so the version requirement in get_format must reject them.
+        """
+        path = fetch("silixa_h5_ingv_1.h5")
+        formatter = netcdf_core.NetCDFCFV18()
+        with h5py.File(path, "r") as h5file:
+            assert is_netcdf4_file(h5file)
+            assert get_cf_version(h5file) is None
+            assert formatter.get_format(h5file) is False
 
     def test_round_trip(self, example_patch, tmp_path):
         """Test round-trip: patch -> NetCDF -> patch."""
