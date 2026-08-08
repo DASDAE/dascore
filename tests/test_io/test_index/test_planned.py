@@ -35,7 +35,8 @@ class TestHelpers:
         ts = pd.Timestamp("2020-01-01")
         assert _ns(ts) == _ns(ts.to_datetime64()) == ts.value
         td = pd.Timedelta(seconds=1)
-        assert _ns(td) == _ns(td.to_timedelta64()) == td.value
+        assert (td_ns := _ns(td)) is not None
+        assert td_ns == _ns(td.to_timedelta64()) == td.value
         assert _ns(None) is None
 
     def test_coord_record_numpy_datetimes(self):
@@ -44,6 +45,7 @@ class TestHelpers:
         hi = np.datetime64("2020-01-02", "ns")
         row = {"time_min": lo, "time_max": hi, "time_step": np.timedelta64(1, "s")}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.value_kind == "time"
         assert record.min_ns == _ns(lo)
 
@@ -51,6 +53,7 @@ class TestHelpers:
         """A one-sided timedelta envelope keeps NaT rather than raising."""
         row = {"time_min": pd.Timedelta(seconds=1), "time_max": pd.NaT}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.min_ns == pd.Timedelta(seconds=1).value
         assert pd.isnull(np.timedelta64(record.max_ns, "ns"))
 
@@ -58,6 +61,7 @@ class TestHelpers:
         """A degenerate step leaves length unknown instead of raising."""
         row = {"time_min": 0.0, "time_max": 1.0, "time_step": 0.0}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.length is None
 
     def test_coord_record_empty_units_dropped(self):
@@ -69,6 +73,7 @@ class TestHelpers:
             "_distance_units": "",
         }
         record = _coord_record_from_row(row, "distance")
+        assert record is not None
         assert record.units is None
         assert record.length == 11
 
