@@ -37,6 +37,7 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - Added the `HDAS` fiber IO format (versions 1 and 2) for reading Aragon Photonics HDAS HDF5 files, covering both the vendor `File_Header` layout (e.g. IGN-ADIF) and the attr-timed `hdas_header` variant (e.g. ICM-CSIC Canalink) from the PubDAS Global DAS Month dataset.
 - Added version 2 of the `Silixa_H5` fiber IO format for the Carina netCDF-shell variant (Silixa attrs on the file root, `Fiber` counts dataset placed on the fiber via `ChannelMap`), used e.g. by the INGV Mt Etna deployment in the PubDAS Global DAS Month dataset.
 - Added the `AI4EPS` fiber IO format for reading the AI4EPS earthquake DAS event files (e.g. the quakeflow_das dataset), including the event metadata (id, time, magnitude, hypocenter) as patch attributes.
+- Added the `ODH4` fiber IO format for reading OptaSense ODH4 HDF5 files (e.g. the UW-Madison SURF deployment from the PubDAS Global DAS Month dataset).
 - Added `dc.scan_payloads(...)` for retrieving raw scan payloads with full coordinate managers and source provenance without loading data arrays.
 - `FiberIO.scan(...)` now standardizes `snap: bool = True`; `snap=False` requests exact stored coordinate values from formats that expose per-sample coordinate arrays.
 - `ScanPayload` now includes optional `source_path`, `source_format`, and `source_version` keys, which are populated by `dc.scan_payloads(...)` rather than format implementations.
