@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -277,7 +278,9 @@ class TestPureHelpers:
         from dascore.io.index.query import _UNSET, _range_bounds
 
         value = (5 * m, 10 * m)
-        kinds = {typed_value(5 * m).kind}
+        kind_probe = typed_value(5 * m)
+        assert kind_probe is not None
+        kinds = {kind_probe.kind}
         # Omitted: bounds pass through with no conversion attempted.
         _, lo, hi, _ = _range_bounds(value, kinds, _UNSET, "distance")
         assert (lo, hi) == pytest.approx((5.0, 10.0))
@@ -329,15 +332,21 @@ class TestCanonicalRange:
         """Bare numbers and quantities become SI magnitudes."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert _canonical_range((20, 60)).magnitudes == (20.0, 60.0)
+        bare = _canonical_range((20, 60))
+        assert bare is not None
+        assert bare.magnitudes == (20.0, 60.0)
         # 20 m .. 60 m -> SI metres
-        assert _canonical_range((20 * m, 60 * m)).magnitudes == (20.0, 60.0)
+        quant = _canonical_range((20 * m, 60 * m))
+        assert quant is not None
+        assert quant.magnitudes == (20.0, 60.0)
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert _canonical_range((None, 60)).magnitudes == (None, 60.0)
+        half_open = _canonical_range((None, 60))
+        assert half_open is not None
+        assert half_open.magnitudes == (None, 60.0)
 
     @pytest.mark.parametrize(
         "value",
@@ -406,7 +415,7 @@ class TestAdaptAndBackendBasics:
         assert len(back._attr_meta()) == 1
         back.close()
 
-    def test_write_failure_rolls_back(self, tmp_path):
+    def test_write_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing write leaves the index unchanged."""
         back = get_backend(tmp_path / "rollback.sqlite3")
         records = summaries_to_records(make_summaries())
@@ -416,10 +425,10 @@ class TestAdaptAndBackendBasics:
         def boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        back._bulk_insert = boom
+        monkeypatch.setattr(back, "_bulk_insert", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.write_sources(records[1:])
-        del back.__dict__["_bulk_insert"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -474,7 +483,7 @@ class TestAdaptAndBackendBasics:
         assert back.get_metadata()["last_indexed_ns"] == before
         back.close()
 
-    def test_delete_failure_rolls_back(self, tmp_path):
+    def test_delete_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing delete leaves the index unchanged."""
         back = get_backend(tmp_path / "delete.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
@@ -483,10 +492,10 @@ class TestAdaptAndBackendBasics:
         def boom(paths, base_uri=""):
             raise RuntimeError("simulated failure")
 
-        back._delete_by_paths = boom
+        monkeypatch.setattr(back, "_delete_by_paths", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.delete_sources(["das/file_1.h5"])
-        del back.__dict__["_delete_by_paths"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -864,6 +873,7 @@ class TestIngestEdges:
         """A coord with a missing or unsupported dtype produces no record."""
 
         class _Stub:
+            dtype: object = None
             dims = ("x",)
             len = 2
             units = None
@@ -880,9 +890,12 @@ class TestIngestEdges:
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_ids."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
-        two = PatchSummary(**{**base, "attrs": {"station": "STA9"}})
+        # Bound and annotated: merging a str literal into the dict widens
+        # the value type to `Any | str`, which no field then accepts.
+        other: dict[str, Any] = {**base, "attrs": {"station": "STA9"}}
+        two = PatchSummary(**other)
         records = s2r([one, two])
         assert len(records) == 1
         ids = [p.source_patch_id for p in records[0].patches]
@@ -1077,6 +1090,7 @@ class TestCoordDeduplication:
         patch = patch.update_coords(distance=values)
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
+        assert record is not None
         assert record.coord_hash == patch.get_coord("distance").fingerprint()
         assert record.def_key.startswith("fp:")
 
@@ -1095,6 +1109,7 @@ class TestCoordDeduplication:
             source_version="1",
         )
         fresh = _coord_record("time", summary.coords["time"])
+        assert fresh is not None
         assert fresh.def_key.startswith("sum:")
         back = get_backend(tmp_path / "sum.sqlite3")
         back.write_sources(summaries_to_records([summary]))
@@ -1142,16 +1157,20 @@ class TestCompositeSourceIdentity:
 
     def test_same_path_different_base_coexist(self, tmp_path):
         """Identical relative paths under different bases don't collide."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         records_a = summaries_to_records([one], base_uri="s3://bucket-a")
+
         # base_uri strip only applies when paths share the base; set directly
-        records_a = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-a"}) for r in records_a
-        ]
-        records_b = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-b"}) for r in records_a
-        ]
+        def _rebase(record, base_uri: str):
+            """Rebuild a record under a different base."""
+            # Annotated because merging a str literal in widens the value
+            # type to `Any | str`, which none of the fields accept.
+            fields: dict[str, Any] = {**record.__dict__, "base_uri": base_uri}
+            return type(record)(**fields)
+
+        records_a = [_rebase(r, "s3://bucket-a") for r in records_a]
+        records_b = [_rebase(r, "s3://bucket-b") for r in records_a]
         back = get_backend(tmp_path / "multi.sqlite3")
         back.write_sources(records_a)
         back.write_sources(records_b)
@@ -1171,8 +1190,10 @@ class TestCompositeSourceIdentity:
         base = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         rec = summaries_to_records([one])[0]
-        rec_a = type(rec)(**{**rec.__dict__, "base_uri": "s3://a"})
-        rec_b = type(rec)(**{**rec.__dict__, "base_uri": "s3://b"})
+        fields_a: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://a"}
+        fields_b: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://b"}
+        rec_a = type(rec)(**fields_a)
+        rec_b = type(rec)(**fields_b)
         back = get_backend(tmp_path / "scoped.sqlite3")
         back.write_sources([rec_a, rec_b])
         assert len(back.query()) == 2
@@ -1327,7 +1348,7 @@ class TestTransactionIsolation:
     """The statement lock covers whole transactions (round-4 F5)."""
 
     @pytest.mark.concurrency
-    def test_reader_never_sees_half_written_replacement(self, tmp_path):
+    def test_reader_never_sees_half_written_replacement(self, tmp_path, monkeypatch):
         """A concurrent reader blocks during a source replacement."""
         import threading
 
@@ -1363,7 +1384,7 @@ class TestTransactionIsolation:
         writer = threading.Thread(
             target=lambda: backend.write_sources([record]), daemon=True
         )
-        type(backend)._delete_by_paths = paused_delete
+        monkeypatch.setattr(type(backend), "_delete_by_paths", paused_delete)
         try:
             writer.start()
             assert in_delete.wait(timeout=10)
@@ -1378,7 +1399,6 @@ class TestTransactionIsolation:
             writer.join(timeout=10)
             reader.join(timeout=10)
         finally:
-            type(backend)._delete_by_paths = original
             release.set()
         assert counts == [1]
         backend.close()

@@ -31,6 +31,7 @@ from dascore.utils.io import (
     TextReader,
     ensure_local_file,
     get_handle_from_resource,
+    xarray_to_patch,
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
@@ -1137,12 +1138,12 @@ class TestXarray:
 
     def test_convert_from_xarray(self, data_array_from_patch):
         """Ensure xarray data arrays can be converted back."""
-        out = dc.utils.io.xarray_to_patch(data_array_from_patch)
+        out = xarray_to_patch(data_array_from_patch)
         assert isinstance(out, dc.Patch)
 
     def test_round_trip(self, random_patch, data_array_from_patch):
         """Converting to xarray should be lossless."""
-        out = dc.utils.io.xarray_to_patch(data_array_from_patch)
+        out = xarray_to_patch(data_array_from_patch)
         assert out == random_patch
 
     def test_convert_non_coord(self, random_patch):
@@ -1152,7 +1153,7 @@ class TestXarray:
         dar = patch.io.to_xarray()
         assert isinstance(dar, xr.DataArray)
         # Ensure it round-trips
-        patch2 = dc.utils.io.xarray_to_patch(dar)
+        patch2 = xarray_to_patch(dar)
         assert isinstance(patch2, dc.Patch)
 
 

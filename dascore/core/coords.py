@@ -13,7 +13,7 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Sized
+from collections.abc import Sequence, Sized
 from contextlib import suppress
 from functools import cache
 from operator import gt, lt
@@ -2841,7 +2841,10 @@ class CoordString(BaseCoord):
 
 def get_coord(
     *,
-    data: ArrayLike | np.ndarray | BaseCoord | None = None,
+    # An int names a length, producing a partial coord of that shape.
+    # Sequence is spelled out because ArrayLike does not cover a plain
+    # list, which is accepted here and used throughout the tests.
+    data: ArrayLike | np.ndarray | BaseCoord | Sequence | int | None = None,
     values: ArrayLike | np.ndarray | None = None,
     start=None,
     min=None,

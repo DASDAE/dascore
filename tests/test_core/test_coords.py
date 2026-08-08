@@ -1350,6 +1350,7 @@ class TestCoordRange:
             action="always", category=DeprecationWarning, record=True
         ) as records:
             coord = get_coord(shape=601, start=np.array([0]), step=1)
+        assert isinstance(coord, CoordRange)
         assert coord.start == 0
         assert coord.stop == 601
         assert coord.shape == (601,)
@@ -1804,6 +1805,7 @@ class TestPartialCoord:
         assert coord.step == 1
         # Test start/stop
         coord = get_coord(start=10, shape=10)
+        assert isinstance(coord, CoordPartial)
         assert coord.start == 10
         assert len(coord) == 10
 
@@ -2076,7 +2078,7 @@ class TestGetNextIndex:
     def test_units(self, evenly_sampled_float_coord_with_units):
         """Ensure values with units work."""
         coord = evenly_sampled_float_coord_with_units
-        val1 = np.array([10, 20]) * get_quantity("m")
+        val1 = get_quantity("m") * np.array([10, 20])
         val2 = val1.to(get_quantity("ft"))
         ind1 = coord.get_next_index(val1)
         ind2 = coord.get_next_index(val2)
@@ -2423,6 +2425,7 @@ class TestStringCoords:
         coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_10", "xx_1"]))
         out, indexer = coord.select("ch_?")
         assert np.array_equal(out.values, np.array(["ch_1", "ch_2"]))
+        assert isinstance(indexer, np.ndarray)
         assert np.array_equal(indexer, np.array([True, True, False, False]))
 
     def test_wildcard_select_no_match_returns_empty(self, string_coord):

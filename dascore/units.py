@@ -138,6 +138,11 @@ def get_quantity(
     """
     Convert a value to a pint quantity.
 
+    Returns None for a null-ish input: None, Ellipsis, or the empty
+    string, which is how dascore spells "carries no units". Callers doing
+    arithmetic on the result have to handle that, since an unset unit
+    reaching a multiplication is a real error rather than a typing one.
+
     Parameters
     ----------
     value
@@ -289,6 +294,8 @@ def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
 
+    Returns None for a null input, including the empty string.
+
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
     Parameters
@@ -353,11 +360,11 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 
 
 def get_filter_units(
-    arg1: Quantity | float,
-    arg2: Quantity | float,
+    arg1: Quantity | float | EllipsisType | None,
+    arg2: Quantity | float | EllipsisType | None,
     to_unit: unit_like,
     dim: str | None = None,
-) -> tuple[float, float]:
+) -> tuple[float | None, float | None]:
     """
     Get a tuple for applying filter based on dimension coordinates.
 
@@ -427,7 +434,9 @@ def get_filter_units(
     return out1, out2
 
 
-def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+def quant_sequence_to_quant_array(
+    sequence: Sequence[Quantity] | np.ndarray,
+) -> Quantity:
     """
     Convert a sequence of Quantities (eg list) to a Quantity array.
 

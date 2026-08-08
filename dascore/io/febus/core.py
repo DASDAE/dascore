@@ -5,13 +5,17 @@ IO module for reading Febus data.
 from __future__ import annotations
 
 import warnings
-from types import EllipsisType
 from typing import Literal
 
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types, timeable_types
+from dascore.constants import (
+    float_select_type,
+    opt_timeable_types,
+    time_select_type,
+    timeable_types,
+)
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.core import _make_scan_payload
 from dascore.utils.hdf5 import H5Reader
@@ -39,11 +43,10 @@ from .g1utils import (
 )
 from .t1utils import _get_t1_patch, _is_t1_file, _scan_t1
 
-_float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
-_time_select_type = tuple[
-    opt_timeable_types | EllipsisType,
-    opt_timeable_types | EllipsisType,
-]
+# Kept as module-local names for the many signatures below; the shared
+# definitions live in dascore.constants.
+_float_select_type = float_select_type
+_time_select_type = time_select_type
 
 
 class FebusPatchAttrs(dc.PatchAttrs):

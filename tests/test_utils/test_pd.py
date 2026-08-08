@@ -33,7 +33,7 @@ def example_df_2():
     """Create a simple df for testing. Example from Chris Albon."""
     time = to_datetime64("2020-01-03")
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
     raw_data = {
         "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
         "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
@@ -52,7 +52,7 @@ def example_df_timedeltas(example_df_2):
     """An example dataframe with timedelta columns."""
     time = to_timedelta64(10)
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
 
     out = example_df_2.assign(time_min=time_min, time_max=time_max)
     return out
@@ -226,6 +226,7 @@ class TestFilterDfAdvanced:
         tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
         out = filter_df(example_df_2, time=(tmax, None))
         # just the last row should have been selected
+        assert isinstance(out, pd.Series)
         assert out.iloc[-1] and out.astype(np.int64).sum() == 1
 
     def test_time_query_with_string(self, example_df_2):

@@ -264,11 +264,11 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
+include = ["dascore"]  # tests/ is burned down separately before it lands here.
 
-# No rule is ignored any more: invalid-method-override,
+# No rule is ignored globally: invalid-method-override,
 # invalid-argument-type and invalid-return-type have each been burned down
-# to zero and left on. Widening [tool.ty.src] to tests/ is the next step.
+# to zero and left on.
 
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.

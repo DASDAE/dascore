@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import EllipsisType, MappingProxyType
 from typing import Literal, Protocol, TypeVar, get_args, runtime_checkable
 
 import numpy as np
@@ -33,6 +33,14 @@ DATA_VERSION = "0.0.0"
 # Types dascore can convert into time representations
 timeable_types = int | float | str | np.datetime64 | pd.Timestamp
 opt_timeable_types = None | timeable_types
+
+# A (start, stop) selection range. Either end may be `...` to leave that
+# side open, which is why these are not simply tuples of the value type.
+time_select_type = tuple[
+    opt_timeable_types | EllipsisType,
+    opt_timeable_types | EllipsisType,
+]
+float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
 
 # Number types
 numeric_types = int | float

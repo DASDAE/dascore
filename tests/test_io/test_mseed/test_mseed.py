@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -73,7 +75,10 @@ def _write_mseed_v2_header(path):
 def _trace_segment(**kwargs):
     """Return a small decoded MiniSEED trace segment for helper tests."""
     data = kwargs.pop("data", np.arange(3, dtype=np.int32))
-    defaults = dict(
+    # Annotated because the values are heterogeneous; without it the
+    # inferred value type is object and every field of the splat below
+    # is rejected.
+    defaults: dict[str, Any] = dict(
         source_id="FDSN:XX_00000__H_S_F",
         network="XX",
         station="00000",
