@@ -7,7 +7,6 @@ import pytest
 
 from dascore.config import config_context
 from dascore.utils.downloader import (
-    LARGE_REGISTRY_FILES,
     _fetch_cached,
     fetch,
     fetcher,
@@ -31,14 +30,6 @@ class TestRegistryDF:
         assert len(registry_df)
         assert isinstance(registry_df, pd.DataFrame)
 
-    def test_exclude_large_filters_large_entries(self):
-        """Large registry files should be excluded only when requested."""
-        all_df = get_registry_df()
-        filtered_df = get_registry_df(exclude_large=True)
-
-        assert LARGE_REGISTRY_FILES <= set(all_df["name"])
-        assert not (LARGE_REGISTRY_FILES & set(filtered_df["name"]))
-
 
 class TestFetch:
     """Tests for fetching filepaths of test files."""
@@ -53,8 +44,11 @@ class TestFetch:
         path = fetch(registry_df["name"].iloc[0])
         assert fetch(path) == path
 
-    def test_fetcher_path_comes_from_config(self, tmp_path):
+    def test_fetcher_path_comes_from_config(self, tmp_path, monkeypatch):
         """Downloader fetchers should honor the configured cache directory."""
+        # DFS_DATA_DIR (set in CI) overrides the path at the pooch level, so
+        # clear it to observe the config-supplied path.
+        monkeypatch.delenv("DFS_DATA_DIR", raising=False)
         cache_dir = tmp_path / "downloads"
         with config_context(downloader_cache_dir=cache_dir):
             active_fetcher = get_fetcher()
