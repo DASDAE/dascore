@@ -202,11 +202,13 @@ def convert_units(
     Parameters
     ----------
     data
-        The data to convert. Anything supporting `*` and `+` works, as do a
-        Quantity and None (None is returned unchanged). Deliberately not a
-        narrower annotation: the return type follows the input rather than
-        matching it (an int in yields a float out) and callers legitimately
-        pass values the checker only knows as `object`.
+        The data to convert. Anything supporting `*` and `+` works, as does
+        a Quantity. Deliberately not a narrower annotation: the return type
+        follows the input rather than matching it (an int in yields a float
+        out) and callers legitimately pass values the checker only knows as
+        `object`. Note that data is returned untouched whenever from_units
+        is None, so None survives that path but raises a TypeError once
+        there are real factors to apply.
     to_units
         The desired units after the conversion
     from_units
