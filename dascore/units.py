@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from functools import cache
 from threading import RLock
 from types import EllipsisType
-from typing import Any, cast
+from typing import Any, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -132,11 +132,27 @@ quantity_like = (
 )
 
 
+@overload
+def get_quantity(value: None) -> None: ...
+
+
+@overload
+def get_quantity(value: str | Quantity | Unit) -> Quantity: ...
+
+
+@overload
+def get_quantity(value: quantity_like) -> Quantity | None: ...
+
+
 def get_quantity(
     value: quantity_like,
 ) -> Quantity | None:
     """
     Convert a value to a pint quantity.
+
+    Only a null-ish input (None or Ellipsis) yields None, so a string,
+    Unit or Quantity is typed as producing a Quantity and stays usable in
+    arithmetic without a narrowing check.
 
     Parameters
     ----------

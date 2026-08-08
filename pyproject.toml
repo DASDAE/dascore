@@ -264,7 +264,7 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
+include = ["dascore", "tests"]
 
 # No rule is ignored any more: invalid-method-override,
 # invalid-argument-type and invalid-return-type have each been burned down
