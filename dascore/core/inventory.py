@@ -987,17 +987,6 @@ def _clip_intervals(items, lo: float, hi: float) -> list:
     return out
 
 
-class ResponseStage(InventoryModel):
-    """A single stage of a station-channel response."""
-
-    name: str = Field(default="", description="Stage name.")
-    description: str = Field(default="", description="Stage description.")
-    gain: float | None = Field(default=None, description="Stage gain.")
-    extra_fields: dict[str, ExtraFieldValue] = Field(
-        default_factory=dict, description="Extra stage metadata."
-    )
-
-
 class Response(InventoryModel):
     """Station-specific response model associated with a channel."""
 
@@ -1009,9 +998,6 @@ class Response(InventoryModel):
     )
     output_units: UnitQuantity | None = Field(
         default=None, description="Physical units after conversion."
-    )
-    stages: tuple[ResponseStage, ...] = Field(
-        default=(), description="Ordered response stages."
     )
     extra_fields: dict[str, ExtraFieldValue] = Field(
         default_factory=dict, description="Extra response metadata."

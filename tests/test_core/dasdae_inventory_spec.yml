@@ -157,9 +157,6 @@ nodes:
       - name: output_units
         type: UnitQuantity | None
         description: Physical units after response conversion.
-      - name: stages
-        type: tuple[ResponseStage, ...]
-        description: Ordered response stages such as gains, filters, or calibration transforms.
       - name: extra_fields
         type: dict[str, str | int | float | bool]
         description: Extra response metadata not represented by standardized fields.
