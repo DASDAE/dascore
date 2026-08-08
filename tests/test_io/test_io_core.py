@@ -6,7 +6,7 @@ import copy
 import io
 import threading
 from pathlib import Path
-from typing import ClassVar, TypeVar
+from typing import ClassVar, Literal, TypeVar
 
 import h5py
 import numpy as np
@@ -66,13 +66,13 @@ class _FiberImplementer(FiberIO):
     def read(self, resource, **kwargs):
         """Dummy read."""
 
-    def write(self, spool: SpoolType, resource):
+    def write(self, spool, resource, **kwargs):
         """Dummy write."""
 
-    def scan(self, resource: BinaryReader):
+    def scan(self, resource: BinaryReader, *, snap: bool = True, **kwargs):
         """Dummy scan."""
 
-    def get_format(self, resource):
+    def get_format(self, resource, **kwargs):
         """Dummy get_format."""
 
 
@@ -82,15 +82,15 @@ class _FiberCaster(FiberIO):
     name = "_TestFormatter"
     version = "2"
 
-    def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
+    def read(self, resource: BinaryReader, **kwargs):
         """Just ensure read was cast to correct type."""
         assert isinstance(resource, io.BufferedReader)
 
-    def write(self, spool: SpoolType, resource: BinaryWriter):
+    def write(self, spool, resource: BinaryWriter, **kwargs):
         """Ditto for write."""
         assert isinstance(resource, io.BufferedWriter)
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """And get format."""
         assert isinstance(resource, Path)
         return False
@@ -132,7 +132,7 @@ class _FiberDirectory(FiberIO):
     version = "0.1"
     input_type = "directory"
 
-    def get_format(self, resource) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept directories which have specific naming."""
         path = Path(resource)
         name = path.name
@@ -160,7 +160,7 @@ class _ReadOnlySummaryFormatter(FiberIO):
     name = "_read_only_summary_formatter"
     version = "1"
 
-    def read(self, resource: Path, snap_dims=True, **kwargs) -> SpoolType:
+    def read(self, resource: Path, snap_dims=True, **kwargs) -> dc.BaseSpool:
         """Return a simple spool for default scan conversion."""
         patch = dc.get_example_patch().update_attrs(tag="fallback")
         values = patch.get_coord("time").values.copy()
@@ -170,7 +170,7 @@ class _ReadOnlySummaryFormatter(FiberIO):
             time = time.snap()
         return dc.spool([patch.update_coords(time=time)])
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept the explicit fallback-scan test resource."""
         path = Path(resource)
         if path.suffix == ".h5" and path.name == "fallback_scan.h5":
@@ -192,7 +192,7 @@ class _MissingOptionalFormatter(FiberIO):
         )
         raise MissingOptionalDependencyError(msg)
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept the explicit missing-optional test resource."""
         path = Path(resource)
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
@@ -1321,21 +1321,21 @@ class TestReloadableSourcePath:
         assert out[0]["source_version"] == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """Default scan should not invent source ids for multi-patch readers."""
         path = tmp_path / "fallback_scan.h5"
         path.write_text("placeholder")
         fio = _ReadOnlySummaryFormatter()
 
-        def read_two_patches(resource: Path, **kwargs) -> SpoolType:
+        def read_two_patches(resource: Path, **kwargs) -> dc.BaseSpool:
             patches = [
                 dc.get_example_patch().update_attrs(tag="first"),
                 dc.get_example_patch().update_attrs(tag="second"),
             ]
             return dc.spool(patches)
 
-        fio.read = read_two_patches  # type: ignore[method-assign]
+        monkeypatch.setattr(fio, "read", read_two_patches)
         out = fio.scan(path)
 
         assert len(out) == 2
