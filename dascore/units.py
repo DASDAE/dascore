@@ -235,9 +235,12 @@ def convert_units(
     return (data * mult1 + add) * mult2
 
 
-def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
+def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity | None:
     """
     Return quantity if it is compatible with dtype.
+
+    A quantity of None passes through for a non-time dtype and raises for
+    a time-like one, where seconds are the only allowable units.
 
     If not raise [UnitError](`dascore.exceptions.UnitError`).
     """
@@ -442,7 +445,10 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
     """
     if is_array(sequence):
         # This is a numpy array, just return multiplied by quantity.
-        return sequence * get_quantity("dimensionless")
+        # Cast because numpy declares ndarray.__mul__ as returning an
+        # ndarray; pint's reflected __rmul__ is what actually runs and it
+        # yields a Quantity.
+        return cast("Quantity", sequence * get_quantity("dimensionless"))
     # iterate the sequence and manually convert to base units.
     try:
         base_unit_sequence = [x.to_base_units() for x in sequence]
@@ -450,7 +456,7 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
         msg = "Not all values in sequence are quantities."
         raise UnitError(msg)
     if not len(base_unit_sequence):
-        return np.array([]) * get_quantity("dimensionless")
+        return cast("Quantity", np.array([]) * get_quantity("dimensionless"))
     units = {x.units for x in base_unit_sequence}
     if len(units) != 1:
         msg = "Not all values in sequence have compatible units."
