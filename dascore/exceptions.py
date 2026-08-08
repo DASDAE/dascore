@@ -143,3 +143,7 @@ class DASCorePluginError(AttributeError, DASCoreError):
 
 class RemoteCacheError(IOError, DASCoreError):
     """Raised when DASCore cannot satisfy remote cache requirements."""
+
+
+class InvalidInventoryError(ValueError, DASCoreError):
+    """Raised when inventory metadata violates the DASDAE inventory model."""
