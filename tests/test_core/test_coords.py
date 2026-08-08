@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import pickle
 import re
+from collections.abc import Mapping
 from functools import partial
 from io import BytesIO
 from typing import ClassVar
@@ -445,6 +446,27 @@ class TestCoordSummary:
     def test_dtype_is_optional(self):
         """The dtype is derived from min, so the constructor must not demand it."""
         summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m")
+        assert summary.dtype == "float64"
+
+    def test_dtype_derived_from_any_mapping(self):
+        """A non-dict mapping must derive dtype rather than take the default."""
+
+        class _Mapping(Mapping):
+            """A mapping which is deliberately not a dict subclass."""
+
+            def __init__(self, data):
+                self._data = data
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+            def __iter__(self):
+                return iter(self._data)
+
+            def __len__(self):
+                return len(self._data)
+
+        summary = CoordSummary.model_validate(_Mapping({"min": 1.0, "max": 2.0}))
         assert summary.dtype == "float64"
 
     def test_json_dump(self):

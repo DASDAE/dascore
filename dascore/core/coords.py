@@ -13,7 +13,7 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Sequence, Sized
+from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
 from functools import cache
 from operator import gt, lt
@@ -211,7 +211,11 @@ class CoordSummary(DascoreBaseModel):
     @classmethod
     def get_correct_dtype_cast_values(cls, data: Any) -> Any:
         """Ensure the correct dtype is provided and value conform to it."""
-        if isinstance(data, dict):
+        # Any mapping, not just a dict: dtype has a default now, so a mapping
+        # this skipped would quietly produce an empty one rather than being
+        # derived from min. Copied because the input need not be mutable.
+        if isinstance(data, Mapping):
+            data = dict(data)
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
             data["dtype"] = str(dtype).split("[")[0]
