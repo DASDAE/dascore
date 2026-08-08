@@ -272,6 +272,20 @@ class TestPureHelpers:
         out = _to_target_unit(typed, str(_gq("m").units), "distance")
         assert out == pytest.approx(5.0)
 
+    def test_range_bounds_unset_is_not_none(self):
+        """Omitting target units must not mean the target is unitless."""
+        from dascore.io.index.query import _UNSET, _range_bounds
+
+        value = (5 * m, 10 * m)
+        kinds = {typed_value(5 * m).kind}
+        # Omitted: bounds pass through with no conversion attempted.
+        _, lo, hi, _ = _range_bounds(value, kinds, _UNSET, "distance")
+        assert (lo, hi) == pytest.approx((5.0, 10.0))
+        # Explicit None means the target is unitless, which cannot answer a
+        # query carrying units.
+        with pytest.raises(UnitError, match="unitless"):
+            _range_bounds(value, kinds, None, "distance")
+
 
 class TestNormalizeSourcePatchId:
     """The single source-patch-id normalizer handles every missing form."""

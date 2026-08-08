@@ -671,12 +671,17 @@ def hash_array(arr: np.ndarray) -> str:
     h.update(arr.dtype.str.encode("ascii"))
     h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
 
+    # .data rather than memoryview(...) throughout: it is the same zero-copy
+    # object, and numpy types it as a memoryview, whereas ndarray's own
+    # __buffer__ is declared only for Python 3.12+ and so is invisible to a
+    # checker resolving the 3.11 floor this project supports.
     if arr.flags.c_contiguous and arr.dtype.kind not in {"M", "m"}:
         # Zero-copy fast path
-        h.update(memoryview(arr).cast("B"))
+        h.update(arr.data.cast("B"))
     else:
         # Canonicalize layout; this also handles datetime/timedelta dtypes,
-        # which do not expose a Python buffer directly.
-        h.update(np.ascontiguousarray(arr).view(np.uint8))
+        # which do not expose a Python buffer directly. The uint8 view must
+        # come before .data -- a datetime64 buffer cannot be exported.
+        h.update(np.ascontiguousarray(arr).view(np.uint8).data)
 
     return h.hexdigest()

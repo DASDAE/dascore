@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import numpy as np
 import pandas as pd
@@ -627,6 +628,26 @@ class TestToFloat:
         """Ensure a single float gets converted to float."""
         assert to_float(1.0) == 1.0
         assert to_float(5) == 5.0
+
+    def test_unregistered_float_able(self):
+        """Anything float() understands still reaches the fallback."""
+        assert to_float(Decimal("3")) == 3.0
+        assert to_float("1.5") == 1.5
+
+    def test_timestamp_uses_registration(self):
+        """Timestamp must dispatch, not fall through to float()."""
+        # float(pd.Timestamp(...)) raises, so reaching the fallback would
+        # turn this into a TypeError rather than seconds from the epoch.
+        stamp = pd.Timestamp("1970-01-02")
+        assert to_float(stamp) == pytest.approx(86400.0)
+        with pytest.raises(TypeError):
+            float(stamp)
+
+    def test_container_return_types(self):
+        """A Series stays a Series; other sequences become arrays."""
+        assert isinstance(to_float(pd.Series([1.0, 2.0])), pd.Series)
+        for seq in ([1.0, 2.0], (1.0, 2.0), np.arange(2.0)):
+            assert isinstance(to_float(seq), np.ndarray)
 
     def test_numerical_array(self):
         """Tests for numerical arrays."""

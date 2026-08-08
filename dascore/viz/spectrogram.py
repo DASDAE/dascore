@@ -13,6 +13,7 @@ from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_compatible_values, get_coord
+from dascore.units import invert_quantity
 from dascore.utils.misc import iterate
 from dascore.utils.patch import patch_function
 from dascore.utils.transformatter import FourierTransformatter
@@ -40,8 +41,7 @@ def _get_new_original_coord(old_coord, array):
 
 def _get_transformed_coord(coord, freqs):
     """Get the transformed coordinates."""
-    units = 1 / coord.units if coord.units is not None else None
-    return get_coord(data=freqs, units=units)
+    return get_coord(data=freqs, units=invert_quantity(coord.units))
 
 
 def _get_new_dims(patch, dim, new_coord_name):

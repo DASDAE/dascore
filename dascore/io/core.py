@@ -264,14 +264,9 @@ def _scan_result_to_summary(
     normalized_source_format = "" if source_format in (None, "") else source_format
     normalized_source_version = "" if source_version in (None, "") else source_version
     summary_source_patch_id = normalize_source_patch_id(source_patch_id)
-    if isinstance(patch_summary, Mapping):
-        return _scan_payload_to_summary(
-            patch_summary,
-            source_path=normalized_source_path,
-            source_format=normalized_source_format,
-            source_version=normalized_source_version,
-            source_patch_id=summary_source_patch_id,
-        )
+    # PatchSummary is checked first even though it is not a Mapping at
+    # runtime: it is not final, so a checker must assume a subclass could be
+    # both, and only this order narrows it out of the Mapping branch.
     if isinstance(patch_summary, PatchSummary):
         return PatchSummary(
             attrs=patch_summary.attrs,
@@ -283,6 +278,14 @@ def _scan_result_to_summary(
             source_format=normalized_source_format or patch_summary.source_format,
             source_version=normalized_source_version or patch_summary.source_version,
             source_patch_id=summary_source_patch_id or patch_summary.source_patch_id,
+        )
+    if isinstance(patch_summary, Mapping):
+        return _scan_payload_to_summary(
+            patch_summary,
+            source_path=normalized_source_path,
+            source_format=normalized_source_format,
+            source_version=normalized_source_version,
+            source_patch_id=summary_source_patch_id,
         )
     if isinstance(patch_summary, dc.PatchAttrs):
         msg = (
@@ -1459,7 +1462,7 @@ def scan_payloads(
     memory than [`scan`](`dascore.scan`) summaries. Prefer scanning specific
     files and discard payloads promptly when probing many resources.
     """
-    out = []
+    out: list[ScanPayload] = []
     iterator = _iter_scan_results(
         path=path,
         file_format=file_format,
@@ -1472,7 +1475,9 @@ def scan_payloads(
     )
     for result, source_info in iterator:
         _validate_scan_payload(result, require_coord_manager=True)
-        payload = dict(result)
+        # dict() erases a TypedDict's value types; the validation above has
+        # already raised unless every key holds what ScanPayload declares.
+        payload = cast("ScanPayload", dict(result))
         payload["attrs"] = PatchAttrs.from_dict(payload["attrs"])
         payload.update(
             {

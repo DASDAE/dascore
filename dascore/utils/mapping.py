@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from collections.abc import Mapping as ABCMap
-from typing import TypeVar
+from typing import TypeVar, cast
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -29,9 +29,17 @@ class FrozenDict(ABCMap[K, V]):
     dict so that the hash doesn't break.
     """
 
+    # Declared rather than inferred. The constructor is overloaded in a way
+    # one untyped signature cannot express -- FrozenDict(**kwargs) can only
+    # produce str keys, FrozenDict(mapping) produces K keys -- which is why
+    # typeshed gives dict.__init__ five overloads. Given **kwargs, the
+    # checker picks the str-keyed one, and dict is invariant in its key, so
+    # the cast is the only way to say what the class actually holds.
+    _dict: dict[K, V]
+
     def __init__(self, *args, **kwargs):
-        self._dict = dict(*args, **kwargs)
-        self._hash = None
+        self._dict = cast("dict[K, V]", dict(*args, **kwargs))
+        self._hash: int | None = None
 
     def __getitem__(self, key: K) -> V:
         return self._dict[key]
@@ -41,10 +49,10 @@ class FrozenDict(ABCMap[K, V]):
 
     def new(self, **kwargs):
         """Copy the contents  and update with new values."""
-        # Passed as a mapping rather than splatted so keys that are not
-        # strings survive the round trip.
-        contents = dict(self._dict)
-        contents.update(kwargs)
+        # Merged in a literal rather than with update, whose typed overloads
+        # all require str keys, and passed as a mapping rather than splatted
+        # so keys that are not strings survive the round trip.
+        contents = {**self._dict, **kwargs}
         return self.__class__(contents)
 
     def __iter__(self) -> Iterator[K]:

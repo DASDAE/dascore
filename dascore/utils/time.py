@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 from functools import singledispatch
+from typing import Any, SupportsFloat, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -322,29 +323,28 @@ def _time_delta_from_str(time_delta_str: str):
             raise TimeError(msg)
 
 
+# The public to_int/to_float below are thin wrappers over these dispatchers
+# so their signatures can be overloaded. Stacking @overload directly on a
+# singledispatch is not an option: the name then refers to the overload set
+# and loses .register.
 @singledispatch
-def to_int(obj: timeable_types | np.ndarray) -> np.ndarray:
-    """
-    Ensure a scalar or array is a number.
-
-    If the input values represents a time or a time-delta, convert it to a
-    an int representing ns.
-    """
+def _to_int(obj: timeable_types | np.ndarray) -> Any:
+    """Dispatch implementation for to_int."""
     msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
 
 
-@to_int.register(float)
-@to_int.register(int)
-@to_int.register(np.number)
+@_to_int.register(float)
+@_to_int.register(int)
+@_to_int.register(np.number)
 def _float_to_num(num: float | int) -> float | int:
     """Convert number to int."""
     return int(num)
 
 
-@to_int.register(np.ndarray)
-@to_int.register(list)
-@to_int.register(tuple)
+@_to_int.register(np.ndarray)
+@_to_int.register(list)
+@_to_int.register(tuple)
 def _array_to_int(array: np.ndarray) -> np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.asarray(array)
@@ -359,47 +359,68 @@ def _array_to_int(array: np.ndarray) -> np.ndarray:
     return array
 
 
-@to_int.register(np.datetime64)
-@to_int.register(datetime)
-@to_int.register(pd.Timestamp)
+@_to_int.register(np.datetime64)
+@_to_int.register(datetime)
+@_to_int.register(pd.Timestamp)
 def _time_to_int(datetime):
     """Simply return the datetime converted to ns."""
     return to_int([to_datetime64(datetime)])[0]
 
 
-@to_int.register(type(None))
-@to_int.register(type(pd.NaT))
-@to_int.register(type(pd.NA))
+@_to_int.register(type(None))
+@_to_int.register(type(pd.NaT))
+@_to_int.register(type(pd.NA))
 def _return_number_null(null):
     """Convert non to NaT."""
     return np.nan
 
 
-@to_int.register(np.timedelta64)
+@_to_int.register(np.timedelta64)
 def _time_delta_to_number(time_delta: np.timedelta64):
     return to_int([to_timedelta64(time_delta)])[0]
 
 
-@to_int.register(pd.Series)
+@_to_int.register(pd.Series)
 def _pandas_timestamp_to_num(ser: pd.Series):
     return ser.astype(np.int64)
 
 
+@overload
+def to_int(obj: pd.Series) -> pd.Series: ...
+
+
+@overload
+def to_int(obj: np.ndarray | list | tuple) -> np.ndarray: ...
+
+
+@overload
+def to_int(obj: Any) -> int | np.integer | float: ...
+
+
+def to_int(obj) -> pd.Series | np.ndarray | int | np.integer | float:
+    """
+    Ensure a scalar or array is a number.
+
+    If the input values represents a time or a time-delta, convert it to a
+    an int representing ns.
+
+    A Series stays a Series and any other sequence becomes an array. Other
+    inputs come back as a scalar, but not always an int: time-like values
+    convert through numpy and yield np.int64, and null yields NaN.
+    """
+    return _to_int(obj)
+
+
 @singledispatch
-def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
-    """
-    Convert various datetime/timedelta things to a float.
-
-    Time offsets represent seconds, and datetimes are seconds from 1970.
-    A pint quantity of time is converted to seconds as well; any other
-    quantity raises [`UnitError`](`dascore.exceptions.UnitError`), since
-    a length or a data size has no float representation here.
-    """
-    return float(obj)
+def _to_float(obj: timeable_types | np.ndarray) -> Any:
+    """Dispatch implementation for to_float."""
+    # Every time type is registered below, so only things float() already
+    # understands reach this fallback.
+    return float(cast("SupportsFloat", obj))
 
 
-@to_float.register(pint.Quantity)
-def _quantity_to_float(quant: pint.Quantity) -> float:
+@_to_float.register(pint.Quantity)
+def _quantity_to_float(quant: pint.Quantity) -> float | np.ndarray:
     """
     Convert a time quantity to seconds.
 
@@ -424,9 +445,9 @@ def _quantity_to_float(quant: pint.Quantity) -> float:
         raise UnitError(msg) from None
 
 
-@to_float.register(np.ndarray)
-@to_float.register(list)
-@to_float.register(tuple)
+@_to_float.register(np.ndarray)
+@_to_float.register(list)
+@_to_float.register(tuple)
 def _array_to_float(array: np.ndarray) -> np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.asarray(array)
@@ -440,35 +461,67 @@ def _array_to_float(array: np.ndarray) -> np.ndarray:
     return array.astype(np.float64)
 
 
-@to_float.register(pd.Series)
+@_to_float.register(pd.Series)
 def _series_to_float(series: pd.Series) -> pd.Series:
     """Convert a series of possible dates to floats."""
     array = to_float(series.values)
     return pd.Series(array, index=series.index)
 
 
-@to_float.register(np.datetime64)
-@to_float.register(datetime)
-@to_float.register(pd.Timestamp)
+@_to_float.register(np.datetime64)
+@_to_float.register(datetime)
+@_to_float.register(pd.Timestamp)
 def _time_to_float(datetime):
     """Simply return the datetime."""
     td = to_datetime64(datetime) - _EPOCH_DATETIME64
     return to_float(td)
 
 
-@to_float.register(type(None))
-@to_float.register(type(pd.NaT))
-@to_float.register(type(pd.NA))
+@_to_float.register(type(None))
+@_to_float.register(type(pd.NaT))
+@_to_float.register(type(pd.NA))
 def _return_null(null):
     """Convert non to NaT."""
     return np.nan
 
 
-@to_float.register(np.timedelta64)
-@to_float.register(timedelta)
-@to_float.register(pd.Timedelta)
+@_to_float.register(np.timedelta64)
+@_to_float.register(timedelta)
+@_to_float.register(pd.Timedelta)
 def _time_delta_to_float(time_delta: np.timedelta64):
     return to_timedelta64(time_delta) / ONE_SECOND
+
+
+@overload
+def to_float(obj: pd.Series) -> pd.Series: ...
+
+
+@overload
+def to_float(obj: np.ndarray | list | tuple) -> np.ndarray: ...
+
+
+@overload
+def to_float(obj: pint.Quantity) -> float | np.ndarray: ...
+
+
+@overload
+def to_float(obj: Any) -> float: ...
+
+
+def to_float(obj) -> pd.Series | np.ndarray | float:
+    """
+    Convert various datetime/timedelta things to a float.
+
+    Time offsets represent seconds, and datetimes are seconds from 1970.
+    A pint quantity of time is converted to seconds as well; any other
+    quantity raises [`UnitError`](`dascore.exceptions.UnitError`), since
+    a length or a data size has no float representation here.
+
+    A Series stays a Series and any other sequence becomes an array; every
+    other input, null included, comes back as a scalar. A quantity follows
+    its own magnitude, so an array-valued one yields an array.
+    """
+    return _to_float(obj)
 
 
 def _is_dtype(obj, numpy_dtype, pandas_dtype) -> bool:

@@ -704,7 +704,7 @@ class CoordManager(DascoreBaseModel):
             msg = f"Cannot use {kwargs} for query; some coords share a dimension."
             raise CoordError(msg)
 
-    def __rich__(self) -> str:
+    def __rich__(self) -> Text:
         """Rich formatting for the coordinate manager."""
         dc_blue = dascore_styles["dc_blue"]
         header_text = Text("➤ ") + Text("Coordinates", style=dc_blue) + Text(" (")
