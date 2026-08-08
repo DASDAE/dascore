@@ -31,17 +31,16 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
+from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
 
 import numpy as np
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 from typing_extensions import Self
 
-from dascore.constants import VALID_DATA_TYPES
+from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.models import (
-    DascoreBaseModel,
     DateTime64,
     InventoryModel,
     TimeRangedModel,
@@ -50,7 +49,7 @@ from dascore.utils.models import (
 
 ExtraFieldValue: TypeAlias = str | int | float | bool
 
-VALID_COUPLING_TYPES = (
+CouplingType = Literal[
     "conduit",
     "trench",
     "outside_borehole_casing",
@@ -58,8 +57,8 @@ VALID_COUPLING_TYPES = (
     "surface",
     "coiled",
     "other",
-)
-CouplingType = Literal[VALID_COUPLING_TYPES]
+]
+VALID_COUPLING_TYPES = get_args(CouplingType)
 
 # Coordinates are stored on the canonical (x, y, z) axes; these labels are
 # resolvable aliases whose meaning the inventory CRS declares.
@@ -78,15 +77,30 @@ _CODE_RE = re.compile(r"[A-Za-z0-9-]+")
 _LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
 
 
-def _check_code(value: str, name: str, allow_blank: bool = False) -> str:
+def _check_code(value: str, allow_blank: bool = False) -> str:
     """Validate a data_source_id code token."""
     pattern = _LOCATION_RE if allow_blank else _CODE_RE
     if pattern.fullmatch(value) is None:
-        allowed = "letters, digits, and '-'"
         blank = " (or blank)" if allow_blank else ""
-        msg = f"Invalid {name} {value!r}; codes use {allowed}{blank}."
+        msg = f"Invalid code {value!r}; codes use letters, digits, and '-'{blank}."
         raise InvalidInventoryError(msg)
     return value
+
+
+# Code tokens used in data_source_id; location codes alone may be blank.
+CodeStr = Annotated[str, AfterValidator(_check_code)]
+LocationCodeStr = Annotated[
+    str, AfterValidator(lambda value: _check_code(value, allow_blank=True))
+]
+# Stable identifier for a shareable inventory resource.
+ResourceIdStr = Annotated[
+    str,
+    Field(
+        default_factory=lambda: str(uuid4()),
+        description="Stable identifier for this shareable inventory resource.",
+    ),
+]
+NotesStr = Annotated[str, Field(default="", description="Additional notes.")]
 
 
 def _is_strictly_increasing(values) -> bool:
@@ -179,10 +193,7 @@ class ExternalResource(InventoryModel):
     """External resource identified but not otherwise modeled by DASCore."""
 
     type: Literal["ExternalResource"] = "ExternalResource"
-    resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    )
+    resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
     description: str = Field(default="", description="Free-form description.")
@@ -192,10 +203,7 @@ class Interrogator(InventoryModel):
     """DAS interrogator unit used for data collection."""
 
     type: Literal["Interrogator"] = "Interrogator"
-    resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    )
+    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model number.")
@@ -209,10 +217,7 @@ class Enclosure(InventoryModel):
     """Physical housing, pipe, duct, conduit, or carrier resource."""
 
     type: Literal["Enclosure"] = "Enclosure"
-    resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    )
+    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     enclosure_type: str = Field(
         default="",
@@ -236,17 +241,14 @@ class Enclosure(InventoryModel):
     specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 class Cable(InventoryModel):
     """Physical cable containing one or more fiber segments."""
 
     type: Literal["Cable"] = "Cable"
-    resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    )
+    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     owner: str = Field(default="", description="Proprietary owner.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
@@ -273,7 +275,7 @@ class Cable(InventoryModel):
     fiber_count: int | None = Field(
         default=None, description="Number of fibers contained in the cable."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 _Resource: TypeAlias = Annotated[
@@ -325,7 +327,7 @@ class FiberSegment(_OpticalComponentBase):
     center_wavelength: float | None = Field(
         default=None, description="Center wavelength in nm."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 class Connector(_OpticalComponentBase):
@@ -339,7 +341,7 @@ class Connector(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 class Splice(_OpticalComponentBase):
@@ -353,7 +355,7 @@ class Splice(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 class Terminator(_OpticalComponentBase):
@@ -369,7 +371,7 @@ class Terminator(_OpticalComponentBase):
     reflectance: float | None = Field(
         default=None, description="Return loss or reflectance, if known."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
 
 OpticalComponent: TypeAlias = Annotated[
@@ -424,7 +426,7 @@ class Geometry(InventoryModel):
         return self
 
     @property
-    def distance_span(self) -> tuple[float, float]:
+    def interval(self) -> tuple[float, float]:
         """The (start, end) optical distance covered by this segment."""
         return (self.distance[0], self.distance[-1])
 
@@ -439,7 +441,7 @@ class Geometry(InventoryModel):
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         coords = np.asarray(self.coordinates, dtype=float)
         out = np.full((len(dist), coords.shape[1]), np.nan)
-        start, end = self.distance_span
+        start, end = self.interval
         inside = (dist >= start) & (dist < end)
         for dim in range(coords.shape[1]):
             out[inside, dim] = np.interp(
@@ -448,7 +450,23 @@ class Geometry(InventoryModel):
         return out
 
 
-class CouplingCondition(InventoryModel):
+class _IntervalModel(InventoryModel):
+    """Base for items placed by start distance plus optical length."""
+
+    distance: float = Field(
+        description="Start optical distance for this interval in meters."
+    )
+    optical_length: float = Field(
+        gt=0.0, description="Interval length in meters."
+    )
+
+    @property
+    def interval(self) -> tuple[float, float]:
+        """The (start, end) optical distance covered by this item."""
+        return (self.distance, self.distance + self.optical_length)
+
+
+class CouplingCondition(_IntervalModel):
     """
     Acoustic coupling condition for an interval of an optical path.
 
@@ -456,12 +474,6 @@ class CouplingCondition(InventoryModel):
     idiom). Coverage may be partial and conditions may not overlap.
     """
 
-    distance: float = Field(
-        description="Start optical distance for this coupling condition in meters."
-    )
-    optical_length: float = Field(
-        gt=0.0, description="Interval length described by this coupling in meters."
-    )
     coupling_type: CouplingType = Field(description="Controlled coupling category.")
     medium: str = Field(default="", description="Surrounding medium.")
     attachment: str = Field(default="", description="Attachment method.")
@@ -472,30 +484,14 @@ class CouplingCondition(InventoryModel):
             "when relevant."
         ),
     )
-    notes: str = Field(default="", description="Additional notes.")
-
-    @property
-    def interval(self) -> tuple[float, float]:
-        """The (start, end) optical distance covered by this condition."""
-        return (self.distance, self.distance + self.optical_length)
+    notes: NotesStr = ''
 
 
-class OpticalPathAnnotation(InventoryModel):
+class OpticalPathAnnotation(_IntervalModel):
     """Named interval on an optical path; annotations may overlap freely."""
 
-    distance: float = Field(
-        description="Start optical distance for this annotation in meters."
-    )
-    optical_length: float = Field(
-        gt=0.0, description="Interval length described by this annotation in meters."
-    )
     label: str = Field(default="", description="Label for this interval.")
-    notes: str = Field(default="", description="Additional notes.")
-
-    @property
-    def interval(self) -> tuple[float, float]:
-        """The (start, end) optical distance covered by this annotation."""
-        return (self.distance, self.distance + self.optical_length)
+    notes: NotesStr = ''
 
 
 class DistanceMap(InventoryModel):
@@ -553,6 +549,7 @@ class DistanceMap(InventoryModel):
     def source_values(self) -> tuple[float, ...]:
         """The populated input axis values."""
         out = self.channel if self.channel is not None else self.instrument_distance
+        assert out is not None  # guaranteed by the model validator
         return out
 
     def map_to_distance(self, values, slope: float | None = None) -> np.ndarray:
@@ -593,18 +590,18 @@ class Acquisition(TimeRangedModel):
     ``distance_map`` are mutually exclusive channel-resolution mechanisms.
     """
 
-    code: str = Field(description="Channel-like acquisition code.")
-    location_code: str = Field(
+    code: CodeStr = Field(description="Channel-like acquisition code.")
+    location_code: LocationCodeStr = Field(
         default="",
         description=(
             "FDSN-style location code naming the optical path lineage this "
             "acquisition interrogates; may be blank, as in FDSN."
         ),
     )
-    data_type: Literal[VALID_DATA_TYPES] = Field(
+    data_type: DataType = Field(
         default="", description="Quantity measured or produced."
     )
-    data_category: str = Field(
+    data_category: DataCategory = Field(
         default="", description="Acquisition family such as DAS, DTS, or DSS."
     )
     data_units: UnitQuantity | None = Field(
@@ -668,16 +665,6 @@ class Acquisition(TimeRangedModel):
         description="Extra acquisition metadata not represented by the model.",
     )
 
-    @field_validator("code")
-    @classmethod
-    def _check_acq_code(cls, value):
-        return _check_code(value, "acquisition code")
-
-    @field_validator("location_code")
-    @classmethod
-    def _check_location(cls, value):
-        return _check_code(value, "location code", allow_blank=True)
-
     @model_validator(mode="after")
     def _check_resolution_mechanism(self) -> Self:
         """start_distance and distance_map are mutually exclusive."""
@@ -710,6 +697,19 @@ class Acquisition(TimeRangedModel):
         return self.start_distance + vals * self.spatial_interval
 
 
+def _overlapping_epochs(items, key) -> list[tuple]:
+    """Return (key, first, second) for time-overlapping items sharing a key."""
+    groups: dict = {}
+    for item in items:
+        groups.setdefault(key(item), []).append(item)
+    out = []
+    for group_key, group in groups.items():
+        for first, second in itertools.combinations(group, 2):
+            if first.overlaps(second):
+                out.append((group_key, first, second))
+    return out
+
+
 def _intervals_overlap(intervals: list[tuple[float, float]]) -> tuple | None:
     """Return the first overlapping pair of half-open intervals, or None."""
     ordered = sorted(intervals)
@@ -738,7 +738,7 @@ class OpticalPath(TimeRangedModel):
             "optical distances."
         ),
     )
-    location_code: str = Field(
+    location_code: LocationCodeStr = Field(
         default="",
         description=(
             "FDSN-style location code naming this path lineage within its "
@@ -760,11 +760,6 @@ class OpticalPath(TimeRangedModel):
     otdr_traces: tuple[ExternalResource | str, ...] = Field(
         default=(), description="References to OTDR traces of this path."
     )
-
-    @field_validator("location_code")
-    @classmethod
-    def _check_location(cls, value):
-        return _check_code(value, "location code", allow_blank=True)
 
     @property
     def optical_length(self) -> float:
@@ -802,30 +797,17 @@ class OpticalPath(TimeRangedModel):
             filled = ~np.isnan(seg_coords[:, 0])
             out[filled] = seg_coords[filled]
         # The outermost endpoint of the geometry coverage domain is included.
-        outer = max(seg.distance_span[1] for seg in self.geometry)
+        outer = max(seg.interval[1] for seg in self.geometry)
         at_outer = dist == outer
         if np.any(at_outer):
-            segment = max(self.geometry, key=lambda s: s.distance_span[1])
+            segment = max(self.geometry, key=lambda s: s.interval[1])
             coords = np.asarray(segment.coordinates, dtype=float)
             out[at_outer] = coords[-1]
         return out
 
-    def coupling_at(self, distances) -> list[CouplingCondition | None]:
-        """Return the coupling condition covering each distance, or None."""
-        dist = np.atleast_1d(np.asarray(distances, dtype=float))
-        outer = max((c.interval[1] for c in self.coupling), default=None)
-        out: list[CouplingCondition | None] = [None] * len(dist)
-        for cond in self.coupling:
-            start, end = cond.interval
-            for i, d in enumerate(dist):
-                covered = start <= d < end or (d == end == outer)
-                if covered:
-                    out[i] = cond
-        return out
-
-    def validate(self, tolerance: float = 1e-9) -> Self:
+    def check(self, tolerance: float = 1e-9) -> Self:
         """
-        Validate track rules for this path.
+        Check track rules for this path.
 
         Checks that geometry and coupling stay within path bounds and do not
         overlap (partial coverage is legal), and that annotations stay within
@@ -833,7 +815,7 @@ class OpticalPath(TimeRangedModel):
         """
         errors = []
         start, end = self.start_distance, self.end_distance
-        geo_spans = [seg.distance_span for seg in self.geometry]
+        geo_spans = [seg.interval for seg in self.geometry]
         coup_spans = [c.interval for c in self.coupling]
         anno_spans = [a.interval for a in self.annotations]
         for name, spans in (
@@ -847,6 +829,11 @@ class OpticalPath(TimeRangedModel):
                         f"{name} interval ({lo}, {hi}) extends past path "
                         f"span ({start}, {end})."
                     )
+        dims = {len(seg.coordinates[0]) for seg in self.geometry}
+        if len(dims) > 1:
+            errors.append(
+                f"Geometry segments mix coordinate dimensionalities {sorted(dims)}."
+            )
         for name, spans in (("geometry", geo_spans), ("coupling", coup_spans)):
             overlap = _intervals_overlap(spans)
             if overlap is not None:
@@ -884,7 +871,7 @@ class OpticalPath(TimeRangedModel):
                 components.append(comp.model_copy(update={"optical_length": length}))
         geometry = []
         for seg in self.geometry:
-            s_lo, s_hi = seg.distance_span
+            s_lo, s_hi = seg.interval
             if s_hi <= lo or s_lo >= hi:
                 continue
             new_lo, new_hi = max(s_lo, lo), min(s_hi, hi)
@@ -934,7 +921,9 @@ class OpticalPath(TimeRangedModel):
         Return the path traversed from the far end.
 
         Every distance-bearing track is rewritten against the reversed axis;
-        the absolute span is unchanged.
+        the absolute span is unchanged. Because intervals stay half-open on
+        the left, exact interval endpoints swap membership under reversal
+        (measure-zero; ``reverse().reverse()`` is exact).
         """
         start, end = self.start_distance, self.end_distance
 
@@ -1052,8 +1041,8 @@ class Response(InventoryModel):
 class Channel(TimeRangedModel):
     """Station-level time-series stream identity."""
 
-    code: str = Field(description="Channel code used in data source identifiers.")
-    location_code: str = Field(
+    code: CodeStr = Field(description="Channel code used in data source identifiers.")
+    location_code: LocationCodeStr = Field(
         default="", description="FDSN-style location code; may be blank."
     )
     coordinates: tuple[float, ...] | None = Field(
@@ -1063,7 +1052,7 @@ class Channel(TimeRangedModel):
             "coordinate_labels declare their meaning."
         ),
     )
-    data_type: Literal[VALID_DATA_TYPES] = Field(
+    data_type: DataType = Field(
         default="", description="Quantity measured or produced."
     )
     data_units: UnitQuantity | None = Field(
@@ -1073,21 +1062,11 @@ class Channel(TimeRangedModel):
         default=None, description="Optional response metadata."
     )
 
-    @field_validator("code")
-    @classmethod
-    def _check_chan_code(cls, value):
-        return _check_code(value, "channel code")
-
-    @field_validator("location_code")
-    @classmethod
-    def _check_location(cls, value):
-        return _check_code(value, "location code", allow_blank=True)
-
 
 class Station(TimeRangedModel):
     """Point-like observing identity under a network."""
 
-    code: str = Field(description="Station code used in data source identifiers.")
+    code: CodeStr = Field(description="Station code used in data source identifiers.")
     name: str = Field(default="", description="Human-readable station name.")
     coordinates: tuple[float, ...] | None = Field(
         default=None,
@@ -1099,12 +1078,7 @@ class Station(TimeRangedModel):
     channels: tuple[Channel, ...] = Field(
         default=(), description="Channels associated with this station."
     )
-    notes: str = Field(default="", description="Additional notes.")
-
-    @field_validator("code")
-    @classmethod
-    def _check_sta_code(cls, value):
-        return _check_code(value, "station code")
+    notes: NotesStr = ''
 
 
 class FiberArray(TimeRangedModel):
@@ -1115,7 +1089,7 @@ class FiberArray(TimeRangedModel):
     location code carrying one optical path at a time.
     """
 
-    code: str = Field(description="Station-like fiber array code.")
+    code: CodeStr = Field(description="Station-like fiber array code.")
     name: str = Field(default="", description="Human-readable fiber array name.")
     acquisitions: tuple[Acquisition, ...] = Field(
         default=(), description="Acquisitions associated with this fiber array."
@@ -1123,57 +1097,42 @@ class FiberArray(TimeRangedModel):
     optical_paths: tuple[OpticalPath, ...] = Field(
         default=(), description="Optical paths associated with this fiber array."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
-    @field_validator("code")
-    @classmethod
-    def _check_fa_code(cls, value):
-        return _check_code(value, "fiber array code")
-
-    def validate(self) -> Self:
+    def check(self) -> Self:
         """
-        Validate epoch rules for this fiber array.
+        Check epoch rules for this fiber array.
 
         No more than one optical path per location code may be valid at a
         time, and acquisition (location_code, code) pairs must be unique for
         overlapping time ranges. Contained paths are also validated.
         """
         errors = []
-        by_location: dict[str, list[OpticalPath]] = {}
-        for path in self.optical_paths:
-            by_location.setdefault(path.location_code, []).append(path)
-        for location, paths in by_location.items():
-            for i, first in enumerate(paths):
-                for second in paths[i + 1 :]:
-                    if first.overlaps(second):
-                        errors.append(
-                            f"Optical paths {first.name!r} and {second.name!r} "
-                            f"overlap in time for location {location!r}."
-                        )
-        by_key: dict[tuple[str, str], list[Acquisition]] = {}
-        for acq in self.acquisitions:
-            by_key.setdefault((acq.location_code, acq.code), []).append(acq)
-        for key, acqs in by_key.items():
-            for i, first in enumerate(acqs):
-                for second in acqs[i + 1 :]:
-                    if first.overlaps(second):
-                        errors.append(
-                            f"Acquisition epochs for {key} overlap in time."
-                        )
+        for loc, first, second in _overlapping_epochs(
+            self.optical_paths, lambda x: x.location_code
+        ):
+            errors.append(
+                f"Optical paths {first.name!r} and {second.name!r} "
+                f"overlap in time for location {loc!r}."
+            )
+        for key, *_ in _overlapping_epochs(
+            self.acquisitions, lambda x: (x.location_code, x.code)
+        ):
+            errors.append(f"Acquisition epochs for {key} overlap in time.")
         if errors:
             msg = f"Fiber array {self.code!r} validation failed:\n" + "\n".join(
                 errors
             )
             raise InvalidInventoryError(msg)
         for path in self.optical_paths:
-            path.validate()
+            path.check()
         return self
 
 
 class Network(InventoryModel):
     """FDSN-like organizational container below an inventory."""
 
-    code: str = Field(description="Network code.")
+    code: CodeStr = Field(description="Network code.")
     name: str = Field(default="", description="Human-readable network name.")
     description: str = Field(default="", description="Network description.")
     fiber_arrays: tuple[FiberArray, ...] = Field(
@@ -1182,16 +1141,11 @@ class Network(InventoryModel):
     stations: tuple[Station, ...] = Field(
         default=(), description="Stations in this network."
     )
-    notes: str = Field(default="", description="Additional notes.")
+    notes: NotesStr = ''
 
-    @field_validator("code")
-    @classmethod
-    def _check_net_code(cls, value):
-        return _check_code(value, "network code")
-
-    def validate(self) -> Self:
+    def check(self) -> Self:
         """
-        Validate code rules for this network.
+        Check code rules for this network.
 
         Station and fiber-array codes must be disjoint for overlapping time
         ranges; contained fiber arrays are also validated.
@@ -1204,11 +1158,20 @@ class Network(InventoryModel):
                         f"Fiber array and station share code {array.code!r} "
                         "for overlapping time ranges."
                     )
+        for kind, items in (
+            ("fiber array", self.fiber_arrays),
+            ("station", self.stations),
+        ):
+            for code, *_ in _overlapping_epochs(items, lambda x: x.code):
+                errors.append(
+                    f"Duplicate {kind} code {code!r} for overlapping "
+                    "time ranges."
+                )
         if errors:
             msg = f"Network {self.code!r} validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
         for array in self.fiber_arrays:
-            array.validate()
+            array.check()
         return self
 
 
@@ -1221,7 +1184,7 @@ class ResolvedContext(NamedTuple):
     optical_path: OpticalPath | None
 
 
-class Inventory(DascoreBaseModel):
+class Inventory(InventoryModel):
     """
     Top-level DASDAE inventory manifest.
 
@@ -1256,14 +1219,20 @@ class Inventory(DascoreBaseModel):
     def _key_resources(cls, value):
         """Accept an iterable of resources, keying them by resource_id."""
         if isinstance(value, dict):
+            out = {}
             for key, resource in value.items():
-                rid = getattr(resource, "resource_id", None) or (
-                    resource.get("resource_id") if isinstance(resource, dict) else None
-                )
+                if isinstance(resource, dict):
+                    rid = resource.get("resource_id")
+                    if rid is None:
+                        resource = {**resource, "resource_id": key}
+                        rid = key
+                else:
+                    rid = getattr(resource, "resource_id", None)
                 if rid is not None and rid != key:
                     msg = f"Resource key {key!r} disagrees with resource_id {rid!r}."
                     raise InvalidInventoryError(msg)
-            return value
+                out[key] = resource
+            return out
         out = {}
         for resource in value:
             if resource.resource_id in out:
@@ -1284,8 +1253,18 @@ class Inventory(DascoreBaseModel):
         """
         pool: dict[str, Any] = {}
         string_refs: list[str] = []
-        nested_fields = {"Cable": ("container", "specification"),
-                         "Enclosure": ("specification",)}
+        ref_fields = {
+            Cable: ("container", "specification"),
+            Enclosure: ("specification",),
+            _OpticalComponentBase: ("container",),
+            Acquisition: ("interrogator",),
+        }
+
+        def pool_add(rid, resource):
+            if rid in pool and pool[rid] != resource:
+                msg = f"Resource {rid!r} is defined twice with different content."
+                raise InvalidInventoryError(msg)
+            pool[rid] = resource
 
         def register(value):
             if value is None:
@@ -1293,56 +1272,39 @@ class Inventory(DascoreBaseModel):
             if isinstance(value, str):
                 string_refs.append(value)
                 return value
-            rid = value.resource_id
-            normalized = normalize_resource(value)
-            if rid in pool and pool[rid] != normalized:
-                msg = f"Resource {rid!r} is defined twice with different content."
-                raise InvalidInventoryError(msg)
-            pool[rid] = normalized
-            return rid
+            pool_add(value.resource_id, normalize(value))
+            return value.resource_id
 
-        def normalize_resource(resource):
+        def normalize(obj):
+            """Rewrite an object's resource-valued fields to id references."""
+            fields = next(
+                (f for cls, f in ref_fields.items() if isinstance(obj, cls)), ()
+            )
             updates = {}
-            for field in nested_fields.get(type(resource).__name__, ()):
-                value = getattr(resource, field)
+            for field in fields:
+                value = getattr(obj, field)
                 new_value = register(value)
                 if new_value is not value:
                     updates[field] = new_value
-            return resource.model_copy(update=updates) if updates else resource
+            return obj.model_copy(update=updates) if updates else obj
 
         for rid, resource in self.resources.items():
-            normalized = normalize_resource(resource)
-            if rid in pool and pool[rid] != normalized:
-                msg = f"Resource {rid!r} is defined twice with different content."
-                raise InvalidInventoryError(msg)
-            pool[rid] = normalized
-
-        def norm_component(comp):
-            new_ref = register(comp.container)
-            if new_ref is comp.container:
-                return comp
-            return comp.model_copy(update={"container": new_ref})
+            pool_add(rid, normalize(resource))
 
         def norm_path(path):
             return path.model_copy(update={
                 "optical_components": tuple(
-                    norm_component(c) for c in path.optical_components
+                    normalize(c) for c in path.optical_components
                 ),
                 "otdr_traces": tuple(register(x) for x in path.otdr_traces),
             })
-
-        def norm_acq(acq):
-            new_ref = register(acq.interrogator)
-            if new_ref is acq.interrogator:
-                return acq
-            return acq.model_copy(update={"interrogator": new_ref})
 
         networks = tuple(
             net.model_copy(update={
                 "fiber_arrays": tuple(
                     arr.model_copy(update={
                         "acquisitions": tuple(
-                            norm_acq(a) for a in arr.acquisitions
+                            normalize(a) for a in arr.acquisitions
                         ),
                         "optical_paths": tuple(
                             norm_path(p) for p in arr.optical_paths
@@ -1359,6 +1321,7 @@ class Inventory(DascoreBaseModel):
             raise InvalidInventoryError(msg)
         object.__setattr__(self, "resources", pool)
         object.__setattr__(self, "networks", networks)
+        self.__pydantic_fields_set__.update({"resources", "networks"})
         return self
 
     def get_resource(self, resource_id: str):
@@ -1369,14 +1332,14 @@ class Inventory(DascoreBaseModel):
             msg = f"No resource with resource_id {resource_id!r}."
             raise InvalidInventoryError(msg) from None
 
-    def validate(self) -> Self:
-        """Validate the whole inventory tree."""
+    def check(self) -> Self:
+        """Check the whole inventory tree against the model rules."""
         codes = [net.code for net in self.networks]
         if len(codes) != len(set(codes)):
             msg = f"Network codes must be unique; got {codes}."
             raise InvalidInventoryError(msg)
         for net in self.networks:
-            net.validate()
+            net.check()
         return self
 
     def resolve(self, data_source_id: str, time=None) -> ResolvedContext:
@@ -1399,30 +1362,36 @@ class Inventory(DascoreBaseModel):
             )
             raise InvalidInventoryError(msg)
         net_code, array_code, location, acq_code = parts
-        networks = [x for x in self.networks if x.code == net_code]
-        if len(networks) != 1:
-            msg = f"{data_source_id!r} resolves to {len(networks)} networks."
-            raise InvalidInventoryError(msg)
-        network = networks[0]
-        arrays = [
-            x
-            for x in network.fiber_arrays
-            if x.code == array_code and x.is_effective_at(time)
-        ]
-        if len(arrays) != 1:
-            msg = f"{data_source_id!r} resolves to {len(arrays)} fiber arrays."
-            raise InvalidInventoryError(msg)
-        array = arrays[0]
+
+        def exactly_one(matches, kind):
+            if len(matches) != 1:
+                msg = f"{data_source_id!r} resolves to {len(matches)} {kind}."
+                raise InvalidInventoryError(msg)
+            return matches[0]
+
+        network = exactly_one(
+            [x for x in self.networks if x.code == net_code], "networks"
+        )
+        array = exactly_one(
+            [
+                x
+                for x in network.fiber_arrays
+                if x.code == array_code and x.is_effective_at(time)
+            ],
+            "fiber arrays",
+        )
         acqs = [
-            x
-            for x in array.acquisitions
-            if x.code == acq_code
-            and x.location_code == location
-            and x.is_effective_at(time)
+            exactly_one(
+                [
+                    x
+                    for x in array.acquisitions
+                    if x.code == acq_code
+                    and x.location_code == location
+                    and x.is_effective_at(time)
+                ],
+                "acquisitions",
+            )
         ]
-        if len(acqs) != 1:
-            msg = f"{data_source_id!r} resolves to {len(acqs)} acquisitions."
-            raise InvalidInventoryError(msg)
         paths = [
             x
             for x in array.optical_paths
@@ -1440,7 +1409,11 @@ class Inventory(DascoreBaseModel):
 
         This is the correction mechanism: the change applies in place and
         retroactively. ``old`` is matched by equality anywhere in the tree,
-        and ``new`` must be the same type.
+        and ``new`` must be the same type. Note that resource normalization
+        rewrites inline resource objects to id references at construction, so
+        match against the stored (normalized) object — e.g. an acquisition
+        whose ``interrogator`` is the id string — not a pre-construction
+        handle holding the inline object.
         """
         if type(new) is not type(old):
             msg = (
@@ -1463,7 +1436,7 @@ class Inventory(DascoreBaseModel):
             pool = dict(self.resources)
             for rid in matches:
                 pool[rid] = new
-            return self.model_copy(update={"resources": pool})
+            return self.new(resources=pool)
         replaced = 0
 
         def swap(items):
@@ -1495,18 +1468,28 @@ class Inventory(DascoreBaseModel):
                         }
                     )
                 )
+            stations = []
+            for station in swap(net.stations):
+                if station == new:
+                    stations.append(station)
+                    continue
+                stations.append(
+                    station.model_copy(
+                        update={"channels": swap(station.channels)}
+                    )
+                )
             networks.append(
                 net.model_copy(
                     update={
                         "fiber_arrays": tuple(arrays),
-                        "stations": swap(net.stations),
+                        "stations": tuple(stations),
                     }
                 )
             )
         if not replaced:
             msg = "Component to replace was not found in the inventory."
             raise InvalidInventoryError(msg)
-        return self.model_copy(update={"networks": tuple(networks)})
+        return self.new(networks=tuple(networks))
 
     def to_yaml(self, path=None) -> str:
         """Serialize this inventory to YAML, optionally writing to a path."""
@@ -1521,18 +1504,33 @@ class Inventory(DascoreBaseModel):
 
     @classmethod
     def from_yaml(cls, source) -> Self:
-        """Load an inventory from a YAML string or file path."""
+        """
+        Load an inventory from a YAML string or file path.
+
+        Parameters
+        ----------
+        source
+            A path to a YAML file, or YAML text (must contain a newline to
+            be treated as text rather than a missing path).
+        """
         import os
 
         import yaml
 
         text = source
         if isinstance(source, os.PathLike) or (
-            isinstance(source, str) and "\n" not in source and os.path.exists(source)
+            isinstance(source, str) and "\n" not in source
         ):
+            if not os.path.exists(source):
+                msg = f"No such inventory file: {source!r}."
+                raise InvalidInventoryError(msg)
             with open(source) as fh:
                 text = fh.read()
-        return cls(**yaml.safe_load(text))
+        data = yaml.safe_load(text)
+        if not isinstance(data, dict):
+            msg = f"Could not parse an inventory mapping from {source!r}."
+            raise InvalidInventoryError(msg)
+        return cls(**data)
 
 
 def inventory(source=None) -> Inventory:
@@ -1542,8 +1540,22 @@ def inventory(source=None) -> Inventory:
     Parameters
     ----------
     source
-        A YAML file path or string; if None, returns an empty inventory.
+        An existing Inventory (returned as is), a YAML file path or YAML
+        text, or None for an empty inventory.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> empty = dc.inventory()
+    >>> round_tripped = dc.inventory(empty.to_yaml())
     """
+    import os
+
     if source is None:
         return Inventory()
-    return Inventory.from_yaml(source)
+    if isinstance(source, Inventory):
+        return source
+    if isinstance(source, str | os.PathLike):
+        return Inventory.from_yaml(source)
+    msg = f"Could not get an inventory from {source!r}."
+    raise InvalidInventoryError(msg)

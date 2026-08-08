@@ -94,14 +94,24 @@ def sensible_model_equals(self: BaseModel | Mapping, other: object) -> bool:
         return False
     for name in set(x for x in d1 if not x.startswith("_")):
         # skip any private attributes.
-        val1, val2 = d1[name], d2[name]
-        if is_array_like(val1):
-            if not all_close(val1, val2):
-                return False
-        else:
-            if val1 != val2 and not (_all_null(val1) and _all_null(val2)):
-                return False
+        if not _values_equal(d1[name], d2[name]):
+            return False
     return True
+
+
+def _values_equal(val1, val2) -> bool:
+    """Recursively compare dumped values, treating nulls (NaT/NaN) as equal."""
+    if is_array_like(val1):
+        return bool(all_close(val1, val2))
+    if isinstance(val1, Mapping) and isinstance(val2, Mapping):
+        if set(val1) != set(val2):
+            return False
+        return all(_values_equal(val1[key], val2[key]) for key in val1)
+    if isinstance(val1, list | tuple) and isinstance(val2, list | tuple):
+        if len(val1) != len(val2):
+            return False
+        return all(_values_equal(v1, v2) for v1, v2 in zip(val1, val2))
+    return bool(val1 == val2 or (_all_null(val1) and _all_null(val2)))
 
 
 class DascoreBaseModel(BaseModel):
@@ -151,6 +161,17 @@ class InventoryModel(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
+    def new(self, **kwargs) -> Self:
+        """
+        Create a new instance with some attributes updated.
+
+        Dumps all fields (not just the set ones) so union discriminators and
+        validator-normalized fields survive reconstruction.
+        """
+        out = self.model_dump()
+        out.update(kwargs)
+        return self.__class__(**out)
+
 
 class TimeRangedModel(InventoryModel):
     """Base class for inventory objects with time-validity epochs.
@@ -174,10 +195,12 @@ class TimeRangedModel(InventoryModel):
     @model_validator(mode="after")
     def _check_time_order(self):
         """A set end time must follow the start time."""
+        from dascore.exceptions import InvalidInventoryError
+
         start, end = self.start_time, self.end_time
         if not pd.isnull(start) and not pd.isnull(end) and end <= start:
             msg = f"end_time {end} must be after start_time {start}."
-            raise ValueError(msg)
+            raise InvalidInventoryError(msg)
         return self
 
     def is_effective_at(self, time) -> bool:

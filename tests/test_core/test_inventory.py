@@ -100,7 +100,7 @@ class TestPathTracks:
     def test_partial_coverage_is_legal(self):
         """Partial coverage is legal."""
         path = build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
-        assert path.validate() is path
+        assert path.check() is path
 
     def test_coupling_overlap_raises(self):
         """Coupling overlap raises."""
@@ -116,7 +116,7 @@ class TestPathTracks:
             ),
         )
         with pytest.raises(InvalidInventoryError, match="Overlapping coupling"):
-            path.validate()
+            path.check()
 
     def test_geometry_overlap_raises(self):
         """Geometry overlap raises."""
@@ -129,7 +129,7 @@ class TestPathTracks:
             ),
         )
         with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
-            path.validate()
+            path.check()
 
     def test_annotations_overlap_freely(self):
         """Annotations overlap freely."""
@@ -144,7 +144,7 @@ class TestPathTracks:
                 ),
             ),
         )
-        assert path.validate() is path
+        assert path.check() is path
 
     def test_out_of_bounds_raises(self):
         """Out of bounds raises."""
@@ -157,7 +157,7 @@ class TestPathTracks:
             ),
         )
         with pytest.raises(InvalidInventoryError, match="extends past"):
-            path.validate()
+            path.check()
 
     def test_outer_endpoint_included(self):
         """The outermost covered endpoint of the geometry track resolves."""
@@ -264,7 +264,7 @@ class TestEpochs:
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
-            array.validate()
+            array.check()
 
     def test_concurrent_paths_different_locations_legal(self):
         """Location-scoped paths: similar co-located fibers share an array."""
@@ -275,7 +275,7 @@ class TestEpochs:
                 inv.OpticalPath(name="b", location_code="01", start_time="2020-01-01"),
             ),
         )
-        assert array.validate() is array
+        assert array.check() is array
 
     def test_abutting_epochs_legal(self):
         """Half-open handoff: end == next start is legal."""
@@ -288,7 +288,7 @@ class TestEpochs:
                 inv.OpticalPath(name="b", start_time="2021-01-01"),
             ),
         )
-        assert array.validate() is array
+        assert array.check() is array
 
     def test_acquisition_epoch_overlap_raises(self):
         """Acquisition epoch overlap raises."""
@@ -300,7 +300,7 @@ class TestEpochs:
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
-            array.validate()
+            array.check()
 
     def test_acquisition_gap_legal(self):
         """Acquisition gap legal."""
@@ -313,7 +313,7 @@ class TestEpochs:
                 inv.Acquisition(code="RAW", start_time="2020-07-15"),
             ),
         )
-        assert array.validate() is array
+        assert array.check() is array
 
     def test_station_fiber_code_collision_raises(self):
         """Station fiber code collision raises."""
@@ -323,7 +323,7 @@ class TestEpochs:
             stations=(inv.Station(code="L001", start_time="2020-06-01"),),
         )
         with pytest.raises(InvalidInventoryError, match="share code"):
-            network.validate()
+            network.check()
 
 
 class TestResolution:
@@ -399,7 +399,7 @@ class TestPathOperations:
         assert piece.start_distance == 50.0
         assert np.isclose(piece.optical_length, 100.0)
         assert piece.geometry[0].distance[0] == 50.0
-        piece.validate()
+        piece.check()
 
     def test_split_and_rejoin(self, path):
         """Split and rejoin."""
@@ -407,7 +407,7 @@ class TestPathOperations:
         assert left.end_distance == right.start_distance == 100.0
         joined = left + right
         assert np.isclose(joined.optical_length, path.optical_length)
-        joined.validate()
+        joined.check()
 
     def test_reverse_involution(self, path):
         """Reverse involution."""
@@ -421,7 +421,7 @@ class TestPathOperations:
         assert np.isclose(rev.annotations[0].distance, 150.0)
         # 0-200 coupling becomes 50-250.
         assert np.isclose(rev.coupling[0].distance, 50.0)
-        rev.validate()
+        rev.check()
 
     def test_empty_selection_raises(self, path):
         """Empty selection raises."""
@@ -434,13 +434,13 @@ class TestInventory:
 
     def test_validate(self):
         """Validate."""
-        assert build_inventory().validate() is not None
+        assert build_inventory().check() is not None
 
     def test_duplicate_network_codes_raise(self):
         """Duplicate network codes raise."""
         net = inv.Network(code="DAS")
         with pytest.raises(InvalidInventoryError, match="unique"):
-            inv.Inventory(networks=(net, net)).validate()
+            inv.Inventory(networks=(net, net)).check()
 
     def test_yaml_roundtrip(self, tmp_path):
         """Yaml roundtrip."""
@@ -703,3 +703,125 @@ class TestResourcePool:
         """Get resource missing raises."""
         with pytest.raises(InvalidInventoryError, match="No resource"):
             build_inventory().get_resource("nope")
+
+
+class TestInternalReviewRegressions:
+    """Regression tests for internal adversarial/convention review findings."""
+
+    def test_new_preserves_union_discriminators(self):
+        """new() works on models holding discriminated unions."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=10.0),)
+        )
+        renamed = path.new(name="renamed")
+        assert renamed.name == "renamed"
+        assert isinstance(renamed.optical_components[0], inv.FiberSegment)
+
+    def test_new_preserves_normalized_pool(self):
+        """new() keeps resources that normalization moved into the pool."""
+        acq = inv.Acquisition(
+            code="RAW", interrogator=inv.Interrogator(resource_id="int-1")
+        )
+        array = inv.FiberArray(code="L001", acquisitions=(acq,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        updated = inventory.new(resource_id="doc-1")
+        assert updated.get_resource("int-1").resource_id == "int-1"
+
+    def test_equality_with_nested_nat(self):
+        """Structurally identical trees with unset times compare equal."""
+        def make():
+            return inv.FiberArray(
+                code="F", acquisitions=(inv.Acquisition(code="A"),)
+            )
+        assert make() == make()
+
+    def test_replace_finds_rebuilt_handle(self):
+        """replace() matches an equal-but-rebuilt object, not just identity."""
+        inventory = build_inventory()
+        old = build_inventory().networks[0].fiber_arrays[0].acquisitions[0]
+        updated = inventory.replace(old, old.new(gauge_length=99.0))
+        acq = updated.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acq.gauge_length == 99.0
+
+    def test_replace_normalizes_inline_resources(self):
+        """A replacement carrying an inline resource gets normalized."""
+        inventory = build_inventory()
+        old = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        new = old.new(interrogator=inv.Interrogator(resource_id="int-9"))
+        updated = inventory.replace(old, new)
+        assert updated.get_resource("int-9").resource_id == "int-9"
+        acq = updated.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acq.interrogator == "int-9"
+
+    def test_replace_rejects_dangling_reference(self):
+        """Replace rejects dangling reference."""
+        inventory = build_inventory()
+        old = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        with pytest.raises(ValidationError, match="Dangling"):
+            inventory.replace(old, old.new(interrogator="no-such-id"))
+
+    def test_replace_finds_channel(self):
+        """Replace finds channel."""
+        chan = inv.Channel(code="HHZ")
+        station = inv.Station(code="S1", channels=(chan,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", stations=(station,)),)
+        )
+        updated = inventory.replace(chan, chan.new(data_type="strain"))
+        got = updated.networks[0].stations[0].channels[0]
+        assert got.data_type == "strain"
+
+    def test_keyless_dict_resource_adopts_key(self):
+        """A dict resource without resource_id adopts its pool key."""
+        inventory = inv.Inventory(
+            resources={"cab-1": {"type": "Cable", "name": "mycable"}}
+        )
+        assert inventory.get_resource("cab-1").resource_id == "cab-1"
+        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
+
+    def test_duplicate_array_codes_raise(self):
+        """Same-code overlapping fiber arrays fail network check."""
+        net = inv.Network(
+            code="DAS",
+            fiber_arrays=(
+                inv.FiberArray(code="L001", start_time="2020-01-01"),
+                inv.FiberArray(code="L001", start_time="2021-01-01"),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="Duplicate fiber array"):
+            net.check()
+
+    def test_mixed_dimensionality_geometry_raises(self):
+        """Segments with different coordinate dims fail the path check."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            geometry=(
+                inv.Geometry(
+                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                ),
+                inv.Geometry(
+                    distance=(20.0, 30.0),
+                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="dimensionalities"):
+            path.check()
+
+    def test_inventory_function_dispatch(self):
+        """dc.inventory handles bad input with clear errors."""
+        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+            dc.inventory("does_not_exist.yaml")
+        with pytest.raises(InvalidInventoryError, match="Could not get"):
+            dc.inventory(123)
+        existing = build_inventory()
+        assert dc.inventory(existing) is existing
+
+    def test_core_namespace_export(self):
+        """Core namespace export."""
+        from dascore.core import Inventory
+
+        assert Inventory is inv.Inventory
