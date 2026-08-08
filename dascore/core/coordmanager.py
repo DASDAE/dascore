@@ -509,14 +509,14 @@ class CoordManager(DascoreBaseModel):
         new = {x: (None, self.coord_map[x]) for x in coord}
         return self.drop_coords(*coord)[0].update(**new)
 
-    def drop_disassociated_coords(self) -> Self:
+    def drop_disassociated_coords(self) -> tuple[Self, MaybeArray]:
         """Drop all coordinates not associated with a dimension."""
         cmap = self.coord_map
         dim_map = self.dim_map
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coords(*no_dim_coords)
 
-    def drop_private_coords(self, array=None) -> Self:
+    def drop_private_coords(self, array=None) -> tuple[Self, MaybeArray]:
         """Drop all coordinates whose name begin with an underscore."""
         cmap = self.coord_map
         private = tuple(x for x in cmap.keys() if x.startswith("_"))
