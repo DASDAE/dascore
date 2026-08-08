@@ -1,0 +1,680 @@
+id: dasdae-inventory
+title: DASDAE Inventory
+proposal_version: 0.0.1
+direction: TB
+reference_label: resolves
+styles: specs/styles.yml
+vocabularies:
+  VALID_COUPLING_TYPES:
+    - conduit
+    - trench
+    - outside_borehole_casing
+    - wireline
+    - surface
+    - coiled
+    - other
+nodes:
+  Inv:
+    label: Inventory
+    style_class: metadata
+    summary: Top-level DASDAE Inventory manifest that stores document metadata, shared resources, and network containers.
+    attributes:
+      - name: schema_version
+        type: int
+        description: Version of the DASDAE Inventory manifest envelope.
+      - name: resource_id
+        type: str
+        description: Optional identifier for the inventory manifest.
+      - name: creation_info
+        type: CreationInfo
+        description: QuakeML-style creation and update metadata.
+      - name: resources
+        type: dict[str, _PublicInventoryItem]
+        description: Shareable resources keyed by resource_id.
+      - name: coordinate_reference_system
+        type: CoordinateReferenceSystem
+        description: Inventory-wide CRS used by all coordinate-bearing metadata.
+      - name: networks
+        type: tuple[Network, ...]
+        description: Network containers in the inventory.
+  Refs:
+    label: References
+    shape: square
+    style_class: shareable_resource
+    children: collapsed
+    summary: Shareable inventory resources keyed by stable resource_id values.
+    attributes:
+      - name: resources
+        type: dict[str, _PublicInventoryItem]
+        description: Shareable resource objects stored by resource_id.
+      - name: resource_id
+        type: str
+        description: Stable identifier used by nested inventory items to refer to a resource.
+      - name: members
+        type: Interrogator | Cable | Enclosure | ExternalResource
+        description: Resource-id objects that can be reused across the inventory tree.
+  Net:
+    label: Network
+    shape: square
+    style_class: container
+    summary: FDSN-like organizational container below an inventory.
+    attributes:
+      - name: code
+        type: str
+        description: Network code.
+      - name: name
+        type: str
+        description: Human-readable network name.
+      - name: description
+        type: str
+        description: Network description.
+      - name: fiber_arrays
+        type: tuple[FiberArray, ...]
+        description: Fiber arrays associated directly with this network.
+      - name: stations
+        type: tuple[Station, ...]
+        description: Station-level observing identities associated with this network.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Station:
+    label: Station
+    style_class: monitoring
+    summary: Point-like observing identity under a network, hosting channels for non-fiber or colocated observations.
+    note: Station coordinates are interpreted using Inventory.coordinate_reference_system. Dynamic coordinate fields matching CoordinateReferenceSystem.coordinate_labels are also accepted; for example latitude, longitude, and elevation still work when the CRS labels are appropriate.
+    attributes:
+      - name: code
+        type: str
+        description: Station code used in FDSN-like data source identifiers.
+      - name: name
+        type: str
+        description: Human-readable station name.
+      - name: start_time
+        type: datetime64
+        description: Start time for which this station metadata is valid.
+      - name: end_time
+        type: datetime64 | None
+        description: End time for which this station metadata is valid; None while ongoing.
+      - name: coordinates
+        type: tuple[float, ...] | None
+        description: Representative station coordinates ordered according to Inventory.coordinate_reference_system.coordinate_labels.
+      - name: "<coordinate_label>"
+        type: float
+        description: Dynamic coordinate field named by CoordinateReferenceSystem.coordinate_labels, such as latitude, longitude, elevation, x, y, or z.
+      - name: channels
+        type: tuple[Channel, ...]
+        description: Station channels associated with this station.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Channel:
+    label: Channel
+    style_class: instrument
+    children: collapsed
+    summary: Station-level time-series stream identity for non-fiber or colocated observations.
+    note: Channel coordinates are interpreted using Inventory.coordinate_reference_system. Dynamic coordinate fields matching CoordinateReferenceSystem.coordinate_labels are also accepted; for example latitude, longitude, and elevation still work when the CRS labels are appropriate.
+    attributes:
+      - name: code
+        type: str
+        description: Channel code used in FDSN-like data source identifiers.
+      - name: location_code
+        type: str
+        description: FDSN-style location code used to group or disambiguate channels.
+      - name: start_time
+        type: datetime64
+        description: Start time for which this channel metadata is valid.
+      - name: end_time
+        type: datetime64 | None
+        description: End time for which this channel metadata is valid; None while ongoing.
+      - name: coordinates
+        type: tuple[float, ...] | None
+        description: Channel coordinates ordered according to Inventory.coordinate_reference_system.coordinate_labels.
+      - name: "<coordinate_label>"
+        type: float
+        description: Dynamic coordinate field named by CoordinateReferenceSystem.coordinate_labels, such as latitude, longitude, elevation, x, y, or z.
+      - name: data_type
+        type: Literal[VALID_DATA_TYPES]
+        description: Quantity measured or produced by this channel.
+      - name: data_units
+        type: UnitQuantity | None
+        description: Units of data produced by this channel.
+      - name: response
+        type: Response | None
+        description: Optional station-specific response metadata for converting recorded values to physical units.
+  Response:
+    label: Response
+    display: Response
+    style_class: instrument
+    children: collapsed
+    summary: Station-specific response model associated with a channel.
+    attributes:
+      - name: sensitivity
+        type: float | None
+        description: Overall channel sensitivity.
+      - name: input_units
+        type: UnitQuantity | None
+        description: Physical units before response conversion.
+      - name: output_units
+        type: UnitQuantity | None
+        description: Physical units after response conversion.
+      - name: stages
+        type: tuple[ResponseStage, ...]
+        description: Ordered response stages such as gains, filters, or calibration transforms.
+      - name: extra_fields
+        type: dict[str, str | int | float | bool]
+        description: Extra response metadata not represented by standardized fields.
+  FA:
+    label: FiberArray
+    style_class: monitoring
+    summary: Durable fiber-optic observing identity anchored by one or more optical paths.
+    attributes:
+      - name: code
+        type: str
+        description: Station-like fiber array code used in data_source_id.
+      - name: name
+        type: str
+        description: Human-readable fiber array name.
+      - name: start_time
+        type: datetime64
+        description: Start time for which this metadata item is valid.
+      - name: end_time
+        type: datetime64 | None
+        description: End time for which this metadata item is valid; None while ongoing.
+      - name: acquisitions
+        type: tuple[Acquisition, ...]
+        description: Acquisitions associated with this fiber array.
+      - name: optical_paths
+        type: tuple[OpticalPath, ...]
+        description: Optical paths associated with this fiber array.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Acq:
+    label: Acquisition
+    display: Acquisition
+    style_class: instrument
+    summary: Time-aware, channel-like DAS acquisition setup used to resolve acquisition-derived patch metadata.
+    note: (location_code, code) pairs are unique within a FiberArray for overlapping time ranges. Codes use letters, digits, and '-' only; location_code alone may be blank, as in FDSN. All times are UTC and validity intervals are half-open.
+    attributes:
+      - name: code
+        type: str
+        description: Channel-like acquisition code used in data_source_id.
+      - name: location_code
+        type: str
+        description: FDSN-style location code naming the optical path lineage this acquisition interrogates; may be blank, as in FDSN.
+      - name: start_time
+        type: datetime64
+        description: Start time for which this acquisition is valid.
+      - name: end_time
+        type: datetime64 | None
+        description: End time for which this acquisition is valid; None while ongoing.
+      - name: data_type
+        type: Literal[VALID_DATA_TYPES]
+        description: Quantity measured or produced by this acquisition.
+      - name: data_category
+        type: str
+        description: Acquisition family such as DAS, DTS, or DSS.
+      - name: data_units
+        type: UnitQuantity | None
+        description: Units of data produced by this acquisition.
+      - name: interrogator
+        type: Interrogator | None
+        description: Interrogator used for this acquisition.
+      - name: interrogator_port
+        type: str | None
+        description: Instrument connector or launch port that fed this acquisition, for multiplexed interrogators. Descriptive only; it plays no role in resolution.
+      - name: gauge_length
+        type: float | None
+        description: Gauge length used by the acquisition in meters.
+      - name: pulse_rate
+        type: float | None
+        description: Pulse repetition rate in Hz.
+      - name: pulse_width
+        type: float | None
+        description: Pulse width in seconds.
+      - name: sample_rate
+        type: float | None
+        description: FDSN-style acquisition sample rate in Hz.
+      - name: spatial_interval
+        type: float | None
+        description: Nominal spatial sampling interval between channels in meters. Descriptive instrument metadata; it participates in channel resolution only as the affine slope when no multi-point distance_map is present.
+      - name: start_distance
+        type: float | None
+        description: Optical path distance corresponding to channel or index position 0. Mutually exclusive with distance_map.
+      - name: distance_map
+        type: DistanceMap | None
+        description: Measured map from interrogator-reported channels or distances onto optical path distance. Mutually exclusive with start_distance.
+      - name: closed_fiber_loop
+        type: bool
+        description: True when the interrogator is attached to both ends of the optical path.
+      - name: extra_fields
+        type: dict[str, str | int | float | bool]
+        description: Extra acquisition metadata not represented by standardized fields.
+  DistMap:
+    label: DistanceMap
+    display: Distance map
+    style_class: instrument
+    summary: Measured control-point map from an acquisition's channel-like coordinate onto optical path distance.
+    note: The map is a function, not a roster of existing channels. Values between control points are resolved by piecewise linear interpolation, and channels outside the covered range are undefined. Exactly one input axis is populated — channel when the interrogator reports channel numbers, instrument_distance when it reports its own nominal meters. A single-point map takes its interpolation slope from the acquisition's nominal spatial_interval.
+    attributes:
+      - name: channel
+        type: tuple[float, ...] | None
+        description: Interrogator-reported channel numbers at the control points; strictly increasing.
+      - name: instrument_distance
+        type: tuple[float, ...] | None
+        description: Interrogator-reported nominal distances at the control points in meters; strictly increasing.
+      - name: distance
+        type: tuple[float, ...]
+        description: Optical path distances at the control points in meters; strictly increasing.
+  Int:
+    label: Interrogator
+    display: Interrogator
+    style_class: shareable_resource
+    summary: DAS interrogator unit used for data collection.
+    attributes:
+      - name: resource_id
+        type: str
+        description: Stable identifier for this shareable inventory resource.
+      - name: name
+        type: str
+        description: Human-readable resource name.
+      - name: manufacturer
+        type: str
+        description: Manufacturer name of the interrogator.
+      - name: model
+        type: str
+        description: Model number of the interrogator.
+      - name: serial_number
+        type: str
+        description: Serial number of the interrogator.
+      - name: instrument_type
+        type: str
+        description: General instrument category.
+  Cable:
+    label: Cable
+    style_class: shareable_resource
+    summary: Physical cable resource containing one or more fiber segments.
+    note: Cable containers are intentionally limited. A cable can be inside an enclosure or another cable, but optical components should still reference the cable segment they physically occupy.
+    attributes:
+      - name: resource_id
+        type: str
+        description: Stable identifier for this shareable inventory resource.
+      - name: name
+        type: str
+        description: Human-readable cable name.
+      - name: owner
+        type: str
+        description: Proprietary owner of the cable.
+      - name: manufacturer
+        type: str
+        description: Manufacturer of the cable.
+      - name: model
+        type: str
+        description: Model name of the cable.
+      - name: serial_number
+        type: str
+        description: Manufacturer serial number for the cable.
+      - name: diameter
+        type: float | None
+        description: Outer cable diameter in meters.
+      - name: strength_member
+        type: str
+        description: Cable strength member material or construction.
+      - name: maximum_load
+        type: float | None
+        description: Maximum cable load in newtons.
+      - name: minimum_bend_radius
+        type: float | None
+        description: Minimum cable bend radius in meters.
+      - name: specification
+        type: ExternalResource | None
+        description: External cable specification, datasheet, or product page.
+      - name: container
+        type: Enclosure | Cable | None
+        description: Optional containing physical asset, such as an enclosure, pipe, duct, or larger cable assembly.
+      - name: fiber_count
+        type: int | None
+        description: Number of fibers contained in the cable.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Enclosure:
+    label: Enclosure
+    style_class: shareable_resource
+    summary: Physical housing, assembly, pipe, duct, conduit, or carrier resource for optical components or cables.
+    attributes:
+      - name: resource_id
+        type: str
+        description: Stable identifier for this shareable inventory resource.
+      - name: name
+        type: str
+        description: Human-readable enclosure name.
+      - name: enclosure_type
+        type: str
+        description: Functional enclosure type, such as splice_box, junction_box, coupler, turnaround, patch_panel, protective_housing, conduit, pipe, duct, casing, borehole, or tray.
+      - name: owner
+        type: str
+        description: Proprietary owner of the enclosure.
+      - name: material
+        type: str
+        description: Enclosure material, such as steel, PVC, HDPE, concrete, or rock.
+      - name: manufacturer
+        type: str
+        description: Manufacturer of the enclosure.
+      - name: model
+        type: str
+        description: Model name of the enclosure.
+      - name: serial_number
+        type: str
+        description: Manufacturer serial number for the enclosure.
+      - name: inner_diameter
+        type: float | None
+        description: Inner diameter in meters, when known.
+      - name: outer_diameter
+        type: float | None
+        description: Outer diameter in meters, when known.
+      - name: specification
+        type: ExternalResource | None
+        description: External enclosure specification, datasheet, drawing, or product page.
+      - name: notes
+        type: str
+        description: Additional notes.
+  CRS:
+    label: CoordinateReferenceSystem
+    display: CRS
+    style_class: metadata
+    summary: Inventory-wide coordinate reference system used by all coordinate-bearing metadata.
+    attributes:
+      - name: authority
+        type: str
+        description: CRS authority such as EPSG, OGC, CF, or LOCAL.
+      - name: code
+        type: str
+        description: Authority code or local project code.
+      - name: name
+        type: str
+        description: Human-readable CRS name.
+      - name: coordinate_labels
+        type: tuple[str, ...]
+        description: Coordinate labels and ordering, such as latitude, longitude, elevation or x, y, z.
+      - name: units
+        type: str
+        description: Coordinate units when known.
+      - name: vertical_datum
+        type: str
+        description: Vertical datum or reference surface, if known.
+  Ext:
+    label: ExternalResource
+    display: External resource
+    style_class: shareable_resource
+    summary: External resource identified by DASCore but not otherwise modeled.
+    attributes:
+      - name: resource_id
+        type: str
+        description: Stable identifier for this shareable inventory resource.
+      - name: uri
+        type: str
+        description: URI or identifier for the resource.
+      - name: name
+        type: str
+        description: Human-readable resource name.
+      - name: description
+        type: str
+        description: Free-form description of the external resource.
+  Path:
+    label: OpticalPath
+    children: collapsed
+    style_class: monitoring
+    summary: Continuous optical path described by independent component, geometry, coupling, and annotation tracks.
+    note: No more than one OpticalPath per (FiberArray, location_code) is valid at a given time. Validity intervals are half-open and all times are UTC. Optical components tile [start_distance, start_distance + total component length).
+    attributes:
+      - name: name
+        type: str
+        description: Human-readable optical path name.
+      - name: start_distance
+        type: float
+        description: Origin of this path's optical-distance axis in meters; 0 for whole paths. Set by select and split_at so path pieces keep absolute optical distances.
+      - name: location_code
+        type: str
+        description: FDSN-style location code naming this path lineage within its fiber array; blank by default. Acquisitions sharing this location code interrogate this path.
+      - name: start_time
+        type: datetime64
+        description: Start time for which this metadata item is valid.
+      - name: end_time
+        type: datetime64 | None
+        description: End time for which this metadata item is valid; None while ongoing.
+      - name: optical_components
+        type: tuple[OpticalComponent, ...]
+        description: Ordered optical components on this path.
+      - name: geometry
+        type: tuple[Geometry, ...]
+        description: Ordered geometries on this path.
+      - name: coupling
+        type: tuple[CouplingCondition, ...]
+        description: Ordered coupling conditions on this path.
+      - name: annotations
+        type: tuple[OpticalPathAnnotation, ...]
+        description: Ordered optical path annotations.
+      - name: otdr_traces
+        type: tuple[ExternalResource, ...]
+        description: References to OTDR traces for this optical path.
+      - name: optical_length
+        type: float
+        description: Computed total optical length from optical_components.
+  Comp:
+    label: OpticalComponent
+    display: Component
+    children: collapsed
+    summary: Base class for ordered physical optical components on an optical path.
+    attributes:
+      - name: optical_length
+        type: float
+        description: Optical component length along the optical path in meters.
+      - name: name
+        type: str
+        description: Human-readable component name.
+      - name: container
+        type: Cable | Enclosure | None
+        description: Optional physical container housing this optical component.
+  FiberSegment:
+    label: FiberSegment
+    display: Fiber segment
+    summary: Length of optical fiber within a cable, patch cord, borehole line, or other run.
+    attributes:
+      - name: optical_length
+        type: float
+        description: Fiber segment length along the optical path in meters.
+      - name: name
+        type: str
+        description: Human-readable fiber segment name.
+      - name: container
+        type: Cable | None
+        description: Optional physical cable containing this fiber segment.
+      - name: fiber_index
+        type: int | None
+        description: Fiber number or index within the containing cable, when known.
+      - name: color
+        type: str | None
+        description: Fiber color or color code used to identify the fiber segment within its container.
+      - name: fiber_type
+        type: str
+        description: Fiber or sensing cable type.
+      - name: fiber_standard
+        type: str
+        description: Fiber standard, product family, or specification name.
+      - name: buffer_type
+        type: str
+        description: Buffer, jacket, or cable construction relevant to the fiber segment.
+      - name: attenuation_db_per_km
+        type: float | None
+        description: Attenuation in dB/km for this fiber segment, interpreted as a maximum when sourced from a less-than specification.
+      - name: attenuation_wavelength
+        type: float | None
+        description: Wavelength in nanometers at which attenuation is specified.
+      - name: rayleigh_backscatter_window
+        type: tuple[float, float] | None
+        description: Wavelength interval in nanometers over which Rayleigh backscatter is enhanced.
+      - name: center_wavelength
+        type: float | None
+        description: Center wavelength in nanometers for the fiber segment's enhanced backscatter response.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Connector:
+    label: Connector
+    summary: Joined optical interface between components.
+    attributes:
+      - name: optical_length
+        type: float
+        description: Connector optical length in meters, commonly zero or negligible.
+      - name: name
+        type: str
+        description: Human-readable connector name.
+      - name: container
+        type: Enclosure | None
+        description: Optional enclosure housing this connector.
+      - name: connector_type
+        type: str
+        description: Connector type, such as E2000, LC, SC, FC, or APC.
+      - name: insertion_loss
+        type: float | None
+        description: Insertion loss in dB, when known.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Splice:
+    label: Splice
+    summary: Fused or mechanical splice between optical fiber segments.
+    attributes:
+      - name: optical_length
+        type: float
+        description: Splice optical length in meters, commonly zero or negligible.
+      - name: name
+        type: str
+        description: Human-readable splice name.
+      - name: container
+        type: Enclosure | None
+        description: Optional enclosure housing this splice.
+      - name: splice_type
+        type: str
+        description: Splice type, such as fusion or mechanical.
+      - name: insertion_loss
+        type: float | None
+        description: Insertion loss in dB, when known.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Terminator:
+    label: Terminator
+    summary: End condition of an optical path.
+    attributes:
+      - name: optical_length
+        type: float
+        description: Terminator optical length in meters, commonly zero or negligible.
+      - name: name
+        type: str
+        description: Human-readable terminator name.
+      - name: container
+        type: Enclosure | None
+        description: Optional enclosure housing this terminator.
+      - name: termination_type
+        type: str
+        description: Termination type, such as open, capped, angled, or mirrored.
+      - name: reflectance
+        type: float | None
+        description: Return loss or reflectance value, when known.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Geo:
+    label: Geometry
+    display: Geometry
+    summary: Geometry for an interval of an optical path, interpreted using the inventory CRS.
+    note: A path's geometries act as piecewise segments placed by their distance arrays; coverage spans first to last distance, half-open. Coordinates interpolate linearly in the inventory CRS, only within a single Geometry object; uncovered optical distance has undefined coordinates, and segments may not overlap. A coil or clump is a segment whose coordinates repeat while distance advances. All distances are optical distances.
+    attributes:
+      - name: name
+        type: str
+        description: Human-readable geometry name.
+      - name: distance
+        type: tuple[float, ...]
+        description: Optical distances paired to coordinates; at least two strictly increasing values whose span is the segment's coverage.
+      - name: coordinates
+        type: tuple[tuple[float, ...], ...]
+        description: Coordinate points describing the geometry; same length as distance.
+  Coup:
+    label: CouplingCondition
+    display: Coupling
+    summary: Acoustic coupling condition for an interval of an optical path.
+    note: Coupling conditions are placed by start distance plus optical_length. Coverage may be partial; optical distance not covered by any coupling condition has undefined coupling, and conditions may not overlap one another. All distances are optical distances.
+    attributes:
+      - name: distance
+        type: float
+        description: Start optical distance for this coupling condition in meters.
+      - name: optical_length
+        type: float
+        description: Optical path interval length described by this coupling in meters.
+      - name: coupling_type
+        type: Literal[VALID_COUPLING_TYPES]
+        description: Controlled coupling category. Allowed values are conduit, trench, outside_borehole_casing, wireline, surface, coiled, and other.
+      - name: medium
+        type: str
+        description: Surrounding medium, such as soil, rock, or steel.
+      - name: attachment
+        type: str
+        description: Attachment method, such as clamped or bonded.
+      - name: depth
+        type: float | None
+        description: Depth in meters, positive down, relative to the local surface or deployment reference, when relevant.
+      - name: notes
+        type: str
+        description: Additional notes.
+  Ann:
+    label: OpticalPathAnnotation
+    display: Annotation
+    summary: Named interval on an optical path.
+    attributes:
+      - name: distance
+        type: float
+        description: Start optical distance for this annotation.
+      - name: optical_length
+        type: float
+        description: Optical path interval length described by this annotation in meters.
+      - name: label
+        type: str
+        description: Human-readable label for this path annotation.
+      - name: notes
+        type: str
+        description: Additional notes.
+edges:
+  - [Inv, Refs]
+  - [Inv, Net]
+  - [Inv, CRS]
+  - [Refs, Int]
+  - [Refs, Cable]
+  - [Refs, Enclosure]
+  - [Refs, Ext]
+  - [Net, FA]
+  - [Net, Station]
+  - [FA, Acq]
+  - [FA, Path]
+  - [Acq, DistMap]
+  - [Station, Channel]
+  - [Channel, Response]
+  - [Path, Comp]
+  - [Comp, FiberSegment]
+  - [Comp, Connector]
+  - [Comp, Splice]
+  - [Comp, Terminator]
+  - [Path, Geo]
+  - [Path, Coup]
+  - [Path, Ann]
+references:
+  - [Acq, Int, uses]
+  - [Cable, Enclosure, contained by]
+  - [Cable, Cable, contained by]
+  - [Path, Cable, uses]
+  - [Path, Enclosure, uses]
+  - [FiberSegment, Cable, uses]
+  - [Connector, Enclosure, uses]
+  - [Splice, Enclosure, uses]
+  - [Terminator, Enclosure, uses]

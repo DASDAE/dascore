@@ -131,3 +131,59 @@ class DascoreBaseModel(BaseModel):
         return out
 
     __eq__ = sensible_model_equals
+
+
+class InventoryModel(DascoreBaseModel):
+    """Base class for immutable DASDAE inventory objects."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        validate_assignment=True,
+        validate_default=True,
+        arbitrary_types_allowed=True,
+    )
+
+
+class TimeRangedModel(InventoryModel):
+    """Base class for inventory objects with time-validity epochs.
+
+    Validity intervals are half-open, ``[start_time, end_time)``; an unset
+    (NaT) end time means the epoch is ongoing. All times are UTC.
+    """
+
+    start_time: DateTime64 = Field(
+        default=np.datetime64("NaT", "ns"),
+        description="Start time for which this metadata item is valid (UTC).",
+    )
+    end_time: DateTime64 = Field(
+        default=np.datetime64("NaT", "ns"),
+        description=(
+            "End time for which this metadata item is valid (UTC); "
+            "NaT while ongoing."
+        ),
+    )
+
+    def is_effective_at(self, time) -> bool:
+        """Return True if this epoch is valid at the supplied time (half-open)."""
+        from dascore.utils.time import to_datetime64
+
+        time = to_datetime64(time)
+        if pd.isnull(time):
+            return True
+        start = self.start_time
+        end = self.end_time
+        after_start = pd.isnull(start) or start <= time
+        before_end = pd.isnull(end) or time < end
+        return bool(after_start and before_end)
+
+    def overlaps(self, other: TimeRangedModel) -> bool:
+        """Return True if two half-open validity intervals overlap."""
+        s1, e1, s2, e2 = (
+            self.start_time, self.end_time, other.start_time, other.end_time
+        )
+        start_1 = np.datetime64("1678-01-01") if pd.isnull(s1) else s1
+        start_2 = np.datetime64("1678-01-01") if pd.isnull(s2) else s2
+        end_1 = np.datetime64("2260-01-01") if pd.isnull(e1) else e1
+        end_2 = np.datetime64("2260-01-01") if pd.isnull(e2) else e2
+        return bool(max(start_1, start_2) < min(end_1, end_2))
