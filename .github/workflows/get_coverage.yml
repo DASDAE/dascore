@@ -31,7 +31,6 @@ jobs:
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
-          cache-number: 1
           prepare-test-data: "true"
 
       - name: run test suite

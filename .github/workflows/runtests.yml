@@ -19,8 +19,6 @@ permissions:
   contents: read
 
 env:
-  # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 1
   # Where the test-data cache is restored; pooch reads files from here.
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
@@ -54,7 +52,6 @@ jobs:
       # key; the losing save just logs a warning.
       - uses: ./.github/actions/prime-test-data-cache
         with:
-          cache-number: ${{ env.CACHE_NUMBER }}
           lookup-only: "true"
 
   test_code:
@@ -84,7 +81,6 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
-          cache-number: ${{ env.CACHE_NUMBER }}
           prepare-test-data: "true"
 
       # Runs test suite and calculates coverage

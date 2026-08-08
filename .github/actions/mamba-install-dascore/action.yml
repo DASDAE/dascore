@@ -20,11 +20,6 @@ inputs:
     default: "true"
     required: false
 
-  cache-number:
-    description: "Cache number. Use != 1 to reset data cache"
-    required: false
-    default: "1"
-
   prepare-test-data:
     description: "If true, restore, prime, and save the test-data cache after installation"
     required: false
@@ -83,8 +78,6 @@ runs:
     - name: prepare test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
       uses: ./.github/actions/prime-test-data-cache
-      with:
-        cache-number: ${{ inputs.cache-number }}
 
     # Print out the package info for current environment
     - name: print package info

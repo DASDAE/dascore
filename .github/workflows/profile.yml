@@ -46,7 +46,6 @@ jobs:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
           install-group-str: "[profile]"
-          cache-number: 1
           prepare-test-data: "true"
 
       - name: Run benchmarks

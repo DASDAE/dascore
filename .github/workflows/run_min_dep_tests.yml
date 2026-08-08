@@ -50,7 +50,6 @@ jobs:
       # jobs start; see the same step in runtests.yml.
       - uses: ./.github/actions/prime-test-data-cache
         with:
-          cache-number: 1
           lookup-only: "true"
 
   test_code_min_deps:
@@ -78,7 +77,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           environment-file: './.github/min_deps_environment.yml'
           install-group-str: "[test]"
-          cache-number: 1
           prepare-test-data: "true"
 
       # Runs test suite and calculates coverage

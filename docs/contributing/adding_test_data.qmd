@@ -51,7 +51,7 @@ Next, add your file to dascore's data registry (dascore/data_registry.txt).
 You will have to get the sha256 hash of your test file, for that you can simply use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html), and you can create the proper download url using the other entries as examples.
 
 :::{.callout-note}
-CI doesn't download registry files one by one; it checks out the whole test_data repo once and builds a single test-data cache shared by all operating systems (see `.github/actions/prime-test-data-cache`). The cache invalidates automatically whenever data_registry.txt changes. If the cache ever needs a manual reset (e.g. if `DATA_VERSION` changes without a registry edit), increment the `cache-number` passed to that action.
+CI doesn't download registry files one by one; it checks out the whole test_data repo once and builds a single test-data cache shared by all operating systems (see `.github/actions/prime-test-data-cache`). The cache invalidates automatically whenever data_registry.txt or `DATA_VERSION` changes. If it ever needs a manual reset, increment the cache number in that action.
 :::
 
 The name, hash, and url might look something like this:

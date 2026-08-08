@@ -7,11 +7,6 @@ description: >
   files (composite actions can't set caller env vars without GITHUB_ENV,
   which zizmor forbids).
 inputs:
-  cache-number:
-    description: "Cache number. Use != 1 to reset data cache"
-    required: false
-    default: "1"
-
   lookup-only:
     description: "If true, check cache existence (and prime on miss) without downloading it"
     required: false
@@ -25,13 +20,21 @@ runs:
       shell: bash
       env:
         REGISTRY_HASH: ${{ hashFiles('dascore/data_registry.txt') }}
-        INPUT_CACHE_NUMBER: ${{ inputs.cache-number }}
       run: |
         if [ -z "$REGISTRY_HASH" ]; then
           echo "dascore/data_registry.txt not found; checkout dascore first." >&2
           exit 1
         fi
-        echo "key=test-data-${REGISTRY_HASH}-${INPUT_CACHE_NUMBER}" >> "$GITHUB_OUTPUT"
+        # DATA_VERSION is part of the key because pooch reads files from a
+        # <DATA_VERSION> subdir of the cache; a version bump must invalidate.
+        data_version="$(sed -n 's/^DATA_VERSION *= *"\([^"]*\)".*/\1/p' dascore/constants.py)"
+        if [ -z "$data_version" ]; then
+          echo "DATA_VERSION not found in dascore/constants.py." >&2
+          exit 1
+        fi
+        # Bump this number to manually reset the cache.
+        cache_number=1
+        echo "key=test-data-${data_version}-${REGISTRY_HASH}-${cache_number}" >> "$GITHUB_OUTPUT"
 
     # The path/key literals must be identical in restore and save, and
     # enableCrossOsArchive must be set on both, so one ubuntu-primed cache
