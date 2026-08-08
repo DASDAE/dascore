@@ -277,7 +277,8 @@ class TestPureHelpers:
         from dascore.io.index.query import _UNSET, _range_bounds
 
         value = (5 * m, 10 * m)
-        kinds = {typed_value(5 * m).kind}
+        assert (kind_probe := typed_value(5 * m)) is not None
+        kinds = {kind_probe.kind}
         # Omitted: bounds pass through with no conversion attempted.
         _, lo, hi, _ = _range_bounds(value, kinds, _UNSET, "distance")
         assert (lo, hi) == pytest.approx((5.0, 10.0))
@@ -406,7 +407,7 @@ class TestAdaptAndBackendBasics:
         assert len(back._attr_meta()) == 1
         back.close()
 
-    def test_write_failure_rolls_back(self, tmp_path):
+    def test_write_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing write leaves the index unchanged."""
         back = get_backend(tmp_path / "rollback.sqlite3")
         records = summaries_to_records(make_summaries())
@@ -416,10 +417,10 @@ class TestAdaptAndBackendBasics:
         def boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        back._bulk_insert = boom
+        monkeypatch.setattr(back, "_bulk_insert", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.write_sources(records[1:])
-        del back.__dict__["_bulk_insert"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -474,7 +475,7 @@ class TestAdaptAndBackendBasics:
         assert back.get_metadata()["last_indexed_ns"] == before
         back.close()
 
-    def test_delete_failure_rolls_back(self, tmp_path):
+    def test_delete_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing delete leaves the index unchanged."""
         back = get_backend(tmp_path / "delete.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
@@ -483,10 +484,10 @@ class TestAdaptAndBackendBasics:
         def boom(paths, base_uri=""):
             raise RuntimeError("simulated failure")
 
-        back._delete_by_paths = boom
+        monkeypatch.setattr(back, "_delete_by_paths", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.delete_sources(["das/file_1.h5"])
-        del back.__dict__["_delete_by_paths"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -1077,6 +1078,7 @@ class TestCoordDeduplication:
         patch = patch.update_coords(distance=values)
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
+        assert record is not None
         assert record.coord_hash == patch.get_coord("distance").fingerprint()
         assert record.def_key.startswith("fp:")
 
@@ -1095,6 +1097,7 @@ class TestCoordDeduplication:
             source_version="1",
         )
         fresh = _coord_record("time", summary.coords["time"])
+        assert fresh is not None
         assert fresh.def_key.startswith("sum:")
         back = get_backend(tmp_path / "sum.sqlite3")
         back.write_sources(summaries_to_records([summary]))
@@ -1327,7 +1330,7 @@ class TestTransactionIsolation:
     """The statement lock covers whole transactions (round-4 F5)."""
 
     @pytest.mark.concurrency
-    def test_reader_never_sees_half_written_replacement(self, tmp_path):
+    def test_reader_never_sees_half_written_replacement(self, tmp_path, monkeypatch):
         """A concurrent reader blocks during a source replacement."""
         import threading
 
@@ -1363,7 +1366,7 @@ class TestTransactionIsolation:
         writer = threading.Thread(
             target=lambda: backend.write_sources([record]), daemon=True
         )
-        type(backend)._delete_by_paths = paused_delete
+        monkeypatch.setattr(type(backend), "_delete_by_paths", paused_delete)
         try:
             writer.start()
             assert in_delete.wait(timeout=10)
@@ -1378,7 +1381,6 @@ class TestTransactionIsolation:
             writer.join(timeout=10)
             reader.join(timeout=10)
         finally:
-            type(backend)._delete_by_paths = original
             release.set()
         assert counts == [1]
         backend.close()
