@@ -613,8 +613,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self._max()
 
     @property
-    def unit_str(self) -> str:
-        """Return a unit string."""
+    def unit_str(self) -> str | None:
+        """Return a unit string, or None for a coord carrying no units."""
         return get_quantity_str(self.units)
 
     @abc.abstractmethod
@@ -640,7 +640,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @property
     def size(self) -> int:
         """Return the size of the coordinate data."""
-        return np.prod(self.shape)
+        # math rather than np.prod: the shape is a tuple of ints, and numpy
+        # hands back an np.int64 (or a float 1.0 for the empty shape).
+        return math.prod(self.shape)
 
     @property
     def evenly_sampled(self) -> bool:
@@ -1033,9 +1035,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def get_next_index(
         self, value, samples=False, allow_out_of_bounds=False, relative=False
-    ) -> int:
+    ) -> np.ndarray | np.integer:
         """
         Get the index a value would have in a coordinate.
+
+        A sized value yields an array of indices; anything else yields a
+        single index, which is a numpy integer rather than a builtin int.
 
         This returns the "next" rather than the closest, index if the exact
         value is not contained by the index.
