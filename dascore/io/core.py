@@ -30,8 +30,9 @@ import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
+    float_select_type,
     path_types,
-    timeable_types,
+    time_select_type,
 )
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
@@ -1061,8 +1062,8 @@ def read(
     path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
-    time: tuple[timeable_types | None, timeable_types | None] | None = None,
-    distance: tuple[float | None, float | None] | None = None,
+    time: time_select_type | None = None,
+    distance: float_select_type | None = None,
     **kwargs,
 ) -> dc.BaseSpool:
     """

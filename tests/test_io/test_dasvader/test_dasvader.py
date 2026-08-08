@@ -7,6 +7,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import h5py
 import numpy as np
@@ -78,7 +79,12 @@ def _write_modern_dasvader_file(
         )
         htime = fi.create_dataset("htime", data=np.array([MODERN_DASVADER.htime_ms]))
 
-        ddas = np.zeros((), dtype=ddas_dtype)
+        # Cast because numpy types np.zeros(..., dtype=<dtype object>) as
+        # float64: a structured dtype built at runtime is invisible to the
+        # stubs, which then reject every field-name index below.
+        ddas = cast(
+            "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+        )
         ddas[data_name] = data.ref
         ddas["htime"] = htime.ref
         ddas["time"]["ref"]["hi"] = 0.0
@@ -112,7 +118,9 @@ def _write_modern_dasvader_file(
                 data=MODERN_DASVADER.pipeline_tracker,
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
-            atrib = np.zeros((), dtype=atrib_dtype)
+            atrib = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=atrib_dtype)
+            )
             atrib["GaugeLength"] = gauge.ref
             atrib["Hostname"] = host.ref
             atrib["PipelineTracker"] = tracker.ref
@@ -166,7 +174,9 @@ class TestDASVader:
             )
             htime = fi.create_dataset("htime", data=np.array([62_135_683_200_000]))
 
-            ddas = np.zeros((), dtype=ddas_dtype)
+            ddas = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+            )
             ddas["strainrate"] = strainrate.ref
             ddas["htime"] = htime.ref
             ddas["time"]["ref"]["hi"] = 0.0
