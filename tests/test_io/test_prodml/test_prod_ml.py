@@ -45,7 +45,7 @@ class TestProdMLFile:
     def issue_221_patch_path(self, tmp_path_factory):
         """Ensure dims are correctly ascertained."""
         tmp_path = tmp_path_factory.mktemp("issue_221")
-        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        path = fetch("prodml_2.0.h5")
         new_path = shutil.copy2(path, tmp_path / "prod_2_monkey_patched.h5")
         with h5py.File(new_path, "a") as fi:
             # monkey patch dimensions to simulate issue.
@@ -56,7 +56,7 @@ class TestProdMLFile:
     def issue_514_patch_path(self, tmp_path_factory):
         """Make a patch with bad endtime metadata. See #412."""
         tmp_path = tmp_path_factory.mktemp("issue_514")
-        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        path = fetch("prodml_2.0.h5")
         new_path = shutil.copy2(path, tmp_path / "prod_2_issue_514.h5")
         with h5py.File(new_path, "a") as fi:
             # monkey patch dimensions to simulate issue.

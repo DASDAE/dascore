@@ -7,6 +7,7 @@ import sys
 import pytest
 
 import dascore as dc
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
@@ -72,7 +73,7 @@ def isolated_remote_cache(tmp_path_factory, permanent_config):
 def _get_remote_case(fetch_name: str, to_http_range_path):
     """Return a range-capable HTTP path for one fetched local test file."""
     with skip_timeout():
-        local_path = dc.utils.downloader.fetch(fetch_name)
+        local_path = fetch(fetch_name)
     return to_http_range_path(local_path)
 
 

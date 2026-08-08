@@ -17,7 +17,6 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.constants import SpoolType
 from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,

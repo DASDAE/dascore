@@ -22,6 +22,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
 )
 from dascore.units import percent
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _spool_up,
     align_patch_coords,
@@ -1024,7 +1025,7 @@ class TestGetPatchWindowSize:
 
     def test_no_warning_under_threshold(self, simple_patch):
         """Test no warning for window sizes under threshold."""
-        with dc.utils.misc.suppress_warnings(action="error"):
+        with suppress_warnings(action="error"):
             # This should not raise (no warning)
             size = get_patch_window_size(
                 simple_patch, {"time": 5}, samples=True, warn_above=10

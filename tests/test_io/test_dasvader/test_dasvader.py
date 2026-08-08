@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import h5py
+import h5py._hl.group as h5py_group
 import numpy as np
 import pytest
 from h5py.h5r import Reference
@@ -203,14 +204,14 @@ class TestDASVader:
         # This intentionally patches h5py internals to simulate dereference
         # failures that are otherwise hard to trigger from the public API.
         # TODO: revisit if h5py internals change or a higher-level hook appears.
-        original_getitem = h5py._hl.group.Group.__getitem__
+        original_getitem = h5py_group.Group.__getitem__
 
         def _patched_getitem(group, key):
             if isinstance(key, Reference):
                 raise KeyError("simulated token dereference failure")
             return original_getitem(group, key)
 
-        monkeypatch.setattr(h5py._hl.group.Group, "__getitem__", _patched_getitem)
+        monkeypatch.setattr(h5py_group.Group, "__getitem__", _patched_getitem)
 
         patch = dc.read(dasvader_modern_path)[0]
         scanned = dc.scan(dasvader_modern_path)
