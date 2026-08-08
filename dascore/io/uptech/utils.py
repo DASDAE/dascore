@@ -41,13 +41,15 @@ def _get_time(resource):
     values = np.asarray(resource[_TIME][:], dtype=float)
     if not np.all(np.isfinite(values)):
         raise ValueError("Uptech acquisition time contains non-finite values.")
+    frequency = float(data.attrs["acquisition_frequency"])
+    if not np.isfinite(frequency) or frequency <= 0:
+        raise ValueError("Uptech acquisition_frequency must be finite and positive.")
     if len(values) > 1:
         steps = np.diff(values)
         if np.any(steps <= 0) or not np.allclose(
             steps, steps[0], rtol=1e-4, atol=1e-9
         ):
             raise ValueError("Uptech acquisition time must be uniformly increasing.")
-        frequency = float(data.attrs["acquisition_frequency"])
         if not np.isclose(steps.mean() * frequency, 1, rtol=1e-3):
             raise ValueError(
                 "Uptech acquisition time disagrees with acquisition_frequency."
@@ -79,6 +81,8 @@ def _get_attrs(resource, coords=None, extras=None):
         "coords": coords or _get_coords(resource),
         "data_type": "strain_rate",
         "data_units": "1/s",
+        "fiber_length": float(data.attrs["fiber_length"]),
+        "fiber_length_units": "m",
         "gauge_length": float(data.attrs["gauge_length"]),
         "gauge_length_units": "m",
         "spatial_resolution": float(data.attrs["spatial_resolution"]),

@@ -8,6 +8,7 @@ import pytest
 
 from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch
+from tests.test_io.test_common_io import skip_timeout
 
 
 class TestUptech:
@@ -36,6 +37,8 @@ class TestUptech:
         patch = io.read(path, distance=(2.5, None))[0]
         assert patch.data.shape == (4, 2)
         assert patch.attrs.data_type == "strain_rate"
+        assert patch.attrs.fiber_length == 12800.0
+        assert patch.attrs.fiber_length_units == "m"
         assert io.scan(path)[0].file_format == "Uptech_H5"
 
     def test_not_detected_without_metadata(self, tmp_path):
@@ -48,7 +51,8 @@ class TestUptech:
 
     def test_real_file_uses_channel_spacing(self):
         """Use sampling interval for spacing, not spatial resolution."""
-        path = fetch("uptech_as1000_1.hdf5")
+        with skip_timeout():
+            path = fetch("uptech_as1000_1.hdf5")
         patch = UptechH5V1().read(path)[0]
 
         assert patch.get_coord("distance").step == 2.5
@@ -68,4 +72,21 @@ class TestUptech:
             )
             h5.create_dataset("Acquisition/Time", data=[1e9, 1e9 + 1, 1e9 + 2])
         with pytest.raises(ValueError, match="acquisition_frequency"):
+            UptechH5V1().read(path)
+
+    @pytest.mark.parametrize("frequency", [0.0, -1.0, np.nan, np.inf])
+    def test_frequency_must_be_finite_and_positive(self, tmp_path, frequency):
+        """Reject invalid acquisition frequency for a one-sample file."""
+        path = tmp_path / "invalid_frequency.hdf5"
+        with h5py.File(path, "w") as h5:
+            data = h5.create_dataset("Acquisition/StrainRate", shape=(1, 2))
+            data.attrs.update(
+                acquisition_frequency=frequency,
+                fiber_length=10.0,
+                gauge_length=1.0,
+                sampling_interval=1.0,
+                spatial_resolution=1.0,
+            )
+            h5.create_dataset("Acquisition/Time", data=[1e9])
+        with pytest.raises(ValueError, match="finite and positive"):
             UptechH5V1().read(path)
