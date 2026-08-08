@@ -100,9 +100,14 @@ def sensible_model_equals(self: BaseModel | Mapping, other: object) -> bool:
 
 
 def _values_equal(val1, val2) -> bool:
-    """Recursively compare dumped values, treating nulls (NaT/NaN) as equal."""
-    if is_array_like(val1):
-        return bool(all_close(val1, val2))
+    """Recursively compare dumped values; nulls are equal only to nulls."""
+    if is_array_like(val1) or is_array_like(val2):
+        arr1, arr2 = np.asarray(val1), np.asarray(val2)
+        if arr1.shape != arr2.shape:
+            return False
+        if not np.array_equal(pd.isnull(arr1), pd.isnull(arr2)):
+            return False
+        return bool(all_close(arr1, arr2))
     if isinstance(val1, Mapping) and isinstance(val2, Mapping):
         if set(val1) != set(val2):
             return False
@@ -187,8 +192,7 @@ class TimeRangedModel(InventoryModel):
     end_time: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
         description=(
-            "End time for which this metadata item is valid (UTC); "
-            "NaT while ongoing."
+            "End time for which this metadata item is valid (UTC); NaT while ongoing."
         ),
     )
 
@@ -223,7 +227,10 @@ class TimeRangedModel(InventoryModel):
         Unset (NaT) starts are unbounded past; unset ends are ongoing.
         """
         s1, e1, s2, e2 = (
-            self.start_time, self.end_time, other.start_time, other.end_time
+            self.start_time,
+            self.end_time,
+            other.start_time,
+            other.end_time,
         )
         first_starts_before = pd.isnull(e2) or pd.isnull(s1) or s1 < e2
         second_starts_before = pd.isnull(e1) or pd.isnull(s2) or s2 < e1

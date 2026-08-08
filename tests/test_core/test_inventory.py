@@ -41,9 +41,7 @@ def build_inventory() -> inv.Inventory:
             ),
         ),
         annotations=(
-            inv.OpticalPathAnnotation(
-                distance=0.0, optical_length=100.0, label="east"
-            ),
+            inv.OpticalPathAnnotation(distance=0.0, optical_length=100.0, label="east"),
         ),
     )
     array = inv.FiberArray(
@@ -67,9 +65,7 @@ class TestGeometry:
     def test_strictly_increasing(self):
         """Strictly increasing."""
         with pytest.raises(ValidationError, match="strictly increasing"):
-            inv.Geometry(
-                distance=(1.0, 1.0), coordinates=((0.0, 0.0), (1.0, 1.0))
-            )
+            inv.Geometry(distance=(1.0, 1.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
 
     def test_paired_lengths(self):
         """Paired lengths."""
@@ -87,9 +83,7 @@ class TestGeometry:
 
     def test_uncovered_is_nan(self):
         """Uncovered is nan."""
-        geo = inv.Geometry(
-            distance=(10.0, 20.0), coordinates=((0.0, 0.0), (1.0, 1.0))
-        )
+        geo = inv.Geometry(distance=(10.0, 20.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
         out = geo.interpolate([5.0, 25.0])
         assert np.all(np.isnan(out))
 
@@ -136,9 +130,7 @@ class TestPathTracks:
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             annotations=(
-                inv.OpticalPathAnnotation(
-                    distance=0.0, optical_length=60.0, label="a"
-                ),
+                inv.OpticalPathAnnotation(distance=0.0, optical_length=60.0, label="a"),
                 inv.OpticalPathAnnotation(
                     distance=50.0, optical_length=20.0, label="b"
                 ),
@@ -177,9 +169,7 @@ class TestDistanceMap:
     def test_exactly_one_input_axis(self):
         """Exactly one input axis."""
         with pytest.raises(ValidationError, match="exactly one input axis"):
-            inv.DistanceMap(
-                channel=(1.0,), instrument_distance=(1.0,), distance=(5.0,)
-            )
+            inv.DistanceMap(channel=(1.0,), instrument_distance=(1.0,), distance=(5.0,))
         with pytest.raises(ValidationError, match="exactly one input axis"):
             inv.DistanceMap(distance=(5.0,))
 
@@ -348,9 +338,7 @@ class TestResolution:
                     end_time="2021-01-01",
                     gauge_length=10.0,
                 ),
-                inv.Acquisition(
-                    code="RAW", start_time="2021-01-01", gauge_length=20.0
-                ),
+                inv.Acquisition(code="RAW", start_time="2021-01-01", gauge_length=20.0),
             ),
         )
         inventory = inv.Inventory(
@@ -364,9 +352,7 @@ class TestResolution:
 
     def test_blank_location_id(self):
         """DAS.L001..RAW is a legal identifier with a blank location."""
-        array = inv.FiberArray(
-            code="L001", acquisitions=(inv.Acquisition(code="RAW"),)
-        )
+        array = inv.FiberArray(code="L001", acquisitions=(inv.Acquisition(code="RAW"),))
         inventory = inv.Inventory(
             networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
         )
@@ -498,9 +484,7 @@ class TestReviewRegressions:
     def test_reversed_epoch_raises(self):
         """End before start fails at construction."""
         with pytest.raises(ValidationError, match="must be after"):
-            inv.Acquisition(
-                code="RAW", start_time="2022-01-01", end_time="2021-01-01"
-            )
+            inv.Acquisition(code="RAW", start_time="2022-01-01", end_time="2021-01-01")
 
     def test_replace_type_mismatch_raises(self):
         """Replace type mismatch raises."""
@@ -577,9 +561,7 @@ class TestCanonicalAxes:
 
     def test_two_axis_crs_has_no_z(self):
         """Two axis crs has no z."""
-        crs = inv.CoordinateReferenceSystem(
-            coordinate_labels=("x", "y"), units="meter"
-        )
+        crs = inv.CoordinateReferenceSystem(coordinate_labels=("x", "y"), units="meter")
         with pytest.raises(InvalidInventoryError, match="no 'z' axis"):
             crs.axis_index("z")
 
@@ -592,12 +574,8 @@ class TestResourcePool:
         """Wrap a component (and optional acquisition) into an inventory."""
         acq = (inv.Acquisition(code="RAW", **acq_kwargs),) if acq_kwargs else ()
         path = inv.OpticalPath(optical_components=(component,))
-        array = inv.FiberArray(
-            code="L001", acquisitions=acq, optical_paths=(path,)
-        )
-        return inv.Inventory(
-            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
-        )
+        array = inv.FiberArray(code="L001", acquisitions=acq, optical_paths=(path,))
+        return inv.Inventory(networks=(inv.Network(code="DAS", fiber_arrays=(array,)),))
 
     def test_inline_resource_normalizes_to_pool(self):
         """An inline cable moves to the pool; the field keeps its id."""
@@ -605,8 +583,7 @@ class TestResourcePool:
         seg = inv.FiberSegment(optical_length=100.0, container=cable)
         inventory = self._inventory_with(seg)
         stored = (
-            inventory.networks[0].fiber_arrays[0]
-            .optical_paths[0].optical_components[0]
+            inventory.networks[0].fiber_arrays[0].optical_paths[0].optical_components[0]
         )
         assert stored.container == "cable-01"
         assert inventory.get_resource("cable-01") == cable
@@ -638,9 +615,7 @@ class TestResourcePool:
         )
         array = inv.FiberArray(code="L001", optical_paths=(path,))
         with pytest.raises(ValidationError, match="defined twice"):
-            inv.Inventory(
-                networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
-            )
+            inv.Inventory(networks=(inv.Network(code="DAS", fiber_arrays=(array,)),))
 
     def test_dangling_reference_raises(self):
         """Dangling reference raises."""
@@ -675,8 +650,7 @@ class TestResourcePool:
         updated = inventory.replace(cable, fixed)
         assert updated.get_resource("cable-01").fiber_count == 4
         stored = (
-            updated.networks[0].fiber_arrays[0]
-            .optical_paths[0].optical_components[0]
+            updated.networks[0].fiber_arrays[0].optical_paths[0].optical_components[0]
         )
         assert stored.container == "cable-01"
 
@@ -731,10 +705,10 @@ class TestInternalReviewRegressions:
 
     def test_equality_with_nested_nat(self):
         """Structurally identical trees with unset times compare equal."""
+
         def make():
-            return inv.FiberArray(
-                code="F", acquisitions=(inv.Acquisition(code="A"),)
-            )
+            return inv.FiberArray(code="F", acquisitions=(inv.Acquisition(code="A"),))
+
         assert make() == make()
 
     def test_replace_finds_rebuilt_handle(self):
@@ -825,3 +799,46 @@ class TestInternalReviewRegressions:
         from dascore.core import Inventory
 
         assert Inventory is inv.Inventory
+
+
+class TestCodexReviewRegressions:
+    """Regression tests for counterpart (Codex) review findings."""
+
+    def test_replace_reaches_path_track_items(self):
+        """A recalibrated geometry segment is replaceable in place."""
+        inventory = build_inventory()
+        old = inventory.networks[0].fiber_arrays[0].optical_paths[0].geometry[0]
+        new = old.new(name="recalibrated")
+        updated = inventory.replace(old, new)
+        got = updated.networks[0].fiber_arrays[0].optical_paths[0].geometry[0]
+        assert got.name == "recalibrated"
+
+    def test_reference_type_mismatch_raises(self):
+        """A string ref resolving to the wrong resource type raises."""
+        cable = inv.Cable(resource_id="cab-1")
+        acq = inv.Acquisition(code="RAW", interrogator="cab-1")
+        array = inv.FiberArray(code="L001", acquisitions=(acq,))
+        with pytest.raises(ValidationError, match="expected one of"):
+            inv.Inventory(
+                resources=[cable],
+                networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
+            )
+
+    def test_nested_null_not_equal_to_value(self):
+        """A nested null array is not equal to a non-null one."""
+        import dascore as _dc
+
+        a = _dc.PatchAttrs(foo={"x": np.array([np.nan])})
+        b = _dc.PatchAttrs(foo={"x": np.array([1.0])})
+        assert a != b
+
+    def test_nonfinite_interval_values_raise(self):
+        """Nonfinite interval values raise."""
+        with pytest.raises(ValidationError):
+            inv.CouplingCondition(
+                distance=np.nan, optical_length=10.0, coupling_type="trench"
+            )
+        with pytest.raises(ValidationError, match="finite"):
+            inv.Geometry(distance=(0.0, np.inf), coordinates=((0.0, 0.0), (1.0, 1.0)))
+        with pytest.raises(ValidationError, match="finite"):
+            inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))

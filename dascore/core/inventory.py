@@ -241,7 +241,7 @@ class Enclosure(InventoryModel):
     specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class Cable(InventoryModel):
@@ -275,7 +275,7 @@ class Cable(InventoryModel):
     fiber_count: int | None = Field(
         default=None, description="Number of fibers contained in the cable."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 _Resource: TypeAlias = Annotated[
@@ -290,6 +290,7 @@ class _OpticalComponentBase(InventoryModel):
     optical_length: float = Field(
         default=0.0,
         ge=0.0,
+        allow_inf_nan=False,
         description="Optical component length along the optical path in meters.",
     )
     name: str = Field(default="", description="Human-readable component name.")
@@ -327,7 +328,7 @@ class FiberSegment(_OpticalComponentBase):
     center_wavelength: float | None = Field(
         default=None, description="Center wavelength in nm."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class Connector(_OpticalComponentBase):
@@ -341,7 +342,7 @@ class Connector(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class Splice(_OpticalComponentBase):
@@ -355,7 +356,7 @@ class Splice(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class Terminator(_OpticalComponentBase):
@@ -371,7 +372,7 @@ class Terminator(_OpticalComponentBase):
     reflectance: float | None = Field(
         default=None, description="Return loss or reflectance, if known."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 OpticalComponent: TypeAlias = Annotated[
@@ -410,6 +411,9 @@ class Geometry(InventoryModel):
         if len(self.distance) < 2:
             msg = "Geometry requires at least two distance control points."
             raise InvalidInventoryError(msg)
+        if not np.all(np.isfinite(self.distance)):
+            msg = "Geometry distance values must be finite."
+            raise InvalidInventoryError(msg)
         if not _is_strictly_increasing(self.distance):
             msg = "Geometry distance values must be strictly increasing."
             raise InvalidInventoryError(msg)
@@ -418,10 +422,7 @@ class Geometry(InventoryModel):
             raise InvalidInventoryError(msg)
         dims = {len(coord) for coord in self.coordinates}
         if len(dims) > 1 or 0 in dims:
-            msg = (
-                "Geometry coordinate points must share one nonzero "
-                "dimensionality."
-            )
+            msg = "Geometry coordinate points must share one nonzero dimensionality."
             raise InvalidInventoryError(msg)
         return self
 
@@ -454,10 +455,11 @@ class _IntervalModel(InventoryModel):
     """Base for items placed by start distance plus optical length."""
 
     distance: float = Field(
-        description="Start optical distance for this interval in meters."
+        allow_inf_nan=False,
+        description="Start optical distance for this interval in meters.",
     )
     optical_length: float = Field(
-        gt=0.0, description="Interval length in meters."
+        gt=0.0, allow_inf_nan=False, description="Interval length in meters."
     )
 
     @property
@@ -484,14 +486,14 @@ class CouplingCondition(_IntervalModel):
             "when relevant."
         ),
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class OpticalPathAnnotation(_IntervalModel):
     """Named interval on an optical path; annotations may overlap freely."""
 
     label: str = Field(default="", description="Label for this interval.")
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class DistanceMap(InventoryModel):
@@ -536,6 +538,9 @@ class DistanceMap(InventoryModel):
             raise InvalidInventoryError(msg)
         if len(source) < 1:
             msg = "DistanceMap requires at least one control point."
+            raise InvalidInventoryError(msg)
+        if not (np.all(np.isfinite(source)) and np.all(np.isfinite(self.distance))):
+            msg = "DistanceMap control points must be finite."
             raise InvalidInventoryError(msg)
         if not _is_strictly_increasing(source):
             msg = "DistanceMap input values must be strictly increasing."
@@ -732,6 +737,7 @@ class OpticalPath(TimeRangedModel):
     name: str = Field(default="", description="Human-readable optical path name.")
     start_distance: float = Field(
         default=0.0,
+        allow_inf_nan=False,
         description=(
             "Origin of this path's optical-distance axis in meters; 0 for "
             "whole paths. Set by select and split_at so pieces keep absolute "
@@ -972,9 +978,7 @@ class OpticalPath(TimeRangedModel):
             return NotImplemented
         offset = self.end_distance - other.start_distance
         geometry = tuple(
-            seg.model_copy(
-                update={"distance": tuple(d + offset for d in seg.distance)}
-            )
+            seg.model_copy(update={"distance": tuple(d + offset for d in seg.distance)})
             for seg in other.geometry
         )
         coupling = tuple(
@@ -1078,7 +1082,7 @@ class Station(TimeRangedModel):
     channels: tuple[Channel, ...] = Field(
         default=(), description="Channels associated with this station."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
 
 class FiberArray(TimeRangedModel):
@@ -1097,7 +1101,7 @@ class FiberArray(TimeRangedModel):
     optical_paths: tuple[OpticalPath, ...] = Field(
         default=(), description="Optical paths associated with this fiber array."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
     def check(self) -> Self:
         """
@@ -1120,9 +1124,7 @@ class FiberArray(TimeRangedModel):
         ):
             errors.append(f"Acquisition epochs for {key} overlap in time.")
         if errors:
-            msg = f"Fiber array {self.code!r} validation failed:\n" + "\n".join(
-                errors
-            )
+            msg = f"Fiber array {self.code!r} validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
         for path in self.optical_paths:
             path.check()
@@ -1141,7 +1143,7 @@ class Network(InventoryModel):
     stations: tuple[Station, ...] = Field(
         default=(), description="Stations in this network."
     )
-    notes: NotesStr = ''
+    notes: NotesStr = ""
 
     def check(self) -> Self:
         """
@@ -1164,8 +1166,7 @@ class Network(InventoryModel):
         ):
             for code, *_ in _overlapping_epochs(items, lambda x: x.code):
                 errors.append(
-                    f"Duplicate {kind} code {code!r} for overlapping "
-                    "time ranges."
+                    f"Duplicate {kind} code {code!r} for overlapping time ranges."
                 )
         if errors:
             msg = f"Network {self.code!r} validation failed:\n" + "\n".join(errors)
@@ -1252,12 +1253,18 @@ class Inventory(InventoryModel):
         raises; id references that resolve to nothing raise.
         """
         pool: dict[str, Any] = {}
-        string_refs: list[str] = []
+        string_refs: list[tuple[str, str, tuple]] = []
         ref_fields = {
-            Cable: ("container", "specification"),
-            Enclosure: ("specification",),
-            _OpticalComponentBase: ("container",),
-            Acquisition: ("interrogator",),
+            FiberSegment: {"container": (Cable,)},
+            Connector: {"container": (Enclosure,)},
+            Splice: {"container": (Enclosure,)},
+            Terminator: {"container": (Enclosure,)},
+            Cable: {
+                "container": (Enclosure, Cable),
+                "specification": (ExternalResource,),
+            },
+            Enclosure: {"specification": (ExternalResource,)},
+            Acquisition: {"interrogator": (Interrogator,)},
         }
 
         def pool_add(rid, resource):
@@ -1266,11 +1273,11 @@ class Inventory(InventoryModel):
                 raise InvalidInventoryError(msg)
             pool[rid] = resource
 
-        def register(value):
+        def register(value, field="resource", allowed=()):
             if value is None:
                 return None
             if isinstance(value, str):
-                string_refs.append(value)
+                string_refs.append((value, field, allowed))
                 return value
             pool_add(value.resource_id, normalize(value))
             return value.resource_id
@@ -1278,12 +1285,12 @@ class Inventory(InventoryModel):
         def normalize(obj):
             """Rewrite an object's resource-valued fields to id references."""
             fields = next(
-                (f for cls, f in ref_fields.items() if isinstance(obj, cls)), ()
+                (f for cls, f in ref_fields.items() if isinstance(obj, cls)), {}
             )
             updates = {}
-            for field in fields:
+            for field, allowed in fields.items():
                 value = getattr(obj, field)
-                new_value = register(value)
+                new_value = register(value, field, allowed)
                 if new_value is not value:
                     updates[field] = new_value
             return obj.model_copy(update=updates) if updates else obj
@@ -1292,33 +1299,50 @@ class Inventory(InventoryModel):
             pool_add(rid, normalize(resource))
 
         def norm_path(path):
-            return path.model_copy(update={
-                "optical_components": tuple(
-                    normalize(c) for c in path.optical_components
-                ),
-                "otdr_traces": tuple(register(x) for x in path.otdr_traces),
-            })
+            return path.model_copy(
+                update={
+                    "optical_components": tuple(
+                        normalize(c) for c in path.optical_components
+                    ),
+                    "otdr_traces": tuple(
+                        register(x, "otdr_traces", (ExternalResource,))
+                        for x in path.otdr_traces
+                    ),
+                }
+            )
 
         networks = tuple(
-            net.model_copy(update={
-                "fiber_arrays": tuple(
-                    arr.model_copy(update={
-                        "acquisitions": tuple(
-                            normalize(a) for a in arr.acquisitions
-                        ),
-                        "optical_paths": tuple(
-                            norm_path(p) for p in arr.optical_paths
-                        ),
-                    })
-                    for arr in net.fiber_arrays
-                ),
-            })
+            net.model_copy(
+                update={
+                    "fiber_arrays": tuple(
+                        arr.model_copy(
+                            update={
+                                "acquisitions": tuple(
+                                    normalize(a) for a in arr.acquisitions
+                                ),
+                                "optical_paths": tuple(
+                                    norm_path(p) for p in arr.optical_paths
+                                ),
+                            }
+                        )
+                        for arr in net.fiber_arrays
+                    ),
+                }
+            )
             for net in self.networks
         )
-        dangling = sorted({x for x in string_refs if x not in pool})
+        dangling = sorted({r for r, *_ in string_refs if r not in pool})
         if dangling:
             msg = f"Dangling resource references: {dangling}."
             raise InvalidInventoryError(msg)
+        for rid, field, allowed in string_refs:
+            if allowed and not isinstance(pool[rid], allowed):
+                names = tuple(x.__name__ for x in allowed)
+                msg = (
+                    f"Resource reference {rid!r} for {field!r} resolves to "
+                    f"{type(pool[rid]).__name__}, expected one of {names}."
+                )
+                raise InvalidInventoryError(msg)
         object.__setattr__(self, "resources", pool)
         object.__setattr__(self, "networks", networks)
         self.__pydantic_fields_set__.update({"resources", "networks"})
@@ -1408,8 +1432,12 @@ class Inventory(InventoryModel):
         Return a new inventory with one component replaced.
 
         This is the correction mechanism: the change applies in place and
-        retroactively. ``old`` is matched by equality anywhere in the tree,
-        and ``new`` must be the same type. Note that resource normalization
+        retroactively. ``old`` is matched by equality at any addressable
+        level: pooled resources, networks, stations, channels, fiber arrays,
+        acquisitions, optical paths, and path track items (components,
+        geometry, coupling, annotations). Singletons such as the CRS or a
+        distance map are corrected with ``new()`` on their parent. ``new``
+        must be the same type as ``old``. Note that resource normalization
         rewrites inline resource objects to id references at construction, so
         match against the stored (normalized) object — e.g. an acquisition
         whose ``interrogator`` is the id string — not a pre-construction
@@ -1460,11 +1488,26 @@ class Inventory(InventoryModel):
                 if array == new:
                     arrays.append(array)
                     continue
+                paths = []
+                for path in swap(array.optical_paths):
+                    if path == new:
+                        paths.append(path)
+                        continue
+                    paths.append(
+                        path.model_copy(
+                            update={
+                                "optical_components": swap(path.optical_components),
+                                "geometry": swap(path.geometry),
+                                "coupling": swap(path.coupling),
+                                "annotations": swap(path.annotations),
+                            }
+                        )
+                    )
                 arrays.append(
                     array.model_copy(
                         update={
                             "acquisitions": swap(array.acquisitions),
-                            "optical_paths": swap(array.optical_paths),
+                            "optical_paths": tuple(paths),
                         }
                     )
                 )
@@ -1474,9 +1517,7 @@ class Inventory(InventoryModel):
                     stations.append(station)
                     continue
                 stations.append(
-                    station.model_copy(
-                        update={"channels": swap(station.channels)}
-                    )
+                    station.model_copy(update={"channels": swap(station.channels)})
                 )
             networks.append(
                 net.model_copy(
