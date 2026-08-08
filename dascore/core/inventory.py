@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import Annotated, Literal, NamedTuple, TypeAlias
+from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 from uuid import uuid4
 
 import numpy as np
@@ -233,7 +233,7 @@ class Enclosure(InventoryModel):
     outer_diameter: float | None = Field(
         default=None, description="Outer diameter in meters."
     )
-    specification: ExternalResource | None = Field(
+    specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
     notes: str = Field(default="", description="Additional notes.")
@@ -264,10 +264,10 @@ class Cable(InventoryModel):
     minimum_bend_radius: float | None = Field(
         default=None, description="Minimum bend radius in meters."
     )
-    specification: ExternalResource | None = Field(
+    specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
-    container: Enclosure | Cable | None = Field(
+    container: Enclosure | Cable | str | None = Field(
         default=None, description="Optional containing physical asset."
     )
     fiber_count: int | None = Field(
@@ -297,7 +297,7 @@ class FiberSegment(_OpticalComponentBase):
     """Length of optical fiber within a cable, patch cord, or other run."""
 
     type: Literal["FiberSegment"] = "FiberSegment"
-    container: Cable | None = Field(
+    container: Cable | str | None = Field(
         default=None, description="Cable containing this fiber."
     )
     fiber_index: int | None = Field(
@@ -332,7 +332,7 @@ class Connector(_OpticalComponentBase):
     """Optical connector in an optical path."""
 
     type: Literal["Connector"] = "Connector"
-    container: Enclosure | None = Field(
+    container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this connector."
     )
     connector_type: str = Field(default="", description="Connector type.")
@@ -346,7 +346,7 @@ class Splice(_OpticalComponentBase):
     """Optical splice in an optical path."""
 
     type: Literal["Splice"] = "Splice"
-    container: Enclosure | None = Field(
+    container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this splice."
     )
     splice_type: str = Field(default="", description="Splice type, such as fusion.")
@@ -360,7 +360,7 @@ class Terminator(_OpticalComponentBase):
     """Optical path terminator."""
 
     type: Literal["Terminator"] = "Terminator"
-    container: Enclosure | None = Field(
+    container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this terminator."
     )
     termination_type: str = Field(
@@ -610,8 +610,12 @@ class Acquisition(TimeRangedModel):
     data_units: UnitQuantity | None = Field(
         default=None, description="Units of data produced."
     )
-    interrogator: Interrogator | None = Field(
-        default=None, description="Interrogator used for this acquisition."
+    interrogator: Interrogator | str | None = Field(
+        default=None,
+        description=(
+            "Interrogator used for this acquisition; an object or a "
+            "resource_id reference."
+        ),
     )
     interrogator_port: str | None = Field(
         default=None,
@@ -753,7 +757,7 @@ class OpticalPath(TimeRangedModel):
     annotations: tuple[OpticalPathAnnotation, ...] = Field(
         default=(), description="Annotations on this path."
     )
-    otdr_traces: tuple[ExternalResource, ...] = Field(
+    otdr_traces: tuple[ExternalResource | str, ...] = Field(
         default=(), description="References to OTDR traces of this path."
     )
 
@@ -1268,6 +1272,103 @@ class Inventory(DascoreBaseModel):
             out[resource.resource_id] = resource
         return out
 
+    @model_validator(mode="after")
+    def _normalize_resources(self) -> Self:
+        """
+        Normalize shareable resources into the flat pool.
+
+        Inline resource objects anywhere in the tree move into ``resources``
+        (keyed by ``resource_id``) and the fields that held them keep the id
+        string. Two inline definitions of one id must be equal or this
+        raises; id references that resolve to nothing raise.
+        """
+        pool: dict[str, Any] = {}
+        string_refs: list[str] = []
+        nested_fields = {"Cable": ("container", "specification"),
+                         "Enclosure": ("specification",)}
+
+        def register(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                string_refs.append(value)
+                return value
+            rid = value.resource_id
+            normalized = normalize_resource(value)
+            if rid in pool and pool[rid] != normalized:
+                msg = f"Resource {rid!r} is defined twice with different content."
+                raise InvalidInventoryError(msg)
+            pool[rid] = normalized
+            return rid
+
+        def normalize_resource(resource):
+            updates = {}
+            for field in nested_fields.get(type(resource).__name__, ()):
+                value = getattr(resource, field)
+                new_value = register(value)
+                if new_value is not value:
+                    updates[field] = new_value
+            return resource.model_copy(update=updates) if updates else resource
+
+        for rid, resource in self.resources.items():
+            normalized = normalize_resource(resource)
+            if rid in pool and pool[rid] != normalized:
+                msg = f"Resource {rid!r} is defined twice with different content."
+                raise InvalidInventoryError(msg)
+            pool[rid] = normalized
+
+        def norm_component(comp):
+            new_ref = register(comp.container)
+            if new_ref is comp.container:
+                return comp
+            return comp.model_copy(update={"container": new_ref})
+
+        def norm_path(path):
+            return path.model_copy(update={
+                "optical_components": tuple(
+                    norm_component(c) for c in path.optical_components
+                ),
+                "otdr_traces": tuple(register(x) for x in path.otdr_traces),
+            })
+
+        def norm_acq(acq):
+            new_ref = register(acq.interrogator)
+            if new_ref is acq.interrogator:
+                return acq
+            return acq.model_copy(update={"interrogator": new_ref})
+
+        networks = tuple(
+            net.model_copy(update={
+                "fiber_arrays": tuple(
+                    arr.model_copy(update={
+                        "acquisitions": tuple(
+                            norm_acq(a) for a in arr.acquisitions
+                        ),
+                        "optical_paths": tuple(
+                            norm_path(p) for p in arr.optical_paths
+                        ),
+                    })
+                    for arr in net.fiber_arrays
+                ),
+            })
+            for net in self.networks
+        )
+        dangling = sorted({x for x in string_refs if x not in pool})
+        if dangling:
+            msg = f"Dangling resource references: {dangling}."
+            raise InvalidInventoryError(msg)
+        object.__setattr__(self, "resources", pool)
+        object.__setattr__(self, "networks", networks)
+        return self
+
+    def get_resource(self, resource_id: str):
+        """Return the shareable resource registered under a resource_id."""
+        try:
+            return self.resources[resource_id]
+        except KeyError:
+            msg = f"No resource with resource_id {resource_id!r}."
+            raise InvalidInventoryError(msg) from None
+
     def validate(self) -> Self:
         """Validate the whole inventory tree."""
         codes = [net.code for net in self.networks]
@@ -1347,6 +1448,22 @@ class Inventory(DascoreBaseModel):
                 f"{type(old).__name__}."
             )
             raise InvalidInventoryError(msg)
+        if isinstance(old, Interrogator | Cable | Enclosure | ExternalResource):
+            matches = [r for r, res in self.resources.items() if res == old]
+            if not matches:
+                msg = "Component to replace was not found in the inventory."
+                raise InvalidInventoryError(msg)
+            if new.resource_id != old.resource_id:
+                msg = (
+                    "Resource corrections must keep the same resource_id "
+                    f"({old.resource_id!r} != {new.resource_id!r}); id "
+                    "references throughout the tree would dangle."
+                )
+                raise InvalidInventoryError(msg)
+            pool = dict(self.resources)
+            for rid in matches:
+                pool[rid] = new
+            return self.model_copy(update={"resources": pool})
         replaced = 0
 
         def swap(items):

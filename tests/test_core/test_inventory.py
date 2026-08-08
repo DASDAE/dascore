@@ -582,3 +582,124 @@ class TestCanonicalAxes:
         )
         with pytest.raises(InvalidInventoryError, match="no 'z' axis"):
             crs.axis_index("z")
+
+
+class TestResourcePool:
+    """Shareable resources normalize into the flat pool with id references."""
+
+    @staticmethod
+    def _inventory_with(component, **acq_kwargs):
+        """Wrap a component (and optional acquisition) into an inventory."""
+        acq = (inv.Acquisition(code="RAW", **acq_kwargs),) if acq_kwargs else ()
+        path = inv.OpticalPath(optical_components=(component,))
+        array = inv.FiberArray(
+            code="L001", acquisitions=acq, optical_paths=(path,)
+        )
+        return inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+
+    def test_inline_resource_normalizes_to_pool(self):
+        """An inline cable moves to the pool; the field keeps its id."""
+        cable = inv.Cable(resource_id="cable-01", name="c")
+        seg = inv.FiberSegment(optical_length=100.0, container=cable)
+        inventory = self._inventory_with(seg)
+        stored = (
+            inventory.networks[0].fiber_arrays[0]
+            .optical_paths[0].optical_components[0]
+        )
+        assert stored.container == "cable-01"
+        assert inventory.get_resource("cable-01") == cable
+
+    def test_shared_resource_registered_once(self):
+        """Two components sharing one enclosure yield one pool entry."""
+        coupler = inv.Enclosure(resource_id="coupler-01")
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.Connector(container=coupler),
+                inv.Connector(container=coupler),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        assert list(inventory.resources) == ["coupler-01"]
+
+    def test_conflicting_inline_definitions_raise(self):
+        """One id, two different contents: agree-or-raise."""
+        a = inv.Cable(resource_id="cable-01", fiber_count=1)
+        b = inv.Cable(resource_id="cable-01", fiber_count=4)
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(optical_length=1.0, container=a),
+                inv.FiberSegment(optical_length=1.0, container=b),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        with pytest.raises(ValidationError, match="defined twice"):
+            inv.Inventory(
+                networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+            )
+
+    def test_dangling_reference_raises(self):
+        """Dangling reference raises."""
+        seg = inv.FiberSegment(optical_length=1.0, container="no-such-cable")
+        with pytest.raises(ValidationError, match="Dangling"):
+            self._inventory_with(seg)
+
+    def test_nested_resources_normalize(self):
+        """A cable inside a pipe: both land in the pool, linked by id."""
+        pipe = inv.Enclosure(resource_id="pipe-01", enclosure_type="pipe")
+        cable = inv.Cable(resource_id="cable-01", container=pipe)
+        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        inventory = self._inventory_with(seg)
+        assert inventory.get_resource("cable-01").container == "pipe-01"
+        assert inventory.get_resource("pipe-01") == pipe
+
+    def test_interrogator_normalizes(self):
+        """Interrogator normalizes."""
+        unit = inv.Interrogator(resource_id="int-01", model="DAS-1000")
+        seg = inv.FiberSegment(optical_length=1.0)
+        inventory = self._inventory_with(seg, interrogator=unit)
+        acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acq.interrogator == "int-01"
+        assert inventory.get_resource("int-01") == unit
+
+    def test_resource_correction_is_single_site(self):
+        """Replacing a pooled resource touches only the pool."""
+        cable = inv.Cable(resource_id="cable-01", fiber_count=1)
+        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        inventory = self._inventory_with(seg)
+        fixed = cable.new(fiber_count=4)
+        updated = inventory.replace(cable, fixed)
+        assert updated.get_resource("cable-01").fiber_count == 4
+        stored = (
+            updated.networks[0].fiber_arrays[0]
+            .optical_paths[0].optical_components[0]
+        )
+        assert stored.container == "cable-01"
+
+    def test_resource_correction_must_keep_id(self):
+        """Resource correction must keep id."""
+        cable = inv.Cable(resource_id="cable-01")
+        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        inventory = self._inventory_with(seg)
+        renamed = cable.new(resource_id="cable-02")
+        with pytest.raises(InvalidInventoryError, match="same resource_id"):
+            inventory.replace(cable, renamed)
+
+    def test_yaml_roundtrip_stays_flat(self, tmp_path):
+        """Serialized form holds ids, not inline copies, and round-trips."""
+        cable = inv.Cable(resource_id="cable-01", name="c")
+        seg = inv.FiberSegment(optical_length=100.0, container=cable)
+        inventory = self._inventory_with(seg)
+        text = inventory.to_yaml()
+        assert text.count("cable-01") >= 2
+        loaded = inv.Inventory.from_yaml(text)
+        assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
+
+    def test_get_resource_missing_raises(self):
+        """Get resource missing raises."""
+        with pytest.raises(InvalidInventoryError, match="No resource"):
+            build_inventory().get_resource("nope")
