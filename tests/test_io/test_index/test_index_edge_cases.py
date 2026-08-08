@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -330,15 +331,18 @@ class TestCanonicalRange:
         """Bare numbers and quantities become SI magnitudes."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert _canonical_range((20, 60)).magnitudes == (20.0, 60.0)
+        assert (bare := _canonical_range((20, 60))) is not None
+        assert bare.magnitudes == (20.0, 60.0)
         # 20 m .. 60 m -> SI metres
-        assert _canonical_range((20 * m, 60 * m)).magnitudes == (20.0, 60.0)
+        assert (quant := _canonical_range((20 * m, 60 * m))) is not None
+        assert quant.magnitudes == (20.0, 60.0)
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
         from dascore.io.index.catalog import _canonical_range
 
-        assert _canonical_range((None, 60)).magnitudes == (None, 60.0)
+        assert (half_open := _canonical_range((None, 60))) is not None
+        assert half_open.magnitudes == (None, 60.0)
 
     @pytest.mark.parametrize(
         "value",
@@ -865,6 +869,7 @@ class TestIngestEdges:
         """A coord with a missing or unsupported dtype produces no record."""
 
         class _Stub:
+            dtype: object = None
             dims = ("x",)
             len = 2
             units = None
@@ -881,9 +886,12 @@ class TestIngestEdges:
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_ids."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
-        two = PatchSummary(**{**base, "attrs": {"station": "STA9"}})
+        # Bound and annotated: merging a str literal into the dict widens
+        # the value type to `Any | str`, which no field then accepts.
+        other: dict[str, Any] = {**base, "attrs": {"station": "STA9"}}
+        two = PatchSummary(**other)
         records = s2r([one, two])
         assert len(records) == 1
         ids = [p.source_patch_id for p in records[0].patches]
@@ -1145,16 +1153,19 @@ class TestCompositeSourceIdentity:
 
     def test_same_path_different_base_coexist(self, tmp_path):
         """Identical relative paths under different bases don't collide."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         records_a = summaries_to_records([one], base_uri="s3://bucket-a")
         # base_uri strip only applies when paths share the base; set directly
-        records_a = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-a"}) for r in records_a
-        ]
-        records_b = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-b"}) for r in records_a
-        ]
+        def _rebase(record, base_uri: str):
+            """Rebuild a record under a different base."""
+            # Annotated because merging a str literal in widens the value
+            # type to `Any | str`, which none of the fields accept.
+            fields: dict[str, Any] = {**record.__dict__, "base_uri": base_uri}
+            return type(record)(**fields)
+
+        records_a = [_rebase(r, "s3://bucket-a") for r in records_a]
+        records_b = [_rebase(r, "s3://bucket-b") for r in records_a]
         back = get_backend(tmp_path / "multi.sqlite3")
         back.write_sources(records_a)
         back.write_sources(records_b)
@@ -1174,8 +1185,10 @@ class TestCompositeSourceIdentity:
         base = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         rec = summaries_to_records([one])[0]
-        rec_a = type(rec)(**{**rec.__dict__, "base_uri": "s3://a"})
-        rec_b = type(rec)(**{**rec.__dict__, "base_uri": "s3://b"})
+        fields_a: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://a"}
+        fields_b: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://b"}
+        rec_a = type(rec)(**fields_a)
+        rec_b = type(rec)(**fields_b)
         back = get_backend(tmp_path / "scoped.sqlite3")
         back.write_sources([rec_a, rec_b])
         assert len(back.query()) == 2
