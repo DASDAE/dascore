@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -1328,7 +1328,9 @@ class CoordPartial(BaseCoord):
         if self.ndim != 1:
             msg = "change_length only works on 1D coords."
             raise CoordError(msg)
-        return get_coord(shape=(_validate_new_length(length),))
+        # A shape-only coord is always partial, so this really is Self; the
+        # factory's declared BaseCoord return is just wider than the case.
+        return cast("Self", get_coord(shape=(_validate_new_length(length),)))
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""

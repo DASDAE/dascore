@@ -45,7 +45,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -310,7 +310,12 @@ class CoordManager(DascoreBaseModel):
             out[coord_name] = (coord_dims, coord.update(**{attr: value}))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
-        return get_coord_manager(out, dims=dims)
+        # Cast because the factory normalizes the coord mapping in ways the
+        # class constructor does not, so this cannot go through
+        # self.__class__ the way drop_coords does. Exact for CoordManager
+        # itself; a subclass would already lose its type here, which is a
+        # limitation of the factory rather than of this annotation.
+        return cast("Self", get_coord_manager(out, dims=dims))
 
     # we need this here to maintain backwards compatibility
     update_coords = update
