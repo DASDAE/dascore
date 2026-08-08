@@ -46,11 +46,13 @@ def _get_time(resource):
         raise ValueError("Uptech acquisition_frequency must be finite and positive.")
     if len(values) > 1:
         steps = np.diff(values)
-        if np.any(steps <= 0) or not np.allclose(
-            steps, steps[0], rtol=1e-4, atol=1e-9
-        ):
-            raise ValueError("Uptech acquisition time must be uniformly increasing.")
-        if not np.isclose(steps.mean() * frequency, 1, rtol=1e-3):
+        if np.any(steps <= 0):
+            raise ValueError("Uptech acquisition time must be increasing.")
+        # Times are float64 epoch seconds, so adjacent samples carry a few
+        # hundred ns of representation jitter even for a perfect clock. Only
+        # the mean step is checked, which still catches a unit mismatch
+        # (ms/us/ns rather than s); get_coord decides on even sampling.
+        if not np.isclose(steps.mean() * frequency, 1, rtol=5e-2):
             raise ValueError(
                 "Uptech acquisition time disagrees with acquisition_frequency."
             )
@@ -74,11 +76,14 @@ def _get_coords(resource):
     )
 
 
-def _get_attrs(resource, coords=None, extras=None):
-    """Build patch attributes from signal metadata."""
+def _get_attrs_dict(resource, coords=None) -> dict:
+    """Build a patch attribute dict from the signal metadata."""
     data = resource[_DATASET]
-    attrs = {
-        "coords": coords or _get_coords(resource),
+    # The nominal acquisition_frequency is deliberately not stored; the time
+    # coordinate is authoritative and stays correct through processing.
+    return {
+        "coords": _get_coords(resource) if coords is None else coords,
+        "data_category": "DAS",
         "data_type": "strain_rate",
         "data_units": "1/s",
         "fiber_length": float(data.attrs["fiber_length"]),
@@ -87,7 +92,4 @@ def _get_attrs(resource, coords=None, extras=None):
         "gauge_length_units": "m",
         "spatial_resolution": float(data.attrs["spatial_resolution"]),
         "spatial_resolution_units": "m",
-        "sampling_frequency": float(data.attrs["acquisition_frequency"]),
     }
-    attrs.update(extras or {})
-    return dc.PatchAttrs(**attrs)
