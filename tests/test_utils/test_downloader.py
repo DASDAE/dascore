@@ -7,6 +7,7 @@ import pytest
 
 from dascore.config import config_context
 from dascore.utils.downloader import (
+    REGISTRY_PATH,
     _fetch_cached,
     fetch,
     fetcher,
@@ -29,6 +30,15 @@ class TestRegistryDF:
         """Ensure a non-empty df was returned."""
         assert len(registry_df)
         assert isinstance(registry_df, pd.DataFrame)
+
+    def test_contains_all_registry_entries(self, registry_df):
+        """The dataframe should include every non-comment registry line."""
+        expected = [
+            line.split(maxsplit=1)[0]
+            for line in REGISTRY_PATH.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        assert registry_df["name"].tolist() == expected
 
 
 class TestFetch:
