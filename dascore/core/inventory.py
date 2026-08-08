@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import Annotated, ClassVar, Literal, NamedTuple, TypeAlias
+from typing import Annotated, Literal, NamedTuple, TypeAlias
 from uuid import uuid4
 
 import numpy as np
@@ -60,6 +60,19 @@ VALID_COUPLING_TYPES = (
     "other",
 )
 CouplingType = Literal[VALID_COUPLING_TYPES]
+
+# Coordinates are stored on the canonical (x, y, z) axes; these labels are
+# resolvable aliases whose meaning the inventory CRS declares.
+VALID_COORDINATE_LABELS = (
+    "x",
+    "y",
+    "z",
+    "latitude",
+    "longitude",
+    "elevation",
+    "easting",
+    "northing",
+)
 
 _CODE_RE = re.compile(r"[A-Za-z0-9-]+")
 _LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
@@ -112,26 +125,54 @@ class CoordinateReferenceSystem(InventoryModel):
     name: str = Field(default="WGS 84 3D", description="Human-readable CRS name.")
     coordinate_labels: tuple[str, ...] = Field(
         default=("longitude", "latitude", "elevation"),
-        description="Ordered coordinate axis labels.",
+        description=(
+            "Meaning of the canonical (x, y, z) axes, in order. Labels come "
+            "from the controlled coordinate vocabulary."
+        ),
     )
     units: str = Field(default="degree", description="Coordinate units when known.")
     vertical_datum: str = Field(
         default="", description="Vertical datum or reference surface, if known."
     )
 
-    _RESERVED_LABELS: ClassVar[frozenset] = frozenset(
-        {"type", "sequence", "segment", "distance"}
-    )
-
     @field_validator("coordinate_labels")
     @classmethod
     def _check_labels(cls, value):
-        """Reserved structural column names may not be coordinate labels."""
-        bad = set(value) & cls._RESERVED_LABELS
+        """Labels come from the controlled vocabulary and are unique."""
+        bad = set(value) - set(VALID_COORDINATE_LABELS)
         if bad:
-            msg = f"coordinate_labels may not use reserved names: {sorted(bad)}"
+            msg = (
+                f"coordinate_labels {sorted(bad)} not in the coordinate "
+                f"vocabulary {VALID_COORDINATE_LABELS}."
+            )
+            raise InvalidInventoryError(msg)
+        if len(set(value)) != len(value):
+            msg = f"coordinate_labels must be unique; got {value}."
             raise InvalidInventoryError(msg)
         return value
+
+    def axis_index(self, label: str) -> int:
+        """
+        Return the canonical axis position for a coordinate label.
+
+        ``x``, ``y``, and ``z`` are always the canonical axes; any other
+        label resolves only when this CRS defines it in coordinate_labels.
+        """
+        canonical = {"x": 0, "y": 1, "z": 2}
+        if label in canonical:
+            index = canonical[label]
+            if index >= len(self.coordinate_labels):
+                msg = f"This CRS has no {label!r} axis (labels: "
+                msg += f"{self.coordinate_labels})."
+                raise InvalidInventoryError(msg)
+            return index
+        if label in self.coordinate_labels:
+            return self.coordinate_labels.index(label)
+        msg = (
+            f"Coordinate label {label!r} is not defined by this CRS "
+            f"(labels: {self.coordinate_labels})."
+        )
+        raise InvalidInventoryError(msg)
 
 
 class ExternalResource(InventoryModel):
@@ -1004,53 +1045,7 @@ class Response(InventoryModel):
     )
 
 
-class _PointLocatedModel(TimeRangedModel):
-    """
-    Base for point-like objects accepting dynamic coordinate-label fields.
-
-    The spec allows coordinates either as the generic ``coordinates`` tuple
-    (ordered by the inventory CRS ``coordinate_labels``) or as dynamic fields
-    named by those labels (e.g. ``latitude=...``). Extra fields are collected
-    at construction; whether they match the CRS labels (and agree with any
-    ``coordinates`` tuple) is checked by ``get_coordinates``.
-    """
-
-    model_config = TimeRangedModel.model_config | {"extra": "allow"}
-
-    def get_coordinates(self, crs: CoordinateReferenceSystem):
-        """
-        Return the coordinate tuple for this object under a CRS, or None.
-
-        Dynamic label fields and an explicit ``coordinates`` tuple are two
-        spellings of one fact: both present must agree or this raises.
-        """
-        extra = self.model_extra or {}
-        unknown = set(extra) - set(crs.coordinate_labels)
-        if unknown:
-            msg = (
-                f"Fields {sorted(unknown)} do not match CRS coordinate "
-                f"labels {crs.coordinate_labels}."
-            )
-            raise InvalidInventoryError(msg)
-        from_labels = None
-        if extra:
-            missing = set(crs.coordinate_labels) - set(extra)
-            if missing:
-                msg = f"Coordinate fields incomplete; missing {sorted(missing)}."
-                raise InvalidInventoryError(msg)
-            from_labels = tuple(float(extra[x]) for x in crs.coordinate_labels)
-        explicit = self.coordinates
-        if explicit is not None and from_labels is not None:
-            if not np.allclose(explicit, from_labels):
-                msg = (
-                    f"coordinates {explicit} disagree with coordinate-label "
-                    f"fields {from_labels}."
-                )
-                raise InvalidInventoryError(msg)
-        return explicit if explicit is not None else from_labels
-
-
-class Channel(_PointLocatedModel):
+class Channel(TimeRangedModel):
     """Station-level time-series stream identity."""
 
     code: str = Field(description="Channel code used in data source identifiers.")
@@ -1059,7 +1054,10 @@ class Channel(_PointLocatedModel):
     )
     coordinates: tuple[float, ...] | None = Field(
         default=None,
-        description="Coordinates ordered by the inventory CRS coordinate_labels.",
+        description=(
+            "Coordinates on the canonical (x, y, z) axes; the inventory CRS "
+            "coordinate_labels declare their meaning."
+        ),
     )
     data_type: Literal[VALID_DATA_TYPES] = Field(
         default="", description="Quantity measured or produced."
@@ -1082,14 +1080,17 @@ class Channel(_PointLocatedModel):
         return _check_code(value, "location code", allow_blank=True)
 
 
-class Station(_PointLocatedModel):
+class Station(TimeRangedModel):
     """Point-like observing identity under a network."""
 
     code: str = Field(description="Station code used in data source identifiers.")
     name: str = Field(default="", description="Human-readable station name.")
     coordinates: tuple[float, ...] | None = Field(
         default=None,
-        description="Coordinates ordered by the inventory CRS coordinate_labels.",
+        description=(
+            "Coordinates on the canonical (x, y, z) axes; the inventory CRS "
+            "coordinate_labels declare their meaning."
+        ),
     )
     channels: tuple[Channel, ...] = Field(
         default=(), description="Channels associated with this station."

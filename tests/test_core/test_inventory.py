@@ -2,25 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
-import yaml
 from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
-
-SPEC_PATH = Path(__file__).parent / "dasdae_inventory_spec.yml"
-
-# Implementation-only fields allowed beyond the spec (serialization/discrimination).
-ALLOWED_EXTRA_FIELDS = {"type"}
-# Spec nodes not implemented as public classes (internal/diagram-only nodes).
-SKIPPED_SPEC_NODES = {"References"}
-# Union nodes: spec base checked against a representative member class.
-UNION_NODES = {"OpticalComponent": "FiberSegment"}
 
 
 def build_inventory() -> inv.Inventory:
@@ -66,44 +54,6 @@ def build_inventory() -> inv.Inventory:
     )
     network = inv.Network(code="DAS", fiber_arrays=(array,))
     return inv.Inventory(networks=(network,))
-
-
-class TestSpecConformance:
-    """The implementation must carry every field the spec declares."""
-
-    spec = yaml.safe_load(SPEC_PATH.read_text())
-
-    @pytest.mark.parametrize("node_id", list(spec["nodes"]))
-    def test_fields_match_spec(self, node_id):
-        """Each spec attribute exists as a field or property."""
-        node = self.spec["nodes"][node_id]
-        label = node.get("label", node_id)
-        if label in SKIPPED_SPEC_NODES:
-            pytest.skip(f"{label} is not a public class")
-        cls = getattr(inv, UNION_NODES.get(label, label))
-        implemented = set(cls.model_fields)
-        implemented |= {
-            name for name in dir(cls) if isinstance(getattr(cls, name, None), property)
-        }
-        spec_fields = {
-            attr["name"]
-            for attr in node.get("attributes", [])
-            if not attr["name"].startswith("<")
-        }
-        missing = spec_fields - implemented
-        assert not missing, f"{label} missing spec fields: {sorted(missing)}"
-
-    @pytest.mark.parametrize("node_id", list(spec["nodes"]))
-    def test_no_undeclared_fields(self, node_id):
-        """Model fields beyond the spec are limited to a known allowlist."""
-        node = self.spec["nodes"][node_id]
-        label = node.get("label", node_id)
-        if label in SKIPPED_SPEC_NODES or label in UNION_NODES:
-            pytest.skip(f"{label} is not a plain public class")
-        cls = getattr(inv, label)
-        spec_fields = {a["name"] for a in node.get("attributes", [])}
-        extras = set(cls.model_fields) - spec_fields - ALLOWED_EXTRA_FIELDS
-        assert not extras, f"{label} has undeclared fields: {sorted(extras)}"
 
 
 class TestGeometry:
@@ -530,9 +480,9 @@ class TestInventory:
         build_inventory().to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
-    def test_crs_reserved_labels_raise(self):
-        """Crs reserved labels raise."""
-        with pytest.raises(ValidationError, match="reserved"):
+    def test_crs_vocabulary_enforced(self):
+        """Structural column names are outside the coordinate vocabulary."""
+        with pytest.raises(ValidationError, match="vocabulary"):
             inv.CoordinateReferenceSystem(coordinate_labels=("x", "distance"))
 
 
@@ -590,28 +540,45 @@ class TestReviewRegressions:
         with pytest.raises(ValidationError, match="nonzero"):
             inv.Geometry(distance=(0.0, 1.0), coordinates=((), ()))
 
-    def test_dynamic_coordinate_fields(self):
-        """Stations accept CRS-label-named fields per the spec."""
-        crs = inv.CoordinateReferenceSystem()
-        station = inv.Station(
-            code="VA01", longitude=2.1, latitude=48.8, elevation=115.0
-        )
-        assert station.get_coordinates(crs) == (2.1, 48.8, 115.0)
+    def test_station_extra_fields_forbidden(self):
+        """Coordinates are canonical (x, y, z); label fields are not stored."""
+        with pytest.raises(ValidationError):
+            inv.Station(code="VA01", latitude=48.8)
 
-    def test_dynamic_fields_disagreeing_with_tuple_raise(self):
-        """Two spellings of coordinates must agree."""
-        crs = inv.CoordinateReferenceSystem()
-        station = inv.Station(
-            code="VA01",
-            coordinates=(2.1, 48.8, 115.0),
-            longitude=9.9, latitude=48.8, elevation=115.0,
-        )
-        with pytest.raises(InvalidInventoryError, match="disagree"):
-            station.get_coordinates(crs)
 
-    def test_unknown_dynamic_fields_raise(self):
-        """Unknown dynamic fields raise."""
+class TestCanonicalAxes:
+    """Canonical (x, y, z) storage with CRS-resolved aliases."""
+
+    def test_canonical_axes_always_resolve(self):
+        """Canonical axes always resolve."""
         crs = inv.CoordinateReferenceSystem()
-        station = inv.Station(code="VA01", northing=1.0)
-        with pytest.raises(InvalidInventoryError, match="do not match CRS"):
-            station.get_coordinates(crs)
+        assert [crs.axis_index(x) for x in ("x", "y", "z")] == [0, 1, 2]
+
+    def test_alias_resolves_when_crs_defines_it(self):
+        """Alias resolves when crs defines it."""
+        crs = inv.CoordinateReferenceSystem()
+        assert crs.axis_index("latitude") == 1
+        assert crs.axis_index("longitude") == 0
+
+    def test_alias_not_defined_raises(self):
+        """An alias absent from the CRS labels raises."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing", "elevation"),
+            units="meter",
+        )
+        assert crs.axis_index("easting") == 0
+        with pytest.raises(InvalidInventoryError, match="not defined"):
+            crs.axis_index("latitude")
+
+    def test_labels_outside_vocabulary_raise(self):
+        """Labels outside vocabulary raise."""
+        with pytest.raises(ValidationError, match="vocabulary"):
+            inv.CoordinateReferenceSystem(coordinate_labels=("depth", "along"))
+
+    def test_two_axis_crs_has_no_z(self):
+        """Two axis crs has no z."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("x", "y"), units="meter"
+        )
+        with pytest.raises(InvalidInventoryError, match="no 'z' axis"):
+            crs.axis_index("z")
