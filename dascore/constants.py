@@ -23,7 +23,12 @@ SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 class ExecutorType(Protocol):
     """Protocol for Executors that DASCore can use."""
 
-    def map(self, func, iterables, **kwargs):
+    # Spelled to match concurrent.futures: the callable is positional-only
+    # and the iterables are varargs. Declaring a named `iterables` or a
+    # **kwargs catch-all excluded ThreadPoolExecutor and ProcessPoolExecutor,
+    # which are the executors this is meant to accept -- they take neither a
+    # keyword `iterables` nor arbitrary keywords.
+    def map(self, fn, /, *iterables):
         """Map function for applying concurrency of some flavor."""
 
 

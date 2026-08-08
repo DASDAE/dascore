@@ -442,6 +442,11 @@ class TestCoordSummary:
         out = CoordSummary(**data)
         assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
 
+    def test_dtype_is_optional(self):
+        """The dtype is derived from min, so the constructor must not demand it."""
+        summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m")
+        assert summary.dtype == "float64"
+
     def test_json_dump(self):
         """JSON dumps should preserve coord summary fields."""
         summary = CoordSummary(

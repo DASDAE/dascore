@@ -191,7 +191,9 @@ class CoordSummary(DascoreBaseModel):
     coordinates.
     """
 
-    dtype: str
+    # Defaulted because the before-validator below derives it from min
+    # whenever it is absent, so requiring it misdescribes the constructor.
+    dtype: str = ""
     min: min_max_type
     max: min_max_type
     step: step_type | None = None
