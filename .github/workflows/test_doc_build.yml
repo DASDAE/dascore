@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+
 jobs:
   test_build_docs:
     if: |
@@ -38,7 +43,6 @@ jobs:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
           environment-file: './.github/doc_environment.yml'
-          cache-number: 1
           prepare-test-data: "true"
 
       - uses: ./.github/actions/build-docs
