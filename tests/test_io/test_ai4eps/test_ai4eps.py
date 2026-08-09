@@ -1,5 +1,8 @@
 """Tests for the AI4EPS event format."""
 
+import shutil
+
+import h5py
 import numpy as np
 import pytest
 
@@ -68,10 +71,6 @@ class TestAI4EPS:
 
     def test_inconsistent_end_time_warns(self, ai4eps_path, tmp_path):
         """A file whose end_time disagrees with begin_time + n*dt warns."""
-        import shutil
-
-        import h5py
-
         path = tmp_path / "bad_dt.h5"
         shutil.copy(ai4eps_path, path)
         with h5py.File(path, "a") as h5:
@@ -81,10 +80,6 @@ class TestAI4EPS:
 
     def test_unparsable_unit_dropped(self, ai4eps_path, tmp_path):
         """An unparseable unit string yields unset units instead of a crash."""
-        import shutil
-
-        import h5py
-
         path = tmp_path / "bad_unit.h5"
         shutil.copy(ai4eps_path, path)
         with h5py.File(path, "a") as h5:
@@ -94,8 +89,6 @@ class TestAI4EPS:
 
     def test_near_miss_not_claimed(self, tmp_path):
         """A file with generic timing attrs but no event metadata isn't claimed."""
-        import h5py
-
         path = tmp_path / "near_miss.h5"
         with h5py.File(path, "w") as h5:
             dataset = h5.create_dataset("data", data=np.zeros((3, 4)))
