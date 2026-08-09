@@ -111,7 +111,13 @@ COMMON_IO_WRITE_TESTS = (
 # Specifies data registry entries which should not be tested.
 # DASVader is covered in its own test module to isolate its compatibility-path
 # testing from the shared common-IO matrix.
-SKIP_DATA_FILES = {"brady_hs_DAS_DTS_coords.csv", "das_vader_1.jld2"}
+SKIP_DATA_FILES = {
+    "brady_hs_DAS_DTS_coords.csv",
+    "das_vader_1.jld2",
+    # No reader claims this file yet; the Silixa Carina variant reader
+    # (which will claim it) should remove this entry when it lands.
+    "silixa_h5_ingv_1.h5",
+}
 
 
 def _scan_summary(scan_result):
