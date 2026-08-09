@@ -1,9 +1,14 @@
 """Tests for the OptaSense ODH4 format."""
 
+import shutil
+
+import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.odh4 import ODH4V1
 from dascore.utils.downloader import fetch
 
@@ -52,12 +57,6 @@ class TestODH4:
 
     def test_inconsistent_attrs_raise(self, odh4_path, tmp_path):
         """A file whose attrs disagree with the data shape refuses to read."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "bad_rate.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -67,10 +66,6 @@ class TestODH4:
 
     def test_transposed_data_raises(self, odh4_path, tmp_path):
         """A transposed data layout must not be read with swapped coords."""
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "transposed.h5"
         with h5py.File(odh4_path, "r") as src, h5py.File(path, "w") as dst:
             for key, value in src.attrs.items():
@@ -81,10 +76,6 @@ class TestODH4:
 
     def test_unparsable_unit_dropped(self, odh4_path, tmp_path):
         """An unknown unit description yields unset units, not a crash."""
-        import shutil
-
-        import h5py
-
         path = tmp_path / "bad_unit.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -94,12 +85,6 @@ class TestODH4:
 
     def test_non_positive_rate_raises(self, odh4_path, tmp_path):
         """A zero sampling rate raises a format error, not ZeroDivisionError."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "zero_rate.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -110,12 +95,6 @@ class TestODH4:
     @pytest.mark.parametrize("bad_rate", [np.nan, np.inf, "not a rate"])
     def test_unusable_rate_raises(self, odh4_path, tmp_path, bad_rate):
         """Non-finite or non-numeric rates raise a format error."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "unusable_rate.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -125,12 +104,6 @@ class TestODH4:
 
     def test_oversized_channel_span_raises(self, odh4_path, tmp_path):
         """A channel span larger than the data must not silently read."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "wide_span.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -140,11 +113,6 @@ class TestODH4:
 
     def test_inclusive_endtime_keeps_step(self, odh4_path, tmp_path):
         """An inclusive-bound endtime yields the exact sampling step."""
-        import shutil
-
-        import h5py
-        import pandas as pd
-
         path = tmp_path / "inclusive.h5"
         shutil.copy(odh4_path, path)
         with h5py.File(path, "a") as h5:
@@ -158,8 +126,6 @@ class TestODH4:
 
     def test_near_miss_not_claimed(self, tmp_path):
         """A file with raw_data but not the full attr set isn't claimed."""
-        import h5py
-
         path = tmp_path / "near_miss.h5"
         with h5py.File(path, "w") as h5:
             h5.create_dataset("raw_data", data=np.zeros((3, 4)))
