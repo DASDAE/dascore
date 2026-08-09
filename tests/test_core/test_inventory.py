@@ -1005,3 +1005,36 @@ class TestTypeTag:
         """Wrong tag rejected."""
         with pytest.raises(ValidationError):
             inv.Cable(resource_id="c1", type="Enclosure")
+
+
+class TestUniformAttachments:
+    """Every inventory object carries notes and extra_fields."""
+
+    def test_notes_on_previous_gaps(self):
+        """Notes on previous gaps."""
+        acq = inv.Acquisition(code="RAW", notes="tap tested twice")
+        path = inv.OpticalPath(notes="post-repair epoch")
+        assert acq.notes and path.notes
+
+    def test_yaml_omits_empty_fields(self):
+        """Empty strings, dicts, and tuples do not serialize."""
+        pytest.importorskip("yaml")
+        text = build_inventory().to_yaml()
+        assert "notes:" not in text
+        assert "extra_fields:" not in text
+        loaded = inv.Inventory.from_yaml(text)
+        assert loaded.model_dump(mode="json") == build_inventory().model_dump(
+            mode="json"
+        )
+
+    def test_extra_fields_contents_survive(self):
+        """User values inside extra_fields are kept verbatim, even empty."""
+        pytest.importorskip("yaml")
+        acq = inv.Acquisition(code="RAW", extra_fields={"vendor_flag": ""})
+        array = inv.FiberArray(code="L001", acquisitions=(acq,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        got = loaded.networks[0].fiber_arrays[0].acquisitions[0]
+        assert got.extra_fields == {"vendor_flag": ""}

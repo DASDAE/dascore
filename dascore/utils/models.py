@@ -156,7 +156,20 @@ class DascoreBaseModel(BaseModel):
 
 
 class InventoryModel(DascoreBaseModel):
-    """Base class for immutable DASDAE inventory objects."""
+    """
+    Base class for immutable DASDAE inventory objects.
+
+    Every inventory object carries two uniform attachment points for
+    information the model does not otherwise represent: ``notes`` (free
+    prose for humans) and ``extra_fields`` (typed key-values, e.g. for
+    round-tripping unmodeled metadata from external formats).
+    """
+
+    notes: str = Field(default="", description="Additional notes.")
+    extra_fields: dict[str, str | int | float | bool] = Field(
+        default_factory=dict,
+        description="Extra metadata not represented by standardized fields.",
+    )
 
     model_config = ConfigDict(
         extra="forbid",

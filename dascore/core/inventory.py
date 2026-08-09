@@ -48,8 +48,6 @@ from dascore.utils.models import (
     UnitQuantity,
 )
 
-ExtraFieldValue: TypeAlias = str | int | float | bool
-
 CouplingType = Literal[
     "conduit",
     "trench",
@@ -101,7 +99,6 @@ ResourceIdStr = Annotated[
         description="Stable identifier for this shareable inventory resource.",
     ),
 ]
-NotesStr = Annotated[str, Field(default="", description="Additional notes.")]
 
 
 def _type_tag(name: str):
@@ -249,7 +246,6 @@ class Enclosure(InventoryModel):
     specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
-    notes: NotesStr = ""
 
 
 class Cable(InventoryModel):
@@ -258,10 +254,8 @@ class Cable(InventoryModel):
     type: Literal["Cable"] = _type_tag("Cable")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
-    owner: str = Field(default="", description="Proprietary owner.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
-    serial_number: str = Field(default="", description="Serial number.")
     diameter: float | None = Field(
         default=None, description="Outer cable diameter in meters."
     )
@@ -283,7 +277,6 @@ class Cable(InventoryModel):
     fiber_count: int | None = Field(
         default=None, description="Number of fibers contained in the cable."
     )
-    notes: NotesStr = ""
 
 
 _Resource: TypeAlias = Annotated[
@@ -336,7 +329,6 @@ class FiberSegment(_OpticalComponentBase):
     center_wavelength: float | None = Field(
         default=None, description="Center wavelength in nm."
     )
-    notes: NotesStr = ""
 
 
 class Connector(_OpticalComponentBase):
@@ -350,7 +342,6 @@ class Connector(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: NotesStr = ""
 
 
 class Splice(_OpticalComponentBase):
@@ -364,7 +355,6 @@ class Splice(_OpticalComponentBase):
     insertion_loss: float | None = Field(
         default=None, description="Insertion loss in dB, if known."
     )
-    notes: NotesStr = ""
 
 
 class Terminator(_OpticalComponentBase):
@@ -380,7 +370,6 @@ class Terminator(_OpticalComponentBase):
     reflectance: float | None = Field(
         default=None, description="Return loss or reflectance, if known."
     )
-    notes: NotesStr = ""
 
 
 OpticalComponent: TypeAlias = Annotated[
@@ -494,14 +483,12 @@ class CouplingCondition(_IntervalModel):
             "when relevant."
         ),
     )
-    notes: NotesStr = ""
 
 
 class OpticalPathAnnotation(_IntervalModel):
     """Named interval on an optical path; annotations may overlap freely."""
 
     label: str = Field(default="", description="Label for this interval.")
-    notes: NotesStr = ""
 
 
 class DistanceMap(InventoryModel):
@@ -601,6 +588,7 @@ class Acquisition(TimeRangedModel):
     overlapping time ranges. The ``location_code`` names the optical path
     lineage this acquisition interrogates. ``start_distance`` and
     ``distance_map`` are mutually exclusive channel-resolution mechanisms.
+    On export to FDSN DAS metadata, ``extra_fields`` maps to native_headers.
     """
 
     code: CodeStr = Field(description="Channel-like acquisition code.")
@@ -672,10 +660,6 @@ class Acquisition(TimeRangedModel):
     closed_fiber_loop: bool = Field(
         default=False,
         description="True when the interrogator is attached to both path ends.",
-    )
-    extra_fields: dict[str, ExtraFieldValue] = Field(
-        default_factory=dict,
-        description="Extra acquisition metadata not represented by the model.",
     )
 
     @model_validator(mode="after")
@@ -1043,9 +1027,6 @@ class Response(InventoryModel):
     output_units: UnitQuantity | None = Field(
         default=None, description="Physical units after conversion."
     )
-    extra_fields: dict[str, ExtraFieldValue] = Field(
-        default_factory=dict, description="Extra response metadata."
-    )
 
 
 class Channel(TimeRangedModel):
@@ -1088,7 +1069,6 @@ class Station(TimeRangedModel):
     channels: tuple[Channel, ...] = Field(
         default=(), description="Channels associated with this station."
     )
-    notes: NotesStr = ""
 
 
 class FiberArray(TimeRangedModel):
@@ -1107,7 +1087,6 @@ class FiberArray(TimeRangedModel):
     optical_paths: tuple[OpticalPath, ...] = Field(
         default=(), description="Optical paths associated with this fiber array."
     )
-    notes: NotesStr = ""
 
     def check(self) -> Self:
         """
@@ -1149,7 +1128,6 @@ class Network(InventoryModel):
     stations: tuple[Station, ...] = Field(
         default=(), description="Stations in this network."
     )
-    notes: NotesStr = ""
 
     def check(self) -> Self:
         """
@@ -1180,6 +1158,30 @@ class Network(InventoryModel):
         for array in self.fiber_arrays:
             array.check()
         return self
+
+
+def _drop_empty(value, _in_extras=False):
+    """
+    Recursively drop empty strings, mappings, and sequences from a dump.
+
+    All model fields default to empty values, so pruning them is lossless on
+    reload. User-supplied ``extra_fields`` contents are kept verbatim.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            pruned = (
+                item
+                if _in_extras
+                else _drop_empty(item, _in_extras=key == "extra_fields")
+            )
+            if pruned in ("", {}, []) and not _in_extras:
+                continue
+            out[key] = pruned
+        return out
+    if isinstance(value, list):
+        return [_drop_empty(item) for item in value]
+    return value
 
 
 class ResolvedContext(NamedTuple):
@@ -1542,7 +1544,7 @@ class Inventory(InventoryModel):
         """Serialize this inventory to YAML, optionally writing to a path."""
         yaml = optional_import("yaml", required_for="YAML inventory serialization")
 
-        data = self.model_dump(mode="json", exclude_none=True)
+        data = _drop_empty(self.model_dump(mode="json", exclude_none=True))
         out = yaml.safe_dump(data, sort_keys=False)
         if path is not None:
             with open(path, "w") as fh:
