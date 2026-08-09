@@ -191,7 +191,7 @@ class TestGetContentsClobberWarning:
 
     def test_regex_query_reads_attr_under_collision(self, random_patch):
         """A regex _attrs query evaluates the attr, not the coord column."""
-        import re
+        import re  # noqa: PLC0415
 
         # one patch carrying both the coord and a same-named string attr:
         # the flat column is the (numeric) envelope even in the filtered
@@ -240,8 +240,8 @@ class TestCompatStaysInDasdae:
 
     def test_import_graph(self):
         """Nothing outside dascore.io.dasdae imports the _compat module."""
-        import re
-        from pathlib import Path
+        import re  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
 
         root = Path(dc.__file__).parent
         dasdae_dir = root / "io" / "dasdae"
@@ -261,7 +261,7 @@ class TestLegacyDasdaeFile:
     def test_legacy_fixture_reads(self):
         """The shipped legacy file loads with coords intact, attrs pure."""
         pytest.importorskip("pooch")
-        from dascore.utils.downloader import fetch
+        from dascore.utils.downloader import fetch  # noqa: PLC0415
 
         path = fetch("example_dasdae_event_1.h5")
         patch = dc.spool(path)[0]

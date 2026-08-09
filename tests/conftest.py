@@ -530,7 +530,7 @@ def terra15_das_unfinished_path() -> Path:
 @register_func(SPOOL_FIXTURES)
 def random_spool() -> SpoolType:
     """Init a random array."""
-    from dascore.examples import get_example_spool
+    from dascore.examples import get_example_spool  # noqa: PLC0415
 
     return get_example_spool("random_das")
 

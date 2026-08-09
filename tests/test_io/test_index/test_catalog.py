@@ -260,7 +260,7 @@ class TestCount:
 
     def _selections(self, catalog):
         """Views spanning attr, coord range, regex, and chained forms."""
-        import re
+        import re  # noqa: PLC0415
 
         df = catalog.to_df()
         t0 = df["time_min"].min()
@@ -318,7 +318,7 @@ class TestCanonicalRange:
 
     def test_eq_and_hash(self):
         """Equal magnitudes compare and hash equal; other types don't."""
-        from dascore.io.index.catalog import _CanonicalRange
+        from dascore.io.index.catalog import _CanonicalRange  # noqa: PLC0415
 
         r1, r2 = _CanonicalRange((1.0, 2.0)), _CanonicalRange((1.0, 2.0))
         assert r1 == r2
@@ -332,7 +332,7 @@ class TestViewSerialization:
 
     def test_view_pickles_membership_only(self):
         """A one-patch view of an N-patch live spool ships one patch."""
-        import pickle
+        import pickle  # noqa: PLC0415
 
         base = dc.get_example_patch()
         patches = [

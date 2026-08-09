@@ -479,7 +479,7 @@ def build_sql(
     SQL-resolvable (regex must inspect rows) and the caller must fall
     back to a projected count.
     """
-    import json
+    import json  # noqa: PLC0415
 
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)

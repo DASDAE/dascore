@@ -85,7 +85,7 @@ def _build_meta_payload_without_fiber_id():
 
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
-    from dascore.io.core import _scan_payload_to_summary
+    from dascore.io.core import _scan_payload_to_summary  # noqa: PLC0415
 
     return _scan_payload_to_summary(payload)
 

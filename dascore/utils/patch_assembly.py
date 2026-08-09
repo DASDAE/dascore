@@ -86,7 +86,7 @@ def _match_merge_units(patch, merge_dim, target_units):
     (patch, target_units); incompatible or missing units pass through
     for the merge itself to police.
     """
-    from dascore.exceptions import UnitError
+    from dascore.exceptions import UnitError  # noqa: PLC0415
 
     if merge_dim is None or merge_dim not in getattr(patch.coords, "coord_map", {}):
         return patch, target_units

@@ -168,7 +168,7 @@ class TestReadDASDAE:
         self, random_patch, tmp_path_factory
     ):
         """New groups appended to a legacy file must not be legacy-stripped."""
-        from dascore.io.dasdae.utils import _SEPARATE_ATTRS_KEY
+        from dascore.io.dasdae.utils import _SEPARATE_ATTRS_KEY  # noqa: PLC0415
 
         path = tmp_path_factory.mktemp("dasdae_legacy_append") / "mixed.h5"
         old_patch = random_patch.update_attrs(tag="old")

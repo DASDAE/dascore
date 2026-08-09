@@ -296,7 +296,7 @@ def _user_stacklevel() -> int:
     build_chunk_plan directly), so a fixed stacklevel would blame library
     frames for some entries.
     """
-    import inspect
+    import inspect  # noqa: PLC0415
 
     # The dascore package directory, resolved from the package itself so
     # this does not depend on this module's location within it.

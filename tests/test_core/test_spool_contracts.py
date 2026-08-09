@@ -132,7 +132,7 @@ class TestChunkPlanContract:
 
     def test_planned_state_is_derived(self, patches):
         """A chunked spool is a fresh derived catalog, not a mode flag."""
-        from dascore.io.index.planned import PlanResolver
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         spool = dc.spool(patches)
         chunked = spool.chunk(time=2)
@@ -159,7 +159,7 @@ class TestTypeSurface:
 
     def test_removed_names_gone(self):
         """The old concrete class names are deleted outright."""
-        import dascore.core.spool as spool_module
+        import dascore.core.spool as spool_module  # noqa: PLC0415
 
         for name in ("MemorySpool", "DirectorySpool", "FileSpool"):
             assert not hasattr(spool_module, name)

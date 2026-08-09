@@ -278,7 +278,7 @@ class TestHistory:
         """
         Ensure patch arguments are truncated in history (issue #529).
         """
-        from dascore.utils.patch import patch_function
+        from dascore.utils.patch import patch_function  # noqa: PLC0415
 
         @patch_function()
         def func_with_patch_arg(patch, other_patch):
@@ -844,7 +844,7 @@ class TestGetPatchName:
         The docs renderer resolves annotations at runtime and falls back to
         raw strings for the whole signature if any name is undefined.
         """
-        from typing import get_type_hints
+        from typing import get_type_hints  # noqa: PLC0415
 
         assert get_type_hints(get_patch_names)
 
@@ -1150,7 +1150,7 @@ class TestForcePatchMergeOverlap:
 
     def test_complete_overlap_keeps_first(self, random_patch):
         """Identical envelopes merge to the first patch."""
-        from dascore.utils.patch import _force_patch_merge
+        from dascore.utils.patch import _force_patch_merge  # noqa: PLC0415
 
         twin = random_patch.new()
         infos = []

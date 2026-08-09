@@ -83,7 +83,7 @@ class _CanonicalRange:
 
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
-        from dascore.units import get_quantity
+        from dascore.units import get_quantity  # noqa: PLC0415
 
         coord_units = getattr(coord, "units", None)
         if coord_units is None:
@@ -279,7 +279,7 @@ class FileResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
-        from dascore.io.core import _resolve_read_spool
+        from dascore.io.core import _resolve_read_spool  # noqa: PLC0415
 
         path = row["path"]
         # relative paths resolve against the catalog root; URIs and
@@ -598,7 +598,7 @@ class PatchCatalog:
         in-memory backend; patches load through the file resolver on
         demand. There is no syncer — a changed file needs a new catalog.
         """
-        from dascore.io.index.ingest import summaries_to_records
+        from dascore.io.index.ingest import summaries_to_records  # noqa: PLC0415
 
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
@@ -616,7 +616,7 @@ class PatchCatalog:
         index_path: str | Path | None = None,
     ) -> PatchCatalog:
         """Catalog over a directory of fiber files."""
-        from dascore.io.index.indexer import DBDirectoryIndexer
+        from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
 
         syncer = DBDirectoryIndexer(path, index_path=index_path)
         return cls(

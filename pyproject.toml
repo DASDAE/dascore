@@ -183,6 +183,7 @@ lint.select = [
     "N",
     "NPY",
     "NPY201",
+    "PLC0415",
 ]
 
 # Exclude a variety of commonly ignored directories.

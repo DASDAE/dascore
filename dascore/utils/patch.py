@@ -487,7 +487,7 @@ def _get_merged_coord(
     `tolerance * step`. Merges whose gaps exceed that stay segmented
     (honestly non-uniform) rather than being relabeled.
     """
-    from dascore.core.coords import concat_coords
+    from dascore.core.coords import concat_coords  # noqa: PLC0415
 
     try:
         merged = concat_coords(*[cm.coord_map[merge_dim] for cm in coords])
@@ -1521,7 +1521,7 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
     if dim is not None:
         if isinstance(dim, str):
             if dim not in patch.dims:
-                from dascore.exceptions import ParameterError
+                from dascore.exceptions import ParameterError  # noqa: PLC0415
 
                 msg = f"Dimension '{dim}' not found in patch dimensions {patch.dims}"
                 raise ParameterError(msg)
@@ -1531,7 +1531,7 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
             axis = []
             for d in dim:
                 if d not in patch.dims:
-                    from dascore.exceptions import ParameterError
+                    from dascore.exceptions import ParameterError  # noqa: PLC0415
 
                     msg = f"Dimension '{d}' not found in patch dimensions {patch.dims}"
                     raise ParameterError(msg)

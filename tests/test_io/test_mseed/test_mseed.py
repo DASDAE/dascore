@@ -188,7 +188,7 @@ class TestMiniSeedGetFormat:
 
     def test_get_format_without_pymseed(self, tmp_path, monkeypatch):
         """MiniSEED headers can be detected without PyMseed installed."""
-        import dascore.io.mseed.core as mseed_core
+        import dascore.io.mseed.core as mseed_core  # noqa: PLC0415
 
         def _optional_import(*args, **kwargs):
             raise MissingOptionalDependencyError("missing")
@@ -498,7 +498,7 @@ class TestMiniSeedScan:
 
     def test_missing_pymseed_raises(self, mseed_v3_path, monkeypatch):
         """Explicit MiniSEED reads require PyMseed."""
-        import dascore.io.mseed.core as mseed_core
+        import dascore.io.mseed.core as mseed_core  # noqa: PLC0415
 
         def _optional_import(*args, **kwargs):
             raise MissingOptionalDependencyError("missing")
@@ -745,7 +745,7 @@ class TestRealMiniSeed:
     def test_read_das_station_channels(self):
         """Etna DAS station-coded channels preserve their full sample counts."""
         pytest.importorskip("pymseed")
-        from dascore.utils.downloader import fetch
+        from dascore.utils.downloader import fetch  # noqa: PLC0415
 
         with skip_timeout():
             path = fetch("etna_9n_3chan_10s.mseed")

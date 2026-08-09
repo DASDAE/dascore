@@ -526,9 +526,9 @@ class TestNetCDFIO:
     def test_remote_stream_no_download(self, example_patch, netcdf_path):
         """Remote NetCDF should stream via h5netcdf, not download to the cache."""
         pytest.importorskip("h5netcdf")
-        from upath import UPath
+        from upath import UPath  # noqa: PLC0415
 
-        from dascore.utils.remote_io import (
+        from dascore.utils.remote_io import (  # noqa: PLC0415
             clear_remote_file_cache,
             get_remote_cache_path,
         )
@@ -562,7 +562,7 @@ class TestNetCDFIO:
         self, minimal_cf_netcdf_path, monkeypatch
     ):
         """Format detection should not depend on xarray being importable."""
-        import importlib
+        import importlib  # noqa: PLC0415
 
         original_import_module = importlib.import_module
 

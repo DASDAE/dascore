@@ -259,7 +259,7 @@ class TestSelectedDirectorySpools:
         self, spool_dir, random_spool, first_patch_range
     ):
         """D1: any operation severs update()."""
-        from dascore.exceptions import InvalidSpoolError
+        from dascore.exceptions import InvalidSpoolError  # noqa: PLC0415
 
         spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
@@ -728,7 +728,7 @@ class TestDirectorySpoolSerialization:
 
     def test_pickle_round_trip(self, basic_file_spool):
         """A directory spool pickles and reopens its own connection."""
-        import pickle
+        import pickle  # noqa: PLC0415
 
         loaded = pickle.loads(pickle.dumps(basic_file_spool))
         assert len(loaded) == len(basic_file_spool)
@@ -736,7 +736,7 @@ class TestDirectorySpoolSerialization:
 
     def test_pickle_selected_view(self, basic_file_spool):
         """Selected views keep their selection through pickling."""
-        import pickle
+        import pickle  # noqa: PLC0415
 
         df = basic_file_spool.get_contents()
         sub = basic_file_spool.select(time=(df["time_min"].min(), None))
@@ -746,7 +746,7 @@ class TestDirectorySpoolSerialization:
     @pytest.mark.concurrency
     def test_process_pool_map(self, basic_file_spool):
         """Spool.map works with a process pool executor."""
-        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
 
         with ProcessPoolExecutor(max_workers=1) as client:
             out = list(

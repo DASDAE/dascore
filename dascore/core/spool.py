@@ -150,7 +150,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         """
         if not isinstance(other, BaseSpool):
             return NotImplemented
-        from dascore.io.index.catalog import PatchCatalog
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         members = [self._as_catalog_member(), other._as_catalog_member()]
         union = PatchCatalog.union(members)
@@ -166,7 +166,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         means the whole catalog (or the catalog view itself carries the
         selection). The base implementation materializes the patches.
         """
-        from dascore.io.index.catalog import PatchCatalog
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         return PatchCatalog.from_patches(list(self)), None
 
@@ -494,7 +494,7 @@ class Spool(BaseSpool):
         self,
         data: PatchType | Sequence[PatchType] | BaseSpool | None = None,
     ):
-        from dascore.io.index.catalog import PatchCatalog
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         if isinstance(data, Spool):
             # copy-construction: share the catalog and provenance
@@ -673,8 +673,8 @@ class Spool(BaseSpool):
         with trimmed envelopes as the output envelopes and the trims
         themselves re-applied at load through the plan resolver.
         """
-        from dascore.io.index.planned import derived_catalog
-        from dascore.utils.chunk_plan import (
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.utils.chunk_plan import (  # noqa: PLC0415
             _SOURCE_COLUMNS,
             ChunkPlan,
             samples_adjusted_envelopes,
@@ -721,8 +721,11 @@ class Spool(BaseSpool):
         residuals adjust the working envelopes so plans reflect the
         loading truth.
         """
-        from dascore.io.index.planned import PlanResolver, collapse_working_df
-        from dascore.utils.chunk_plan import (
+        from dascore.io.index.planned import (  # noqa: PLC0415
+            PlanResolver,
+            collapse_working_df,
+        )
+        from dascore.utils.chunk_plan import (  # noqa: PLC0415
             _ensure_patch_id,
             samples_adjusted_envelopes,
         )
@@ -771,7 +774,7 @@ class Spool(BaseSpool):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        from dascore.utils.chunk_plan import build_chunk_plan
+        from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
 
         _, working = self._plan_frames(next(iter(kwargs), None))
         return build_chunk_plan(
@@ -799,8 +802,8 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
-        from dascore.io.index.planned import derived_catalog
-        from dascore.utils.chunk_plan import build_chunk_plan
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
 
         source_rows, working = self._plan_frames(next(iter(kwargs), None))
         plan = build_chunk_plan(
@@ -832,8 +835,11 @@ class Spool(BaseSpool):
     @compose_docstring(desc=get_docstring(concatenate_patches))
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
-        from dascore.io.index.planned import derived_catalog
-        from dascore.utils.chunk_plan import ChunkPlan, _combined_dtype
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.utils.chunk_plan import (  # noqa: PLC0415
+            ChunkPlan,
+            _combined_dtype,
+        )
 
         if len(kwargs) != 1:
             msg = (
@@ -907,12 +913,12 @@ class Spool(BaseSpool):
         The directory's index (created/updated via ``update()``) backs
         the catalog; ``path`` may also be an existing directory indexer.
         """
-        from dascore.io.index.catalog import FileResolver, PatchCatalog
-        from dascore.io.index.indexer import DBDirectoryIndexer
+        from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
+        from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
 
         out = cls()
         if isinstance(path, DBDirectoryIndexer):
-            from dascore.io.index.catalog import _DIRECTORY_ORDER
+            from dascore.io.index.catalog import _DIRECTORY_ORDER  # noqa: PLC0415
 
             out._catalog = PatchCatalog(
                 backend=path._backend,
@@ -940,7 +946,7 @@ class Spool(BaseSpool):
         if not path.exists() or path.is_dir():
             msg = f"{path} does not exist or is a directory"
             raise FileNotFoundError(msg)
-        from dascore.io.index.catalog import PatchCatalog
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
@@ -986,7 +992,7 @@ class Spool(BaseSpool):
         select, slicing, sort, chunk, concatenate, or combining spools)
         raises: update the root and re-apply the operations.
         """
-        from dascore.io.index.catalog import LiveResolver
+        from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 
         catalog = self._catalog
         derived_msg = (
@@ -1001,7 +1007,7 @@ class Spool(BaseSpool):
             catalog.update(progress=progress)
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
-            from dascore.io.core import FiberIO
+            from dascore.io.core import FiberIO  # noqa: PLC0415
 
             formatter = FiberIO.manager.get_fiberio(
                 format=self._file_format, version=self._file_version
@@ -1083,7 +1089,7 @@ class Spool(BaseSpool):
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
 
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
+        from dascore.utils.chunk_plan import samples_adjusted_envelopes  # noqa: PLC0415
 
         catalog = self._catalog
         rows = self._df

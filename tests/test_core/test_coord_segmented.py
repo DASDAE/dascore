@@ -724,7 +724,7 @@ class TestEdgeCases:
 
     def test_unsupported_segment_class_raises(self):
         """Coord classes other than range/monotonic are rejected."""
-        from dascore.core.coords import CoordArray
+        from dascore.core.coords import CoordArray  # noqa: PLC0415
 
         bad = CoordArray(values=np.array([3.0, 1.0, 2.0]))
         good = get_coord(start=10.0, stop=20.0, step=1.0)
@@ -1136,7 +1136,7 @@ class TestPlannedSpoolWriteGuard:
     @pytest.fixture()
     def gapped_planned_spool(self, tmp_path):
         """A file-backed planned spool whose output spans a real gap."""
-        import warnings
+        import warnings  # noqa: PLC0415
 
         src = tmp_path / "src"
         src.mkdir()

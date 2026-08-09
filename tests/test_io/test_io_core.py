@@ -241,7 +241,7 @@ class TestGetExactCoord:
 
     def test_jittery_array_does_not_over_segment(self):
         """Sub-step jitter must not explode into a per-sample segmented coord."""
-        from dascore.core.coords import CoordSegmented
+        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
 
         rng = np.random.default_rng(0)
         n = 5_000
@@ -267,7 +267,7 @@ class TestGetExactCoord:
 
     def test_piecewise_uniform_array_stays_segmented(self):
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
-        from dascore.core.coords import CoordSegmented
+        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
 
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
@@ -1470,7 +1470,7 @@ class TestIOCoreCoverageEdges:
 
     def test_directory_format_ignores_unknown_format(self, monkeypatch, tmp_path):
         """An unsupported directory is not itself a scan unit."""
-        from dascore.io.core import is_directory_format
+        from dascore.io.core import is_directory_format  # noqa: PLC0415
 
         def _raise_unknown_format(_path):
             raise UnknownFiberFormatError
@@ -1480,7 +1480,7 @@ class TestIOCoreCoverageEdges:
 
     def test_directory_format_propagates_unexpected_error(self, monkeypatch, tmp_path):
         """Unexpected format-detection failures remain visible to callers."""
-        from dascore.io.core import is_directory_format
+        from dascore.io.core import is_directory_format  # noqa: PLC0415
 
         def _raise_unexpected_error(_path):
             raise RuntimeError("format detection failed")
@@ -1491,8 +1491,8 @@ class TestIOCoreCoverageEdges:
 
     def test_numeric_singleton_without_identity_not_trusted(self):
         """A positional ID cannot resolve an anonymous trimmed singleton."""
-        from dascore.exceptions import PatchAttributeError
-        from dascore.io.core import _resolve_read_spool
+        from dascore.exceptions import PatchAttributeError  # noqa: PLC0415
+        from dascore.io.core import _resolve_read_spool  # noqa: PLC0415
 
         spool = dc.spool([dc.get_example_patch()])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
@@ -1500,8 +1500,8 @@ class TestIOCoreCoverageEdges:
 
     def test_non_unique_patch_resolution_raises(self):
         """An unresolvable source id in a multi-patch read raises clearly."""
-        from dascore.exceptions import PatchAttributeError
-        from dascore.io.core import _select_patch_from_spool
+        from dascore.exceptions import PatchAttributeError  # noqa: PLC0415
+        from dascore.io.core import _select_patch_from_spool  # noqa: PLC0415
 
         spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
@@ -1515,14 +1515,14 @@ class TestIOCoreCoverageEdges:
         these (see #583); the guard must fire before any identity matching,
         with or without a requested source id.
         """
-        from dascore.io.core import _select_patch_from_spool
+        from dascore.io.core import _select_patch_from_spool  # noqa: PLC0415
 
         with pytest.raises(MissingPatchError, match="No patch remained"):
             _select_patch_from_spool(dc.spool([]), source_patch_id=source_patch_id)
 
     def test_single_patch_resolved_by_name(self):
         """A one-patch read resolves when the id matches the patch name."""
-        from dascore.io.core import _select_patch_from_spool
+        from dascore.io.core import _select_patch_from_spool  # noqa: PLC0415
 
         patch = dc.get_example_patch()
         spool = dc.spool([patch])
@@ -1533,7 +1533,7 @@ class TestIOCoreCoverageEdges:
 
     def test_corrupt_file_format_detection_is_robust(self, tmp_path):
         """A reader raising during format detection is caught, not propagated."""
-        from dascore.exceptions import UnknownFiberFormatError
+        from dascore.exceptions import UnknownFiberFormatError  # noqa: PLC0415
 
         # valid HDF5 magic followed by garbage: an HDF5 reader raises while
         # probing, which format detection must swallow before giving up.

@@ -164,7 +164,7 @@ class TestPatchStamping:
 
     def test_chunked(self, tmp_path):
         """Patches from a chunked spool keep hive attrs."""
-        from dascore.examples import spool_to_directory
+        from dascore.examples import spool_to_directory  # noqa: PLC0415
 
         sub = tmp_path / "network=XX"
         sub.mkdir()
@@ -310,7 +310,7 @@ class TestEdgeCases:
 
     def test_old_index_version_rebuilds(self, hive_dir):
         """An index stamped with an older version rebuilds transparently."""
-        import sqlite3
+        import sqlite3  # noqa: PLC0415
 
         spool = Spool.from_directory(hive_dir).update(progress=None)
         spool.indexer.close()

@@ -132,7 +132,7 @@ class TestGetPluginTable:
 
     def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
         """An empty registry directory returns a DataFrame with the correct columns."""
-        import dascore.utils.namespace as ns_module
+        import dascore.utils.namespace as ns_module  # noqa: PLC0415
 
         monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
         df = get_plugin_table()

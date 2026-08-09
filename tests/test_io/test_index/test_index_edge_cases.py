@@ -41,8 +41,8 @@ class TestIndexCoverageEdges:
 
     def test_live_resolver_missing_patch(self):
         """A row for a patch absent from the registry raises MissingPatchError."""
-        from dascore.exceptions import MissingPatchError
-        from dascore.io.index.catalog import LiveResolver
+        from dascore.exceptions import MissingPatchError  # noqa: PLC0415
+        from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 
         resolver = LiveResolver([dc.get_example_patch()])
         with pytest.raises(MissingPatchError, match="not available"):
@@ -50,7 +50,7 @@ class TestIndexCoverageEdges:
 
     def test_mixed_compatible_unit_range(self):
         """A coord range mixing compatible units resolves."""
-        from dascore.units import get_quantity
+        from dascore.units import get_quantity  # noqa: PLC0415
 
         cm = get_quantity("cm")
         out = dc.spool([dc.get_example_patch()]).select(distance=(1 * m, 200 * cm))
@@ -62,7 +62,7 @@ class TestIndexCoverageEdges:
         The catalog canonicalizes units before the backend, so only a
         direct Query reaches the multi-unit compatibility check.
         """
-        from dascore.units import s
+        from dascore.units import s  # noqa: PLC0415
 
         with pytest.raises(UnitError, match="Cannot convert"):
             backend.query(Query(coords={"distance": (1 * m, 2 * s)}))
@@ -79,7 +79,7 @@ class TestIndexCoverageEdges:
 
     def test_attr_meta_units_backfilled(self, tmp_path):
         """An attr first seen unitless gets its unit backfilled by a later write."""
-        from dascore.core.summary import PatchSummary
+        from dascore.core.summary import PatchSummary  # noqa: PLC0415
 
         def _summary(gain, path):
             return PatchSummary(
@@ -116,9 +116,9 @@ class TestIndexCoverageEdges:
 
     def test_reopen_missing_meta_row(self, tmp_path):
         """An index whose meta row was lost is rejected on reopen."""
-        import sqlite3
+        import sqlite3  # noqa: PLC0415
 
-        from dascore.exceptions import InvalidIndexError
+        from dascore.exceptions import InvalidIndexError  # noqa: PLC0415
 
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
@@ -131,9 +131,9 @@ class TestIndexCoverageEdges:
 
     def test_reopen_table_missing_column(self, tmp_path):
         """An index whose table lost a column is rejected on reopen."""
-        import sqlite3
+        import sqlite3  # noqa: PLC0415
 
-        from dascore.exceptions import InvalidIndexError
+        from dascore.exceptions import InvalidIndexError  # noqa: PLC0415
 
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
@@ -155,7 +155,7 @@ class TestIndexCoverageEdges:
 
     def test_schema_creation_rolls_back_on_failure(self, tmp_path):
         """A failure while creating the schema rolls back and re-raises."""
-        from dascore.io.index.lite import SQLiteBackend
+        from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
 
         class _BoomBackend(SQLiteBackend):
             def _execute(self, sql, params=()):
@@ -168,7 +168,7 @@ class TestIndexCoverageEdges:
 
     def test_schema_commit_failure_rolls_back(self, tmp_path):
         """A schema commit failure follows the protected rollback path."""
-        from dascore.io.index.lite import SQLiteBackend
+        from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
 
         class _CommitBoomBackend(SQLiteBackend):
             rolled_back = False
@@ -186,9 +186,9 @@ class TestIndexCoverageEdges:
 
     def test_reopen_missing_dynamic_attr_column(self, tmp_path):
         """attr_meta referencing an absent attrs column is rejected on reopen."""
-        import sqlite3
+        import sqlite3  # noqa: PLC0415
 
-        from dascore.exceptions import InvalidIndexError
+        from dascore.exceptions import InvalidIndexError  # noqa: PLC0415
 
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
@@ -208,7 +208,7 @@ class TestPureHelpers:
 
     def test_is_directory_format_on_file(self, tmp_path):
         """A plain file is never a directory scan unit."""
-        from dascore.io.core import is_directory_format
+        from dascore.io.core import is_directory_format  # noqa: PLC0415
 
         f = tmp_path / "a.txt"
         f.write_text("x")
@@ -216,9 +216,9 @@ class TestPureHelpers:
 
     def test_memory_backend_refuses_pickle(self):
         """An in-memory backend cannot be pickled (owners serialize rows)."""
-        import pickle
+        import pickle  # noqa: PLC0415
 
-        from dascore.io.index.lite import SQLiteBackend
+        from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
 
         back = SQLiteBackend(":memory:")
         try:
@@ -229,7 +229,7 @@ class TestPureHelpers:
 
     def test_py_scalar_bool_and_int(self):
         """_py_scalar unwraps numpy bool/int to plain python scalars."""
-        from dascore.io.index.ingest import _py_scalar
+        from dascore.io.index.ingest import _py_scalar  # noqa: PLC0415
 
         assert _py_scalar(np.bool_(True)) is True
         assert _py_scalar(np.int64(5)) == 5
@@ -237,14 +237,14 @@ class TestPureHelpers:
 
     def test_assemble_records_empty_sources(self):
         """No sources yields no records."""
-        from dascore.io.index.ingest import assemble_source_records
+        from dascore.io.index.ingest import assemble_source_records  # noqa: PLC0415
 
         empty = pd.DataFrame()
         assert assemble_source_records(empty, empty, empty, empty, empty, empty) == []
 
     def test_units_compatible(self):
         """_units_compatible is True for same dimensionality, False otherwise."""
-        from dascore.io.index.backend import SQLIndexBackend
+        from dascore.io.index.backend import SQLIndexBackend  # noqa: PLC0415
 
         assert SQLIndexBackend._units_compatible("m", "ft") is True
         assert SQLIndexBackend._units_compatible("m", "s") is False
@@ -256,15 +256,15 @@ class TestPureHelpers:
 
     def test_wrong_arity_coord_query_raises(self, backend):
         """A hand-built coord range of the wrong length is rejected."""
-        from dascore.exceptions import ParameterError
+        from dascore.exceptions import ParameterError  # noqa: PLC0415
 
         with pytest.raises(ParameterError, match="length 2 sequence"):
             backend.query(Query(coords={"distance": (1, 2, 3)}))
 
     def test_to_target_unit_paths(self):
         """Quantity on a unitless target raises; on a unit target it converts."""
-        from dascore.io.index.query import _to_target_unit
-        from dascore.units import get_quantity as _gq
+        from dascore.io.index.query import _to_target_unit  # noqa: PLC0415
+        from dascore.units import get_quantity as _gq  # noqa: PLC0415
 
         typed = typed_value(5 * m)  # a numeric TypedValue carrying units
         with pytest.raises(UnitError, match="unitless"):
@@ -275,7 +275,7 @@ class TestPureHelpers:
 
     def test_range_bounds_unset_is_not_none(self):
         """Omitting target units must not mean the target is unitless."""
-        from dascore.io.index.query import _UNSET, _range_bounds
+        from dascore.io.index.query import _UNSET, _range_bounds  # noqa: PLC0415
 
         value = (5 * m, 10 * m)
         kind_probe = typed_value(5 * m)
@@ -295,7 +295,7 @@ class TestNormalizeSourcePatchId:
 
     def test_missing_forms_become_empty(self):
         """None, empty string, and pandas NaN/NaT all normalize to ''."""
-        from dascore.core.summary import normalize_source_patch_id
+        from dascore.core.summary import normalize_source_patch_id  # noqa: PLC0415
 
         assert normalize_source_patch_id(None) == ""
         assert normalize_source_patch_id("") == ""
@@ -305,20 +305,20 @@ class TestNormalizeSourcePatchId:
 
     def test_numpy_scalar_becomes_plain_string(self):
         """A numpy scalar is unwrapped before stringifying."""
-        from dascore.core.summary import normalize_source_patch_id
+        from dascore.core.summary import normalize_source_patch_id  # noqa: PLC0415
 
         assert normalize_source_patch_id(np.int64(42)) == "42"
 
     def test_plain_values_stringify(self):
         """Ordinary ids pass through as strings."""
-        from dascore.core.summary import normalize_source_patch_id
+        from dascore.core.summary import normalize_source_patch_id  # noqa: PLC0415
 
         assert normalize_source_patch_id("abc") == "abc"
         assert normalize_source_patch_id(7) == "7"
 
     def test_non_scalar_falls_through(self):
         """A value pd.isnull cannot evaluate as a scalar still stringifies."""
-        from dascore.core.summary import normalize_source_patch_id
+        from dascore.core.summary import normalize_source_patch_id  # noqa: PLC0415
 
         # pd.isnull on a list returns an array (truth value is ambiguous),
         # so the helper must swallow that and fall through to str().
@@ -330,7 +330,7 @@ class TestCanonicalRange:
 
     def test_bare_and_quantity_bounds(self):
         """Bare numbers and quantities become SI magnitudes."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.io.index.catalog import _canonical_range  # noqa: PLC0415
 
         bare = _canonical_range((20, 60))
         assert bare is not None
@@ -342,7 +342,7 @@ class TestCanonicalRange:
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.io.index.catalog import _canonical_range  # noqa: PLC0415
 
         half_open = _canonical_range((None, 60))
         assert half_open is not None
@@ -360,7 +360,7 @@ class TestCanonicalRange:
     )
     def test_non_numeric_ranges_return_none(self, value):
         """Anything that is not a bounded numeric range yields None."""
-        from dascore.io.index.catalog import _canonical_range
+        from dascore.io.index.catalog import _canonical_range  # noqa: PLC0415
 
         assert _canonical_range(value) is None
 
@@ -974,10 +974,10 @@ class TestIndexerEdges:
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
-        import sys
+        import sys  # noqa: PLC0415
 
         sys.path.insert(0, "tests/test_io/test_xml_binary")
-        from test_xml_binary import metadata
+        from test_xml_binary import metadata  # noqa: PLC0415
 
         sub = tmp_path / "unit"
         sub.mkdir()
@@ -1008,7 +1008,7 @@ class TestDirSpoolPassthrough:
 
     def test_spool_from_indexer(self, tmp_path, random_patch):
         """Passing an indexer instance to from_directory works."""
-        from dascore.core.spool import Spool
+        from dascore.core.spool import Spool  # noqa: PLC0415
 
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         indexer = DBDirectoryIndexer(tmp_path)
@@ -1021,7 +1021,7 @@ class TestFinalCoverage:
 
     def test_datetime_object_becomes_time(self):
         """A python datetime routes through the datetime fallback."""
-        import datetime
+        import datetime  # noqa: PLC0415
 
         out = typed_value(datetime.datetime(2024, 1, 1))
         assert out is not None and out.kind == "time"
@@ -1207,10 +1207,10 @@ class TestResourceCleanup:
 
     def test_gc_closes_connection(self):
         """Garbage collection closes the backend connection silently."""
-        import gc
-        import warnings as warnings_mod
+        import gc  # noqa: PLC0415
+        import warnings as warnings_mod  # noqa: PLC0415
 
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         spool = dc.spool([dc.get_example_patch()])
         spool.get_contents()  # realize the backend
@@ -1228,8 +1228,8 @@ class TestResourceCleanup:
 
     def test_explicit_close_idempotent(self):
         """Explicit close works and GC afterwards stays quiet."""
-        import dascore as dc
-        from dascore.io.index.catalog import PatchCatalog
+        import dascore as dc  # noqa: PLC0415
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
@@ -1238,11 +1238,11 @@ class TestResourceCleanup:
     @pytest.mark.concurrency
     def test_finalization_from_worker_thread(self):
         """Dropping the last backend reference off-thread does not raise."""
-        import gc
-        import sys
-        import threading
+        import gc  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        import threading  # noqa: PLC0415
 
-        from dascore.io.index.lite import SQLiteBackend
+        from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
 
         holder = [SQLiteBackend(":memory:")]
         unraisable = []
@@ -1269,10 +1269,10 @@ class TestLegacyIndexMap:
 
     def test_legacy_entry_ignored(self, tmp_path):
         """A mapped legacy HDF5 index does not break index creation."""
-        import h5py
+        import h5py  # noqa: PLC0415
 
-        import dascore as dc
-        from dascore.io.index.indexer import (
+        import dascore as dc  # noqa: PLC0415
+        from dascore.io.index.indexer import (  # noqa: PLC0415
             _set_mapped_index_path,
         )
 
@@ -1299,7 +1299,7 @@ class TestReservedAttrNames:
     )
     def test_reserved_attr_warns_and_skips(self, name, value):
         """Reserved names warn at ingest and never corrupt the relation."""
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         patch = dc.get_example_patch().update_attrs(**{name: value})
         with pytest.warns(UserWarning, match="reserved attr"):
@@ -1310,7 +1310,7 @@ class TestReservedAttrNames:
 
     def test_non_reserved_attr_round_trips(self):
         """Ordinary arbitrary attrs still index and select normally."""
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         patch = dc.get_example_patch().update_attrs(experiment="exp42")
         spool = dc.spool([patch])
@@ -1319,7 +1319,7 @@ class TestReservedAttrNames:
 
     def test_cross_patch_envelope_attr_clobbered_not_reserved(self):
         """An envelope-shaped attr indexes normally; the coord wins the column."""
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         base = dc.get_example_patch()
         p1 = base.update_attrs(event_time_min=123.0)
@@ -1337,7 +1337,7 @@ class TestReservedAttrNames:
 
     def test_data_units_attr_still_indexed(self):
         """A real ``*_units`` attr is not an envelope column; stays queryable."""
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
@@ -1350,10 +1350,10 @@ class TestTransactionIsolation:
     @pytest.mark.concurrency
     def test_reader_never_sees_half_written_replacement(self, tmp_path, monkeypatch):
         """A concurrent reader blocks during a source replacement."""
-        import threading
+        import threading  # noqa: PLC0415
 
-        from dascore.io.index.backend import get_backend
-        from dascore.io.index.ingest import SourceRecord, patch_record
+        from dascore.io.index.backend import get_backend  # noqa: PLC0415
+        from dascore.io.index.ingest import SourceRecord, patch_record  # noqa: PLC0415
 
         patch = dc.get_example_patch()
         record = SourceRecord(

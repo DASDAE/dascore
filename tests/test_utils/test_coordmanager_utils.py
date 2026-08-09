@@ -172,10 +172,10 @@ class TestRawMergeKeepsUnits:
 
     def test_units_survive_value_merge(self):
         """Merging value-backed coords with one common unit keeps it."""
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
 
-        import dascore as dc
-        from dascore.utils.coordmanager import merge_coord_managers
+        import dascore as dc  # noqa: PLC0415
+        from dascore.utils.coordmanager import merge_coord_managers  # noqa: PLC0415
 
         p1 = dc.get_example_patch().set_units(distance="m")
         d = p1.get_coord("distance")

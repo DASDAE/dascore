@@ -392,7 +392,7 @@ class TestWaterfall:
 
     def test_percent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""
-        from dascore.units import percent
+        from dascore.units import percent  # noqa: PLC0415
 
         ax = random_patch.viz.waterfall(scale=10 * percent, scale_type="absolute")
         assert ax is not None

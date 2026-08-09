@@ -79,8 +79,8 @@ def _coord_record_from_row(
     planned dim's range fingerprint is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
     """
-    from dascore.core.coords import CoordSummary
-    from dascore.io.index.ingest import _coord_record
+    from dascore.core.coords import CoordSummary  # noqa: PLC0415
+    from dascore.io.index.ingest import _coord_record  # noqa: PLC0415
 
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
@@ -356,7 +356,7 @@ class PlanResolver(PatchResolver):
         return nested
 
     def _assembler(self):
-        from dascore.utils.patch_assembly import PatchAssembler
+        from dascore.utils.patch_assembly import PatchAssembler  # noqa: PLC0415
 
         return PatchAssembler(
             load_patch=self._load_member,
@@ -386,7 +386,7 @@ class PlanResolver(PatchResolver):
             assert len(members) == 1
             return self._load_member(members.iloc[0].to_dict())
         if self.mode == "concat":
-            from dascore.utils.patch import concatenate_patches
+            from dascore.utils.patch import concatenate_patches  # noqa: PLC0415
 
             patches = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
@@ -444,7 +444,7 @@ def derived_catalog(
     trim_cols = [c for c in trims.columns if c not in ("_patch_id",)]
     sources = source_rows.copy(deep=False)
     if "_patch_id" not in sources.columns:
-        from dascore.utils.chunk_plan import _ensure_patch_id
+        from dascore.utils.chunk_plan import _ensure_patch_id  # noqa: PLC0415
 
         sources = _ensure_patch_id(sources)
     member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(

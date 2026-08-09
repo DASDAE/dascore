@@ -1645,7 +1645,7 @@ def _resolves_assembled_patches(spool) -> bool:
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    from dascore.core.coords import CoordSegmented
+    from dascore.core.coords import CoordSegmented  # noqa: PLC0415
 
     # Gap inspection depends on what the spool resolves, not on where
     # its ultimate members live: only literal file reads are always

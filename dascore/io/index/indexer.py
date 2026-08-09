@@ -235,7 +235,7 @@ class DBDirectoryIndexer:
 
     def _directory_format(self, path: Path) -> bool:
         """Return True when a directory is itself one FiberIO scan unit."""
-        from dascore.io.core import is_directory_format
+        from dascore.io.core import is_directory_format  # noqa: PLC0415
 
         return is_directory_format(path)
 

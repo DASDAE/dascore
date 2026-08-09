@@ -32,7 +32,7 @@ class TestUnitInit:
 
     def test_stale_pint_cache_falls_back(self, monkeypatch):
         """Stale Pint disk cache should not prevent registry creation."""
-        from dascore import units
+        from dascore import units  # noqa: PLC0415
 
         class FakeRegistry:
             pass
@@ -213,7 +213,7 @@ class TestConvenientImport:
 
     def test_import_common(self):
         """Ensure common units are importable."""
-        from dascore.units import Hz, ft, km, m, miles
+        from dascore.units import Hz, ft, km, m, miles  # noqa: PLC0415
 
         assert m == get_quantity("m")
         assert ft == get_quantity("ft")
@@ -228,7 +228,7 @@ class TestConvenientImport:
 
     def test_empty_name_raises(self):
         """The empty string is the one name get_quantity maps to None."""
-        import dascore.units
+        import dascore.units  # noqa: PLC0415
 
         with pytest.raises(AttributeError):
             getattr(dascore.units, "")

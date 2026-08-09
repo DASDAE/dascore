@@ -896,7 +896,7 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.BaseSpool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    from dascore.core.coords import CoordSegmented
+    from dascore.core.coords import CoordSegmented  # noqa: PLC0415
 
     if dim is not None and dim not in self.dims:
         msg = f"split_gaps dim must be one of {self.dims}, got {dim!r}."

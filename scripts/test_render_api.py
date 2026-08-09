@@ -44,7 +44,7 @@ class TestGetTypeHints:
 
     def test_signature_of_type_checking_annotated_class(self):
         """Spool annotates a TYPE_CHECKING-only import; it must still render."""
-        from dascore.core.spool import Spool
+        from dascore.core.spool import Spool  # noqa: PLC0415
 
         data = {
             "signature": inspect.signature(Spool),

@@ -423,7 +423,7 @@ class TestOptionalImport:
 
     def test_import_installed_module(self):
         """Test to ensure an installed module imports."""
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         mod = optional_import("dascore")
         assert mod is dc

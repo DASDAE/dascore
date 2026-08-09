@@ -129,7 +129,7 @@ class TestWhiten:
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
 
-        import dascore as dc
+        import dascore as dc  # noqa: PLC0415
 
         dc._bob = True
 

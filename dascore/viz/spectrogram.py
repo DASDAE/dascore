@@ -53,7 +53,7 @@ def _get_new_dims(patch, dim, new_coord_name):
 
 def _spectrogram_patch(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     """Create a spectrogram patch for visualization."""
-    from dascore.utils.patch import (
+    from dascore.utils.patch import (  # noqa: PLC0415
         _get_data_units_from_dims,
         _get_dx_or_spacing_and_axes,
     )

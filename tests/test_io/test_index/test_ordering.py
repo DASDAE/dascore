@@ -116,7 +116,7 @@ class TestIndexVersionRebuild:
 
     def test_version_mismatch_rebuilds(self, tmp_path):
         """An index of another schema version is replaced, not fatal."""
-        import sqlite3
+        import sqlite3  # noqa: PLC0415
 
         patch = dc.get_example_patch()
         dc.write(patch, tmp_path / "a.h5", "dasdae")
@@ -138,7 +138,7 @@ class TestIndexVersionRebuild:
 
     def test_indexer_deepcopy_shares_instance(self, tmp_path):
         """Derived spools share the indexer (and its live DB connection)."""
-        import copy
+        import copy  # noqa: PLC0415
 
         dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
         spool = dc.spool(tmp_path).update(progress=None)
@@ -231,7 +231,7 @@ class TestInterruptedInitialUpdate:
 
     def test_interruption_before_renumber_recovers(self, tmp_path):
         """A crash after write_sources still renumbers on the retry."""
-        from dascore.io.index.indexer import DBDirectoryIndexer
+        from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
 
         p0 = dc.get_example_patch()
         t = p0.get_coord("time")

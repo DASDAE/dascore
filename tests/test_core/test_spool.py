@@ -191,7 +191,7 @@ class TestLiveSpoolLazy:
 
     def test_derived_spool_is_own_catalog(self, patch_list):
         """A chunked spool is a fresh derived catalog sharing patches."""
-        from dascore.io.index.planned import PlanResolver
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
@@ -779,7 +779,7 @@ class TestSpoolBehaviorOptionalImports:
     def monkey_patch_segy(self, monkeypatch):
         """Monkey patch the name of the imported library for segy."""
         # TODO we should find a cleaner way to do this in the future.
-        from dascore.io.segy import SegyV1_0
+        from dascore.io.segy import SegyV1_0  # noqa: PLC0415
 
         monkeypatch.setattr(SegyV1_0, "_package_name", "not_segyio_clearly")
 
@@ -828,7 +828,7 @@ class TestMisc:
         Chunking a spool whose time coordinate is timedelta64 (rather than
         datetime64) should work with a numeric chunk size (see #553).
         """
-        from dascore.examples import ricker_moveout
+        from dascore.examples import ricker_moveout  # noqa: PLC0415
 
         patch = ricker_moveout()
         assert np.issubdtype(patch.get_coord("time").dtype, np.timedelta64)
@@ -878,14 +878,14 @@ class TestDeepEqualityCheck:
 
     def test_non_dict_comparison(self):
         """Plain value comparison inside dicts."""
-        from dascore.utils.misc import deep_equality_check
+        from dascore.utils.misc import deep_equality_check  # noqa: PLC0415
 
         assert deep_equality_check({"a": "hello"}, {"a": "hello"})
         assert not deep_equality_check({"a": "hello"}, {"a": "world"})
 
     def test_objects_with_dict(self):
         """Objects compare via recursive __dict__ comparison."""
-        from dascore.utils.misc import deep_equality_check
+        from dascore.utils.misc import deep_equality_check  # noqa: PLC0415
 
         class TestObject:
             def __init__(self, value):
@@ -896,7 +896,7 @@ class TestDeepEqualityCheck:
 
     def test_mixed_types(self):
         """Ints, lists, and numpy arrays compare by value."""
-        from dascore.utils.misc import deep_equality_check
+        from dascore.utils.misc import deep_equality_check  # noqa: PLC0415
 
         d1 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
         d2 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
@@ -906,7 +906,7 @@ class TestDeepEqualityCheck:
 
     def test_dataframes(self):
         """DataFrames compare via .equals."""
-        from dascore.utils.misc import deep_equality_check
+        from dascore.utils.misc import deep_equality_check  # noqa: PLC0415
 
         df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
@@ -916,7 +916,7 @@ class TestDeepEqualityCheck:
 
     def test_unequal_sub_dicts(self):
         """Nested dicts with different values are unequal."""
-        from dascore.utils.misc import deep_equality_check
+        from dascore.utils.misc import deep_equality_check  # noqa: PLC0415
 
         assert not deep_equality_check({"d": {1: 2}}, {"d": {2: 3}})
 
@@ -982,7 +982,7 @@ class TestSpoolCoverageEdges:
 
     def test_union_of_chunked_spool(self, many_contiguous):
         """A chunked spool is a derived catalog; unions compose it."""
-        from dascore.io.index.planned import PlanResolver
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         chunked = dc.spool(many_contiguous).chunk(time=None)
         assert isinstance(chunked._catalog.resolver, PlanResolver)
@@ -1016,7 +1016,7 @@ class TestSpoolCoverageEdges:
 
     def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
         """An under-estimated merge buffer is grown to fit (uneven sampling)."""
-        import dascore.utils.patch_assembly as assembly_mod
+        import dascore.utils.patch_assembly as assembly_mod  # noqa: PLC0415
 
         # Force the pre-merge sample estimate to be too small so the
         # streaming buffer must grow mid-merge.
