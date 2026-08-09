@@ -240,16 +240,11 @@ class Enclosure(InventoryModel):
             "casing, borehole, or tray."
         ),
     )
-    owner: str = Field(default="", description="Proprietary owner.")
     material: str = Field(default="", description="Material of the enclosure.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
-    serial_number: str = Field(default="", description="Serial number.")
     inner_diameter: float | None = Field(
         default=None, description="Inner diameter in meters."
-    )
-    outer_diameter: float | None = Field(
-        default=None, description="Outer diameter in meters."
     )
     specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
