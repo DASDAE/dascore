@@ -104,6 +104,18 @@ ResourceIdStr = Annotated[
 NotesStr = Annotated[str, Field(default="", description="Additional notes.")]
 
 
+def _type_tag(name: str):
+    """
+    Return the serialization-only type tag field for a tagged model class.
+
+    The tag drives union dispatch and the authoring format's type
+    declaration in serialized YAML/JSON. Users never set it: it defaults to
+    the class name, the Literal annotation rejects any other value, and it
+    is hidden from repr.
+    """
+    return Field(default=name, repr=False)
+
+
 def _is_strictly_increasing(values) -> bool:
     """Return True if a sequence is strictly increasing."""
     arr = np.asarray(values, dtype=float)
@@ -193,7 +205,7 @@ class CoordinateReferenceSystem(InventoryModel):
 class ExternalResource(InventoryModel):
     """External resource identified but not otherwise modeled by DASCore."""
 
-    type: Literal["ExternalResource"] = "ExternalResource"
+    type: Literal["ExternalResource"] = _type_tag("ExternalResource")
     resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
@@ -203,7 +215,7 @@ class ExternalResource(InventoryModel):
 class Interrogator(InventoryModel):
     """DAS interrogator unit used for data collection."""
 
-    type: Literal["Interrogator"] = "Interrogator"
+    type: Literal["Interrogator"] = _type_tag("Interrogator")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
@@ -217,7 +229,7 @@ class Interrogator(InventoryModel):
 class Enclosure(InventoryModel):
     """Physical housing, pipe, duct, conduit, or carrier resource."""
 
-    type: Literal["Enclosure"] = "Enclosure"
+    type: Literal["Enclosure"] = _type_tag("Enclosure")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     enclosure_type: str = Field(
@@ -248,7 +260,7 @@ class Enclosure(InventoryModel):
 class Cable(InventoryModel):
     """Physical cable containing one or more fiber segments."""
 
-    type: Literal["Cable"] = "Cable"
+    type: Literal["Cable"] = _type_tag("Cable")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     owner: str = Field(default="", description="Proprietary owner.")
@@ -300,7 +312,7 @@ class _OpticalComponentBase(InventoryModel):
 class FiberSegment(_OpticalComponentBase):
     """Length of optical fiber within a cable, patch cord, or other run."""
 
-    type: Literal["FiberSegment"] = "FiberSegment"
+    type: Literal["FiberSegment"] = _type_tag("FiberSegment")
     container: Cable | str | None = Field(
         default=None, description="Cable containing this fiber."
     )
@@ -335,7 +347,7 @@ class FiberSegment(_OpticalComponentBase):
 class Connector(_OpticalComponentBase):
     """Optical connector in an optical path."""
 
-    type: Literal["Connector"] = "Connector"
+    type: Literal["Connector"] = _type_tag("Connector")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this connector."
     )
@@ -349,7 +361,7 @@ class Connector(_OpticalComponentBase):
 class Splice(_OpticalComponentBase):
     """Optical splice in an optical path."""
 
-    type: Literal["Splice"] = "Splice"
+    type: Literal["Splice"] = _type_tag("Splice")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this splice."
     )
@@ -363,7 +375,7 @@ class Splice(_OpticalComponentBase):
 class Terminator(_OpticalComponentBase):
     """Optical path terminator."""
 
-    type: Literal["Terminator"] = "Terminator"
+    type: Literal["Terminator"] = _type_tag("Terminator")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this terminator."
     )

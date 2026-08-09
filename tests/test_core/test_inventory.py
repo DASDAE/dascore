@@ -987,3 +987,21 @@ class TestCoverageCompleteness:
         assert _values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
         assert not _values_equal({"a": 1}, {"b": 1})
         assert _values_equal((1.0, np.nan), (1.0, np.nan))
+
+
+class TestTypeTag:
+    """The serialization type tag is invisible to users."""
+
+    def test_hidden_from_repr(self):
+        """Hidden from repr."""
+        cable = inv.Cable(resource_id="c1", name="c")
+        assert "type" not in repr(cable)
+
+    def test_present_in_dump(self):
+        """Present in dump."""
+        assert inv.Cable(resource_id="c1").model_dump()["type"] == "Cable"
+
+    def test_wrong_tag_rejected(self):
+        """Wrong tag rejected."""
+        with pytest.raises(ValidationError):
+            inv.Cable(resource_id="c1", type="Enclosure")
