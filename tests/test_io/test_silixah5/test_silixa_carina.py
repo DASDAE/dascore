@@ -1,9 +1,14 @@
 """Tests for the Silixa H5 Carina (netCDF-shell) variant."""
 
+import shutil
+
+import h5py
 import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError
+from dascore.io.netcdf.core import NetCDFCFV18
 from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2
 from dascore.utils.downloader import fetch
 
@@ -59,12 +64,6 @@ class TestSilixaCarina:
 
     def test_non_bijective_channel_map_raises(self, carina_path, tmp_path):
         """A ChannelMap that loses a data column refuses to guess distances."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "bad_map.h5"
         shutil.copy(carina_path, path)
         with h5py.File(path, "a") as h5:
@@ -74,10 +73,6 @@ class TestSilixaCarina:
 
     def test_gapped_channel_map_distances(self, carina_path, tmp_path):
         """A bijective but non-contiguous map yields per-channel distances."""
-        import shutil
-
-        import h5py
-
         path = tmp_path / "gapped_map.h5"
         shutil.copy(carina_path, path)
         with h5py.File(path, "a") as h5:
@@ -92,8 +87,6 @@ class TestSilixaCarina:
 
     def test_partial_files_not_claimed(self, tmp_path):
         """Files missing the ChannelMap or the attr family aren't claimed."""
-        import h5py
-
         no_map = tmp_path / "no_map.h5"
         with h5py.File(no_map, "w") as h5:
             h5.create_dataset("Fiber", data=np.zeros((4, 3), dtype=np.int16))
@@ -106,12 +99,6 @@ class TestSilixaCarina:
 
     def test_bad_samplerate_raises(self, carina_path, tmp_path):
         """A zero Samplerate raises a format error, not ZeroDivisionError."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "zero_rate.h5"
         shutil.copy(carina_path, path)
         with h5py.File(path, "a") as h5:
@@ -121,12 +108,6 @@ class TestSilixaCarina:
 
     def test_bad_channel_map_shapes_raise(self, carina_path, tmp_path):
         """A 2-d or all-unmapped ChannelMap raises a format error."""
-        import shutil
-
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         two_d = tmp_path / "twod_map.h5"
         shutil.copy(carina_path, two_d)
         with h5py.File(two_d, "a") as h5:
@@ -144,8 +125,6 @@ class TestSilixaCarina:
 
     def test_group_channel_map_not_claimed(self, carina_path, tmp_path):
         """A ChannelMap that is a group, not a dataset, is not claimed."""
-        import h5py
-
         path = tmp_path / "group_map.h5"
         with h5py.File(carina_path, "r") as src, h5py.File(path, "w") as dst:
             for key, value in src.attrs.items():
@@ -157,9 +136,5 @@ class TestSilixaCarina:
     def test_netcdf_does_not_claim(self, carina_path):
         """NETCDF_CF must keep rejecting these files (no Conventions attr)."""
         pytest.importorskip("xarray")
-        import h5py
-
-        from dascore.io.netcdf.core import NetCDFCFV18
-
         with h5py.File(carina_path, "r") as h5file:
             assert NetCDFCFV18().get_format(h5file) is False
