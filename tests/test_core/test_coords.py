@@ -479,6 +479,14 @@ class TestCoordSummary:
         summary = CoordSummary.model_validate(source, from_attributes=True)
         assert summary.dtype == "float64"
 
+    def test_attribute_values_conform_to_derived_dtype(self):
+        """A derived dtype must not leave the values contradicting it."""
+        # Deriving float64 but keeping strings made to_coord raise in np.sign.
+        source = SimpleNamespace(min=0.0, max="2.0", step="0.5")
+        summary = CoordSummary.model_validate(source, from_attributes=True)
+        assert summary == CoordSummary(min=0.0, max="2.0", step="0.5")
+        assert summary.to_coord() == CoordRange(start=0.0, stop=2.5, step=0.5)
+
     def test_json_dump(self):
         """JSON dumps should preserve coord summary fields."""
         summary = CoordSummary(

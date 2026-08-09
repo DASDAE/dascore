@@ -234,6 +234,15 @@ class CoordSummary(DascoreBaseModel):
         """
         if not self.dtype:
             dtype = _get_dtype(self.min, None)
+            # Conform the values too, so this path agrees with the mapping one
+            # instead of deriving a dtype the values then contradict. Confined
+            # to the unset case on purpose: conforming on every validation
+            # measured ~50% of construction cost, and a summary is built per
+            # coordinate while indexing. An attribute input that *does* carry a
+            # dtype is therefore still left alone, as it always has been.
+            for name in ("min", "max", "step"):
+                value = ensure_consistent_dtype(getattr(self, name), name, dtype)
+                object.__setattr__(self, name, value)
             object.__setattr__(self, "dtype", str(dtype).split("[")[0])
         return self
 
