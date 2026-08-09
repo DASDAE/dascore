@@ -1,9 +1,12 @@
 """Tests for the Aragon Photonics HDAS format."""
 
+import h5py
 import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError
+from dascore.io.core import FiberIO
 from dascore.io.hdas import HDASV1, HDASV2
 from dascore.utils.downloader import fetch
 
@@ -89,8 +92,6 @@ class TestHDASDetection:
 
     def test_no_blank_version_registered(self):
         """Sharing logic between variants must not register a blank version."""
-        from dascore.io.core import FiberIO
-
         hdas_ios = [
             io
             for io in FiberIO.manager.yield_fiberio(format="HDAS")
@@ -101,8 +102,6 @@ class TestHDASDetection:
 
     def test_variant_header_shape_enforced(self, tmp_path):
         """A V1-named header with the V2 shape isn't claimed."""
-        import h5py
-
         header = np.zeros(200)
         header[0] = 200
         path = tmp_path / "flat_v1_header.h5"
@@ -113,8 +112,6 @@ class TestHDASDetection:
 
     def test_wrong_header_length_not_claimed(self, tmp_path):
         """A file whose header is not 200 values isn't claimed."""
-        import h5py
-
         path = tmp_path / "bad_header.h5"
         with h5py.File(path, "w") as h5:
             h5.create_dataset("File_Header", data=np.zeros((1, 100)))
@@ -123,8 +120,6 @@ class TestHDASDetection:
 
     def test_wrong_header_marker_not_claimed(self, tmp_path):
         """A correctly-shaped header whose length marker isn't 200 is rejected."""
-        import h5py
-
         path = tmp_path / "bad_marker.h5"
         with h5py.File(path, "w") as h5:
             h5.create_dataset("File_Header", data=np.zeros((1, 200)))
@@ -133,8 +128,6 @@ class TestHDASDetection:
 
     def test_missing_data_not_claimed(self, tmp_path):
         """A valid header without a 2d data array is rejected."""
-        import h5py
-
         header = np.zeros((1, 200))
         header[0, 0] = 200
         path = tmp_path / "no_data.h5"
@@ -144,10 +137,6 @@ class TestHDASDetection:
 
     def test_corrupt_header_raises_on_read(self, tmp_path):
         """A zero-filled header refuses to decode instead of yielding nan."""
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         header = np.zeros((1, 200))
         header[0, 0] = 200
         path = tmp_path / "zero_header.h5"
@@ -159,9 +148,6 @@ class TestHDASDetection:
 
     def test_bad_header_fields_raise(self, tmp_path):
         """Infinite spatial steps and negative divisors are rejected."""
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
 
         def _make(path, spatial, div_a, div_b):
             header = np.zeros((1, 200))
@@ -185,10 +171,6 @@ class TestHDASDetection:
 
     def test_wrong_size_header_raises_on_direct_read(self, tmp_path):
         """Reading a file with a wrong-size header raises a format error."""
-        import h5py
-
-        from dascore.exceptions import InvalidFiberFileError
-
         path = tmp_path / "small_header.h5"
         with h5py.File(path, "w") as h5:
             h5.create_dataset("File_Header", data=np.zeros((1, 100)))
@@ -198,8 +180,6 @@ class TestHDASDetection:
 
     def test_missing_start_time_not_claimed_by_v2(self, tmp_path):
         """A V2-shaped file without start_time isn't claimed."""
-        import h5py
-
         header = np.zeros(200, dtype=np.float32)
         header[0] = 200
         path = tmp_path / "no_start_time.h5"
