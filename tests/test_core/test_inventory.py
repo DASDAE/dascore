@@ -1038,3 +1038,46 @@ class TestUniformAttachments:
         loaded = inv.Inventory.from_yaml(inventory.to_yaml())
         got = loaded.networks[0].fiber_arrays[0].acquisitions[0]
         assert got.extra_fields == {"vendor_flag": ""}
+
+
+class TestPointMarkers:
+    """Zero-length intervals are point markers."""
+
+    def test_aerial_coupling_type(self):
+        """Aerial coupling type."""
+        cond = inv.CouplingCondition(
+            distance=0.0, optical_length=100.0, coupling_type="aerial"
+        )
+        assert cond.coupling_type == "aerial"
+
+    def test_point_clamp_inside_span_is_legal(self):
+        """A point marker inside a covered span does not count as overlap."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            coupling=(
+                inv.CouplingCondition(
+                    distance=0.0, optical_length=80.0, coupling_type="trench"
+                ),
+                inv.CouplingCondition(
+                    distance=40.0,
+                    optical_length=0.0,
+                    coupling_type="other",
+                    notes="clamp point",
+                ),
+            ),
+        )
+        assert path.check() is path
+
+    def test_point_annotation(self):
+        """Point annotation."""
+        anno = inv.OpticalPathAnnotation(
+            distance=350.0, optical_length=0.0, label="wellhead"
+        )
+        assert anno.interval == (350.0, 350.0)
+
+    def test_negative_length_still_rejected(self):
+        """Negative length still rejected."""
+        with pytest.raises(ValidationError):
+            inv.CouplingCondition(
+                distance=0.0, optical_length=-1.0, coupling_type="trench"
+            )

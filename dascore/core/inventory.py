@@ -54,6 +54,7 @@ CouplingType = Literal[
     "outside_borehole_casing",
     "wireline",
     "surface",
+    "aerial",
     "coiled",
     "other",
 ]
@@ -449,14 +450,22 @@ class Geometry(InventoryModel):
 
 
 class _IntervalModel(InventoryModel):
-    """Base for items placed by start distance plus optical length."""
+    """
+    Base for items placed by start distance plus optical length.
+
+    A zero optical_length makes the item a point marker (e.g. a clamp or a
+    labeled spot): it documents a location but covers no distance, so it
+    never participates in coverage, enrichment, or overlap checks.
+    """
 
     distance: float = Field(
         allow_inf_nan=False,
         description="Start optical distance for this interval in meters.",
     )
     optical_length: float = Field(
-        gt=0.0, allow_inf_nan=False, description="Interval length in meters."
+        ge=0.0,
+        allow_inf_nan=False,
+        description="Interval length in meters; 0 marks a point.",
     )
 
     @property
@@ -708,8 +717,11 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 
 def _intervals_overlap(intervals: list[tuple[float, float]]) -> tuple | None:
-    """Return the first overlapping pair of half-open intervals, or None."""
-    ordered = sorted(intervals)
+    """Return the first overlapping pair of half-open intervals, or None.
+
+    Empty (point) intervals cover nothing and cannot overlap.
+    """
+    ordered = sorted(x for x in intervals if x[0] < x[1])
     for first, second in itertools.pairwise(ordered):
         if second[0] < first[1]:
             return first, second
