@@ -29,11 +29,9 @@ class NeubrexDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex DAS Format files."""
 
     gauge_length: float = 0
-    gauge_length_units: str = ""
     index_of_reflection: float = 1.46
     triggered_time: np.datetime64 | None = None
     phase_to_strain: float | None = None
-    instrument_model: str = ""
     distance_decimation_filter: int = 0
     time_decimation_filter: int = 0
 

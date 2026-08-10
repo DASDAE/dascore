@@ -62,9 +62,6 @@ class SR4731PatchAttrs(PatchAttrs):
     refractive_index: float = np.nan
     trace_count: int = 0
     sample_scale: int = 0
-    manufacturer: str = ""
-    model: str = ""
-    serial_number: str = ""
 
 
 def _read_all(resource) -> bytes:
@@ -284,21 +281,19 @@ def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
     """Create DASCore patch attrs from parsed SR-4731 metadata."""
     supplier = parsed["supplier"]
     manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
-    instrument_id = "-".join(x for x in (manufacturer, model, serial_number) if x)
     data_points = parsed["data_points"]
     out = {
         "data_type": "otdr",
         "data_units": "dB",
-        "instrument_id": instrument_id,
         "wavelength_nm": parsed["fixed"]["wavelength_nm"],
         "acquisition_range_m": parsed["fixed"]["acquisition_range_m"],
         "sample_spacing_usec": parsed["fixed"]["sample_spacing_usec"],
         "refractive_index": parsed["fixed"]["refractive_index"],
         "trace_count": data_points["trace_count"],
         "sample_scale": data_points["scale"],
-        "manufacturer": manufacturer,
-        "model": model,
-        "serial_number": serial_number,
+        "interrogator.manufacturer": manufacturer,
+        "interrogator.model": model,
+        "interrogator.serial_number": serial_number,
     }
     out.update(extras or {})
     return out

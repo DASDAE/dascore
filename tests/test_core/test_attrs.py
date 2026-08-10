@@ -8,9 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import VALID_DATA_TYPES, max_lens
+from dascore.constants import INVENTORY_ATTRS, VALID_DATA_TYPES, max_lens
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.core.inventory import Acquisition, Interrogator
+from dascore.exceptions import InvalidInventoryError
+from dascore.utils.misc import validate_data_source_id
 
 
 @pytest.fixture(scope="class")
@@ -260,3 +263,83 @@ class TestSeparateConstruction:
             dims=("distance", "time"),
         )
         assert patch.summary.get_coord_summary("time").min == coord.min()
+
+
+class TestDataSourceId:
+    """The identity key which resolves a patch against an inventory."""
+
+    valid = ("XX.R2D1.01.RAW", "XX.R2D1..RAW", "X-1.A2.00.H-Z")
+    invalid = ("XX.R2D1.01", "XX.R2D1.01.RAW.EXTRA", "XX.R2D1.01.R W", "XX..01.RAW")
+
+    @pytest.mark.parametrize("value", valid)
+    def test_valid(self, value):
+        """Four code tokens, of which only the location may be blank."""
+        assert PatchAttrs(data_source_id=value).data_source_id == value
+
+    @pytest.mark.parametrize("value", invalid)
+    def test_invalid(self, value):
+        """Wrong token count or illegal characters are rejected."""
+        with pytest.raises(ValidationError):
+            PatchAttrs(data_source_id=value)
+
+    def test_unset_is_empty(self):
+        """An empty id means the patch has no inventory identity."""
+        assert PatchAttrs().data_source_id == ""
+
+    @pytest.mark.parametrize("value", invalid)
+    def test_inventory_agrees(self, value):
+        """
+        The inventory rejects exactly what the attr rejects.
+
+        Both go through one validator so a code which is legal in a file
+        header cannot be illegal in the inventory naming the same source.
+        """
+        with pytest.raises(InvalidInventoryError):
+            validate_data_source_id(value)
+
+    @pytest.mark.parametrize("value", valid)
+    def test_inventory_agrees_valid(self, value):
+        """The shared validator accepts what the attr accepts."""
+        assert validate_data_source_id(value) == value
+
+    def test_removed_names_become_extras(self):
+        """
+        The names data_source_id replaced are ordinary extras now.
+
+        They are no longer part of the model, so nothing in DASCore reads
+        them, but a patch which sets one keeps it like any other extra.
+        """
+        attrs = PatchAttrs(network="XX", station="A1", instrument_id="sn-1")
+        assert set(PatchAttrs.model_fields) & {"network", "station"} == set()
+        assert attrs.get("network") == "XX"
+
+
+class TestInventoryAttrs:
+    """The vocabulary readers share with the inventory."""
+
+    def test_names_exist_in_model(self):
+        """
+        Every canonical name is a field of the model it claims to mirror.
+
+        The vocabulary is what keeps a file header and an enriched value
+        the same attr; a name which no longer matches the inventory would
+        quietly split them in two.
+        """
+        acquisition = set(Acquisition.model_fields)
+        interrogator = set(Interrogator.model_fields)
+        for name in INVENTORY_ATTRS:
+            prefix, _, field = name.rpartition(".")
+            if prefix == "interrogator":
+                assert field in interrogator, name
+            else:
+                assert not prefix, name
+                assert field in acquisition, name
+
+    def test_excludes_data_state(self):
+        """
+        Data-state fields are the patch's, not the observing system's.
+
+        Processing rewrites them, so blanket enrichment must not carry
+        them even though the inventory records their as-acquired values.
+        """
+        assert not set(INVENTORY_ATTRS) & {"data_type", "data_category", "data_units"}

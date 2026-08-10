@@ -13,13 +13,13 @@ import numpy as np
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidSpoolError, PatchError, UnitError
-from dascore.io.utils import get_exact_coord
-from dascore.units import convert_units, get_quantity_str
+from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
-from dascore.utils.models import UnitQuantity, UTF8Str
+from dascore.utils.models import UTF8Str
 
 # --- Getting format/version
 
@@ -44,11 +44,14 @@ _ROOT_ATTRS = {
     "GaugeLengthUnit": "gauge_length_units",
     "GaugeLengthUnits": "gauge_length_units",
     "GaugeLength.uom": "gauge_length_units",
-    "AcquisitionId": "acquisition_id",
+    "AcquisitionId": "experiment_id",
     "FacilityId": "facility_id",
     "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
 }
+
+# The units patch attrs use for the measures ProdML tags with a uom.
+_MEASURE_UNITS = {"pulse_width": "s", "pulse_rate": "Hz", "gauge_length": "m"}
 
 _FBE_NODE_ATTRS = {
     "StartFrequency": "start_frequency",
@@ -75,9 +78,7 @@ class ProdMLRawPatchAttrs(dc.PatchAttrs):
     """Patch attrs for raw data contained in ProdML."""
 
     pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
     gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
     schema_version: UTF8Str = ""
 
 
@@ -126,6 +127,18 @@ def _get_root_attrs(attrs):
     if "facility_id" in out:
         values = tuple(unbyte(x) for x in np.atleast_1d(out["facility_id"]))
         out["facility_id"] = values[0] if len(values) == 1 else values
+    return _to_canonical_units(out)
+
+
+def _to_canonical_units(out: dict) -> dict:
+    """
+    Convert the measures ProdML tags with a uom to the units attrs use.
+
+    ProdML's schema defaults match those units, so a measure whose uom is
+    missing or unreadable is taken as already canonical.
+    """
+    for name, target in _MEASURE_UNITS.items():
+        convert_attr_units(out, name, target)
     return out
 
 
@@ -317,25 +330,22 @@ def _get_distance_info(coord):
     return step, start_locus
 
 
-def _get_measure(attrs, name, units_name, target_units):
-    """Return a complete positive measure, or None when it is unusable."""
-    value = attrs.get(name)
+def _get_measure(attrs, name):
+    """Return a usable positive measure, or None. Units are canonical."""
     try:
-        units = get_quantity_str(attrs.get(units_name))
-        value = float(value)
-        if not units or not np.isfinite(value) or value <= 0:
-            return None
-        convert_units(value, to_units=target_units, from_units=units)
-    except (TypeError, ValueError, UnitError):
+        value = float(attrs.get(name))
+    except (TypeError, ValueError):
         return None
-    return value, units
+    if not np.isfinite(value) or value <= 0:
+        return None
+    return value
 
 
 def _get_write_metadata(attrs):
     """Return normalized and validated metadata strings for writing."""
     out = {
-        "AcquisitionId": str(attrs.acquisition_id or uuid4()),
-        "FacilityId": attrs.get("facility_id") or attrs.station or "UNKNOWN",
+        "AcquisitionId": str(attrs.get("experiment_id") or uuid4()),
+        "FacilityId": attrs.get("facility_id") or "UNKNOWN",
         "ServiceCompanyName": attrs.get("service_company_name") or "UNKNOWN",
         "RawDataUnit": get_quantity_str(attrs.data_units) or "UNKNOWN",
     }
@@ -368,14 +378,14 @@ def _get_acquisition_attrs(
         "schemaVersion": encode_h5_strings("2.1")[0],
         "uuid": encode_h5_strings(str(uuid4()))[0],
     }
-    for name, units_name, target, hdf_name in (
-        ("pulse_rate", "pulse_rate_units", "Hz", "PulseRate"),
-        ("pulse_width", "pulse_width_units", "s", "PulseWidth"),
-        ("gauge_length", "gauge_length_units", "m", "GaugeLength"),
+    for name, hdf_name in (
+        ("pulse_rate", "PulseRate"),
+        ("pulse_width", "PulseWidth"),
+        ("gauge_length", "GaugeLength"),
     ):
-        if measure := _get_measure(attrs, name, units_name, target):
-            out[hdf_name] = measure[0]
-            out[f"{hdf_name}.uom"] = encode_h5_strings(measure[1])[0]
+        if (measure := _get_measure(attrs, name)) is not None:
+            out[hdf_name] = measure
+            out[f"{hdf_name}.uom"] = encode_h5_strings(_MEASURE_UNITS[name])[0]
     return out
 
 

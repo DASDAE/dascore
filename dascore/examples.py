@@ -42,8 +42,7 @@ def random_patch(
     distance_min=0,
     distance_step=1,
     dist_array=None,
-    network="",
-    station="",
+    data_source_id="",
     tag="random",
     shape=(300, 2_000),
 ):
@@ -66,10 +65,9 @@ def random_patch(
     dist_array
         If not None, an array of distance values and `distance_min` and
         `distance_step` will not be used.
-    network
-        The network code.
-    station
-        The station designation.
+    data_source_id
+        The inventory identity of the data source
+        (network.fiber_array.location.acquisition).
     tag
         The patch tag
     shape
@@ -84,8 +82,7 @@ def random_patch(
     time_step = to_timedelta64(time_step)
     attrs = dict(
         category="DAS",
-        network=network,
-        station=station,
+        data_source_id=data_source_id,
         tag=tag,
     )
     if time_array is None:
@@ -509,8 +506,7 @@ def delta_patch(
         coords = {"distance": dist_coord, "time": time_coord}
         attrs = dict(
             category="DAS",
-            network="",
-            station="",
+            data_source_id="",
             tag="delta",
         )
 
@@ -602,28 +598,26 @@ def diverse_spool():
     """
     A spool with a diverse set of patch metadata for testing.
 
-    There are various gaps, tags, station names, etc.
+    There are various gaps, tags, data source ids, etc.
     """
     spool_no_gaps = random_spool()
-    spool_no_gaps_different_network = random_spool(network="das2")
-    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), station="big_gaps")
-    spool_overlaps = random_spool(
-        time_gap=-np.timedelta64(10, "ms"), station="overlaps"
-    )
+    spool_no_gaps_different_source = random_spool(data_source_id="DAS2.R2D1..RAW")
+    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), tag="big_gaps")
+    spool_overlaps = random_spool(time_gap=-np.timedelta64(10, "ms"), tag="overlaps")
     time_step = spool_big_gaps[0].coords.step("time")
     dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
-    spool_small_gaps = random_spool(time_gap=dt, station="smallg")
+    spool_small_gaps = random_spool(time_gap=dt, tag="smallg")
     spool_way_late = random_spool(
-        length=1, time_min=np.datetime64("2030-01-01"), station="wayout"
+        length=1, time_min=np.datetime64("2030-01-01"), tag="wayout"
     )
     spool_new_tag = random_spool(tag="some_tag", length=1)
     spool_way_early = random_spool(
-        length=1, time_min=np.datetime64("1989-05-04"), station="wayout"
+        length=1, time_min=np.datetime64("1989-05-04"), tag="wayout"
     )
 
     all_spools = [
         spool_no_gaps,
-        spool_no_gaps_different_network,
+        spool_no_gaps_different_source,
         spool_big_gaps,
         spool_overlaps,
         spool_small_gaps,

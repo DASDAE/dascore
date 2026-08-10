@@ -27,9 +27,7 @@ class SilixaPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for Silixa hdf5 format."""
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
     pulse_width: float = np.nan
-    pulse_width_units: str = "ns"
 
 
 class SilixaH5V1(FiberIO):

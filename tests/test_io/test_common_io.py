@@ -22,7 +22,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.constants import INVENTORY_ATTRS
+from dascore.exceptions import CoordError, UnknownFiberFormatError
 from dascore.io import BinaryReader
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
@@ -123,6 +124,114 @@ SKIP_DATA_FILES = {
     "brady_hs_DAS_DTS_coords.csv",
     "das_vader_1.jld2",
 }
+
+# Vendor-specific attrs the readers add on top of the shared vocabulary
+# (`INVENTORY_ATTRS` plus the default `PatchAttrs` fields). Adding a name
+# here is a decision, not a formality: check first whether the value is one
+# of the inventory's facts under a vendor spelling, in which case it belongs
+# under the canonical name, and whether it states units the reader should
+# have converted away at the parse boundary.
+VENDOR_ATTRS = frozenset(
+    {
+        "acq_res",
+        "acqres",
+        "acquisition_range_m",
+        "ampli_power",
+        "amppower",
+        "api",
+        "average",
+        "channel",
+        "distance_decimation_filter",
+        "dtype",
+        "end_frequency",
+        "end_time",
+        "epsg_code",
+        "event_depth_km",
+        "event_id",
+        "event_latitude",
+        "event_longitude",
+        "event_time",
+        "experiment_id",
+        "facility_id",
+        "fiber_break",
+        "fiber_from",
+        "fiber_length",
+        "fiber_to",
+        "fiberbreak",
+        "fiberlength",
+        "field_name",
+        "filed_name",
+        "folog_a1_software_version",
+        "format_version",
+        "freq_fiber",
+        "freq_offset",
+        "freq_offset_abs",
+        "freq_ref",
+        "freq_step",
+        "freqfiber",
+        "freqoffset",
+        "freqoffsetabs",
+        "freqref",
+        "freqstep",
+        "gps_status",
+        "group",
+        "index_of_reflection",
+        "index_of_refraction",
+        "long_name",
+        "magnitude",
+        "magnitude_type",
+        "mode",
+        "phase_to_strain",
+        "project",
+        "project_number",
+        "pulse_length",
+        "radians_to_nano_strain",
+        "raw_reference",
+        "refractive_index",
+        "sample_scale",
+        "sample_spacing_usec",
+        "sampling_resolution",
+        "schema_version",
+        "service_company_name",
+        "signal_size",
+        "signalsize",
+        "source",
+        "spatial_resolution",
+        "start_frequency",
+        "start_time",
+        "temperature",
+        "time_decimation_filter",
+        "trace_count",
+        "transform_size",
+        "transform_type",
+        "triggered_time",
+        "wavelength_nm",
+        "well_bore_id",
+        "well_id",
+        "well_name",
+        "window_function",
+        "window_overlap",
+        "window_size",
+        "zone",
+        "zone_count",
+        "zonecount",
+        "zones",
+    }
+)
+
+
+def _replays_stored_attrs(path) -> bool:
+    """
+    Return True for a format which stores whole patch attrs and replays them.
+
+    A DASDAE file returns the attrs it was written with, so it speaks the
+    vocabulary of its own era rather than the current one. Only readers
+    which build attrs from a native header are held to the shared
+    vocabulary.
+    """
+    with suppress(UnknownFiberFormatError):
+        return dc.get_format(path)[0] == "DASDAE"
+    return False
 
 
 def _scan_summary(scan_result):
@@ -557,6 +666,45 @@ class TestWrite:
         assert new == random_patch
 
 
+class TestAttrVocabulary:
+    """Readers speak one vocabulary, shared with the inventory."""
+
+    def test_no_unknown_attrs(self, data_file_path):
+        """
+        Every attr a reader emits is canonical, default, or a listed extra.
+
+        Without this each new format is free to invent its own spelling of
+        gauge length or channel spacing, and nothing downstream can treat
+        two files as describing the same kind of thing.
+        """
+        if _replays_stored_attrs(data_file_path):
+            return
+        allowed = set(INVENTORY_ATTRS) | set(dc.PatchAttrs.model_fields) | VENDOR_ATTRS
+        for patch in _cached_read(data_file_path):
+            names = {x for x in dict(patch.attrs) if not x.startswith("_")}
+            assert not (names - allowed)
+
+    def test_no_unit_companion_attrs(self, data_file_path):
+        """
+        No attr states the units of another attr.
+
+        Units are part of each attr's contract, so a companion means the
+        reader skipped the conversion the contract requires.
+        """
+        for patch in _cached_read(data_file_path):
+            names = {x for x in dict(patch.attrs) if not x.startswith("_")}
+            companions = {x for x in names if x.endswith("_units")}
+            assert companions <= {"data_units"}
+
+    def test_no_storage_provenance_attrs(self, data_file_path):
+        """Where the bytes live belongs to the spool, not to patch attrs."""
+        if _replays_stored_attrs(data_file_path):
+            return
+        for patch in _cached_read(data_file_path):
+            names = set(dict(patch.attrs))
+            assert not names & {"path", "file_format", "file_version"}
+
+
 class TestIntegration:
     """Test suite for generic scanning."""
 
@@ -571,7 +719,7 @@ class TestIntegration:
             "data_type",
             "data_units",
             "tag",
-            "network",
+            "data_source_id",
         )
         with skip_missing():
             scan_summary_list = [_scan_summary(x) for x in dc.scan(data_file_path)]

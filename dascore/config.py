@@ -68,13 +68,10 @@ class DascoreConfig(BaseModel):
     )
     groupby_attrs: tuple[str, ...] = Field(
         default=(
-            "network",
-            "station",
+            "data_source_id",
             "data_type",
             "data_category",
             "tag",
-            "instrument_id",
-            "acquisition_id",
         ),
         description=(
             "Attributes which partition patches into separate groups for "

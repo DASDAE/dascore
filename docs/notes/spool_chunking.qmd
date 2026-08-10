@@ -31,7 +31,7 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 
 Patches may only combine when they agree on all of:
 
-1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: network, station, data type/category, tag, instrument and acquisition ids), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
+1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: data source id, data type/category, and tag), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's canonical units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet plan together and assembly converts them to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
@@ -43,9 +43,10 @@ t0 = np.datetime64("2020-01-01", "ns")
 p1 = dc.get_example_patch(time_min=t0)
 time = p1.get_coord("time")
 p2 = dc.get_example_patch(time_min=time.max() + time.step)
-p3, p4 = p1.update_attrs(station="XX2"), p2.update_attrs(station="XX2")
+source = "XX2.R2D1..RAW"
+p3, p4 = p1.update_attrs(data_source_id=source), p2.update_attrs(data_source_id=source)
 
-# Two stations, each with two contiguous patches: two outputs, no error.
+# Two data sources, each with two contiguous patches: two outputs, no error.
 merged = dc.spool([p1, p2, p3, p4]).chunk(time=None)
 assert len(merged) == 2
 ```

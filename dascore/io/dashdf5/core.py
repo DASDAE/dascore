@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UnitQuantity, UTF8Str
+from dascore.utils.models import UTF8Str
 
 from .utils import _get_cf_attrs, _get_cf_coords, _get_cf_version_str
 
@@ -19,9 +19,7 @@ class ProdMLPatchAttrs(dc.PatchAttrs):
     """Patch attrs for ProdML."""
 
     pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
     gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
     schema_version: UTF8Str = ""
 
 

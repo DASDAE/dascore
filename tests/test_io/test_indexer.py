@@ -293,7 +293,7 @@ class TestGetContents:
         files = list(Path(two_patch_directory).rglob("*.hdf5"))
         assert isinstance(out, pd.DataFrame)
         assert len(out) == len(files)
-        names_df = {x.split("/")[-1] for x in out["path"]}
+        names_df = {x.split("/")[-1] for x in out["source_path"]}
         names_files = {x.name for x in files}
         assert names_df == names_files
 
@@ -311,18 +311,18 @@ class TestGetContents:
         out = diverse_indexer(time=(None, min_endtime))
         assert len(out) == len(expected)
 
-    def test_filter_station_exact(self, diverse_df, diverse_indexer):
+    def test_filter_tag_exact(self, diverse_df, diverse_indexer):
         """Ensure contents can be filtered on an attr."""
-        exact_name = diverse_df["station"].unique()[0]
-        new_df = diverse_indexer(station=exact_name)
-        assert (new_df["station"] == exact_name).all()
+        exact_name = diverse_df["tag"].unique()[0]
+        new_df = diverse_indexer(tag=exact_name)
+        assert (new_df["tag"] == exact_name).all()
 
     def test_filter_isin(self, diverse_df, diverse_indexer):
         """Ensure contents can be filtered with a collection."""
         # empty strings mean "attr missing" and are not queryable (spec).
-        stations = [x for x in diverse_df["station"].unique() if x]
-        new_df = diverse_indexer(station=stations[:2])
-        assert set(new_df["station"]) <= set(stations[:2])
+        tags = [x for x in diverse_df["tag"].unique() if x]
+        new_df = diverse_indexer(tag=tags[:2])
+        assert set(new_df["tag"]) <= set(tags[:2])
         assert len(new_df)
 
     def test_empty_index(self, empty_index):

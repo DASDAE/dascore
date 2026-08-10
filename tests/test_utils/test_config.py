@@ -197,15 +197,7 @@ class TestConfigDefaults:
 
     def test_groupby_attrs_default(self):
         """The default group attrs are the conventional identity set."""
-        expected = (
-            "network",
-            "station",
-            "data_type",
-            "data_category",
-            "tag",
-            "instrument_id",
-            "acquisition_id",
-        )
+        expected = ("data_source_id", "data_type", "data_category", "tag")
         assert get_config().groupby_attrs == expected
 
     def test_sampling_group_tolerance_default(self):

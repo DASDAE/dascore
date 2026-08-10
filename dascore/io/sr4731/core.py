@@ -20,14 +20,6 @@ class SR4731V200(FiberIO):
     version = "200"
     preferred_extensions = ("sor",)
 
-    def _get_extras(self, resource) -> dict[str, str]:
-        """Return DASCore IO provenance metadata."""
-        return {
-            "path": getattr(resource, "name", ""),
-            "file_format": self.name,
-            "file_version": self.version,
-        }
-
     def get_format(
         self,
         resource: BinaryReader,
@@ -57,6 +49,5 @@ class SR4731V200(FiberIO):
             time=time,
             distance=distance,
             attr_class=SR4731PatchAttrs,
-            extras=self._get_extras(resource),
         )
         return dc.spool(patches)

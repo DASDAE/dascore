@@ -77,12 +77,12 @@ def _get_attrs_dict(resource):
     """Get attributes."""
     daq = resource["DAQ"]
     pserver = resource["ProcessingServer"]
-    out = dict(
-        data_category="DAS",
-        instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
-        gauge_length=_maybe_unpack(pserver["GaugeLength"]),
-        radians_to_nano_strain=_maybe_unpack(pserver["RadiansToNanoStrain"]),
-    )
+    out = {
+        "data_category": "DAS",
+        "interrogator.serial_number": unbyte(_maybe_unpack(daq["SerialNumber"])),
+        "gauge_length": _maybe_unpack(pserver["GaugeLength"]),
+        "radians_to_nano_strain": _maybe_unpack(pserver["RadiansToNanoStrain"]),
+    }
     return out
 
 

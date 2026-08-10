@@ -116,14 +116,10 @@ class SintelaProtobufAttrs(PatchAttrs):
     """Patch attributes for Sintela protobuf recordings."""
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
     packet_type: str = ""
     recorder_namespace: str = ""
     metadata_recording_time: np.datetime64 | None = None
-    instrument_manufacturer: str = ""
-    instrument_model: str = ""
     fiber_id: int | None = None
-    serial_number: str = ""
     start_channel: int | None = None
     channel_step: int | None = None
     demod_data_type: str = ""
@@ -563,20 +559,21 @@ def _base_attrs(
     Each packet family supplies its own ``data_type``/``data_units`` via
     ``extra``; the fields below are shared across all families.
     """
-    attrs = SintelaProtobufAttrs(
-        data_category="DAS",
-        packet_type=packet_type,
-        recorder_namespace=meta.recorder_namespace,
-        metadata_recording_time=meta.metadata_recording_time,
-        instrument_manufacturer=meta.instrument_manufacturer,
-        instrument_model=meta.instrument_model,
-        # Mirror the recorder serial into the canonical PatchAttrs field while
-        # preserving the raw vendor-specific name for round-tripping/debugging.
-        instrument_id=meta.serial_number,
-        serial_number=meta.serial_number,
-        fiber_id=meta.fiber_id,
-        start_channel=int(getattr(common_header, "start_channel", 0)),
-        channel_step=None,
+    # Validated from a dict because the interrogator facts are nested names,
+    # which no keyword argument can spell.
+    attrs = SintelaProtobufAttrs.model_validate(
+        {
+            "data_category": "DAS",
+            "packet_type": packet_type,
+            "recorder_namespace": meta.recorder_namespace,
+            "metadata_recording_time": meta.metadata_recording_time,
+            "fiber_id": meta.fiber_id,
+            "start_channel": int(getattr(common_header, "start_channel", 0)),
+            "channel_step": None,
+            "interrogator.manufacturer": meta.instrument_manufacturer,
+            "interrogator.model": meta.instrument_model,
+            "interrogator.serial_number": meta.serial_number,
+        }
     )
     return attrs.new(**extra) if extra else attrs
 

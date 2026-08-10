@@ -114,15 +114,38 @@ max_lens = {
     "path": 120,
     "file_format": 15,
     "tag": 100,
-    "network": 12,
-    "station": 12,
+    # Four codes of at most 12 characters plus separators, with headroom.
+    "data_source_id": 64,
     "dims": 40,
     "file_version": 9,
-    "experiment_id": 50,
-    "instrument_id": 50,
     "data_type": 32,
     "data_category": 4,
 }
+
+# Observing-system facts a reader may put in patch attrs. Every name is a
+# field of the inventory's Acquisition, or of its Interrogator when dotted,
+# so a value read from a file header and the same value enriched from an
+# inventory are one attr rather than two spellings of one. The units are the
+# inventory's: seconds, hertz, and meters. Readers convert at the parse
+# boundary instead of shipping a companion units attr.
+# Tested against the models in tests/test_core/test_attrs.py.
+INVENTORY_ATTRS = (
+    "closed_fiber_loop",
+    "firmware_version",
+    "gauge_length",
+    "interrogator.instrument_type",
+    "interrogator.manufacturer",
+    "interrogator.model",
+    "interrogator.name",
+    "interrogator.serial_number",
+    "interrogator_port",
+    "pulse_rate",
+    "pulse_width",
+    "sample_rate",
+    "software_version",
+    "spatial_interval",
+    "start_distance",
+)
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
@@ -136,7 +159,7 @@ SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
-PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
+PATCH_MERGE_ATTRS = ("data_source_id", "dims", "data_type", "data_category")
 
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]

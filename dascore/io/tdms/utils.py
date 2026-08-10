@@ -208,7 +208,7 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time,distance"
-    out["instrument_id"] = out.get("SystemInfomation.Devices0.SerialNum")
+    out["interrogator.serial_number"] = out.get("SystemInfomation.Devices0.SerialNum")
     # Rename some attributes to preferred names
     d_coord = _get_distance_coord(out)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()

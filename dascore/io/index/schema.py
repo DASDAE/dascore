@@ -283,9 +283,9 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "distance_max",
         "distance_step",
         # flat-relation (spool-facing) names
-        "path",
-        "file_format",
-        "file_version",
+        "source_path",
+        "source_format",
+        "source_version",
         # spool instruction machinery
         "current_index",
         "source_index",

@@ -40,7 +40,7 @@ from dascore.io.index.ingest import (
     _coord_record,
     typed_value,
 )
-from dascore.utils.chunk_plan import _ensure_patch_id
+from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
 from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_patches
 from dascore.utils.patch_assembly import PatchAssembler
@@ -371,8 +371,7 @@ class PlanResolver(PatchResolver):
             trim = {
                 k: v
                 for k, v in kwargs.items()
-                if not str(k).startswith("_")
-                and k not in ("path", "file_format", "file_version", "source_patch_id")
+                if not str(k).startswith("_") and k not in _SOURCE_COLUMNS
             }
         patch = self.loader.resolve(kwargs, **trim)
         return apply_exact_residuals(patch, self.parent_residuals)
@@ -455,18 +454,20 @@ def derived_catalog(
     # resolve stored-relative paths once; the derived catalog is
     # root-independent afterwards
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
-    if root is not None and "path" in member_rows.columns:
+    if root is not None and "source_path" in member_rows.columns:
         member_rows = member_rows.assign(
-            path=[
+            source_path=[
                 str(p)
                 if "://" in str(p) or str(p).startswith("/")
                 else str(root / str(p))
-                for p in member_rows["path"]
+                for p in member_rows["source_path"]
             ]
         )
     loader = CompositeResolver()
     if parent is not None:
-        member_paths = set(member_rows.get("path", pd.Series(dtype=str)).astype(str))
+        member_paths = set(
+            member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
+        )
         loader.absorb(parent.resolver, paths=member_paths)
     resolver = PlanResolver(
         token=token,

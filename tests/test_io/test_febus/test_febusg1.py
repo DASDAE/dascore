@@ -175,12 +175,11 @@ class TestG1MTXH5:
         np.testing.assert_array_equal(patch.data, stored)
         np.testing.assert_allclose(frequency.values, expected_frequency)
 
-    def test_read_attrs_have_io_provenance(self, mtx_h5_path):
-        """Read patch attrs should include path and format provenance."""
+    def test_read_attrs_omit_storage_provenance(self, mtx_h5_path):
+        """Where the bytes live belongs to the spool, not to patch attrs."""
         patch = dc.read(mtx_h5_path)[0]
-        assert patch.attrs.path == str(mtx_h5_path)
-        assert patch.attrs.file_format == FebusMTXH5V1.name
-        assert patch.attrs.file_version == FebusMTXH5V1.version
+        names = set(dict(patch.attrs))
+        assert not names & {"path", "file_format", "file_version"}
 
     def test_scan_matches_read_attrs(self, mtx_h5_path):
         """Scan and read should return matching coord summaries."""

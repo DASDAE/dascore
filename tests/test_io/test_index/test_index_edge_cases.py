@@ -78,7 +78,7 @@ class TestIndexCoverageEdges:
         """A row for a patch absent from the registry raises MissingPatchError."""
         resolver = LiveResolver([dc.get_example_patch()])
         with pytest.raises(MissingPatchError, match="not available"):
-            resolver.resolve({"path": "memorypatch://not-a-real-id"})
+            resolver.resolve({"source_path": "memorypatch://not-a-real-id"})
 
     def test_mixed_compatible_unit_range(self):
         """A coord range mixing compatible units resolves."""
@@ -633,7 +633,7 @@ class TestUnitHeterogeneity:
         )
         meters = get_quantity("m")
         df = back.query(Query(coords={"distance": (150 * meters, 300 * meters)}))
-        assert set(df["path"]) == {"with_units.h5", "no_units.h5"}
+        assert set(df["source_path"]) == {"with_units.h5", "no_units.h5"}
         back.close()
 
     def test_nonoverlapping_unitless_coord_stays_candidate(self, tmp_path):
@@ -649,7 +649,7 @@ class TestUnitHeterogeneity:
         )
         meters = get_quantity("m")
         df = back.query(Query(coords={"distance": (250 * meters, 300 * meters)}))
-        assert list(df["path"]) == ["no_units.h5"]
+        assert list(df["source_path"]) == ["no_units.h5"]
         back.close()
 
     def test_all_unitless_quantity_query_keeps_candidates(self, tmp_path):
@@ -658,7 +658,7 @@ class TestUnitHeterogeneity:
         back.write_sources(summaries_to_records([self._summary("no_units.h5")]))
         meters = get_quantity("m")
         df = back.query(Query(coords={"distance": (150 * meters, 300 * meters)}))
-        assert list(df["path"]) == ["no_units.h5"]
+        assert list(df["source_path"]) == ["no_units.h5"]
         back.close()
 
     def test_incompatible_units_only_raises(self, tmp_path):
@@ -683,9 +683,9 @@ class TestUnitHeterogeneity:
             back.write_sources(summaries_to_records(summaries))
         # both patches indexed; only the incompatible value is skipped
         df = back.query()
-        assert set(df["path"]) == {"a.h5", "b.h5"}
+        assert set(df["source_path"]) == {"a.h5", "b.h5"}
         got = back.query(Query(attrs={"resolution": (0.5, 2.0)}))
-        assert list(got["path"]) == ["a.h5"]
+        assert list(got["source_path"]) == ["a.h5"]
         back.close()
 
 
@@ -740,7 +740,7 @@ class TestExactNsFetch:
         )
         back = get_backend(tmp_path / "exact.sqlite3")
         back.write_sources(summaries_to_records([with_time, numeric_only]))
-        df = back.query().set_index("path")
+        df = back.query().set_index("source_path")
         got = df.loc["abs.h5", "event_time_min"]
         assert pd.Timestamp(got).value == self.NS
         back.close()
@@ -1150,13 +1150,13 @@ class TestCompositeSourceIdentity:
         back.write_sources(records_b)
         df = back.query()
         assert len(df) == 2
-        prefixes = {p.split("/das/")[0] for p in df["path"]}
+        prefixes = {p.split("/das/")[0] for p in df["source_path"]}
         assert prefixes == {"s3://bucket-a", "s3://bucket-b"}
         # deletion is base-scoped
         back.delete_sources([records_a[0].source_path], base_uri="s3://bucket-a")
         df = back.query()
         assert len(df) == 1
-        assert df["path"].iloc[0].startswith("s3://bucket-b")
+        assert df["source_path"].iloc[0].startswith("s3://bucket-b")
         back.close()
 
     def test_replacement_is_base_scoped(self, tmp_path):
@@ -1248,7 +1248,11 @@ class TestReservedAttrNames:
 
     @pytest.mark.parametrize(
         "name,value",
-        [("path", "user-path"), ("file_format", "attr-format"), ("source_id", 42)],
+        [
+            ("source_path", "user-path"),
+            ("source_format", "attr-format"),
+            ("source_id", 42),
+        ],
     )
     def test_reserved_attr_warns_and_skips(self, name, value):
         """Reserved names warn at ingest and never corrupt the relation."""

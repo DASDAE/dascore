@@ -892,18 +892,16 @@ class SQLIndexBackend(abc.ABC):
         # flat-contract names for source columns; path_attrs goes private
         # so chunk merge-compat grouping (non-private columns) ignores it
         renames = {
-            "source_path": "path",
-            "source_format": "file_format",
-            "format_version": "file_version",
+            "format_version": "source_version",
             "path_attrs": "_path_attrs",
         }
         out = out.rename(columns=renames)
         if "base_uri" in out:
             has_base = out["base_uri"].notna() & (out["base_uri"] != "")
-            out.loc[has_base, "path"] = (
+            out.loc[has_base, "source_path"] = (
                 out.loc[has_base, "base_uri"].str.rstrip("/")
                 + "/"
-                + out.loc[has_base, "path"]
+                + out.loc[has_base, "source_path"]
             )
             out = out.drop(columns=["base_uri"])
         return out.drop(columns=["source_id"], errors="ignore"), new_columns

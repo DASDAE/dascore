@@ -40,7 +40,7 @@ from dascore.io.core import (
     is_directory_format,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import convert_attr_units, get_exact_coord
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
@@ -1528,3 +1528,52 @@ class TestIOCoreCoverageEdges:
         bad.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 256)
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(bad)
+
+
+class TestConvertAttrUnits:
+    """Readers spend a file's unit declaration at the parse boundary."""
+
+    def test_converts_and_drops_units(self):
+        """The companion attr is consumed, the value converted."""
+        attrs = {"gauge_length": 100.0, "gauge_length_units": "cm"}
+        out = convert_attr_units(attrs, "gauge_length", "m")
+        assert out["gauge_length"] == 1.0
+        assert "gauge_length_units" not in out
+
+    def test_named_units_attr(self):
+        """A format may spell its units attr however it likes."""
+        attrs = {"pulse_width": 10.0, "PulseWidth.uom": "ns"}
+        out = convert_attr_units(attrs, "pulse_width", "s", units_name="PulseWidth.uom")
+        assert out["pulse_width"] == pytest.approx(1e-8)
+
+    def test_missing_units_keeps_value(self):
+        """With no declaration the format's documented default stands."""
+        assert convert_attr_units({"gauge_length": 5.0}, "gauge_length", "m") == {
+            "gauge_length": 5.0
+        }
+
+    def test_missing_value_is_noop(self):
+        """A file which omits the measure gets no measure."""
+        assert (
+            convert_attr_units({"gauge_length_units": "m"}, "gauge_length", "m") == {}
+        )
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [
+            {"gauge_length": 5.0, "gauge_length_units": "not-a-unit"},
+            {"gauge_length": 5.0, "gauge_length_units": "s"},
+            {"gauge_length": "ten", "gauge_length_units": "m"},
+        ],
+    )
+    def test_unusable_conversion_keeps_value(self, attrs):
+        """
+        An unreadable, wrong-dimension, or non-numeric measure is left alone.
+
+        Vendor headers carry junk; a reader which raised here would refuse
+        files whose data is perfectly good.
+        """
+        expected = attrs["gauge_length"]
+        assert (
+            convert_attr_units(attrs, "gauge_length", "m")["gauge_length"] == expected
+        )

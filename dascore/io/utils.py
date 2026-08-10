@@ -2,8 +2,11 @@
 
 import numpy as np
 
+from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, UnitError
+from dascore.units import convert_units, get_quantity_str
+from dascore.utils.misc import unbyte
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -13,6 +16,53 @@ from dascore.exceptions import CoordError
 # skip segmentation for arrays large enough for the cost to matter.
 _MAX_SEGMENT_FRACTION = 0.1
 _MIN_SEGMENT_GUARD_SIZE = 1_000
+
+
+def get_attr_names(attr_cls) -> set[str]:
+    """
+    Return the attr names a reader's attr class accepts from a file header.
+
+    Dotted inventory names (``interrogator.serial_number``) name a nested
+    inventory fact and so cannot be pydantic fields. Readers which keep only
+    the keys their attr class declares filter through this instead of through
+    ``model_fields`` alone, or the nested facts would be silently dropped.
+    """
+    return set(attr_cls.model_fields) | {x for x in INVENTORY_ATTRS if "." in x}
+
+
+def convert_attr_units(attrs: dict, name: str, to_units: str, units_name="") -> dict:
+    """
+    Convert one attr to the units patch attrs use, dropping the file's units.
+
+    Patch attrs record each physical quantity in the units the inventory
+    documents, so a file's own unit declaration is spent here at the parse
+    boundary rather than travelling beside the value as a companion attr.
+    An absent or unreadable declaration leaves the value alone; the format's
+    documented default is then the assumption, and the reader says so.
+
+    Parameters
+    ----------
+    attrs
+        The parsed attrs, modified in place and returned.
+    name
+        The attr to convert.
+    to_units
+        The units the patch attr uses.
+    units_name
+        The attr holding the file's units, ``f"{name}_units"`` by default.
+        It is always removed, whether or not it could be used.
+    """
+    raw_units = attrs.pop(units_name or f"{name}_units", None)
+    value = attrs.get(name)
+    if value is None:
+        return attrs
+    try:
+        if units := get_quantity_str(unbyte(raw_units)):
+            value = convert_units(float(value), to_units=to_units, from_units=units)
+            attrs[name] = value
+    except (TypeError, ValueError, UnitError):
+        pass
+    return attrs
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:

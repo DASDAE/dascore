@@ -25,13 +25,11 @@ def _maybe_trim_data(cm, data, kwargs):
     return new_cm, new_data
 
 
-def _get_attrs_coords_and_data(h5, snap, fiber_io):
+def _get_attrs_coords_and_data(h5, snap):
     """Return attrs, coordinate manager, and data node."""
     attrs = h5.attrs
     attr_names = set(attrs) - DEFAULT_ATTRS
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
-    attr_dict["file_version"] = fiber_io.version
-    attr_dict["file_format"] = fiber_io.name
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
     attr_dict.pop("dims", None)
     return attr_dict, cm, data

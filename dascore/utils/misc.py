@@ -28,6 +28,7 @@ from dascore.config import config_context, get_config
 from dascore.constants import WARN_LEVELS, WARNING_ACTIONS
 from dascore.exceptions import (
     FilterValueError,
+    InvalidInventoryError,
     MissingOptionalDependencyError,
     ParameterError,
 )
@@ -1326,3 +1327,54 @@ def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
         return bool(np.all(view1 > view2))
     except TypeError:  # values which do not support comparison
         return False
+
+
+_CODE_RE = re.compile(r"[A-Za-z0-9-]+")
+_LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
+# The tokens of a data_source_id, in order. Only location may be blank.
+DATA_SOURCE_ID_PARTS = ("network", "fiber_array", "location", "acquisition")
+
+
+def check_code(value: str, allow_blank: bool = False) -> str:
+    """
+    Validate a single code token of a data source id.
+
+    Parameters
+    ----------
+    value
+        The token to validate.
+    allow_blank
+        If True an empty token is valid, as it is for location codes.
+    """
+    pattern = _LOCATION_RE if allow_blank else _CODE_RE
+    if pattern.fullmatch(value) is None:
+        blank = " (or blank)" if allow_blank else ""
+        msg = f"Invalid code {value!r}; codes use letters, digits, and '-'{blank}."
+        raise InvalidInventoryError(msg)
+    return value
+
+
+def validate_data_source_id(value: str) -> str:
+    """
+    Validate a composite data source id.
+
+    A data source id names an inventory acquisition as
+    network.fiber_array.location.acquisition. An empty string means unset,
+    which is how patches with no inventory identity are spelled.
+
+    Both the inventory model and `PatchAttrs` use this function so a code
+    legal in one is legal in the other.
+    """
+    if not value:
+        return value
+    parts = value.split(".")
+    if len(parts) != len(DATA_SOURCE_ID_PARTS):
+        expected = ".".join(DATA_SOURCE_ID_PARTS)
+        msg = (
+            f"Invalid data_source_id {value!r}; got {len(parts)} dot separated "
+            f"codes but expected {len(DATA_SOURCE_ID_PARTS)} ({expected})."
+        )
+        raise InvalidInventoryError(msg)
+    for part, name in zip(parts, DATA_SOURCE_ID_PARTS, strict=True):
+        check_code(part, allow_blank=name == "location")
+    return value

@@ -109,7 +109,7 @@ while True:
             time=window, step=step, engine="numpy").mean()
 
         # Save results 
-        file_name = sp.get_contents()["path"][patch_num]
+        file_name = sp.get_contents()["source_path"][patch_num]
         output_path = os.path.join(output_data_dir, file_name)
         rolling_mean_patch.io.write(output_path, "dasdae")
 

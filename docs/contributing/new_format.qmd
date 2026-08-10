@@ -160,9 +160,42 @@ The rule is simple:
 - `source_patch_id` remains the public summary/reload field, while `_source_patch_id` remains the private attr-level field FiberIO authors should set directly.
 - If both are provided when constructing a `PatchSummary`, `source_patch_id` wins and is copied back onto `attrs["_source_patch_id"]`.
 - Private attrs should not participate in normal patch compatibility checks.
-- `path`, `file_format`, and `file_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
+- `source_path`, `source_format`, and `source_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
 
 For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_id`.
+
+## What Belongs in `attrs`
+
+Every attr a reader emits is one of four kinds, and the kind decides both its
+name and who may change it later.
+
+1. **`data_source_id`** — the inventory identity of the data source, spelled
+   `network.fiber_array.location.acquisition`. Set it only if the file really
+   carries those codes; most archives supply it through the directory layout
+   instead.
+2. **Observing-system facts** — what the instrument was doing. Use the names
+   in [`INVENTORY_ATTRS`](`dascore.constants.INVENTORY_ATTRS`), which are the
+   fields of the DASDAE inventory's acquisition (`gauge_length`,
+   `spatial_interval`, `pulse_width`, …) and of its interrogator, dotted
+   (`interrogator.serial_number`). Using a vendor spelling for one of these
+   splits one fact into two attrs that nothing downstream can reconcile.
+   These attrs carry fixed units — seconds, hertz, meters — so convert at the
+   parse boundary with
+   [`convert_attr_units`](`dascore.io.utils.convert_attr_units`) and never
+   emit a companion attr stating a value's units.
+3. **Data state** — `data_type`, `data_category`, and `data_units`, which
+   describe the data as it now stands. Processing functions rewrite these, so
+   they belong to the patch rather than to the observing system.
+4. **Vendor extras** — everything genuinely specific to the format, under
+   whatever name the format uses. These are welcome, but each new one must be
+   listed in the `VENDOR_ATTRS` set in `tests/test_io/test_common_io.py`,
+   which is where a reviewer checks that the value is not one of the facts
+   above wearing a vendor's name.
+
+Storage provenance (`source_path`, `source_format`, `source_version`) is the
+spool's, not the patch's: it says where the bytes live rather than where the
+signal came from, and a patch merged from three files has no single answer.
+Read it from `get_contents()`.
 
 ## Building Scan Payloads
 

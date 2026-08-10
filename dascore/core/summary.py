@@ -268,11 +268,13 @@ class PatchSummary(DascoreBaseModel):
         summary_meta = {
             "dims": ",".join(self.dims),
             "dtype": self.dtype,
-            # The flat contract names source fields path/file_format/
-            # file_version; the index and spool relations both key off these.
-            "path": str(self.source_path) if self.source_path else "",
-            "file_format": self.source_format,
-            "file_version": self.source_version,
+            # Storage provenance keeps the source_ prefix everywhere: the
+            # flat contract, the index, and the spool relations all key off
+            # these, and the prefix marks them as the spool's rather than
+            # the patch's.
+            "source_path": str(self.source_path) if self.source_path else "",
+            "source_format": self.source_format,
+            "source_version": self.source_version,
             "source_patch_id": self.source_patch_id,
             "coord_names": ",".join(self.coords),
         }

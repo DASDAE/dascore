@@ -110,12 +110,13 @@ def _make_base_attrs_dict(metadata: XMLBinaryInfo):
     ius = metadata.das_interrogator_serial
     assert len(ius) == 1, "expecting one interrogator."
     iu_name = next(iter(ius.values()))
-    attrs = dict(
-        pulse_width_ns=metadata.pulse_width_ns,
-        gauge_length=metadata.gauge_length_m,
-        instrument_id=iu_name,
-        zone_name=zone_name,
-    )
+    attrs = {
+        # The metadata states nanoseconds and meters; attrs use seconds.
+        "pulse_width": metadata.pulse_width_ns * 1e-9,
+        "gauge_length": metadata.gauge_length_m,
+        "interrogator.serial_number": iu_name,
+        "zone_name": zone_name,
+    }
     return attrs
 
 

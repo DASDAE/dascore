@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import itertools
 import os
-import re
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
 
@@ -32,7 +31,7 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
-from dascore.utils.misc import is_strictly_monotonic, optional_import
+from dascore.utils.misc import check_code, is_strictly_monotonic, optional_import
 from dascore.utils.models import (
     DateTime64,
     InventoryModel,
@@ -67,29 +66,17 @@ CoordinateLabel = Literal[
 ]
 VALID_COORDINATE_LABELS = get_args(CoordinateLabel)
 
-_CODE_RE = re.compile(r"[A-Za-z0-9-]+")
-_LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
-
-
-def _check_code(value: str, allow_blank: bool = False) -> str:
-    """Validate a data_source_id code token."""
-    pattern = _LOCATION_RE if allow_blank else _CODE_RE
-    if pattern.fullmatch(value) is None:
-        blank = " (or blank)" if allow_blank else ""
-        msg = f"Invalid code {value!r}; codes use letters, digits, and '-'{blank}."
-        raise InvalidInventoryError(msg)
-    return value
-
-
 # Code tokens used in data_source_id; location codes alone may be blank.
-CodeStr = Annotated[str, AfterValidator(_check_code)]
+# The token rule is shared with PatchAttrs.data_source_id so a code legal
+# in one is legal in the other.
+CodeStr = Annotated[str, AfterValidator(check_code)]
 # A float which must be finite; nan/inf silently poison downstream math.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 # Sensor orientation, in the ranges seismology already uses.
 Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
 Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
 LocationCodeStr = Annotated[
-    str, AfterValidator(lambda value: _check_code(value, allow_blank=True))
+    str, AfterValidator(lambda value: check_code(value, allow_blank=True))
 ]
 # Stable identifier for a shareable inventory resource.
 ResourceIdStr = Annotated[

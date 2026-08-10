@@ -50,7 +50,7 @@ class SegyV1_0(FiberIO):  # noqa
         path_str = str(resource)
         with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path_str, self, include_source=True)
+            attrs = _get_attrs(fi, coords)
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
@@ -70,7 +70,7 @@ class SegyV1_0(FiberIO):  # noqa
         path_str = str(resource)
         with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path_str, self)
+            attrs = _get_attrs(fi, coords)
             dtype = str(fi.dtype)
         return [
             {

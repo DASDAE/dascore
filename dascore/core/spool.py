@@ -490,7 +490,13 @@ class Spool(BaseSpool):
 
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
-    _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
+    _drop_columns = (
+        "patch",
+        "source_path",
+        "source_format",
+        "source_version",
+        "source_patch_id",
+    )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
     # single-file provenance (set by from_file; drives update())
@@ -1070,11 +1076,11 @@ class Spool(BaseSpool):
             # view cannot know its trimmed fingerprint without loading,
             # and data values are never compared here anyway.
             drop = [
-                "path",
+                "source_path",
                 "_patch_id",
                 "source_patch_id",
-                "file_format",
-                "file_version",
+                "source_format",
+                "source_version",
                 "_modified",
                 *[c for c in df.columns if str(c).endswith("_def_key")],
             ]

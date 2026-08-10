@@ -326,14 +326,14 @@ class TestScanDASDAE:
         df1 = dc.scan_to_df(written_dascore_v1_random)
         df2 = dc.scan_to_df(written_dascore_v1_random_copy)
         # common fields should be equal (except path)
-        common = list((set(df1) & set(df2)) - {"path"})
+        common = list((set(df1) & set(df2)) - {"source_path"})
         assert df1[common].equals(df2[common])
 
     def test_get_patch_summary_has_file_metadata(self, random_spool):
         """The summary helper should stamp DASDAE metadata on each row."""
         out = DASDAEV1()._get_patch_summary(random_spool)
-        assert set(out["file_format"]) == {"DASDAE"}
-        assert set(out["file_version"]) == {"1"}
+        assert set(out["source_format"]) == {"DASDAE"}
+        assert set(out["source_version"]) == {"1"}
         assert out["source_patch_id"].notnull().all()
 
 

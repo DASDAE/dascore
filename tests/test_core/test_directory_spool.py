@@ -104,9 +104,9 @@ class TestDirectorySpoolBasics:
 
     def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
-        new = diverse_directory_spool.select(station="big_gaps")
+        new = diverse_directory_spool.select(tag="big_gaps")
         contents = new.get_contents()
-        assert (contents["station"] == "big_gaps").all()
+        assert (contents["tag"] == "big_gaps").all()
 
     def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
         """Sorted directory spool rows should reload the intended source patch."""
@@ -160,11 +160,12 @@ class TestLoadPatchFastPath:
             return object()
 
         monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
-        resolver._read("path", {"file_format": "DASDAE", "file_version": "1"}, {}, "")
+        row = {"source_format": "DASDAE", "source_version": "1"}
+        resolver._read("path", row, {}, "")
         assert calls[-1]["file_format"] == "DASDAE"
         assert calls[-1]["file_version"] == "1"
         # empty format/version are simply omitted (dc.read detects them)
-        resolver._read("path", {"file_format": ""}, {}, "")
+        resolver._read("path", {"source_format": ""}, {}, "")
         assert "file_format" not in calls[-1]
 
     def test_reads_file_once(self, one_directory_spool, monkeypatch):
@@ -176,7 +177,7 @@ class TestLoadPatchFastPath:
             return ()  # an unusual (empty) reader return
 
         monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
-        row = {"file_format": "DASDAE", "file_version": "1"}
+        row = {"source_format": "DASDAE", "source_version": "1"}
         resolver = one_directory_spool._catalog.resolver
         resolver._read("path", row, {}, "")
         assert len(calls) == 1
@@ -195,9 +196,9 @@ class TestLoadPatchFastPath:
 
         monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
         row = {
-            "path": "path",
-            "file_format": "DASDAE",
-            "file_version": "1",
+            "source_path": "path",
+            "source_format": "DASDAE",
+            "source_version": "1",
             "source_patch_id": "second",
         }
         resolver = one_directory_spool._catalog.resolver
@@ -217,9 +218,9 @@ class TestLoadPatchFastPath:
 
         monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
         row = {
-            "path": "path",
-            "file_format": "DASDAE",
-            "file_version": "1",
+            "source_path": "path",
+            "source_format": "DASDAE",
+            "source_version": "1",
             "source_patch_id": "1",
         }
         resolver = one_directory_spool._catalog.resolver
@@ -305,9 +306,9 @@ class TestDirectoryIndex:
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
         expected = {
-            "path",
-            "file_format",
-            "file_version",
+            "source_path",
+            "source_format",
+            "source_version",
             "dims",
             "time_min",
             "time_max",
@@ -378,7 +379,7 @@ class TestDirectoryIndex:
             dascore.examples.spool_to_directory(spool, path)
         df = dc.spool(base_path).update().get_contents()
         # ensure each sub-directory is represented
-        paths = df["path"]
+        paths = df["source_path"]
         assert any(paths.str.startswith("sub_0"))
         assert any(paths.str.startswith("sub_0/sub_1"))
         assert any(paths.str.startswith("sub_0/sub_1/sub_2"))
@@ -428,18 +429,20 @@ class TestSelect:
         duration = contents["time_max"] - contents["time_min"]
         new_max = (contents["time_min"] + duration.mean() / 2).median()
         out = (
-            spool.select(network="das2").select(tag="ran*").select(time=(None, new_max))
+            spool.select(data_source_id="DAS2.*")
+            .select(tag="ran*")
+            .select(time=(None, new_max))
         )
         assert len(out) > 0
         # first check content dataframe
         new_content = out.get_contents()
         assert len(new_content) == len(out)
-        assert (new_content["network"] == "das2").all()
+        assert (new_content["data_source_id"] == "DAS2.R2D1..RAW").all()
         assert (new_content["tag"].str.startswith("ran")).all()
         assert (new_content["time_max"] <= new_max).all()
         # then check patches
         for patch in out:
-            assert patch.attrs["network"] == "das2"
+            assert patch.attrs["data_source_id"] == "DAS2.R2D1..RAW"
             assert patch.attrs["tag"].startswith("ran")
             assert patch.get_coord("time").max() <= new_max
         # ensure raises when selecting off the end of the spool
@@ -564,7 +567,13 @@ class TestGetContents:
     def test_str_columns_in_dataframe(self, diverse_directory_spool):
         """Ensure the conventional string columns are in the index."""
         df = diverse_directory_spool.get_contents()
-        expected = {"path", "file_format", "file_version", "dims", "station"}
+        expected = {
+            "source_path",
+            "source_format",
+            "source_version",
+            "dims",
+            "data_source_id",
+        }
         assert set(df.columns).issuperset(expected)
 
 
@@ -633,18 +642,18 @@ class TestFileBackedSpoolIntegrations:
 
     def test_one(self, diverse_spool_directory):
         """Small integration test with diverse spool."""
-        network = "das2"
+        data_source_id = "DAS2.R2D1..RAW"
         endtime = np.datetime64("2022-01-01")
         duration = 3
         spool = (
             dc.spool(diverse_spool_directory)
-            .select(network=network)  # sub-select das2 network
+            .select(data_source_id=data_source_id)  # sub-select one data source
             .select(time=(None, endtime))  # unselect anything after 2022
             .chunk(time=duration, overlap=0.5)  # change the chunking of the patches
         )
         for patch in spool:
             assert isinstance(patch, dc.Patch)
-            assert patch.attrs["network"] == network
+            assert patch.attrs["data_source_id"] == data_source_id
             time_coord = patch.get_coord("time")
             assert time_coord.max() <= endtime
             patch_duration = (time_coord.max() - time_coord.min()) / ONE_SECOND
