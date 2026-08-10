@@ -35,6 +35,7 @@ from dascore.io.hdas import HDASV1, HDASV2
 from dascore.io.mseed.core import MSeedV2
 from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
+from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
@@ -82,6 +83,7 @@ COMMON_IO_READ_TESTS = {
     HDASV2(): ("hdas_2.h5",),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
+    ODH4V1(): ("optasense_odh4_1.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
