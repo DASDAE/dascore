@@ -644,7 +644,11 @@ def _output_dtypes(sub: pd.DataFrame, members: pd.DataFrame) -> pd.Series | None
         return None
     by_patch = sub.drop_duplicates("_patch_id").set_index("_patch_id")["_dtype"]
     grouped = members.groupby("output_id")["_patch_id"]
-    dtypes = grouped.apply(lambda pids: _combined_dtype(by_patch.reindex(pids)))
+    # A scalar-returning apply on a SeriesGroupBy is always a Series; the
+    # stubs cannot see through the lambda and claim DataFrame | Series.
+    dtypes: pd.Series = grouped.apply(  # ty: ignore[invalid-assignment]
+        lambda pids: _combined_dtype(by_patch.reindex(pids))
+    )
     # "" is the same not-known sentinel ingest writes; never leave NaN,
     # which would reach the derived catalog as the string "nan".
     return dtypes.map(lambda x: "" if x is None else str(x))
@@ -901,6 +905,9 @@ def build_chunk_plan(
         out_frames.append(outputs)
         member_frames.append(members)
     if size_diagnostics:
+        # Diagnostics are only collected on the size-chunk path, where the
+        # chunk value is an information Quantity (is_data_size gated).
+        assert isinstance(value, Quantity)
         params["size"] = {
             "requested_bytes": get_byte_count(value),
             "partitions": tuple(size_diagnostics),
