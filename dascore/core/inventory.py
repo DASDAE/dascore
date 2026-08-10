@@ -1106,12 +1106,6 @@ class OpticalPath(TimeRangedModel):
             }
         )
 
-    def __radd__(self, other):
-        """Support sum() over path sequences."""
-        if other == 0:
-            return self
-        return NotImplemented
-
 
 def _clip_intervals(items, lo: float, hi: float) -> list:
     """Clip start+optical_length interval items to [lo, hi), dropping empties."""

@@ -383,6 +383,17 @@ class TestPathOperations:
         """Return the example path."""
         return build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
 
+    def test_component_intervals(self, path):
+        """Components tile the absolute axis cumulatively."""
+        two = inv.OpticalPath(
+            start_distance=100.0,
+            optical_components=(
+                inv.FiberSegment(optical_length=50.0),
+                inv.Splice(optical_length=0.5),
+            ),
+        )
+        assert two.component_intervals() == ((100.0, 150.0), (150.0, 150.5))
+
     def test_select_preserves_absolute_distances(self, path):
         """Select preserves absolute distances."""
         piece = path.select(distance=(50.0, 150.0))
@@ -906,14 +917,6 @@ class TestCoverageCompleteness:
             _ = path + 5
         with pytest.raises(TypeError):
             _ = 5 + path
-
-    def test_sum_of_paths(self):
-        """Sum of paths."""
-        path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=10.0),)
-        )
-        total = sum([path, path])
-        assert np.isclose(total.optical_length, 20.0)
 
     def test_resolve_multiple_paths_raises(self):
         """An unchecked inventory with concurrent paths fails resolve."""
