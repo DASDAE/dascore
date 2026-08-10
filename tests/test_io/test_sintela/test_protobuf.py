@@ -14,6 +14,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
+from dascore.io.core import _scan_payload_to_summary
 from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
@@ -85,8 +86,6 @@ def _build_meta_payload_without_fiber_id():
 
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
-    from dascore.io.core import _scan_payload_to_summary
-
     return _scan_payload_to_summary(payload)
 
 

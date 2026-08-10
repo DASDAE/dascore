@@ -32,13 +32,16 @@ import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.summary import normalize_source_patch_id
 from dascore.exceptions import MissingPatchError
+from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend, resolve_query
-from dascore.io.index.ingest import SourceRecord, patch_record
+from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
 )
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
+from dascore.units import get_quantity
 from dascore.utils.misc import is_range
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
@@ -83,8 +86,6 @@ class _CanonicalRange:
 
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
-        from dascore.units import get_quantity
-
         coord_units = getattr(coord, "units", None)
         if coord_units is None:
             # unitless coords: bare canonical magnitudes (documented policy)
@@ -279,8 +280,6 @@ class FileResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
-        from dascore.io.core import _resolve_read_spool
-
         path = row["path"]
         # relative paths resolve against the catalog root; URIs and
         # absolute paths pass through untouched.
@@ -598,8 +597,6 @@ class PatchCatalog:
         in-memory backend; patches load through the file resolver on
         demand. There is no syncer — a changed file needs a new catalog.
         """
-        from dascore.io.index.ingest import summaries_to_records
-
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
         )
@@ -616,8 +613,6 @@ class PatchCatalog:
         index_path: str | Path | None = None,
     ) -> PatchCatalog:
         """Catalog over a directory of fiber files."""
-        from dascore.io.index.indexer import DBDirectoryIndexer
-
         syncer = DBDirectoryIndexer(path, index_path=index_path)
         return cls(
             backend=syncer._backend,

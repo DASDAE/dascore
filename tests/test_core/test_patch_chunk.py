@@ -15,8 +15,12 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.utils.patch_assembly as assembly_module
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
+from dascore.units import get_quantity
 from dascore.utils.misc import get_middle_value
+from dascore.utils.patch import _get_merged_coord
+from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
 from dascore.utils.time import to_timedelta64
 
 
@@ -420,8 +424,6 @@ class TestChunkMerge:
 
     def test_non_si_merge_tolerance_uses_coord_units(self, random_patch):
         """Canonical index steps are not interpreted in native coord units."""
-        from dascore.utils.patch import _get_merged_coord
-
         size = len(random_patch.get_coord("distance"))
         first = dc.get_coord(data=np.arange(size, dtype=float), units="km")
         second = dc.get_coord(
@@ -702,8 +704,6 @@ class TestChunkMerge:
 
 def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
-    from dascore.utils.patch_assembly import PatchAssembler
-
     return PatchAssembler(load_patch=None, merge_kwargs={})
 
 
@@ -715,8 +715,6 @@ class TestStreamingMerge:
 
     def test_streaming_path_used(self, adjacent_spool_no_overlap, monkeypatch):
         """Ensure simple merges take the streaming path."""
-        from dascore.utils.patch_assembly import PatchAssembler
-
         called = []
         original = PatchAssembler._merge_patches_streaming
 
@@ -731,8 +729,6 @@ class TestStreamingMerge:
 
     def test_matches_materialized_merge(self, adjacent_spool_no_overlap, monkeypatch):
         """Streaming and concatenating merges must produce identical patches."""
-        import dascore.utils.patch_assembly as assembly_module
-
         streamed = adjacent_spool_no_overlap.chunk(time=None)[0]
         # Disabling the sample estimate forces the materialized path.
         monkeypatch.setattr(
@@ -961,9 +957,6 @@ class TestMatchMergeUnits:
 
     def test_incompatible_units_pass_through(self):
         """Dimensionality mismatches pass through for the merge to police."""
-        from dascore.units import get_quantity
-        from dascore.utils.patch_assembly import _match_merge_units
-
         patch = dc.get_example_patch().set_units(distance="m")
         target = get_quantity("s").units
         out, kept = _match_merge_units(patch, "distance", target)

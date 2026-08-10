@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 from typing import ClassVar
 
 import h5py
 import numpy as np
 import pytest
+from upath import UPath
 
 import dascore as dc
 from dascore.io.netcdf import core as netcdf_core
@@ -17,6 +19,10 @@ from dascore.io.netcdf.utils import (
     is_netcdf4_file,
 )
 from dascore.utils.downloader import fetch
+from dascore.utils.remote_io import (
+    clear_remote_file_cache,
+    get_remote_cache_path,
+)
 
 pytest.importorskip("xarray")
 
@@ -526,12 +532,6 @@ class TestNetCDFIO:
     def test_remote_stream_no_download(self, example_patch, netcdf_path):
         """Remote NetCDF should stream via h5netcdf, not download to the cache."""
         pytest.importorskip("h5netcdf")
-        from upath import UPath
-
-        from dascore.utils.remote_io import (
-            clear_remote_file_cache,
-            get_remote_cache_path,
-        )
 
         # Publish the file onto a non-local (memory) filesystem.
         remote = UPath("memory://netcdf_stream_test/remote.nc")
@@ -562,8 +562,6 @@ class TestNetCDFIO:
         self, minimal_cf_netcdf_path, monkeypatch
     ):
         """Format detection should not depend on xarray being importable."""
-        import importlib
-
         original_import_module = importlib.import_module
 
         def _import_module(name, package=None):

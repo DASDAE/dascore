@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
@@ -208,8 +209,6 @@ class TestElementDtype:
 
     def test_dtype_is_private_in_flat_relation(self):
         """The spool sees `_dtype`, never a public `dtype` column."""
-        import dascore as dc
-
         spool = dc.get_example_spool("random_das")
         df = spool.get_contents()
         assert "dtype" not in df.columns

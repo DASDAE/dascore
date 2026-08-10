@@ -8,7 +8,7 @@ import pydantic
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError
 from dascore.utils.pd import (
     _model_list_to_df,
     adjust_segments,
@@ -18,6 +18,7 @@ from dascore.utils.pd import (
     get_interval_columns,
     list_ser_to_str,
     patch_to_dataframe,
+    relative_ranges_to_absolute,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -553,18 +554,12 @@ class TestRelativeRangesToAbsolute:
 
     def test_missing_max_column_raises_spool_error(self):
         """A frame with the min but not the max column raises the doc'd error."""
-        from dascore.exceptions import InvalidSpoolQueryError
-        from dascore.utils.pd import relative_ranges_to_absolute
-
         df = pd.DataFrame({"time_min": [0.0]})  # no time_max
         with pytest.raises(InvalidSpoolQueryError, match="relative select"):
             relative_ranges_to_absolute(df, {"time": (1, -1)})
 
     def test_non_tuple_value_raises(self):
         """A non-(start, stop) relative value raises rather than mis-resolving."""
-        from dascore.exceptions import InvalidSpoolQueryError
-        from dascore.utils.pd import relative_ranges_to_absolute
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
         with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             relative_ranges_to_absolute(df, {"time": 5})

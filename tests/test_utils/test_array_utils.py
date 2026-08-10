@@ -16,6 +16,7 @@ from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
 from dascore.utils.array import (
     PatchUFunc,
+    _BoundPatchUFunc,
     apply_array_func,
     apply_ufunc,
     convert_bytes_to_strings,
@@ -521,7 +522,6 @@ class TestStringArrayHelpers:
         bound_once = ufunc.__get__(random_patch, type(random_patch))
 
         # Verify the bound instance is a _BoundPatchUFunc
-        from dascore.utils.array import _BoundPatchUFunc
 
         assert isinstance(bound_once, _BoundPatchUFunc)
 
@@ -538,8 +538,6 @@ class TestStringArrayHelpers:
 
     def test_patch_ufunc_class_properties(self, random_patch):
         """Test _BoundPatchUFunc class has proper attributes."""
-        from dascore.utils.array import _BoundPatchUFunc
-
         ufunc = PatchUFunc(np.multiply)
         bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
 
