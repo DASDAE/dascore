@@ -1152,6 +1152,7 @@ class Channel(TimeRangedModel):
             "coordinate_labels declare their meaning."
         ),
     )
+    sample_rate: float | None = Field(default=None, description="Sample rate in Hz.")
     data_type: DataType = Field(
         default="", description="Quantity measured or produced."
     )
