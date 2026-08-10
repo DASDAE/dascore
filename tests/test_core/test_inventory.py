@@ -1057,6 +1057,14 @@ class TestStationXmlAlignment:
         assert net.is_effective_at("2021-06-01")
         assert not net.is_effective_at("2022-01-01")
 
+    def test_identifiers_on_citable_levels(self):
+        """Network, FiberArray, and Station carry citation identifiers."""
+        doi = "doi:10.7914/SN/XX"
+        net = inv.Network(code="XX", identifiers=(doi,))
+        array = inv.FiberArray(code="L001", identifiers=(doi,))
+        station = inv.Station(code="VA01", identifiers=(doi,))
+        assert net.identifiers == array.identifiers == station.identifiers == (doi,)
+
     def test_channel_orientation_and_depth(self):
         """Channels hold azimuth, dip, and burial depth."""
         chan = inv.Channel(code="BHN", azimuth=0.0, dip=0.0, depth=100.0)

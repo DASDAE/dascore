@@ -1208,6 +1208,13 @@ class Station(TimeRangedModel):
 
     code: CodeStr = Field(description="Station code used in data source identifiers.")
     name: str = Field(default="", description="Human-readable station name.")
+    identifiers: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Scheme-prefixed identifier URIs naming this object, e.g. "
+            "'doi:10.7914/SN/XX'."
+        ),
+    )
     coordinates: tuple[float, ...] | None = Field(
         default=None,
         description=(
@@ -1230,6 +1237,13 @@ class FiberArray(TimeRangedModel):
 
     code: CodeStr = Field(description="Station-like fiber array code.")
     name: str = Field(default="", description="Human-readable fiber array name.")
+    identifiers: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Scheme-prefixed identifier URIs naming this object, e.g. "
+            "'doi:10.7914/SN/XX'."
+        ),
+    )
     acquisitions: tuple[Acquisition, ...] = Field(
         default=(), description="Acquisitions associated with this fiber array."
     )
@@ -1270,6 +1284,13 @@ class Network(TimeRangedModel):
 
     code: CodeStr = Field(description="Network code.")
     name: str = Field(default="", description="Human-readable network name.")
+    identifiers: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Scheme-prefixed identifier URIs naming this object, e.g. "
+            "'doi:10.7914/SN/XX'."
+        ),
+    )
     fiber_arrays: tuple[FiberArray, ...] = Field(
         default=(), description="Fiber arrays in this network."
     )
