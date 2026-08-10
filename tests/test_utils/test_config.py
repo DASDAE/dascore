@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import pytest
 
@@ -218,8 +219,6 @@ class TestMapConfigBinding:
     @pytest.mark.concurrency
     def test_thread_pool_sees_call_time_config(self):
         """A thread-pool map sees the caller's scoped override."""
-        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-
         spool = dc.get_example_spool()
         with config_context(display_float_precision=8):
             with ThreadPoolExecutor(2) as executor:
@@ -229,8 +228,6 @@ class TestMapConfigBinding:
     @pytest.mark.concurrency
     def test_process_pool_sees_call_time_config(self):
         """A process-pool map sees the caller's scoped override too."""
-        from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
-
         spool = dc.get_example_spool()
         with config_context(display_float_precision=8):
             with ProcessPoolExecutor(2) as executor:

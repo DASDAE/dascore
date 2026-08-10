@@ -15,7 +15,11 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_compatible_values, get_coord
 from dascore.units import invert_quantity
 from dascore.utils.misc import iterate
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import (
+    _get_data_units_from_dims,
+    _get_dx_or_spacing_and_axes,
+    patch_function,
+)
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -53,11 +57,6 @@ def _get_new_dims(patch, dim, new_coord_name):
 
 def _spectrogram_patch(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     """Create a spectrogram patch for visualization."""
-    from dascore.utils.patch import (  # noqa: PLC0415
-        _get_data_units_from_dims,
-        _get_dx_or_spacing_and_axes,
-    )
-
     assert len(iterate(dim)) == 1, "only one dimension allowed."
     coord = patch.get_coord(dim)
     dxs, axes = _get_dx_or_spacing_and_axes(patch, dim, require_evenly_spaced=True)

@@ -1521,8 +1521,6 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
     if dim is not None:
         if isinstance(dim, str):
             if dim not in patch.dims:
-                from dascore.exceptions import ParameterError  # noqa: PLC0415
-
                 msg = f"Dimension '{dim}' not found in patch dimensions {patch.dims}"
                 raise ParameterError(msg)
             axis = patch.get_axis(dim)
@@ -1531,8 +1529,6 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
             axis = []
             for d in dim:
                 if d not in patch.dims:
-                    from dascore.exceptions import ParameterError  # noqa: PLC0415
-
                     msg = f"Dimension '{d}' not found in patch dimensions {patch.dims}"
                     raise ParameterError(msg)
                 axis.append(patch.get_axis(d))

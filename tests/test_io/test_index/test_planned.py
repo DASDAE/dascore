@@ -4,6 +4,7 @@ Tests for derived catalogs (plan-as-catalog) and coverage of their edges.
 
 from __future__ import annotations
 
+import pickle
 import re
 
 import numpy as np
@@ -11,14 +12,18 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.core.spool import BaseSpool
+from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.index.planned import (
     PlanResolver,
+    _aux_coord_info,
     _coord_record_from_row,
     _ns,
     collapse_working_df,
     derived_catalog,
 )
+from dascore.units import m
+from dascore.utils.chunk_plan import ChunkPlan, samples_adjusted_envelopes
 
 
 @pytest.fixture(scope="module")
@@ -91,8 +96,6 @@ class TestHelpers:
 
     def test_derived_catalog_adds_patch_ids(self, patches):
         """source_rows without _patch_id get positional ids."""
-        from dascore.utils.chunk_plan import ChunkPlan  # noqa: PLC0415
-
         spool = dc.spool(patches)
         rows = spool.get_contents().drop(columns=["_patch_id"], errors="ignore")
         rows = rows.reset_index(drop=True)
@@ -158,8 +161,6 @@ class TestDerivedComposition:
 
     def test_union_view_of_live_spools_pickles_composite(self, patches):
         """A selected union pickles a membership-restricted composite."""
-        import pickle  # noqa: PLC0415
-
         t0 = patches[0].get_coord("time")
         combined = dc.spool(patches[:2]) + dc.spool(patches[2:])
         view = combined.select(time=(None, t0.max()))
@@ -172,8 +173,6 @@ class TestDerivedComposition:
         """A missing registry entry surfaces as MissingPatchError, not
         out-of-bounds.
         """
-        from dascore.exceptions import MissingPatchError  # noqa: PLC0415
-
         spool = dc.spool(patches[:1])
         _ = spool.get_contents()  # realize rows
         spool._catalog.resolver._registry.clear()
@@ -182,7 +181,6 @@ class TestDerivedComposition:
 
     def test_union_with_third_party_spool(self, patches):
         """The BaseSpool fallback materializes third-party members."""
-        from dascore.core.spool import BaseSpool  # noqa: PLC0415
 
         class MiniSpool(BaseSpool):
             def __init__(self, inner):
@@ -231,8 +229,6 @@ class TestRemainingEdges:
         """A quantity-selected chunked view re-chunks without applying
         unit-bearing bounds to envelopes (they stay load residuals).
         """
-        from dascore.units import m  # noqa: PLC0415
-
         chunked = dc.spool(patches).chunk(time=2)
         selected = chunked.select(_coords={"distance": (0 * m, 10 * m)})
         merged = selected.chunk(time=None)
@@ -242,8 +238,6 @@ class TestRemainingEdges:
 
     def test_samples_adjust_skips_missing_columns(self):
         """Residuals naming absent envelope columns pass through."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes  # noqa: PLC0415
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
         residuals = (({"depth": (0, 5)}, True),)
         out = samples_adjusted_envelopes(df, residuals)
@@ -317,14 +311,10 @@ class TestAuxInfoEdges:
 
     def test_coord_record_missing_envelope_returns_none(self):
         """A row without envelope values yields no coord record."""
-        from dascore.io.index.planned import _coord_record_from_row  # noqa: PLC0415
-
         assert _coord_record_from_row({}, "time") is None
 
     def test_absent_envelope_columns_skipped(self):
         """A mapped coord with no envelope columns contributes nothing."""
-        from dascore.io.index.planned import _aux_coord_info  # noqa: PLC0415
-
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [1], "_modified": [False]}
         )
@@ -333,8 +323,6 @@ class TestAuxInfoEdges:
 
     def test_all_null_group_skipped(self):
         """An output whose members carry no values for a coord is skipped."""
-        from dascore.io.index.planned import _aux_coord_info  # noqa: PLC0415
-
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [1], "_modified": [False]}
         )

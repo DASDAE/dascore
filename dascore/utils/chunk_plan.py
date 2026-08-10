@@ -15,6 +15,7 @@ applied; `Spool.chunk` runs on these plans.
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -296,8 +297,6 @@ def _user_stacklevel() -> int:
     build_chunk_plan directly), so a fixed stacklevel would blame library
     frames for some entries.
     """
-    import inspect  # noqa: PLC0415
-
     # The dascore package directory, resolved from the package itself so
     # this does not depend on this module's location within it.
     package_dir = str(Path(dc.__file__).resolve().parent)

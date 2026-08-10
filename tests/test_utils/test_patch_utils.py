@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -11,7 +11,6 @@ import pytest
 from pydantic import Field
 
 import dascore as dc
-from dascore import patch_function
 from dascore.config import config_context
 from dascore.constants import PatchType
 from dascore.exceptions import (
@@ -24,6 +23,7 @@ from dascore.exceptions import (
 from dascore.units import percent
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
+    _force_patch_merge,
     _spool_up,
     align_patch_coords,
     concatenate_patches,
@@ -33,6 +33,7 @@ from dascore.utils.patch import (
     get_window_axis_step,
     merge_compatible_coords_attrs,
     merge_patches,
+    patch_function,
     patches_to_df,
     stack_patches,
     swap_kwargs_dim_to_axis,
@@ -278,7 +279,6 @@ class TestHistory:
         """
         Ensure patch arguments are truncated in history (issue #529).
         """
-        from dascore.utils.patch import patch_function  # noqa: PLC0415
 
         @patch_function()
         def func_with_patch_arg(patch, other_patch):
@@ -844,8 +844,6 @@ class TestGetPatchName:
         The docs renderer resolves annotations at runtime and falls back to
         raw strings for the whole signature if any name is undefined.
         """
-        from typing import get_type_hints  # noqa: PLC0415
-
         assert get_type_hints(get_patch_names)
 
     def test_name_column_exists(self, random_spool):
@@ -1150,8 +1148,6 @@ class TestForcePatchMergeOverlap:
 
     def test_complete_overlap_keeps_first(self, random_patch):
         """Identical envelopes merge to the first patch."""
-        from dascore.utils.patch import _force_patch_merge  # noqa: PLC0415
-
         twin = random_patch.new()
         infos = []
         for patch in (random_patch, twin):

@@ -24,6 +24,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import WARN_LEVELS
+from dascore.core.coords import CoordSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -36,9 +37,13 @@ from dascore.io.index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
+    _coord_record,
     typed_value,
 )
+from dascore.utils.chunk_plan import _ensure_patch_id
 from dascore.utils.misc import is_range
+from dascore.utils.patch import concatenate_patches
+from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
 
 PLAN_SCHEME = "plan://"
@@ -79,9 +84,6 @@ def _coord_record_from_row(
     planned dim's range fingerprint is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
     """
-    from dascore.core.coords import CoordSummary  # noqa: PLC0415
-    from dascore.io.index.ingest import _coord_record  # noqa: PLC0415
-
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
     if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
@@ -356,7 +358,6 @@ class PlanResolver(PatchResolver):
         return nested
 
     def _assembler(self):
-        from dascore.utils.patch_assembly import PatchAssembler  # noqa: PLC0415
 
         return PatchAssembler(
             load_patch=self._load_member,
@@ -386,8 +387,6 @@ class PlanResolver(PatchResolver):
             assert len(members) == 1
             return self._load_member(members.iloc[0].to_dict())
         if self.mode == "concat":
-            from dascore.utils.patch import concatenate_patches  # noqa: PLC0415
-
             patches = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
@@ -444,8 +443,6 @@ def derived_catalog(
     trim_cols = [c for c in trims.columns if c not in ("_patch_id",)]
     sources = source_rows.copy(deep=False)
     if "_patch_id" not in sources.columns:
-        from dascore.utils.chunk_plan import _ensure_patch_id  # noqa: PLC0415
-
         sources = _ensure_patch_id(sources)
     member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),

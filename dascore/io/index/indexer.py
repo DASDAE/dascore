@@ -25,6 +25,7 @@ from dascore.compat import UPath
 from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
+from dascore.io.core import is_directory_format
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import (
     SourceRecord,
@@ -235,8 +236,6 @@ class DBDirectoryIndexer:
 
     def _directory_format(self, path: Path) -> bool:
         """Return True when a directory is itself one FiberIO scan unit."""
-        from dascore.io.core import is_directory_format  # noqa: PLC0415
-
         return is_directory_format(path)
 
     @staticmethod

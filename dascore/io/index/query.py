@@ -10,6 +10,7 @@ exactly are applied as pandas residual filters.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -479,8 +480,6 @@ def build_sql(
     SQL-resolvable (regex must inspect rows) and the caller must fall
     back to a projected count.
     """
-    import json  # noqa: PLC0415
-
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
     if patch_ids is not None:

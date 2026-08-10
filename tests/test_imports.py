@@ -9,6 +9,9 @@ import sys
 
 import pytest
 
+import dascore
+from dascore.utils.imports import lazy_import
+
 
 def _run_snippet(code: str) -> None:
     """Run a python snippet in a subprocess."""
@@ -51,8 +54,6 @@ class TestLazyImports:
 
     def test_lazy_import_proxy_forwards_calls_and_attrs(self):
         """The lazy proxy should behave like the resolved target object."""
-        from dascore.utils.imports import lazy_import  # noqa: PLC0415
-
         sqrt = lazy_import("math", "sqrt")
         assert sqrt(4) == 2
         assert sqrt.__name__ == "sqrt"
@@ -69,8 +70,6 @@ class TestLazyImports:
 
     def test_viz_module_lazy_loads_in_process(self):
         """Accessing dascore.viz should use the package attribute hook."""
-        import dascore  # noqa: PLC0415
-
         assert callable(dascore.__getattr__("viz").waterfall)
 
     @pytest.mark.concurrency
@@ -95,7 +94,5 @@ class TestLazyImports:
 
     def test_missing_attribute_raises_in_process(self):
         """Unknown package attributes should raise in the parent process too."""
-        import dascore  # noqa: PLC0415
-
         with pytest.raises(AttributeError, match="not_a_real_attribute"):
             dascore.__getattr__("not_a_real_attribute")

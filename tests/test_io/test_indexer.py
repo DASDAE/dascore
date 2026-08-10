@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -15,7 +16,15 @@ from upath import UPath
 
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.index import indexer as indexer_mod
+from dascore.io.index.indexer import (
+    DBDirectoryIndexer,
+    _get_mapped_index_path,
+    _map_entry_path,
+    _path_digest,
+    _set_mapped_index_path,
+)
+from dascore.io.index.query import InvalidSpoolQueryError
 from dascore.utils.patch import get_patch_names
 
 
@@ -76,8 +85,6 @@ class TestFindIndex:
         name would differ every session and orphan the prior index. The
         name is a stable digest of the directory path.
         """
-        from dascore.io.index.indexer import _path_digest  # noqa: PLC0415
-
         map_dir = tmp_path / "path_map"
         with config_context(directory_index_map_dir=map_dir):
             first = DBDirectoryIndexer(unwritable_directory).index_path
@@ -110,8 +117,6 @@ class TestFindIndex:
 
     def test_corrupt_cache(self, tmp_path):
         """Ensure a corrupt map entry doesn't crash indexing. See #508."""
-        from dascore.io.index.indexer import _map_entry_path  # noqa: PLC0415
-
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         map_dir = tmp_path / "path_map"
@@ -152,9 +157,6 @@ class TestIndexMap:
 
     def test_digest_falls_back_for_non_fspath(self):
         """A directory os.fsencode rejects still digests (future URL support)."""
-        import hashlib  # noqa: PLC0415
-
-        from dascore.io.index.indexer import _path_digest  # noqa: PLC0415
 
         class _Remote:
             """Stand-in for a remote UPath whose fspath is unavailable."""
@@ -170,11 +172,6 @@ class TestIndexMap:
 
     def test_roundtrip(self, tmp_path):
         """A recorded index path is read back for the same directory."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _set_mapped_index_path,
-        )
-
         map_dir = tmp_path / "path_map"
         index_path = tmp_path / "idx.sqlite3"
         _set_mapped_index_path(tmp_path / "data", index_path, map_dir)
@@ -182,17 +179,10 @@ class TestIndexMap:
 
     def test_missing_entry_is_none(self, tmp_path):
         """An unmapped directory reads back as None (a cache miss)."""
-        from dascore.io.index.indexer import _get_mapped_index_path  # noqa: PLC0415
-
         assert _get_mapped_index_path(tmp_path / "nope", tmp_path / "path_map") is None
 
     def test_distinct_dirs_dont_collide(self, tmp_path):
         """Separate directories use separate entry files (no lost writes)."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _set_mapped_index_path,
-        )
-
         map_dir = tmp_path / "path_map"
         _set_mapped_index_path(tmp_path / "a", "index-a", map_dir)
         _set_mapped_index_path(tmp_path / "b", "index-b", map_dir)
@@ -201,11 +191,6 @@ class TestIndexMap:
 
     def test_corrupt_entry_is_miss(self, tmp_path):
         """A corrupt entry reads as a miss (and is not deleted). See #508."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _map_entry_path,
-        )
-
         map_dir = tmp_path / "path_map"
         entry = _map_entry_path(tmp_path / "a", map_dir)
         entry.parent.mkdir(parents=True)
@@ -216,11 +201,6 @@ class TestIndexMap:
 
     def test_bad_payload_shapes_are_miss(self, tmp_path):
         """Non-string or empty index paths read as a miss, not an error."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _map_entry_path,
-        )
-
         map_dir = tmp_path / "path_map"
         entry = _map_entry_path(tmp_path / "a", map_dir)
         entry.parent.mkdir(parents=True)
@@ -231,11 +211,6 @@ class TestIndexMap:
 
     def test_digest_collision_is_miss(self, tmp_path):
         """An entry whose stored directory differs reads as a miss."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _map_entry_path,
-        )
-
         map_dir = tmp_path / "path_map"
         entry = _map_entry_path(tmp_path / "a", map_dir)
         entry.parent.mkdir(parents=True)
@@ -245,12 +220,6 @@ class TestIndexMap:
 
     def test_update_is_atomic_and_leaves_no_temp(self, tmp_path):
         """Writes swap a temp file into place, leaving no debris."""
-        from dascore.io.index.indexer import (  # noqa: PLC0415
-            _get_mapped_index_path,
-            _map_entry_path,
-            _set_mapped_index_path,
-        )
-
         map_dir = tmp_path / "path_map"
         _set_mapped_index_path(tmp_path / "a", "1", map_dir)
         _set_mapped_index_path(tmp_path / "a", "2", map_dir)
@@ -260,8 +229,6 @@ class TestIndexMap:
 
     def test_failed_swap_cleans_up_temp(self, tmp_path, monkeypatch):
         """A failure during the atomic swap unlinks the temp file and re-raises."""
-        from dascore.io.index import indexer as indexer_mod  # noqa: PLC0415
-
         map_dir = tmp_path / "path_map"
 
         def boom(*args, **kwargs):
@@ -279,8 +246,6 @@ class TestWalkResilience:
 
     def test_walk_skips_file_removed_mid_scan(self, tmp_path, monkeypatch):
         """A file vanishing between the walk and its stat is skipped, not fatal."""
-        from dascore.io.index import indexer as indexer_mod  # noqa: PLC0415
-
         good = tmp_path / "good.h5"
         good.write_bytes(b"")
         # Never created: models a file deleted between the walk yielding it and
@@ -445,7 +410,5 @@ class TestNameResolution:
 
     def test_unknown_name_raises(self, basic_indexer):
         """Names in neither namespace error clearly (#435)."""
-        from dascore.io.index.query import InvalidSpoolQueryError  # noqa: PLC0415
-
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             basic_indexer(bad_dimension=(1, 2))

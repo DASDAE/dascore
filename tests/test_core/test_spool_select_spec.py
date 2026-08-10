@@ -8,11 +8,16 @@ work at spool level (#362), and _attrs/_coords disambiguate explicitly.
 
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolQueryError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
+from dascore.io.index.catalog import PatchCatalog
+from dascore.io.index.planned import PlanResolver
+from dascore.units import get_quantity, m
 
 
 @pytest.fixture(
@@ -37,8 +42,6 @@ def spool(request, tmp_path_factory):
         )
         out = dc.spool(path).update(progress=None)
     if request.param.endswith("_derived"):
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
         out = out.concatenate(time=1)
         assert isinstance(out._catalog.resolver, PlanResolver)
     return out
@@ -120,7 +123,6 @@ class TestLazySelection:
     @pytest.fixture()
     def forbid_realization(self, monkeypatch):
         """Return a callable that makes flat realization fail loudly."""
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         def _boom(self):
             msg = "flat relation realized during selection construction"
@@ -307,8 +309,6 @@ class TestUnitCanonicalSelection:
 
     def test_quantity_selector(self, ft_patch):
         """Quantity bounds select the same physical interval."""
-        from dascore.units import m  # noqa: PLC0415
-
         selected = dc.spool([ft_patch]).select(distance=(20 * m, 60 * m))
         assert len(selected.get_contents()) == 1  # no DimensionalityError
         coord = selected[0].get_coord("distance")
@@ -317,8 +317,6 @@ class TestUnitCanonicalSelection:
 
     def test_quantity_in_native_units(self, ft_patch):
         """Quantities in the coordinate's own units also work."""
-        from dascore.units import get_quantity  # noqa: PLC0415
-
         ft = get_quantity("ft")
         coord = (
             dc.spool([ft_patch])
@@ -336,8 +334,6 @@ class TestUnitCanonicalSelection:
 
     def test_directory_spool(self, ft_patch, tmp_path):
         """The same semantics hold for file-backed spools."""
-        from dascore.units import m  # noqa: PLC0415
-
         dc.write(ft_patch, tmp_path / "ft.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         coord = spool.select(distance=(20 * m, 60 * m))[0].get_coord("distance")
@@ -363,8 +359,6 @@ class TestUnitCanonicalSelection:
 
     def test_mixed_unitless_and_feet_quantity(self, ft_patch):
         """A metre quantity range works across a mixed population."""
-        from dascore.units import m  # noqa: PLC0415
-
         plain = dc.get_example_patch()
         plain = plain.update_coords(
             distance=plain.get_coord("distance").set_units(None)
@@ -379,15 +373,11 @@ class TestUnitCanonicalSelection:
 
     def test_value_membership_rejected(self, ft_patch):
         """A wrong-arity list is reported as a malformed range."""
-        from dascore.exceptions import ParameterError  # noqa: PLC0415
-
         with pytest.raises(ParameterError, match="length 2 sequence"):
             dc.spool([ft_patch]).select(distance=[10, 20, 50])
 
     def test_chained_views(self, ft_patch):
         """Canonicalization holds across chained selections."""
-        from dascore.units import m  # noqa: PLC0415
-
         coord = (
             dc.spool([ft_patch])
             .select(distance=(0 * m, 90 * m))
@@ -425,8 +415,6 @@ class TestQuantityDimensionality:
 
     def test_incompatible_coord_excluded(self, mixed_unit_spool):
         """A metre query never returns (or trims) a seconds coordinate."""
-        from dascore.units import get_quantity, m  # noqa: PLC0415
-
         out = mixed_unit_spool.select(_coords={"distance": (1 * m, 2 * m)})
         patches = list(out)
         assert len(patches) == 1
@@ -435,9 +423,6 @@ class TestQuantityDimensionality:
 
     def test_all_incompatible_raises(self):
         """A query incompatible with every stored unit raises UnitError."""
-        from dascore.exceptions import UnitError  # noqa: PLC0415
-        from dascore.units import m  # noqa: PLC0415
-
         p_s = dc.get_example_patch().update_coords(
             distance=dc.get_example_patch().get_coord("distance").set_units("s")
         )
@@ -493,8 +478,6 @@ class TestLazyOrderAndWindow:
 
     def test_split_parts_pickle_small(self):
         """split() windows keep map() payloads at member size."""
-        import pickle  # noqa: PLC0415
-
         base = dc.get_example_patch()
         rng = np.random.default_rng(0)
         patches = [base.new(data=rng.random(base.shape)) for _ in range(5)]

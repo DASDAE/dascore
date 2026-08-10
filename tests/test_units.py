@@ -7,12 +7,16 @@ import pint
 import pytest
 
 import dascore as dc
+import dascore.units
 import dascore.units as units_module
+from dascore import units
 from dascore.exceptions import UnitError
 from dascore.units import (
+    Hz,
     Quantity,
     assert_dtype_compatible_with_units,
     convert_units,
+    ft,
     get_byte_count,
     get_factor_and_unit,
     get_filter_units,
@@ -21,7 +25,10 @@ from dascore.units import (
     get_unit,
     invert_quantity,
     is_data_size,
+    km,
+    m,
     maybe_convert_percent_to_fraction,
+    miles,
     quant_sequence_to_quant_array,
 )
 from dascore.utils.time import to_float
@@ -32,7 +39,6 @@ class TestUnitInit:
 
     def test_stale_pint_cache_falls_back(self, monkeypatch):
         """Stale Pint disk cache should not prevent registry creation."""
-        from dascore import units  # noqa: PLC0415
 
         class FakeRegistry:
             pass
@@ -213,8 +219,6 @@ class TestConvenientImport:
 
     def test_import_common(self):
         """Ensure common units are importable."""
-        from dascore.units import Hz, ft, km, m, miles  # noqa: PLC0415
-
         assert m == get_quantity("m")
         assert ft == get_quantity("ft")
         assert miles == get_quantity("miles")
@@ -228,8 +232,6 @@ class TestConvenientImport:
 
     def test_empty_name_raises(self):
         """The empty string is the one name get_quantity maps to None."""
-        import dascore.units  # noqa: PLC0415
-
         with pytest.raises(AttributeError):
             getattr(dascore.units, "")
 

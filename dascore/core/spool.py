@@ -30,6 +30,14 @@ from dascore.exceptions import (
     MissingPatchError,
     ParameterError,
 )
+from dascore.utils.chunk_plan import (
+    _SOURCE_COLUMNS,
+    ChunkPlan,
+    _combined_dtype,
+    _ensure_patch_id,
+    build_chunk_plan,
+    samples_adjusted_envelopes,
+)
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
@@ -674,11 +682,6 @@ class Spool(BaseSpool):
         themselves re-applied at load through the plan resolver.
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-        from dascore.utils.chunk_plan import (  # noqa: PLC0415
-            _SOURCE_COLUMNS,
-            ChunkPlan,
-            samples_adjusted_envelopes,
-        )
 
         rows = self._df.reset_index(drop=True)
         working = samples_adjusted_envelopes(rows, self._catalog._residuals)
@@ -725,10 +728,6 @@ class Spool(BaseSpool):
             PlanResolver,
             collapse_working_df,
         )
-        from dascore.utils.chunk_plan import (  # noqa: PLC0415
-            _ensure_patch_id,
-            samples_adjusted_envelopes,
-        )
 
         resolver = self._catalog.resolver
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
@@ -774,8 +773,6 @@ class Spool(BaseSpool):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
-
         _, working = self._plan_frames(next(iter(kwargs), None))
         return build_chunk_plan(
             working,
@@ -803,7 +800,6 @@ class Spool(BaseSpool):
     ) -> Self:
         """{doc}"""
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-        from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
 
         source_rows, working = self._plan_frames(next(iter(kwargs), None))
         plan = build_chunk_plan(
@@ -836,10 +832,6 @@ class Spool(BaseSpool):
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-        from dascore.utils.chunk_plan import (  # noqa: PLC0415
-            ChunkPlan,
-            _combined_dtype,
-        )
 
         if len(kwargs) != 1:
             msg = (
@@ -1088,8 +1080,6 @@ class Spool(BaseSpool):
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
-
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes  # noqa: PLC0415
 
         catalog = self._catalog
         rows = self._df

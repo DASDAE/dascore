@@ -7,6 +7,7 @@ import textwrap
 import pandas as pd
 import pytest
 
+import dascore.utils.namespace as ns_module
 from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
 from dascore.utils.docs import (
@@ -132,8 +133,6 @@ class TestGetPluginTable:
 
     def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
         """An empty registry directory returns a DataFrame with the correct columns."""
-        import dascore.utils.namespace as ns_module  # noqa: PLC0415
-
         monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
         df = get_plugin_table()
         assert list(df.columns) == ["namespace", "package_name", "package_url"]

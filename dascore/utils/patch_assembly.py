@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.exceptions import CoordMergeError
+from dascore.exceptions import CoordMergeError, UnitError
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import (
@@ -86,8 +86,6 @@ def _match_merge_units(patch, merge_dim, target_units):
     (patch, target_units); incompatible or missing units pass through
     for the merge itself to police.
     """
-    from dascore.exceptions import UnitError  # noqa: PLC0415
-
     if merge_dim is None or merge_dim not in getattr(patch.coords, "coord_map", {}):
         return patch, target_units
     units = patch.coords.coord_map[merge_dim].units

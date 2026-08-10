@@ -7,6 +7,8 @@ import typing
 
 import pytest
 
+from dascore.core.spool import Spool
+
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
@@ -44,8 +46,6 @@ class TestGetTypeHints:
 
     def test_signature_of_type_checking_annotated_class(self):
         """Spool annotates a TYPE_CHECKING-only import; it must still render."""
-        from dascore.core.spool import Spool  # noqa: PLC0415
-
         data = {
             "signature": inspect.signature(Spool),
             "object": Spool,

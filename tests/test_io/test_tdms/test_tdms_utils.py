@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import io
 import struct
 
@@ -52,7 +53,6 @@ class TestTDMSUtils:
         """Test that parse_time_stamp works with valid input."""
         # Test with valid timestamp - using a reasonable epoch timestamp
         # LabVIEW epoch starts at 1904-01-01, so we need a positive value
-        import datetime  # noqa: PLC0415
 
         # Use a timestamp that represents a valid date after 1904
         seconds = 365 * 24 * 3600 * 100  # 100 years after 1904

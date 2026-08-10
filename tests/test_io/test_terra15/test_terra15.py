@@ -12,6 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.terra15 import Terra15FormatterV4
+from dascore.io.terra15.utils import _get_version_data_node
 
 
 class TestTerra15:
@@ -92,7 +93,6 @@ class TestTerra15:
 
     def test_unsupported_version_error(self):
         """Test that unsupported Terra15 version raises NotImplementedError."""
-        from dascore.io.terra15.utils import _get_version_data_node  # noqa: PLC0415
 
         # Create a mock HDF5 root object with unsupported version
         class MockRoot:
