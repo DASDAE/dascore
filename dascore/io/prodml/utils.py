@@ -333,8 +333,11 @@ def _get_measure(attrs, name):
     """
     values = {name: attrs.get(name), f"{name}_units": attrs.get(f"{name}_units")}
     convert_attr_units(values, name, _MEASURE_UNITS[name])
+    measure = values.get(name)
+    if measure is None:
+        return None
     try:
-        value = float(values.get(name))
+        value = float(measure)
     except (TypeError, ValueError):
         return None
     if not np.isfinite(value) or value <= 0:

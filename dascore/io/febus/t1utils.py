@@ -53,7 +53,7 @@ def _get_coords(fi, snap=True) -> dc.CoordManager:
 
 
 # The fixed attrs every Febus T1 file carries.
-_T1_ATTRS = {
+_T1_ATTRS: dict[str, str] = {
     "data_type": "temperature",
     "data_units": "°C",
     "data_category": "DTS",
@@ -92,5 +92,5 @@ def _get_t1_patch(
         time_slice, distance_slice
     ]  # (n_time, n_dist)
     # Construct the patch
-    attrs = dc.PatchAttrs(**_T1_ATTRS)
+    attrs = dc.PatchAttrs.from_dict(_T1_ATTRS)
     return dc.Patch(data=temp, coords=coords, dims=coords.dims, attrs=attrs)
