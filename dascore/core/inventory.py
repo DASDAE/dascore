@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
 
@@ -646,15 +647,17 @@ class DistanceMap(InventoryModel):
     Measured control-point map from a channel-like coordinate onto optical
     path distance.
 
-    The map is a function, not a roster of existing channels. Exactly one
-    input axis is populated: ``channel`` when the interrogator reports channel
-    numbers, ``instrument_distance`` when it reports its own nominal meters.
-    Values between control points are piecewise-linearly interpolated;
-    channels outside the covered range are undefined (NaN). A single-point
-    map states an origin and takes its slope from the axis it is written
-    in: the acquisition's nominal ``spatial_interval`` for a channel axis,
-    and one meter of path per interrogator meter for an
-    ``instrument_distance`` axis.
+    The map is a function, not a roster of existing channels. It states one
+    set of control points in whichever input coordinates were measured:
+    ``channel`` when the interrogator reports channel numbers,
+    ``instrument_distance`` when it reports its own nominal meters, or both
+    when the same points are known in both, which lets one acquisition
+    serve patches whose axes differ. Values between control points are
+    piecewise-linearly interpolated; channels outside the covered range are
+    undefined (NaN). A single-point map states an origin and takes its
+    slope from the axis it is read on: the acquisition's nominal
+    ``spatial_interval`` on the channel axis, and one meter of path per
+    interrogator meter on the instrument_distance axis.
     """
 
     channel: tuple[float, ...] | None = Field(
@@ -671,55 +674,73 @@ class DistanceMap(InventoryModel):
 
     @model_validator(mode="after")
     def _validate_map(self) -> Self:
-        """Enforce one input axis and paired increasing control points."""
-        inputs = [self.channel, self.instrument_distance]
-        populated = [x for x in inputs if x is not None]
-        if len(populated) != 1:
+        """Enforce paired, increasing control points on every input axis."""
+        if not self.axes:
             msg = (
-                "DistanceMap requires exactly one input axis: "
+                "DistanceMap requires at least one input axis: "
                 "channel or instrument_distance."
             )
             raise InvalidInventoryError(msg)
-        source = populated[0]
-        if len(source) != len(self.distance):
-            msg = "DistanceMap input and distance must have the same length."
-            raise InvalidInventoryError(msg)
-        if len(source) < 1:
+        if len(self.distance) < 1:
             msg = "DistanceMap requires at least one control point."
             raise InvalidInventoryError(msg)
-        if not (np.all(np.isfinite(source)) and np.all(np.isfinite(self.distance))):
+        if not np.all(np.isfinite(self.distance)):
             msg = "DistanceMap control points must be finite."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(source, increasing=True):
-            msg = "DistanceMap input values must be strictly increasing."
             raise InvalidInventoryError(msg)
         if not is_strictly_monotonic(self.distance, increasing=True):
             msg = "DistanceMap distance values must be strictly increasing."
             raise InvalidInventoryError(msg)
+        for axis in self.axes:
+            source = getattr(self, axis)
+            if len(source) != len(self.distance):
+                msg = (
+                    f"DistanceMap {axis} and distance must have the same "
+                    "length; they are the same control points."
+                )
+                raise InvalidInventoryError(msg)
+            if not np.all(np.isfinite(source)):
+                msg = "DistanceMap control points must be finite."
+                raise InvalidInventoryError(msg)
+            if not is_strictly_monotonic(source, increasing=True):
+                msg = f"DistanceMap {axis} values must be strictly increasing."
+                raise InvalidInventoryError(msg)
         return self
 
     @property
-    def source_values(self) -> tuple[float, ...]:
-        """The populated input axis values."""
-        out = self.channel if self.channel is not None else self.instrument_distance
-        assert out is not None  # guaranteed by the model validator
+    def axes(self) -> tuple[str, ...]:
+        """The input axes this map is written in, in preference order."""
+        names = ("channel", "instrument_distance")
+        return tuple(x for x in names if getattr(self, x) is not None)
+
+    def source_values(self, axis: str | None = None) -> tuple[float, ...]:
+        """Return the control points on one input axis."""
+        axis = self.axes[0] if axis is None else axis
+        out = getattr(self, axis, None)
+        if out is None:
+            msg = f"This DistanceMap is not written in {axis!r}; it has {self.axes}."
+            raise InvalidInventoryError(msg)
         return out
 
-    def map_to_distance(self, values, slope: float | None = None) -> np.ndarray:
+    def map_to_distance(
+        self, values, axis: str | None = None, slope: float | None = None
+    ) -> np.ndarray:
         """
         Map channel-like values onto optical path distance.
 
         Parameters
         ----------
         values
-            Channel numbers or instrument distances (per the populated axis).
+            Channel numbers or instrument distances.
+        axis
+            The input axis ``values`` are on; the map's first axis by
+            default.
         slope
             Distance per input unit, used only for single-point maps. The
-            caller supplies it in the units of the populated axis; see
+            caller supplies it in the units of that axis; see
             ``Acquisition.channel_to_distance``.
         """
         vals = np.atleast_1d(np.asarray(values, dtype=float))
-        source = np.asarray(self.source_values, dtype=float)
+        source = np.asarray(self.source_values(axis), dtype=float)
         dist = np.asarray(self.distance, dtype=float)
         if len(source) == 1:
             if slope is None:
@@ -740,8 +761,10 @@ class Acquisition(TimeRangedModel):
 
     ``(location_code, code)`` pairs are unique within a ``FiberArray`` for
     overlapping time ranges. The ``location_code`` names the optical path
-    lineage this acquisition interrogates. ``start_distance`` and
-    ``distance_map`` are mutually exclusive channel-resolution mechanisms.
+    lineage this acquisition interrogates. The ``distance_map`` is the one
+    channel-resolution mechanism: a single control point states an origin
+    (and, on the channel axis, takes ``spatial_interval`` as its slope),
+    and more points describe a measured, bending relationship.
     On export to FDSN DAS metadata, ``extra_fields`` maps to native_headers.
     """
 
@@ -800,24 +823,15 @@ class Acquisition(TimeRangedModel):
         default=None,
         description=(
             "Nominal spatial sampling interval between channels in meters. "
-            "Participates in channel resolution only as the affine slope, or "
-            "as the slope of a single-point distance_map written on the "
-            "channel axis."
-        ),
-    )
-    start_distance: FiniteFloat | None = Field(
-        default=None,
-        description=(
-            "Optical path distance corresponding to channel position 0. "
-            "Mutually exclusive with distance_map."
+            "Participates in channel resolution only as the slope of a "
+            "single-point distance_map read on the channel axis."
         ),
     )
     distance_map: DistanceMap | None = Field(
         default=None,
         description=(
-            "Measured map from interrogator-reported channels or distances "
-            "onto optical path distance. Mutually exclusive with "
-            "start_distance."
+            "Map from interrogator-reported channels or distances onto "
+            "optical path distance."
         ),
     )
     closed_fiber_loop: bool = Field(
@@ -825,38 +839,45 @@ class Acquisition(TimeRangedModel):
         description="True when the interrogator is attached to both path ends.",
     )
 
-    @model_validator(mode="after")
-    def _check_resolution_mechanism(self) -> Self:
-        """start_distance and distance_map are mutually exclusive."""
-        if self.start_distance is not None and self.distance_map is not None:
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_start_distance(cls, data):
+        """Explain the removed affine form rather than 'extra inputs'."""
+        if isinstance(data, Mapping) and "start_distance" in data:
             msg = (
-                "Acquisition defines at most one channel-resolution mechanism: "
-                "start_distance and distance_map are mutually exclusive."
+                "Acquisition no longer takes start_distance; the distance_map "
+                "is the one channel-resolution mechanism. Write "
+                f"start_distance: {data['start_distance']} as distance_map: "
+                f"{{channel: [0], distance: [{data['start_distance']}]}}, which "
+                "states the same origin and takes spatial_interval as its slope."
             )
             raise InvalidInventoryError(msg)
-        return self
+        return data
 
-    def channel_to_distance(self, values) -> np.ndarray:
+    def channel_to_distance(self, values, axis: str | None = None) -> np.ndarray:
         """
         Map channel-like patch coordinates onto optical path distance.
 
-        Uses the measured ``distance_map`` when present, else the affine
-        ``start_distance`` + ``spatial_interval`` form.
+        Parameters
+        ----------
+        values
+            The interrogator-reported coordinate to place on the path.
+        axis
+            Which of the map's input axes ``values`` are on; the map's
+            first axis by default.
         """
-        if (dist_map := self.distance_map) is not None:
-            # The slope carries the units of the map's input axis: meters of
-            # path per channel for a channel axis, and per interrogator
-            # meter -- nominally one -- for an instrument_distance axis.
-            slope = self.spatial_interval if dist_map.channel is not None else 1.0
-            return dist_map.map_to_distance(values, slope=slope)
-        if self.start_distance is None or self.spatial_interval is None:
+        if (dist_map := self.distance_map) is None:
             msg = (
-                "Acquisition defines no channel-resolution mechanism; set "
-                "start_distance and spatial_interval, or a distance_map."
+                f"Acquisition {self.code!r} defines no distance_map, so its "
+                "channels cannot be placed on the optical path."
             )
             raise InvalidInventoryError(msg)
-        vals = np.atleast_1d(np.asarray(values, dtype=float))
-        return self.start_distance + vals * self.spatial_interval
+        axis = dist_map.axes[0] if axis is None else axis
+        # The slope carries the units of the axis being read: meters of path
+        # per channel on the channel axis, and per interrogator meter --
+        # nominally one -- on the instrument_distance axis.
+        slope = self.spatial_interval if axis == "channel" else 1.0
+        return dist_map.map_to_distance(values, axis=axis, slope=slope)
 
 
 def _overlapping_epochs(items, key) -> list[tuple]:

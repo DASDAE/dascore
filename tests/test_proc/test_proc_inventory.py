@@ -250,23 +250,42 @@ class TestChannelResolution:
         out = patch.enrich(inventory, attrs=False, coords=("x",))
         assert len(out.get_coord("x")) == len(patch.get_coord("distance"))
 
-    def test_affine_needs_channel_coord(self, patch, inventory):
-        """The affine form maps channel numbers, which this patch lacks."""
-        affine = _replace_acquisition(
-            inventory, distance_map=None, start_distance=100.0
+    def test_channel_map_needs_a_channel_coord(self, patch, inventory):
+        """A channel-axis map has nothing to read on a meters patch."""
+        channel_map = _replace_acquisition(
+            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
         )
-        with pytest.raises(PatchError, match="'channel' coordinate"):
-            patch.enrich(affine, attrs=False, coords=("x",))
+        with pytest.raises(PatchError, match=r"\['channel'\]"):
+            patch.enrich(channel_map, attrs=False, coords=("x",))
 
-    def test_affine_with_channel_coord(self, patch, inventory):
-        """Given channel numbers, the affine form resolves them."""
-        affine = _replace_acquisition(
-            inventory, distance_map=None, start_distance=100.0
+    def test_channel_map_with_a_channel_coord(self, patch, inventory):
+        """Given channel numbers, a one-point channel map resolves them."""
+        channel_map = _replace_acquisition(
+            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
         )
         channels = np.arange(len(patch.get_coord("distance")))
         with_channel = patch.update_coords(channel=("distance", channels))
-        out = with_channel.enrich(affine, attrs=False, coords=("zone",))
+        out = with_channel.enrich(channel_map, attrs=False, coords=("zone",))
         assert out.get_coord("zone").values[0] == "north"
+
+    def test_axis_follows_the_patch(self, patch, inventory):
+        """A map written in both coordinates is read on the one present."""
+        both = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(0.0, 299.0),
+                instrument_distance=(0.0, 299.0),
+                distance=(100.0, 399.0),
+            ),
+        )
+        by_meters = patch.enrich(both, attrs=False, coords=("zone",))
+        channels = np.arange(len(patch.get_coord("distance")))
+        by_channel = patch.update_coords(channel=("distance", channels)).enrich(
+            both, attrs=False, coords=("zone",)
+        )
+        assert list(by_meters.get_coord("zone").values) == list(
+            by_channel.get_coord("zone").values
+        )
 
     def test_optical_distance_is_requestable(self, patch, inventory):
         """The path axis can be added once it does not collide."""
@@ -469,7 +488,7 @@ class TestEdgeCases:
     def test_multidimensional_channel_coord_raises(self, patch, inventory):
         """One channel coordinate maps to one dimension of the patch."""
         affine = _replace_acquisition(
-            inventory, distance_map=None, start_distance=100.0
+            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
         )
         shape = patch.shape
         two_d = patch.update_coords(channel=(patch.dims, np.ones(shape, dtype=float)))
@@ -567,6 +586,12 @@ class TestReviewFindings:
         wrong = wrong.update_coords(zone=("distance", values))
         with pytest.raises(PatchError, match="does not agree"):
             wrong.enrich(inventory, attrs=False, coords=("zone",))
+
+    def test_no_map_raises_when_coords_are_wanted(self, patch, inventory):
+        """Without a map there is nothing to project the tracks onto."""
+        no_map = _replace_acquisition(inventory, distance_map=None)
+        with pytest.raises(PatchError, match="no distance_map"):
+            patch.enrich(no_map, attrs=False, coords=("zone",))
 
     def test_empty_coord_request_needs_no_map(self, patch, inventory):
         """Asking for no coordinates asks nothing of the channel map."""
@@ -741,3 +766,49 @@ class TestSecondReviewFindings:
         collides = patch.update_coords(noisy=("distance", floats))
         with pytest.raises(PatchError, match="does not agree"):
             collides.enrich(inventory, attrs=False, coords=("noisy",))
+
+    def test_disagreeing_axes_raise(self, patch, inventory):
+        """A patch which contradicts the map about its own channels raises."""
+        stretched = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(0.0, 299.0),
+                instrument_distance=(0.0, 598.0),
+                distance=(100.0, 399.0),
+            ),
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        both = patch.update_coords(channel=("distance", channels))
+        with pytest.raises(PatchError, match="place its channels differently"):
+            both.enrich(stretched, attrs=False, coords=("zone",))
+
+    def test_agreeing_axes_are_fine(self, patch, inventory):
+        """Two coordinates which say the same thing are not a contradiction."""
+        both_axes = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(0.0, 299.0),
+                instrument_distance=(0.0, 299.0),
+                distance=(100.0, 399.0),
+            ),
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        both = patch.update_coords(channel=("distance", channels))
+        out = both.enrich(both_axes, attrs=False, coords=("zone",))
+        assert out.get_coord("zone").values[0] == "north"
+
+    def test_axes_on_different_dimensions_raise(self, patch, inventory):
+        """A coordinate named channel which is not the channel axis is caught."""
+        both_axes = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(0.0, 299.0),
+                instrument_distance=(0.0, 299.0),
+                distance=(100.0, 399.0),
+            ),
+        )
+        mislabeled = patch.update_coords(
+            channel=("time", np.arange(len(patch.get_coord("time"))))
+        )
+        with pytest.raises(PatchError, match="place its channels differently"):
+            mislabeled.enrich(both_axes, attrs=False, coords=("zone",))

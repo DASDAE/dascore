@@ -144,7 +144,6 @@ INVENTORY_ATTRS = (
     "sample_rate",
     "software_version",
     "spatial_interval",
-    "start_distance",
 )
 
 # Methods FileFormatter needs to support

@@ -255,43 +255,87 @@ def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
     return updates, drops
 
 
-def _get_channel_coord_name(patch, acquisition) -> str:
-    """
-    Return the patch coordinate the acquisition's channel map is written in.
+# The patch coordinates each map axis can be read from, in preference
+# order. A patch reframed onto the path keeps the interrogator's meters
+# under the explicit name, which is why it wins over plain distance.
+_AXIS_COORDS = {
+    "channel": ("channel",),
+    "instrument_distance": ("instrument_distance", "distance"),
+}
 
-    The map calibrates the interrogator's own coordinate onto the path axis,
-    so which patch coordinate it applies to is the map's to declare: channel
-    numbers for the affine form and for a channel-axis distance map,
-    interrogator meters for an instrument_distance map. A patch which has
-    been reframed onto the path keeps the interrogator's axis under the
-    explicit name, which then wins.
+
+def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+    """
+    Return every map axis the patch can be read on, with its coordinate.
+
+    The map states its control points in whichever coordinates were
+    measured, so the patch decides which of them is read. Guessing instead
+    would be wrong by the channel spacing, silently.
     """
     dist_map = acquisition.distance_map
-    if dist_map is not None and dist_map.instrument_distance is not None:
-        if "instrument_distance" in patch.coords.coord_map:
-            return "instrument_distance"
-        return "distance"
-    return "channel"
+    if dist_map is None:
+        msg = (
+            f"Acquisition {acquisition.code!r} defines no distance_map, so "
+            "its channels cannot be placed on the optical path."
+        )
+        raise PatchError(msg)
+    out = []
+    for axis in dist_map.axes:
+        for name in _AXIS_COORDS[axis]:
+            if name in patch.coords.coord_map:
+                out.append((axis, name))
+                break
+    if out:
+        return out
+    wanted = sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
+    msg = (
+        f"Acquisition {acquisition.code!r} maps {list(dist_map.axes)} onto "
+        f"path distance, so it needs one of the {wanted} coordinates, and "
+        f"this patch has {sorted(patch.coords.coord_map)}. An acquisition "
+        "whose patches carry interrogator meters is calibrated with a "
+        "distance_map on the instrument_distance axis, one control point "
+        "being enough to state an origin."
+    )
+    raise PatchError(msg)
 
 
 def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
-    """Return the channel coord name, its dimension, and optical distances."""
-    name = _get_channel_coord_name(patch, acquisition)
-    coord = patch.coords.coord_map.get(name)
-    if coord is None:
-        msg = (
-            f"Acquisition {acquisition.code!r} maps its {name!r} coordinate "
-            f"onto path distance, which this patch does not have (it has "
-            f"{sorted(patch.coords.coord_map)}). An acquisition whose patches "
-            "carry interrogator meters is calibrated with a distance_map on "
-            "the instrument_distance axis."
-        )
-        raise PatchError(msg)
-    dims = patch.coords.dim_map[name]
-    if len(dims) != 1:
-        msg = f"The {name!r} coordinate must belong to exactly one dimension."
-        raise PatchError(msg)
-    return name, dims[0], acquisition.channel_to_distance(coord.values)
+    """
+    Return the channel coord name, its dimension, and optical distances.
+
+    A patch which carries more than one of the map's coordinates must be
+    consistent with the map about all of them. Picking one and moving on
+    would answer a question the patch itself contradicts.
+    """
+    resolved = []
+    for axis, name in _get_channel_axes(patch, acquisition):
+        dims = patch.coords.dim_map[name]
+        if len(dims) != 1:
+            msg = f"The {name!r} coordinate must belong to exactly one dimension."
+            raise PatchError(msg)
+        values = patch.coords.coord_map[name].values
+        distances = acquisition.channel_to_distance(values, axis=axis)
+        resolved.append((name, dims[0], distances))
+    first = resolved[0]
+    for name, _, distances in resolved[1:]:
+        if not _distances_agree(first[2], distances):
+            msg = (
+                f"The patch's {first[0]!r} and {name!r} coordinates place its "
+                f"channels differently on the path ({first[2][0]} vs "
+                f"{distances[0]} for the first channel). The patch and the "
+                f"map of {acquisition.code!r} disagree; drop the coordinate "
+                "which does not belong to this acquisition."
+            )
+            raise PatchError(msg)
+    return first
+
+
+def _distances_agree(first, second) -> bool:
+    """Return True when two resolutions place every channel together."""
+    if first.shape != second.shape:
+        return False
+    both_nan = np.isnan(first) & np.isnan(second)
+    return bool(np.all(np.isclose(first, second, equal_nan=True) | both_nan))
 
 
 def _fill_from_intervals(distances, intervals, values, kind):
