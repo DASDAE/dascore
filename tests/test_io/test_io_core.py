@@ -18,6 +18,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import (
+    DependencyError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
@@ -195,6 +196,25 @@ class _MissingOptionalFormatter(FiberIO):
         """Only accept the explicit missing-optional test resource."""
         path = Path(resource)
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
+            return self.name, self.version
+        return False
+
+
+class _DependencyErrorFormatter(FiberIO):
+    """A formatter whose scan path hits a dependency/compatibility problem."""
+
+    name = "_dependency_error_formatter"
+    version = "1"
+
+    def scan(self, resource: Path, **kwargs):
+        """Raise a stable dependency error for scan coverage tests."""
+        msg = "simulated stack incompatibility while scanning"
+        raise DependencyError(msg)
+
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        """Only accept the explicit dependency-error test resource."""
+        path = Path(resource)
+        if path.suffix == ".dep" and path.name == "dependency_error.dep":
             return self.name, self.version
         return False
 
@@ -953,6 +973,26 @@ class TestScan:
         msg = "found files that can be read if additional packages"
         with pytest.warns(UserWarning, match=msg):
             out = dc.scan([missing_path, readable_path])
+
+        assert len(out) == 1
+        assert out[0].source_format == _ReadOnlySummaryFormatter.name
+
+    def test_scan_dependency_error_warns_and_skips(self, tmp_path):
+        """
+        A scan-time dependency/compatibility problem warns and keeps scanning.
+
+        Scan is best-effort across many resources, so such problems must
+        surface as warnings on the affected file rather than aborting the
+        whole scan. (The DASVader legacy file used to exercise this branch,
+        but whether it does depends on the installed HDF5 stack.)
+        """
+        dep_path = tmp_path / "dependency_error.dep"
+        dep_path.write_text("placeholder")
+        readable_path = tmp_path / "fallback_scan.h5"
+        readable_path.write_text("placeholder")
+
+        with pytest.warns(UserWarning, match="simulated stack incompatibility"):
+            out = dc.scan([dep_path, readable_path])
 
         assert len(out) == 1
         assert out[0].source_format == _ReadOnlySummaryFormatter.name
