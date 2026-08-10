@@ -1048,6 +1048,21 @@ class TestUniformAttachments:
         assert got.extra_fields == {"vendor_flag": ""}
 
 
+class TestStationXmlAlignment:
+    """Fields added for FDSN StationXML import fidelity."""
+
+    def test_network_epochs(self):
+        """Networks carry validity epochs like every other container."""
+        net = inv.Network(code="XX", start_time="2020-01-01", end_time="2022-01-01")
+        assert net.is_effective_at("2021-06-01")
+        assert not net.is_effective_at("2022-01-01")
+
+    def test_channel_orientation_and_depth(self):
+        """Channels hold azimuth, dip, and burial depth."""
+        chan = inv.Channel(code="BHN", azimuth=0.0, dip=0.0, depth=100.0)
+        assert (chan.azimuth, chan.dip, chan.depth) == (0.0, 0.0, 100.0)
+
+
 class TestPointMarkers:
     """Zero-length intervals are point markers."""
 

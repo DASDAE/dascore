@@ -1176,6 +1176,22 @@ class Channel(TimeRangedModel):
         ),
     )
     sample_rate: float | None = Field(default=None, description="Sample rate in Hz.")
+    azimuth: float | None = Field(
+        default=None,
+        description=(
+            "Sensor component azimuth in degrees clockwise from north, [0, 360)."
+        ),
+    )
+    dip: float | None = Field(
+        default=None,
+        description=(
+            "Sensor component dip in degrees down from horizontal, [-90, 90]."
+        ),
+    )
+    depth: float | None = Field(
+        default=None,
+        description="Sensor depth in meters below the local surface; positive down.",
+    )
     data_type: DataType = Field(
         default="", description="Quantity measured or produced."
     )
@@ -1249,7 +1265,7 @@ class FiberArray(TimeRangedModel):
         return self
 
 
-class Network(InventoryModel):
+class Network(TimeRangedModel):
     """FDSN-like organizational container below an inventory."""
 
     code: CodeStr = Field(description="Network code.")
