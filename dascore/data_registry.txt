@@ -51,3 +51,4 @@ sintela_protobuf_1.pb cafa038c033cb5e4cf4aa90bab203eb1e10dc05a6052c0576dc80d6a5b
 hdas_1.h5 aab81959bfbe2c10b2f29a074c6cf58c0564d3a822e71facbc5c62d90ca76749 https://github.com/dasdae/test_data/raw/master/das/hdas_1.h5
 hdas_2.h5 d53841ee6d8608908e15114396f94948781ece1a3224f293ab21f5f8335570c4 https://github.com/dasdae/test_data/raw/master/das/hdas_2.h5
 silixa_h5_ingv_1.h5 738a359fb0f7848fc352f6d2879967dd15bd5c3f04b4c3e12c553825b9df861d https://github.com/dasdae/test_data/raw/master/das/silixa_h5_ingv_1.h5
+ai4eps_1.h5 2dd3d8bd16a9d775b69601f3683dad807caa51953488f495def70388e031e731 https://github.com/dasdae/test_data/raw/master/das/ai4eps_1.h5
