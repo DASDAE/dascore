@@ -651,6 +651,14 @@ class Acquisition(TimeRangedModel):
             "for multiplexed interrogators. Descriptive only."
         ),
     )
+    firmware_version: str = Field(
+        default="",
+        description="Interrogator firmware version during this acquisition.",
+    )
+    software_version: str = Field(
+        default="",
+        description="Acquisition software version during this acquisition.",
+    )
     gauge_length: float | None = Field(
         default=None, description="Gauge length in meters."
     )
