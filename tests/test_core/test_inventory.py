@@ -866,6 +866,41 @@ class TestCodexReviewRegressions:
 class TestCoverageCompleteness:
     """Exercise remaining branches so the patch stays fully covered."""
 
+    def test_attenuation_none_without_loss(self):
+        """No loss value means no derivable attenuation rate."""
+        seg = inv.FiberSegment(optical_length=100.0)
+        assert seg.attenuation_db_per_km is None
+
+    def test_attenuation_scalar(self):
+        """A scalar loss over a known length gives a per-km rate."""
+        seg = inv.FiberSegment(optical_length=2000.0, loss_db=0.8)
+        assert seg.attenuation_db_per_km == pytest.approx(0.4)
+
+    def test_interval_optical_length(self):
+        """Interval items report their length from start/end distances."""
+        cond = inv.CouplingCondition(
+            start_distance=10.0, end_distance=60.0, coupling_type="trench"
+        )
+        assert cond.optical_length == 50.0
+
+    def test_normalize_keeps_existing_id_tuple(self):
+        """A tuple ref field already holding id strings is left untouched."""
+        m1 = inv.OpticalMeasurement(resource_id="m1", method="otdr", wavelength=1550.0)
+        m2 = inv.OpticalMeasurement(resource_id="m2", method="otdr", wavelength=1310.0)
+        segment = inv.FiberSegment(
+            optical_length=10.0,
+            loss_db=(0.4, 0.5),
+            loss_measurement=("m1", "m2"),
+        )
+        path = inv.OpticalPath(optical_components=(segment,))
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
+            resources={"m1": m1, "m2": m2},
+        )
+        got = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        assert got.optical_components[0].loss_measurement == ("m1", "m2")
+
     def test_duplicate_coordinate_labels_raise(self):
         """Duplicate coordinate labels raise."""
         with pytest.raises(ValidationError, match="unique"):
