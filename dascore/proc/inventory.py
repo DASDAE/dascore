@@ -10,16 +10,19 @@ import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, PatchType, attr_conflict_description
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
+    DISTANCE_MAP_AXES,
     VALID_COORDINATE_LABELS,
     Interrogator,
     Inventory,
     ResolvedContext,
     _annotation_kind,
+    interval_masks,
 )
 from dascore.exceptions import InvalidInventoryError, ParameterError, PatchError
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
+from dascore.utils.models import values_equal
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
@@ -34,7 +37,8 @@ _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 # and naming one restores the as-acquired value.
 _PROCESSING_MAINTAINED_ATTRS = ("sample_rate", "spatial_interval")
 
-_VALID_ON_MISSING = ("raise", "nan", "skip")
+OnMissing = Literal["raise", "nan", "skip"]
+_VALID_ON_MISSING = get_args(OnMissing)
 
 # Tracks whose fields enrich can project, and where their intervals live.
 _TRACK_NAMES = ("optical_components", "geometry", "coupling")
@@ -53,14 +57,6 @@ on_missing
     applicable and never trigger it, and per-channel coverage gaps are always
     missing values rather than errors.
 """.strip()
-
-
-def _validate_on_missing(on_missing: str) -> str:
-    """Ensure on_missing is a supported value."""
-    if on_missing not in _VALID_ON_MISSING:
-        msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
-        raise ParameterError(msg)
-    return on_missing
 
 
 def _get_data_source_id(patch, data_source_id) -> str:
@@ -144,14 +140,20 @@ def _get_interrogator(inventory, acquisition):
     return value
 
 
+def _attr_owner(context, interrogator, name):
+    """Return the object a possibly-dotted attr name belongs to, and its field."""
+    prefix, _, field = name.rpartition(".")
+    owner = interrogator if prefix == "interrogator" else context.acquisition
+    return owner, field
+
+
 def _get_system_attrs(inventory, context) -> dict:
     """Return the observing-system facts the resolved context defines."""
     interrogator = _get_interrogator(inventory, context.acquisition)
     out = {}
     for name in INVENTORY_ATTRS:
-        prefix, _, field = name.rpartition(".")
-        obj = interrogator if prefix == "interrogator" else context.acquisition
-        value = getattr(obj, field, None)
+        owner, field = _attr_owner(context, interrogator, name)
+        value = getattr(owner, field, None)
         if _is_unset(value):
             continue
         out[name] = value
@@ -194,8 +196,8 @@ def _missing_marker(context, name):
     NaN is the marker a number can carry; nothing else has one, so None
     stands for "the inventory does not say".
     """
-    prefix, _, field = name.rpartition(".")
-    model = Interrogator if prefix == "interrogator" else type(context.acquisition)
+    owner, field = _attr_owner(context, Interrogator, name)
+    model = owner if isinstance(owner, type) else type(owner)
     info = model.model_fields.get(field)
     annotation = None if info is None else info.annotation
     return np.nan if _is_numeric_annotation(annotation) else None
@@ -220,14 +222,6 @@ def _is_unset(value) -> bool:
     return isinstance(value, float | np.floating) and bool(np.isnan(value))
 
 
-def _values_equal(value1, value2) -> bool:
-    """Return True when two attr values agree."""
-    try:
-        return bool(value1 == value2)
-    except (TypeError, ValueError):
-        return False
-
-
 def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
@@ -239,7 +233,7 @@ def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_unset(old) or _values_equal(old, value):
+        if _is_unset(old) or values_equal(old, value):
             updates[name] = value
         elif conflicts == "raise":
             msg = (
@@ -262,6 +256,8 @@ _AXIS_COORDS = {
     "channel": ("channel",),
     "instrument_distance": ("instrument_distance", "distance"),
 }
+# A map axis with no patch coordinate could never be read.
+assert set(_AXIS_COORDS) == set(DISTANCE_MAP_AXES)
 
 
 def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
@@ -339,7 +335,9 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
                 f"not the channel axis of {acquisition.code!r}."
             )
             raise PatchError(msg)
-        if not _distances_agree(first[2], distances):
+        if not np.allclose(
+            first[2], distances, rtol=0, atol=_DISTANCE_TOLERANCE, equal_nan=True
+        ):
             offset = np.nanmax(np.abs(first[2] - distances))
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates place its "
@@ -357,33 +355,19 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
 _DISTANCE_TOLERANCE = 1e-6
 
 
-def _distances_agree(first, second) -> bool:
-    """Return True when two resolutions place every channel together."""
-    return bool(
-        np.allclose(first, second, rtol=0, atol=_DISTANCE_TOLERANCE, equal_nan=True)
-    )
-
-
 def _fill_from_intervals(distances, intervals, values, kind):
     """
     Return per-distance values of an interval track.
 
-    Coverage is half-open, matching the tracks themselves, with the
-    outermost covered endpoint included so the last channel of a path is
-    not silently uncovered. Point markers cover nothing.
+    Coverage follows `interval_masks`: half-open, with the end of each
+    coverage run included so the last channel of a run is not silently
+    uncovered, and point markers covering nothing.
     """
     fill = {"boolean": False, "numeric": np.nan}.get(kind, None)
     out = np.full(len(distances), fill, dtype=object)
-    spans = [(lo, hi, value) for (lo, hi), value in zip(intervals, values) if lo < hi]
-    claimed = np.zeros(len(distances), dtype=bool)
-    for lo, hi, _ in spans:
-        claimed |= (distances >= lo) & (distances < hi)
-    for lo, hi, value in spans:
-        covered = (distances >= lo) & (distances < hi)
-        # The end of a coverage run belongs to the interval which ends
-        # there unless another interval claims it, so the last channel of
-        # a run is not left out by the half-open rule.
-        covered |= (distances == hi) & ~claimed
+    for value, covered in zip(values, interval_masks(distances, intervals)):
+        if not np.any(covered):
+            continue
         if isinstance(value, tuple | list):
             msg = (
                 f"Cannot project the multi-valued {value!r} onto channels; "
@@ -448,8 +432,7 @@ def _get_geometry_coord(inventory, path, label, distances):
     coords = path.coordinates_at(distances)
     if index >= coords.shape[1]:
         return None
-    units = crs.units[index] if index < len(crs.units) else None
-    return get_coord(data=coords[:, index], units=units)
+    return get_coord(data=coords[:, index], units=crs.units[index])
 
 
 def _get_blanket_coord_names(inventory, path) -> list[str]:
@@ -467,11 +450,11 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     return out + [x for x in seen if x]
 
 
-def _get_coord_values(inventory, path, name, distances, optical_distances):
+def _get_coord_values(inventory, path, name, distances):
     """Return the values of one requested coordinate, or None if undefined."""
     if name == "distance":
-        # Optical path distance is in meters, as every path length is.
-        return get_coord(data=optical_distances, units="m")
+        # The distances are already the optical path's, in meters.
+        return get_coord(data=distances, units="m")
     track, _, field = name.partition(".")
     if track in _TRACK_NAMES and field:
         return _get_track_coord(path, track, field, distances)
@@ -521,7 +504,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
                 f"(patch.rename_coords({name}='instrument_distance'))."
             )
             raise PatchError(msg)
-        values = _get_coord_values(inventory, path, name, distances, distances)
+        values = _get_coord_values(inventory, path, name, distances)
         if (existing := patch.coords.coord_map.get(name)) is not None:
             if values is not None and _coords_equal(existing, values):
                 continue  # re-enriching is a refresh, not a collision
@@ -557,7 +540,7 @@ def enrich(
     coords: bool | tuple[str, ...] = True,
     data_source_id: str | None = None,
     time=None,
-    on_missing: Literal["raise", "nan", "skip"] = "raise",
+    on_missing: OnMissing = "raise",
     conflicts: Literal["drop", "raise", "keep_first"] = "keep_first",
 ) -> PatchType:
     """
@@ -616,7 +599,9 @@ def enrich(
     ... )
     """
     validate_conflict(conflicts)
-    _validate_on_missing(on_missing)
+    if on_missing not in _VALID_ON_MISSING:
+        msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
+        raise ParameterError(msg)
     source_id = _get_data_source_id(patch, data_source_id)
     times = _get_resolution_times(patch, time)
     context = _resolve_context(inventory, source_id, times)

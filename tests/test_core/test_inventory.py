@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
-from dascore.utils.models import _values_equal
+from dascore.utils.models import values_equal
 
 
 def build_inventory() -> inv.Inventory:
@@ -63,7 +63,7 @@ class TestGeometry:
 
     def test_requires_two_points(self):
         """Requires two points."""
-        with pytest.raises(ValidationError, match="at least two"):
+        with pytest.raises(ValidationError, match="at least 2 control points"):
             inv.Geometry(distance=(1.0,), coordinates=((0.0, 0.0),))
 
     def test_strictly_increasing(self):
@@ -1009,7 +1009,7 @@ class TestCoverageCompleteness:
 
     def test_distance_map_empty_raises(self):
         """Distance map empty raises."""
-        with pytest.raises(ValidationError, match="at least one"):
+        with pytest.raises(ValidationError, match="at least 1 control point"):
             inv.DistanceMap(channel=(), distance=())
 
     def test_distance_map_non_increasing_raises(self):
@@ -1119,10 +1119,10 @@ class TestCoverageCompleteness:
 
     def test_values_equal_branches(self):
         """Null-pattern and key mismatches compare unequal."""
-        assert not _values_equal(np.array([np.nan]), np.array([1.0]))
-        assert _values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
-        assert not _values_equal({"a": 1}, {"b": 1})
-        assert _values_equal((1.0, np.nan), (1.0, np.nan))
+        assert not values_equal(np.array([np.nan]), np.array([1.0]))
+        assert values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
+        assert not values_equal({"a": 1}, {"b": 1})
+        assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
 class TestTypeTag:

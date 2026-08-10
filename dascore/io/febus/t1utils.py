@@ -52,22 +52,21 @@ def _get_coords(fi, snap=True) -> dc.CoordManager:
     )
 
 
-def _get_attrs():
-    """Return the fixed attrs every Febus T1 file carries."""
-    return {
-        "data_type": "temperature",
-        "data_units": "°C",
-        "data_category": "DTS",
-        "interrogator.manufacturer": "FEBUS",
-        "interrogator.model": "T1",
-    }
+# The fixed attrs every Febus T1 file carries.
+_T1_ATTRS = {
+    "data_type": "temperature",
+    "data_units": "°C",
+    "data_category": "DTS",
+    "interrogator.manufacturer": "FEBUS",
+    "interrogator.model": "T1",
+}
 
 
 def _scan_t1(fi: H5Reader, snap=True):
     """Get the coordinates and attributes for a T1 data patch"""
     coords = _get_coords(fi, snap=snap)
     return _make_scan_payload(
-        attrs=_get_attrs(),
+        attrs=_T1_ATTRS,
         coords=coords,
         dims=coords.dims,
         shape=coords.shape,
@@ -93,5 +92,5 @@ def _get_t1_patch(
         time_slice, distance_slice
     ]  # (n_time, n_dist)
     # Construct the patch
-    attrs = dc.PatchAttrs(**_get_attrs())
+    attrs = dc.PatchAttrs(**_T1_ATTRS)
     return dc.Patch(data=temp, coords=coords, dims=coords.dims, attrs=attrs)

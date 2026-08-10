@@ -204,7 +204,7 @@ same units as the specified dimension, or have units attached.
 
 attr_conflict_description = """
 Indicates how to handle conflicts in attributes other than those
-indicated by dim (eg tag, history, station, etc). If "drop" simply
+indicated by dim (eg tag, history, data_source_id, etc). If "drop" simply
 drop conflicting attributes, or attributes not shared by all models.
 If "raise" raise an
 [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when

@@ -514,15 +514,7 @@ class Geometry(InventoryModel):
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
-        if len(self.distance) < 2:
-            msg = "Geometry requires at least two distance control points."
-            raise InvalidInventoryError(msg)
-        if not np.all(np.isfinite(self.distance)):
-            msg = "Geometry distance values must be finite."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(self.distance, increasing=True):
-            msg = "Geometry distance values must be strictly increasing."
-            raise InvalidInventoryError(msg)
+        _check_control_points(self.distance, "Geometry distance", minimum=2)
         if len(self.coordinates) != len(self.distance):
             msg = "Geometry coordinates and distance must have the same length."
             raise InvalidInventoryError(msg)
@@ -558,6 +550,31 @@ class Geometry(InventoryModel):
                 dist[inside], np.asarray(self.distance), coords[:, dim]
             )
         return out
+
+
+def interval_masks(values, intervals) -> list[np.ndarray]:
+    """
+    Return, per interval, the mask of values that interval covers.
+
+    Coverage is half-open, ``[start, end)``, with one exception: the end of
+    a coverage run belongs to the interval ending there when no half-open
+    interval claims it, so the last point of a run is not left out. Point
+    markers (equal start and end) cover nothing.
+    """
+    values = np.asarray(values, dtype=float)
+    spans = [(lo, hi) for lo, hi in intervals]
+    claimed = np.zeros(len(values), dtype=bool)
+    for lo, hi in spans:
+        if lo < hi:
+            claimed |= (values >= lo) & (values < hi)
+    out = []
+    for lo, hi in spans:
+        if lo >= hi:  # a point marker covers nothing
+            out.append(np.zeros(len(values), dtype=bool))
+            continue
+        mask = (values >= lo) & (values < hi)
+        out.append(mask | ((values == hi) & ~claimed))
+    return out
 
 
 class _IntervalModel(InventoryModel):
@@ -643,7 +660,21 @@ class OpticalPathAnnotation(_IntervalModel):
 
 
 # The coordinates a DistanceMap may be written in, in preference order.
-_DISTANCE_MAP_AXES = ("channel", "instrument_distance")
+DISTANCE_MAP_AXES = ("channel", "instrument_distance")
+
+
+def _check_control_points(values, what: str, minimum: int = 1) -> None:
+    """Check an axis of control points: enough of them, finite, increasing."""
+    if len(values) < minimum:
+        plural = "" if minimum == 1 else "s"
+        msg = f"{what} requires at least {minimum} control point{plural}."
+        raise InvalidInventoryError(msg)
+    if not np.all(np.isfinite(values)):
+        msg = f"{what} values must be finite."
+        raise InvalidInventoryError(msg)
+    if not is_strictly_monotonic(values, increasing=True):
+        msg = f"{what} values must be strictly increasing."
+        raise InvalidInventoryError(msg)
 
 
 class DistanceMap(InventoryModel):
@@ -687,15 +718,7 @@ class DistanceMap(InventoryModel):
                 "channel or instrument_distance."
             )
             raise InvalidInventoryError(msg)
-        if len(self.distance) < 1:
-            msg = "DistanceMap requires at least one control point."
-            raise InvalidInventoryError(msg)
-        if not np.all(np.isfinite(self.distance)):
-            msg = "DistanceMap control points must be finite."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(self.distance, increasing=True):
-            msg = "DistanceMap distance values must be strictly increasing."
-            raise InvalidInventoryError(msg)
+        _check_control_points(self.distance, "DistanceMap distance")
         for axis in self.axes:
             source = getattr(self, axis)
             if len(source) != len(self.distance):
@@ -704,12 +727,7 @@ class DistanceMap(InventoryModel):
                     "length; they are the same control points."
                 )
                 raise InvalidInventoryError(msg)
-            if not np.all(np.isfinite(source)):
-                msg = "DistanceMap control points must be finite."
-                raise InvalidInventoryError(msg)
-            if not is_strictly_monotonic(source, increasing=True):
-                msg = f"DistanceMap {axis} values must be strictly increasing."
-                raise InvalidInventoryError(msg)
+            _check_control_points(source, f"DistanceMap {axis}")
         self._check_axes_agree()
         return self
 
@@ -739,15 +757,15 @@ class DistanceMap(InventoryModel):
     @property
     def axes(self) -> tuple[str, ...]:
         """The input axes this map is written in, in preference order."""
-        return tuple(x for x in _DISTANCE_MAP_AXES if getattr(self, x) is not None)
+        return tuple(x for x in DISTANCE_MAP_AXES if getattr(self, x) is not None)
 
     def source_values(self, axis: str | None = None) -> tuple[float, ...]:
         """Return the control points on one input axis."""
         axis = self.axes[0] if axis is None else axis
-        if axis not in _DISTANCE_MAP_AXES:
+        if axis not in DISTANCE_MAP_AXES:
             msg = (
                 f"{axis!r} is not a DistanceMap input axis; the axes are "
-                f"{_DISTANCE_MAP_AXES}."
+                f"{DISTANCE_MAP_AXES}."
             )
             raise InvalidInventoryError(msg)
         out = getattr(self, axis)
@@ -1048,20 +1066,16 @@ class OpticalPath(TimeRangedModel):
         if len(dims) > 1:
             raise InvalidInventoryError(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
         out = np.full((len(dist), dims.pop()), np.nan)
-        for segment in self.geometry:
-            seg_coords = segment.interpolate(dist)
-            filled = ~np.isnan(seg_coords[:, 0])
-            out[filled] = seg_coords[filled]
-        # A distance sitting exactly on a segment's last control point would
-        # otherwise fall outside every half-open segment. It belongs to that
-        # segment unless another one claims it, so the end of each coverage
-        # run is included without a segment elsewhere changing the answer.
-        claimed = ~np.isnan(out[:, 0])
-        for segment in self.geometry:
-            at_end = (dist == segment.interval[1]) & ~claimed
-            if np.any(at_end):
-                coords = np.asarray(segment.coordinates, dtype=float)
-                out[at_end] = coords[-1]
+        masks = interval_masks(dist, [x.interval for x in self.geometry])
+        for segment, mask in zip(self.geometry, masks):
+            if not np.any(mask):
+                continue
+            # interpolate() reports its own coverage, which excludes the
+            # run end the mask includes, so fill that from the last point.
+            seg_coords = segment.interpolate(dist[mask])
+            last = np.asarray(segment.coordinates, dtype=float)[-1]
+            seg_coords[np.isnan(seg_coords[:, 0])] = last
+            out[mask] = seg_coords
         return out
 
     def check(self, tolerance: float = 1e-9) -> Self:

@@ -34,7 +34,7 @@ def get_attr_names(attr_cls) -> set[str]:
     return set(attr_cls.model_fields) | {x for x in INVENTORY_ATTRS if "." in x}
 
 
-def convert_attr_units(attrs: dict, name: str, to_units: str, units_name="") -> dict:
+def convert_attr_units(attrs: dict, name: str, to_units: str, from_units="") -> dict:
     """
     Convert one attr to the units patch attrs use, dropping the file's units.
 
@@ -55,11 +55,12 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, units_name="") -> 
         The attr to convert.
     to_units
         The units the patch attr uses.
-    units_name
-        The attr holding the file's units, ``f"{name}_units"`` by default.
-        It is always removed, whether or not it could be used.
+    from_units
+        The units the format documents when it states none of its own, for
+        a header whose units live in the key name rather than beside it.
+        A declared unit still wins.
     """
-    raw_units = unbyte(attrs.pop(units_name or f"{name}_units", None))
+    raw_units = unbyte(attrs.pop(f"{name}_units", None)) or from_units
     value = attrs.get(name)
     if value is None or raw_units is None or raw_units == "":
         return attrs

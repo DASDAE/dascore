@@ -1540,11 +1540,17 @@ class TestConvertAttrUnits:
         assert out["gauge_length"] == 1.0
         assert "gauge_length_units" not in out
 
-    def test_named_units_attr(self):
-        """A format may spell its units attr however it likes."""
-        attrs = {"pulse_width": 10.0, "PulseWidth.uom": "ns"}
-        out = convert_attr_units(attrs, "pulse_width", "s", units_name="PulseWidth.uom")
+    def test_documented_units(self):
+        """A format whose units live in the key name states them itself."""
+        attrs = {"pulse_width": 10.0}
+        out = convert_attr_units(attrs, "pulse_width", "s", from_units="ns")
         assert out["pulse_width"] == pytest.approx(1e-8)
+
+    def test_declared_units_win(self):
+        """A file which states its units is believed over the default."""
+        attrs = {"pulse_width": 10.0, "pulse_width_units": "us"}
+        out = convert_attr_units(attrs, "pulse_width", "s", from_units="ns")
+        assert out["pulse_width"] == pytest.approx(1e-5)
 
     def test_missing_units_keeps_value(self):
         """With no declaration the format's documented default stands."""

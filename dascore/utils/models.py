@@ -95,12 +95,12 @@ def sensible_model_equals(self: BaseModel | Mapping, other: object) -> bool:
         return False
     for name in set(x for x in d1 if not x.startswith("_")):
         # skip any private attributes.
-        if not _values_equal(d1[name], d2[name]):
+        if not values_equal(d1[name], d2[name]):
             return False
     return True
 
 
-def _values_equal(val1, val2) -> bool:
+def values_equal(val1, val2) -> bool:
     """Recursively compare dumped values; nulls are equal only to nulls."""
     if is_array_like(val1) or is_array_like(val2):
         arr1, arr2 = np.asarray(val1), np.asarray(val2)
@@ -112,11 +112,11 @@ def _values_equal(val1, val2) -> bool:
     if isinstance(val1, Mapping) and isinstance(val2, Mapping):
         if set(val1) != set(val2):
             return False
-        return all(_values_equal(val1[key], val2[key]) for key in val1)
+        return all(values_equal(val1[key], val2[key]) for key in val1)
     if isinstance(val1, list | tuple) and isinstance(val2, list | tuple):
         if len(val1) != len(val2):
             return False
-        return all(_values_equal(v1, v2) for v1, v2 in zip(val1, val2))
+        return all(values_equal(v1, v2) for v1, v2 in zip(val1, val2))
     return bool(val1 == val2 or (_all_null(val1) and _all_null(val2)))
 
 
