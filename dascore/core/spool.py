@@ -25,6 +25,7 @@ from dascore.constants import (
     path_types,
     timeable_types,
 )
+from dascore.core.inventory import Inventory
 from dascore.exceptions import (
     InvalidSpoolError,
     MissingPatchError,
@@ -499,6 +500,10 @@ class Spool(BaseSpool):
     )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
+    # An attached inventory, and the enrich kwargs to apply on extraction
+    # (None means attached without automatic enrichment).
+    _inventory = None
+    _enrich_kwargs: dict | None = None
     # single-file provenance (set by from_file; drives update())
     _file_path = None
     _file_format = None
@@ -569,7 +574,7 @@ class Spool(BaseSpool):
                 raise ValueError(msg)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
-            return self._catalog.get_patch(int(item))
+            return self._maybe_enrich(self._catalog.get_patch(int(item)))
         except MissingPatchError:
             # MissingPatchError subclasses IndexError for backwards
             # compatibility; it must never masquerade as out-of-bounds
@@ -581,7 +586,8 @@ class Spool(BaseSpool):
     def __iter__(self):
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
-        yield from self._catalog
+        for patch in self._catalog:
+            yield self._maybe_enrich(patch)
 
     # --- selection and presentation specs -------------------------------
 
@@ -604,6 +610,56 @@ class Spool(BaseSpool):
             **kwargs,
         )
         return self._new_from_catalog(catalog)
+
+    def attach_inventory(self, inventory, *, enrich: bool = True, **kwargs) -> Self:
+        """
+        Attach a DASDAE inventory to this spool.
+
+        Each patch the spool yields is enriched from the inventory as it is
+        extracted, so the metadata arrives with the data rather than in a
+        second step the caller must remember. The spool holds the reference;
+        the patches do not.
+
+        Parameters
+        ----------
+        inventory
+            The inventory to resolve the spool's patches against.
+        enrich
+            If False, hold the inventory without enriching extracted
+            patches. Attaching is then only a way to carry the inventory
+            with the spool.
+        **kwargs
+            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
+            each extracted patch (`attrs`, `coords`, `conflicts`, ...).
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).attach_inventory(inventory)
+        >>> assert spool[0].attrs.gauge_length == 10.0
+
+        Notes
+        -----
+        This is the metadata half of the workflow: resolving the index
+        against the inventory, subdividing it at epoch boundaries, and
+        selecting on inventory tracks are not implemented yet.
+        """
+        if not isinstance(inventory, Inventory):
+            msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
+            raise ParameterError(msg)
+        new = self.__class__(self)
+        new._inventory = inventory
+        new._enrich_kwargs = dict(kwargs) if enrich else None
+        return new
+
+    def _maybe_enrich(self, patch):
+        """Enrich an extracted patch when an inventory is attached."""
+        if self._inventory is None or self._enrich_kwargs is None:
+            return patch
+        return patch.enrich(self._inventory, **self._enrich_kwargs)
 
     @compose_docstring(doc=get_docstring(BaseSpool.sort))
     def sort(self, attribute) -> Self:
@@ -1046,6 +1102,8 @@ class Spool(BaseSpool):
             and mine._residuals == theirs._residuals
             and mine._order == theirs._order
             and mine._ids == theirs._ids
+            and self._inventory == other._inventory
+            and self._enrich_kwargs == other._enrich_kwargs
         ):
             return True
         return deep_equality_check(self._eq_state(), other._eq_state())
@@ -1096,7 +1154,13 @@ class Spool(BaseSpool):
             rows = samples_adjusted_envelopes(
                 rows, catalog._residuals, drop_empty=False
             )
-        return {"rows": _strip_identity(rows)}
+        # An attached inventory is part of the contents: it decides what
+        # the extracted patches carry.
+        return {
+            "rows": _strip_identity(rows),
+            "inventory": self._inventory,
+            "enrich_kwargs": self._enrich_kwargs,
+        }
 
     def __rich__(self):
         base = super().__rich__()

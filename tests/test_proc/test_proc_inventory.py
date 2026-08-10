@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.core.inventory import (
     Acquisition,
     CoordinateReferenceSystem,
@@ -474,3 +475,49 @@ class TestEdgeCases:
         inv = _replace_path(inventory, geometry=(flat,))
         with pytest.raises(PatchError, match="defines no 'z'"):
             patch.enrich(inv, attrs=False, coords=("z",))
+
+
+class TestAttachInventory:
+    """The spool carries the inventory so extraction enriches."""
+
+    def test_getitem_is_enriched(self, patch, inventory):
+        """A patch pulled by index arrives with its metadata."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert spool[0].attrs.gauge_length == 10.0
+
+    def test_iteration_is_enriched(self, patch, inventory):
+        """So does one pulled by iteration."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert all(x.attrs.gauge_length == 10.0 for x in spool)
+
+    def test_kwargs_pass_through(self, patch, inventory):
+        """Enrich's arguments are the spool's arguments."""
+        spool = dc.spool(patch).attach_inventory(
+            inventory, attrs=("gauge_length",), coords=False
+        )
+        out = spool[0]
+        assert out.attrs.gauge_length == 10.0
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
+
+    def test_enrich_false_holds_only(self, patch, inventory):
+        """Attaching without enriching just carries the inventory."""
+        spool = dc.spool(patch).attach_inventory(inventory, enrich=False)
+        assert "gauge_length" not in dict(spool[0].attrs)
+
+    def test_derived_spool_keeps_inventory(self, patch, inventory):
+        """A selection is still the spool it came from."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert spool.select(tag="random")[0].attrs.gauge_length == 10.0
+
+    def test_equality_includes_inventory(self, patch, inventory):
+        """An attached inventory changes what the spool yields."""
+        plain = dc.spool(patch)
+        attached = plain.attach_inventory(inventory)
+        assert attached != plain
+        assert attached == plain.attach_inventory(inventory)
+        assert attached != plain.attach_inventory(inventory, coords=False)
+
+    def test_requires_an_inventory(self, patch):
+        """Anything else names no metadata to attach."""
+        with pytest.raises(ParameterError, match="needs an Inventory"):
+            dc.spool(patch).attach_inventory("inventory.yaml")
