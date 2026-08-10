@@ -1944,6 +1944,12 @@ class Inventory(InventoryModel):
         """
         Load an inventory from a YAML string or file path.
 
+        A loaded document is checked before it is returned: reading one asks
+        whether it is a valid inventory, and a document which fails should
+        fail at its source rather than as a confusing error later. Building
+        an inventory in memory stays unchecked until ``check`` is called, so
+        it can be assembled a piece at a time.
+
         Parameters
         ----------
         source
@@ -1964,7 +1970,7 @@ class Inventory(InventoryModel):
         if not isinstance(data, dict):
             msg = f"Could not parse an inventory mapping from {source!r}."
             raise InvalidInventoryError(msg)
-        return cls(**data)
+        return cls(**data).check()
 
 
 def inventory(source=None) -> Inventory:

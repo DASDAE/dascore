@@ -1650,6 +1650,28 @@ class TestSerializationIsLossless:
         assert loaded.check() is loaded
 
 
+class TestLoadingValidates:
+    """Reading a document asks whether it is a valid inventory."""
+
+    def test_invalid_document_raises_on_load(self):
+        """A document violating a whole-tree rule fails at its source."""
+        pytest.importorskip("yaml")
+        station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", stations=(station,)),)
+        )
+        text = inventory.to_yaml()
+        with pytest.raises(InvalidInventoryError, match="coordinate values"):
+            inv.Inventory.from_yaml(text)
+        with pytest.raises(InvalidInventoryError, match="coordinate values"):
+            dc.inventory(text)
+
+    def test_in_memory_construction_stays_unchecked(self):
+        """An inventory can be assembled a piece at a time."""
+        station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
+        assert inv.Inventory(networks=(inv.Network(code="XX", stations=(station,)),))
+
+
 class TestFiberSegmentFields:
     """Fiber-level naming and optical calibration fields."""
 
