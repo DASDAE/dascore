@@ -38,7 +38,7 @@ from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
-from dascore.io.silixah5 import SilixaH5V1
+from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2
 from dascore.io.sintela import SintelaBinaryV3, SintelaProtobufV1
 from dascore.io.sr4731 import SR4731V200
 from dascore.io.tdms import TDMSFormatterV4713
@@ -88,6 +88,7 @@ COMMON_IO_READ_TESTS = {
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
+    SilixaH5V2(): ("silixa_h5_ingv_1.h5",),
     SintelaBinaryV3(): ("sintela_binary_v3_test_1.raw",),
     SintelaProtobufV1(): ("sintela_protobuf_1.pb",),
     Terra15FormatterV4(): (
