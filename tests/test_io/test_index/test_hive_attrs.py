@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import os
 import pickle
+import sqlite3
 
 import pytest
 
 import dascore as dc
 from dascore.core.spool import Spool
+from dascore.examples import spool_to_directory
 from dascore.utils.paths import parse_hive_path_attrs
 
 
@@ -164,8 +166,6 @@ class TestPatchStamping:
 
     def test_chunked(self, tmp_path):
         """Patches from a chunked spool keep hive attrs."""
-        from dascore.examples import spool_to_directory
-
         sub = tmp_path / "network=XX"
         sub.mkdir()
         spool_to_directory(dc.get_example_spool("random_das"), path=sub)
@@ -310,8 +310,6 @@ class TestEdgeCases:
 
     def test_old_index_version_rebuilds(self, hive_dir):
         """An index stamped with an older version rebuilds transparently."""
-        import sqlite3
-
         spool = Spool.from_directory(hive_dir).update(progress=None)
         spool.indexer.close()
         index_path = hive_dir / ".dascore_index.sqlite3"

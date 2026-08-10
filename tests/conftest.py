@@ -22,7 +22,7 @@ from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.core.spool import Spool
-from dascore.examples import get_example_patch
+from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.downloader import fetch
@@ -530,8 +530,6 @@ def terra15_das_unfinished_path() -> Path:
 @register_func(SPOOL_FIXTURES)
 def random_spool() -> SpoolType:
     """Init a random array."""
-    from dascore.examples import get_example_spool
-
     return get_example_spool("random_das")
 
 

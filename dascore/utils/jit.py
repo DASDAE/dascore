@@ -67,7 +67,7 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
 
     has_numba = True
     try:
-        import numba
+        import numba  # noqa: PLC0415
 
         if _missing_numba:
             raise ImportError("Simulating missing numba.")

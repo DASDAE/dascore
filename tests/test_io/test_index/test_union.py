@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import copy
+import pickle
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.core.coords import CoordRange
-from dascore.io.index.catalog import CompositeResolver, PatchCatalog
+from dascore.io.index.catalog import CompositeResolver, PatchCatalog, _absolutize_record
+from dascore.io.index.ingest import SourceRecord
 
 
 @pytest.fixture(scope="module")
@@ -182,8 +188,6 @@ class TestPatchIdentity:
         Identity is minted eagerly at construction, so copies share it
         regardless of when they are made (no access-order dependence).
         """
-        import copy
-
         patch = dc.get_example_patch()
         clone = copy.deepcopy(patch)
         assert clone._instance_id == patch._instance_id
@@ -202,8 +206,6 @@ class TestPatchIdentity:
 
     def test_pickle_round_trip_preserves_content(self):
         """Spools of live patches pickle and rebuild their backend."""
-        import pickle
-
         patch = dc.get_example_patch()
         spool = dc.spool([patch])
         _ = len(spool)  # realize the catalog
@@ -213,8 +215,6 @@ class TestPatchIdentity:
 
     def test_union_pickles(self):
         """Union spools survive pickling (rows ride along as records)."""
-        import pickle
-
         p1 = dc.get_example_patch()
         p2 = p1.new()
         combined = dc.spool([p1]) + dc.spool([p2])
@@ -223,8 +223,6 @@ class TestPatchIdentity:
 
     def test_remove_updates_live_registry(self):
         """Removing a live source removes it from the store as well."""
-        import pickle
-
         patch = dc.get_example_patch()
         catalog = PatchCatalog.from_patches([patch])
         path = catalog.to_df().iloc[0]["path"]
@@ -287,11 +285,6 @@ class TestExportPushdown:
 
     def test_absolutize_record_passthrough(self, tmp_path):
         """A record already carrying an absolute/URI path is returned as-is."""
-        from pathlib import Path
-
-        from dascore.io.index.catalog import _absolutize_record
-        from dascore.io.index.ingest import SourceRecord
-
         # an OS-native absolute path (drive-qualified on Windows)
         abs_path = str((tmp_path / "a.h5").resolve())
         assert Path(abs_path).is_absolute()
@@ -444,8 +437,6 @@ class TestLossyStateUnion:
 
     def test_combined_pickles(self):
         """A union holding a materialized operand round-trips pickling."""
-        import pickle
-
         p = dc.get_example_patch()
         t = p.get_coord("time")
         lo, hi = t.min() + 10 * t.step, t.min() + 20 * t.step
@@ -465,8 +456,6 @@ class TestMixedViewPickle:
 
     def test_sliced_mixed_union_pickles(self):
         """A sliced union of planned and live rows loads all rows back."""
-        import pickle
-
         p = dc.get_example_patch()
         t = p.get_coord("time")
         trimmed = dc.spool([p]).select(
@@ -481,8 +470,6 @@ class TestMixedViewPickle:
     @pytest.mark.concurrency
     def test_mixed_union_map_processes(self):
         """Process-backed map ships plan routes with each task."""
-        from concurrent.futures import ProcessPoolExecutor
-
         p = dc.get_example_patch()
         t = p.get_coord("time")
         trimmed = dc.spool([p]).select(

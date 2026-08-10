@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index import Query, get_backend, summaries_to_records
@@ -189,6 +190,53 @@ class TestFlatRelation:
         # NULLS LAST: relative-time patches sort after absolute ones.
         nulls = df1["time_min"].isnull().to_numpy()
         assert not nulls[: (~nulls).sum()].any()
+
+
+class TestElementDtype:
+    """The data array's dtype is recorded per patch (size-based chunking)."""
+
+    def test_dtype_round_trips(self, backend):
+        """Each patch keeps the dtype its summary reported."""
+        df = backend.query()
+
+        def _key(path):
+            """Compare path-independently; Windows round-trips backslashes."""
+            return str(path).replace("\\", "/")
+
+        expected = {_key(x.source_path): x.dtype for x in make_summaries()}
+        got = {_key(k): v for k, v in zip(df["path"], df["dtype"], strict=True)}
+        assert got == expected
+
+    def test_dtype_is_private_in_flat_relation(self):
+        """The spool sees `_dtype`, never a public `dtype` column."""
+        spool = dc.get_example_spool("random_das")
+        df = spool.get_contents()
+        assert "dtype" not in df.columns
+        assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
+
+    def test_dtype_attr_does_not_shadow_column(self, tmp_path):
+        """A patch attr named `dtype` is skipped, not written to the column."""
+        summary = make_summaries()[0]
+        shadowed = PatchSummary(
+            attrs=dict(summary.attrs.model_dump(), dtype="not a dtype"),
+            coords={k: v.model_dump() for k, v in summary.coords.items()},
+            dims=summary.dims,
+            shape=summary.shape,
+            dtype=summary.dtype,
+            source_path=summary.source_path,
+            source_format=summary.source_format,
+            source_version=summary.source_version,
+        )
+        path = tmp_path / "shadow.sqlite3"
+        back = get_backend(path)
+        try:
+            with pytest.warns(UserWarning, match="dtype"):
+                back.write_sources(summaries_to_records([shadowed]))
+            df = back.query()
+            # the structural column keeps the element dtype, not the attr
+            assert df["dtype"].iloc[0] == summary.dtype
+        finally:
+            back.close()
 
 
 class TestAttrPredicates:

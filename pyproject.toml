@@ -150,6 +150,7 @@ SEGY__V1_0 = "dascore.io.segy.core:SegyV1_0"
 SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
 SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
+SILIXA_H5__V2 = "dascore.io.silixah5:SilixaH5V2"
 SINTELA_BINARY__V3 = "dascore.io.sintela.core:SintelaBinaryV3"
 SINTELA_PROTOBUF__V1 = "dascore.io.sintela.core:SintelaProtobufV1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
@@ -184,6 +185,7 @@ lint.select = [
     "N",
     "NPY",
     "NPY201",
+    "PLC0415",
 ]
 
 # Exclude a variety of commonly ignored directories.
@@ -263,7 +265,22 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-include = ["dascore"]  # tests/ is burned down separately before it lands here.
+# tests/ is deliberately out of scope. Type checking is worth most where a
+# wrong annotation propagates to users, and tests are leaf code with a fast,
+# loud failure signal and 100% enforced coverage. They also do type-hostile
+# things on purpose -- passing bad input to prove it is rejected, monkey
+# patching, building stubs -- so enforcing here costs suppressions on every
+# new test and risks silently weakening one during a mechanical fix.
+#
+# The value is in the scan, not the enforcement: because tests call the
+# public API the way users do, running ty over them audits whether dascore's
+# signatures are honest. Run it on demand -- after an API change, before a
+# release -- read what it says about dascore/, and fix that:
+#
+#   uvx ty@0.0.65 check --python .venv --config "src.include=['dascore','tests']"
+#
+# Diagnostics that only describe the tests themselves are not worth acting on.
+include = ["dascore"]
 
 # No rule is ignored globally: invalid-method-override,
 # invalid-argument-type and invalid-return-type have each been burned down

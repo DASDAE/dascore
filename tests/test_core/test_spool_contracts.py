@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 import dascore as dc
+import dascore.core.spool as spool_module
 from dascore.exceptions import InvalidSpoolError
+from dascore.io.index.planned import PlanResolver
 
 
 @pytest.fixture(scope="module")
@@ -132,8 +134,6 @@ class TestChunkPlanContract:
 
     def test_planned_state_is_derived(self, patches):
         """A chunked spool is a fresh derived catalog, not a mode flag."""
-        from dascore.io.index.planned import PlanResolver
-
         spool = dc.spool(patches)
         chunked = spool.chunk(time=2)
         assert chunked._catalog is not spool._catalog
@@ -159,8 +159,6 @@ class TestTypeSurface:
 
     def test_removed_names_gone(self):
         """The old concrete class names are deleted outright."""
-        import dascore.core.spool as spool_module
-
         for name in ("MemorySpool", "DirectorySpool", "FileSpool"):
             assert not hasattr(spool_module, name)
         with pytest.raises(ImportError):

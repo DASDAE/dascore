@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import pickle
+import re
 
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _canonical_range
+from dascore.io.index.catalog import _canonical_range, _CanonicalRange
 from dascore.io.index.query import InvalidSpoolQueryError
 
 
@@ -260,8 +261,6 @@ class TestCount:
 
     def _selections(self, catalog):
         """Views spanning attr, coord range, regex, and chained forms."""
-        import re
-
         df = catalog.to_df()
         t0 = df["time_min"].min()
         window = (t0, t0 + dc.to_timedelta64(1))
@@ -318,8 +317,6 @@ class TestCanonicalRange:
 
     def test_eq_and_hash(self):
         """Equal magnitudes compare and hash equal; other types don't."""
-        from dascore.io.index.catalog import _CanonicalRange
-
         r1, r2 = _CanonicalRange((1.0, 2.0)), _CanonicalRange((1.0, 2.0))
         assert r1 == r2
         assert hash(r1) == hash(r2)
@@ -332,8 +329,6 @@ class TestViewSerialization:
 
     def test_view_pickles_membership_only(self):
         """A one-patch view of an N-patch live spool ships one patch."""
-        import pickle
-
         base = dc.get_example_patch()
         patches = [
             base.update_attrs(tag=str(i)).new(
