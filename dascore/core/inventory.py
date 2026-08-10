@@ -158,9 +158,22 @@ class CoordinateReferenceSystem(InventoryModel):
             "from the controlled coordinate vocabulary."
         ),
     )
-    units: str = Field(default="degree", description="Coordinate units when known.")
+    units: tuple[str, ...] = Field(
+        default=("degree", "degree", "meter"),
+        description=(
+            "Units of the canonical axes, in order; same length as "
+            "coordinate_labels."
+        ),
+    )
     vertical_datum: str = Field(
         default="", description="Vertical datum or reference surface, if known."
+    )
+    wkt: str = Field(
+        default="",
+        description=(
+            "WKT2 definition for frames an authority code cannot describe "
+            "(local, derived, or compound CRSs); empty for registry CRSs."
+        ),
     )
 
     @field_validator("coordinate_labels")
@@ -178,6 +191,17 @@ class CoordinateReferenceSystem(InventoryModel):
             msg = f"coordinate_labels must be unique; got {value}."
             raise InvalidInventoryError(msg)
         return value
+
+    @model_validator(mode="after")
+    def _check_units_length(self) -> Self:
+        """Units pair with the axes, one per coordinate label."""
+        if len(self.units) != len(self.coordinate_labels):
+            msg = (
+                f"units {self.units} must have one entry per coordinate "
+                f"label {self.coordinate_labels}."
+            )
+            raise InvalidInventoryError(msg)
+        return self
 
     def axis_index(self, label: str) -> int:
         """

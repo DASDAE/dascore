@@ -565,7 +565,7 @@ class TestCanonicalAxes:
         """An alias absent from the CRS labels raises."""
         crs = inv.CoordinateReferenceSystem(
             coordinate_labels=("easting", "northing", "elevation"),
-            units="meter",
+            units=("meter", "meter", "meter"),
         )
         assert crs.axis_index("easting") == 0
         with pytest.raises(InvalidInventoryError, match="not defined"):
@@ -578,7 +578,9 @@ class TestCanonicalAxes:
 
     def test_two_axis_crs_has_no_z(self):
         """Two axis crs has no z."""
-        crs = inv.CoordinateReferenceSystem(coordinate_labels=("x", "y"), units="meter")
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("x", "y"), units=("meter", "meter")
+        )
         with pytest.raises(InvalidInventoryError, match="no 'z' axis"):
             crs.axis_index("z")
 
@@ -1187,3 +1189,28 @@ class TestOpticalLoss:
         )
         got = inventory.networks[0].fiber_arrays[0].optical_paths[0]
         assert got.measurements == ("otdr-1",)
+
+
+class TestCrsShape:
+    """Units pair with axes; WKT carries non-registry definitions."""
+
+    def test_default_units_match_default_labels(self):
+        """The default CRS has honest per-axis units."""
+        crs = inv.CoordinateReferenceSystem()
+        assert crs.units == ("degree", "degree", "meter")
+
+    def test_units_length_mismatch_raises(self):
+        """Units length mismatch raises."""
+        with pytest.raises(ValidationError, match="one entry per"):
+            inv.CoordinateReferenceSystem(units=("degree",))
+
+    def test_local_frame_with_wkt(self):
+        """Local frame with wkt."""
+        crs = inv.CoordinateReferenceSystem(
+            authority="LOCAL",
+            code="mine-grid-7",
+            coordinate_labels=("x", "y", "z"),
+            units=("meter", "meter", "meter"),
+            wkt='ENGCRS["mine grid",EDATUM["portal"],CS[Cartesian,3]]',
+        )
+        assert crs.wkt.startswith("ENGCRS")
