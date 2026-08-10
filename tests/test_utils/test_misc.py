@@ -28,6 +28,7 @@ from dascore.utils.misc import (
     get_buffer_size,
     get_parent_code_name,
     get_stencil_coefs,
+    is_strictly_monotonic,
     iterate,
     maybe_get_items,
     maybe_mem_map,
@@ -1115,3 +1116,38 @@ class TestDeepEqualityCheck:
         result = deep_equality_check(df1, df3)
         assert isinstance(result, bool), f"Expected bool, got {type(result)}"
         assert result is False
+
+
+class TestIsStrictlyMonotonic:
+    """Tests for the strict monotonicity check."""
+
+    def test_increasing(self):
+        """An ascending sequence is monotonic in either sense."""
+        assert is_strictly_monotonic([1, 2, 3])
+        assert is_strictly_monotonic([1, 2, 3], increasing=True)
+        assert not is_strictly_monotonic([1, 2, 3], increasing=False)
+
+    def test_decreasing(self):
+        """A descending sequence qualifies unless ascending is required."""
+        assert is_strictly_monotonic([3, 2, 1])
+        assert is_strictly_monotonic([3, 2, 1], increasing=False)
+        assert not is_strictly_monotonic([3, 2, 1], increasing=True)
+
+    def test_repeats_are_not_strict(self):
+        """Equal neighbors break strictness."""
+        assert not is_strictly_monotonic([1, 1, 2])
+
+    def test_short_sequences(self):
+        """Sequences too short to have a direction are trivially monotonic."""
+        assert is_strictly_monotonic([1])
+        assert is_strictly_monotonic([])
+
+    def test_multidimensional(self):
+        """Monotonicity is undefined for anything but a single dimension."""
+        assert not is_strictly_monotonic(np.arange(4).reshape(2, 2))
+        assert not is_strictly_monotonic(5)
+
+    def test_uncomparable_values(self):
+        """Values which cannot be ordered are not monotonic."""
+        values = np.array([{"a": 1}, {"b": 2}], dtype=object)
+        assert not is_strictly_monotonic(values)

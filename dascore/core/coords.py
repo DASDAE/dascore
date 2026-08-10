@@ -59,6 +59,7 @@ from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
     cached_method,
+    is_strictly_monotonic,
     iterate,
     sanitize_range_param,
 )
@@ -2995,11 +2996,7 @@ def get_coord(
             return None, None, None, False
         view2 = data[1:]
         view1 = data[:-1]
-        try:
-            # ascending first; it is by far the more common case.
-            is_monotonic = np.all(view2 > view1) or np.all(view1 > view2)
-        except TypeError:
-            return None, None, None, False
+        is_monotonic = is_strictly_monotonic(data)
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
             try:
