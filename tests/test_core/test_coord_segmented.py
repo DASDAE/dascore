@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
+    CoordArray,
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
@@ -724,8 +726,6 @@ class TestEdgeCases:
 
     def test_unsupported_segment_class_raises(self):
         """Coord classes other than range/monotonic are rejected."""
-        from dascore.core.coords import CoordArray
-
         bad = CoordArray(values=np.array([3.0, 1.0, 2.0]))
         good = get_coord(start=10.0, stop=20.0, step=1.0)
         with pytest.raises(ValidationError, match="CoordRange or CoordMonotonic"):
@@ -1136,8 +1136,6 @@ class TestPlannedSpoolWriteGuard:
     @pytest.fixture()
     def gapped_planned_spool(self, tmp_path):
         """A file-backed planned spool whose output spans a real gap."""
-        import warnings
-
         src = tmp_path / "src"
         src.mkdir()
         p1 = dc.get_example_patch()

@@ -21,6 +21,7 @@ from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _SEPARATE_ATTRS_KEY,
     _decode_attr_value,
     _decode_legacy_attr_value,
     _encode_attr_value,
@@ -168,8 +169,6 @@ class TestReadDASDAE:
         self, random_patch, tmp_path_factory
     ):
         """New groups appended to a legacy file must not be legacy-stripped."""
-        from dascore.io.dasdae.utils import _SEPARATE_ATTRS_KEY
-
         path = tmp_path_factory.mktemp("dasdae_legacy_append") / "mixed.h5"
         old_patch = random_patch.update_attrs(tag="old")
         old_patch.io.write(path, "dasdae")

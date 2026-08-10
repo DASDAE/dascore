@@ -135,7 +135,7 @@ def merge_coord_managers(
             # the (verified common) units so the merge stays unit-true
             common_units = next(iter(units))
             if common_units is not None:
-                from dascore.core.coords import get_coord
+                from dascore.core.coords import get_coord  # noqa: PLC0415
 
                 coord = get_coord(data=new_data, units=common_units)
                 out[coord_name] = (dims, coord)

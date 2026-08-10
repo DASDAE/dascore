@@ -27,11 +27,13 @@ from dascore.exceptions import (
 from dascore.io.index.dialect import SQLiteDialect
 from dascore.io.index.ingest import (
     SourceRecord,
+    assemble_source_records,
     attr_column_name,
     dump_path_attrs,
     hive_typed_attrs,
 )
 from dascore.io.index.query import (
+    InvalidSpoolQueryError,
     Query,
     _as_query_list,
     apply_residuals,
@@ -801,8 +803,6 @@ class SQLIndexBackend(abc.ABC):
         fetched — O(selected membership), not O(total archive). The frames
         are assembled into the backend-independent transfer format.
         """
-        from dascore.io.index.ingest import assemble_source_records
-
         if patch_ids is None:
             sources = self._fetch_df("SELECT * FROM sources")
             patches = self._fetch_df("SELECT * FROM patches")
@@ -1100,7 +1100,6 @@ def resolve_query(
     Implements section 1 of the selector spec; raises on unknown names or
     names supplied in more than one namespace.
     """
-    from dascore.io.index.query import InvalidSpoolQueryError
 
     def _drop_noops(mapping: dict) -> dict:
         """Bare None/... selectors are no-ops, matching Patch.select."""
@@ -1163,6 +1162,6 @@ def resolve_query(
 
 def get_backend(path: str | Path) -> SQLIndexBackend:
     """Create the SQLite spool-index backend at path."""
-    from dascore.io.index.lite import SQLiteBackend
+    from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
 
     return SQLiteBackend(path)

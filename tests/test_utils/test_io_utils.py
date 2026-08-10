@@ -1132,7 +1132,7 @@ class TestXarray:
 
     def test_convert_to_xarray(self, data_array_from_patch):
         """Tests for converting to xarray object."""
-        import xarray as xr
+        import xarray as xr  # noqa: PLC0415
 
         assert isinstance(data_array_from_patch, xr.DataArray)
 
@@ -1174,7 +1174,7 @@ class TestObsPy:
 
     def test_convert_to_obspy(self, stream_from_patch):
         """Ensure a patch can be converted to a stream."""
-        import obspy
+        import obspy  # noqa: PLC0415
 
         assert isinstance(stream_from_patch, obspy.Stream)
 
