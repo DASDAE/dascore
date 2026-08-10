@@ -260,15 +260,6 @@ class Cable(InventoryModel):
     diameter: float | None = Field(
         default=None, description="Outer cable diameter in meters."
     )
-    strength_member: str = Field(
-        default="", description="Strength member construction."
-    )
-    maximum_load: float | None = Field(
-        default=None, description="Maximum load in newtons."
-    )
-    minimum_bend_radius: float | None = Field(
-        default=None, description="Minimum bend radius in meters."
-    )
     specification: ExternalResource | str | None = Field(
         default=None, description="External specification or datasheet."
     )
