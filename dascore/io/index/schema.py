@@ -286,6 +286,12 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "source_path",
         "source_format",
         "source_version",
+        # the keyword names the row is loaded with: an attr called one of
+        # these would be splatted into dc.read alongside the row's own
+        # value and collide with it.
+        "path",
+        "file_format",
+        "file_version",
         # spool instruction machinery
         "current_index",
         "source_index",

@@ -9,16 +9,19 @@ import dascore as dc
 from dascore.core.inventory import (
     Acquisition,
     CoordinateReferenceSystem,
+    DistanceMap,
     FiberArray,
     Geometry,
     Inventory,
     Network,
+    OpticalMeasurement,
     OpticalPath,
     OpticalPathAnnotation,
 )
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
     InvalidInventoryError,
+    InvalidSpoolError,
     ParameterError,
     PatchError,
 )
@@ -127,9 +130,21 @@ class TestAttrs:
         """The fields the inventory is authoritative for, under its names."""
         attrs = patch.enrich(inventory, coords=False).attrs
         assert attrs.gauge_length == 10.0
-        assert attrs.spatial_interval == 1.0
+        assert attrs.pulse_width == 1e-8
         assert attrs.get("interrogator.serial_number") == "sn-1"
         assert attrs.get("interrogator.model") == "FI-1"
+
+    def test_blanket_excludes_processing_maintained(self, patch, inventory):
+        """Decimating changes the sample rate without the inventory being wrong."""
+        decimated = patch.decimate(time=2)
+        out = decimated.enrich(inventory, coords=False)
+        assert "sample_rate" not in dict(out.attrs)
+        assert "spatial_interval" not in dict(out.attrs)
+
+    def test_named_processing_maintained_restores(self, patch, inventory):
+        """Naming one restores the as-acquired value, as for data state."""
+        out = patch.enrich(inventory, attrs=("sample_rate",), coords=False)
+        assert out.attrs.sample_rate == 250.0
 
     def test_blanket_excludes_data_state(self, patch, inventory):
         """Processing owns the data trio; blanket enrich must not undo it."""
@@ -521,3 +536,208 @@ class TestAttachInventory:
         """Anything else names no metadata to attach."""
         with pytest.raises(ParameterError, match="needs an Inventory"):
             dc.spool(patch).attach_inventory("inventory.yaml")
+
+
+class TestReviewFindings:
+    """Defects found reviewing the first cut of enrich."""
+
+    def test_geometry_coords_carry_crs_units(self, patch, inventory):
+        """The CRS states its units, so the coordinates carry them."""
+        out = patch.enrich(inventory, attrs=False, coords=("x", "z"))
+        assert out.get_coord("x").units == dc.get_quantity("degree")
+        assert out.get_coord("z").units == dc.get_quantity("meter")
+
+    def test_optical_distance_is_in_meters(self, patch, inventory):
+        """Path lengths are meters, so path distance is too."""
+        renamed = patch.rename_coords(distance="instrument_distance")
+        out = renamed.enrich(inventory, attrs=False, coords=("distance",))
+        assert out.get_coord("distance").units == dc.get_quantity("m")
+
+    def test_default_enrich_is_idempotent(self, patch, inventory):
+        """Re-enriching is a refresh, coordinates included."""
+        once = patch.enrich(inventory)
+        twice = once.enrich(inventory)
+        assert set(twice.coords.coord_map) == set(once.coords.coord_map)
+        assert twice.equals(once)
+
+    def test_disagreeing_coord_still_raises(self, patch, inventory):
+        """A coordinate the inventory contradicts is not silently replaced."""
+        wrong = patch.enrich(inventory, attrs=False, coords=("zone",))
+        values = np.array(["elsewhere"] * len(wrong.get_coord("zone")))
+        wrong = wrong.update_coords(zone=("distance", values))
+        with pytest.raises(PatchError, match="does not agree"):
+            wrong.enrich(inventory, attrs=False, coords=("zone",))
+
+    def test_empty_coord_request_needs_no_map(self, patch, inventory):
+        """Asking for no coordinates asks nothing of the channel map."""
+        no_map = _replace_acquisition(inventory, distance_map=None)
+        out = patch.enrich(no_map, coords=())
+        assert out.attrs.gauge_length == 10.0
+
+    def test_blanket_needs_no_map_when_path_is_bare(self, patch, inventory):
+        """A path with nothing to project asks nothing of the map either."""
+        no_map = _replace_acquisition(inventory, distance_map=None)
+        bare = _replace_path(no_map, geometry=(), annotations=())
+        out = patch.enrich(bare)
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
+
+    def test_unset_track_field_is_missing(self, patch, inventory):
+        """A field no interval states defines nothing, so on_missing rules."""
+        with pytest.raises(PatchError, match=r"defines no 'coupling\.depth'"):
+            patch.enrich(inventory, attrs=False, coords=("coupling.depth",))
+
+    def test_unknown_track_field_is_missing(self, patch, inventory):
+        """A misspelled field is missing rather than an all-null coordinate."""
+        out = patch.enrich(
+            inventory, attrs=False, coords=("coupling.nope",), on_missing="skip"
+        )
+        assert "coupling.nope" not in set(out.coords.coord_map)
+
+    def test_track_field_units(self, patch, inventory):
+        """Track fields the inventory documents in meters say so."""
+        old = inventory.networks[0].fiber_arrays[0].optical_paths[0].coupling[0]
+        inv = _replace_path(inventory, coupling=(old.new(depth=2.0),))
+        out = patch.enrich(inv, attrs=False, coords=("coupling.depth",))
+        assert out.get_coord("coupling.depth").units == dc.get_quantity("m")
+
+    def test_union_carries_the_inventory(self, patch, inventory):
+        """Combining spools keeps metadata the operands already had."""
+        attached = dc.spool(patch).attach_inventory(inventory)
+        combined = attached + dc.spool(patch)
+        assert combined[0].attrs.gauge_length == 10.0
+        assert (dc.spool(patch) + attached)[0].attrs.gauge_length == 10.0
+
+    def test_union_of_different_inventories_raises(self, patch, inventory):
+        """Two attachments have no combined meaning."""
+        first = dc.spool(patch).attach_inventory(inventory)
+        second = dc.spool(patch).attach_inventory(inventory, coords=False)
+        with pytest.raises(InvalidSpoolError, match="different inventories"):
+            first + second
+
+
+class TestSecondReviewFindings:
+    """Defects found by the adversarial reviews of the first fixes."""
+
+    def test_endpoint_belongs_to_its_own_run(self, patch, inventory):
+        """A track's coverage end is local: a later interval cannot move it."""
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        far = path.coupling[0].new(start_distance=300.0, end_distance=400.0)
+        with_far = _replace_path(inventory, coupling=(path.coupling[0], far))
+        near = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
+        both = with_far.networks and patch.enrich(
+            with_far, attrs=False, coords=("coupling.medium",)
+        )
+        # channel 150 sits at path distance 250, the end of the first run
+        assert near.get_coord("coupling.medium").values[150] == "soil"
+        assert both.get_coord("coupling.medium").values[150] == "soil"
+
+    def test_geometry_endpoint_is_local(self, patch, inventory):
+        """The same rule holds for the geometry track."""
+        first = Geometry(distance=(100.0, 200.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
+        second = Geometry(distance=(300.0, 400.0), coordinates=((3.0, 3.0), (4.0, 4.0)))
+        inv = _replace_path(inventory, geometry=(first, second))
+        out = patch.enrich(inv, attrs=False, coords=("x",))
+        # channel 100 is path distance 200, the last point of the first segment
+        assert out.get_coord("x").values[100] == 1.0
+
+    def test_multivalued_track_field_raises(self, patch, inventory):
+        """A per-wavelength loss is not one value per channel."""
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        component = path.optical_components[0]
+        measurements = (
+            OpticalMeasurement(wavelength=1550.0),
+            OpticalMeasurement(wavelength=1625.0),
+        )
+        multi = component.new(loss_db=(0.5, 0.3), loss_measurement=measurements)
+        inv = _replace_path(inventory, optical_components=(multi,))
+        with pytest.raises(PatchError, match="multi-valued"):
+            patch.enrich(inv, attrs=False, coords=("optical_components.loss_db",))
+
+    def test_nan_attr_is_filled_not_conflicted(self, patch, inventory):
+        """NaN is how a reader spells unknown, so the inventory fills it."""
+        unknown = patch.update_attrs(gauge_length=np.nan)
+        out = unknown.enrich(inventory, coords=False, conflicts="raise")
+        assert out.attrs.gauge_length == 10.0
+
+    def test_nan_marker_round_trips(self, patch, inventory):
+        """Re-enriching a nan-filled attr is a refresh, not a conflict."""
+        once = patch.enrich(
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="nan"
+        )
+        twice = once.enrich(
+            inventory,
+            attrs=("pulse_rate",),
+            coords=False,
+            on_missing="nan",
+            conflicts="raise",
+        )
+        assert np.isnan(twice.attrs.pulse_rate)
+
+    def test_missing_marker_matches_the_field(self, patch, inventory):
+        """A string field's missing marker is not a float."""
+        out = patch.enrich(
+            inventory, attrs=("firmware_version",), coords=False, on_missing="nan"
+        )
+        assert out.attrs.firmware_version is None
+
+    def test_geometryless_path_honors_on_missing(self, patch, inventory):
+        """Every axis of a path with no geometry is missing, not all-NaN."""
+        inv = _replace_path(inventory, geometry=())
+        with pytest.raises(PatchError, match="defines no 'x'"):
+            patch.enrich(inv, attrs=False, coords=("x",))
+
+    def test_single_point_instrument_map_is_an_offset(self, patch, inventory):
+        """Interrogator meters map onto path meters one for one."""
+        acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        one_point = acq.new(
+            spatial_interval=2.0,
+            distance_map=DistanceMap(instrument_distance=(0.0,), distance=(100.0,)),
+        )
+        inv = inventory.replace(acq, one_point)
+        renamed = patch.rename_coords(distance="instrument_distance")
+        out = renamed.enrich(inv, attrs=False, coords=("distance",))
+        assert out.get_coord("distance").values[10] == 110.0
+
+    def test_reserved_annotation_group_raises(self, inventory):
+        """A group named after a coordinate would shadow it at enrichment."""
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        annotation = OpticalPathAnnotation(
+            start_distance=100.0, end_distance=200.0, group="time", value=True
+        )
+        with pytest.raises(InvalidInventoryError, match="reserved name"):
+            path.new(annotations=(annotation,)).check()
+
+    def test_boolean_group_is_a_union(self, patch, inventory):
+        """Membership groups overlap, so any covering true interval wins."""
+        annotations = (
+            OpticalPathAnnotation(
+                start_distance=100.0, end_distance=400.0, group="wet", value=True
+            ),
+            OpticalPathAnnotation(
+                start_distance=200.0, end_distance=300.0, group="wet", value=False
+            ),
+        )
+        inv = _replace_path(inventory, annotations=annotations)
+        out = patch.enrich(inv, attrs=False, coords=("wet",))
+        assert out.get_coord("wet").values.all()
+
+    def test_missing_marker_for_a_non_scalar_field(self, patch, inventory):
+        """A field which is neither text nor number has no numeric marker."""
+        out = patch.enrich(
+            inventory, attrs=("data_units",), coords=False, on_missing="nan"
+        )
+        assert out.attrs.data_units is None
+
+    def test_coord_unit_change_is_a_disagreement(self, patch, inventory):
+        """The same numbers in other units are other coordinates."""
+        enriched = patch.enrich(inventory, attrs=False, coords=("x",))
+        stripped = enriched.update_coords(x=("distance", enriched.get_array("x")))
+        with pytest.raises(PatchError, match="does not agree"):
+            stripped.enrich(inventory, attrs=False, coords=("x",))
+
+    def test_coord_dtype_change_is_a_disagreement(self, patch, inventory):
+        """A coordinate of another dtype is not the one enrich would add."""
+        floats = np.zeros(len(patch.get_coord("distance")))
+        collides = patch.update_coords(noisy=("distance", floats))
+        with pytest.raises(PatchError, match="does not agree"):
+            collides.enrich(inventory, attrs=False, coords=("noisy",))

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, PatchType, attr_conflict_description
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     VALID_COORDINATE_LABELS,
+    Interrogator,
     Inventory,
     ResolvedContext,
     _annotation_kind,
@@ -26,10 +28,22 @@ from dascore.utils.time import to_datetime64
 # leaves them alone; naming one explicitly restores the as-acquired value.
 _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 
+# Observing-system facts which processing nevertheless maintains: decimating
+# in time changes the sample rate, and in distance the channel spacing. They
+# are excluded from blanket enrichment for the same reason as the data trio,
+# and naming one restores the as-acquired value.
+_PROCESSING_MAINTAINED_ATTRS = ("sample_rate", "spatial_interval")
+
 _VALID_ON_MISSING = ("raise", "nan", "skip")
 
 # Tracks whose fields enrich can project, and where their intervals live.
 _TRACK_NAMES = ("optical_components", "geometry", "coupling")
+
+# Track fields whose units the inventory documents.
+_TRACK_FIELD_UNITS = {
+    "coupling.depth": "m",
+    "optical_components.optical_length": "m",
+}
 
 on_missing_description = """
 on_missing
@@ -150,7 +164,9 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
         return {}
     system = _get_system_attrs(inventory, context)
     if attrs is True:
-        return system
+        return {
+            i: v for i, v in system.items() if i not in _PROCESSING_MAINTAINED_ATTRS
+        }
     available = dict(system)
     for name in _DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
@@ -167,13 +183,41 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
             )
             raise PatchError(msg)
         elif on_missing == "nan":
-            out[name] = np.nan
+            out[name] = _missing_marker(context, name)
     return out
 
 
+def _missing_marker(context, name):
+    """
+    Return the missing marker matching the field's type.
+
+    NaN is the marker a number can carry; nothing else has one, so None
+    stands for "the inventory does not say".
+    """
+    prefix, _, field = name.rpartition(".")
+    model = Interrogator if prefix == "interrogator" else type(context.acquisition)
+    info = model.model_fields.get(field)
+    annotation = None if info is None else info.annotation
+    return np.nan if _is_numeric_annotation(annotation) else None
+
+
+def _is_numeric_annotation(annotation) -> bool:
+    """Return True when a field annotation admits a plain number."""
+    if annotation is float or annotation is int:
+        return True
+    return any(_is_numeric_annotation(x) for x in get_args(annotation))
+
+
 def _is_unset(value) -> bool:
-    """Return True when an attr holds no information."""
-    return value is None or (isinstance(value, str) and not value)
+    """
+    Return True when an attr holds no information.
+
+    NaN is how readers spell an unknown number, so a NaN placeholder is
+    filled rather than treated as a value which disagrees.
+    """
+    if value is None or (isinstance(value, str) and not value):
+        return True
+    return isinstance(value, float | np.floating) and bool(np.isnan(value))
 
 
 def _values_equal(value1, value2) -> bool:
@@ -261,14 +305,25 @@ def _fill_from_intervals(distances, intervals, values, kind):
     fill = {"boolean": False, "numeric": np.nan}.get(kind, None)
     out = np.full(len(distances), fill, dtype=object)
     spans = [(lo, hi, value) for (lo, hi), value in zip(intervals, values) if lo < hi]
-    outer = max((hi for _, hi, _ in spans), default=None)
+    claimed = np.zeros(len(distances), dtype=bool)
+    for lo, hi, _ in spans:
+        claimed |= (distances >= lo) & (distances < hi)
     for lo, hi, value in spans:
         covered = (distances >= lo) & (distances < hi)
-        if hi == outer:  # the outermost covered endpoint is included
-            covered |= distances == hi
+        # The end of a coverage run belongs to the interval which ends
+        # there unless another interval claims it, so the last channel of
+        # a run is not left out by the half-open rule.
+        covered |= (distances == hi) & ~claimed
+        if isinstance(value, tuple | list):
+            msg = (
+                f"Cannot project the multi-valued {value!r} onto channels; "
+                "a coordinate holds one value per channel."
+            )
+            raise PatchError(msg)
         if kind == "boolean":
-            # membership groups may overlap, so a channel belongs when any
-            # covering interval says it does.
+            # Membership groups may overlap, so a channel belongs when any
+            # covering interval says it does: the group is the union of its
+            # true intervals.
             if value:
                 out[covered] = True
         else:
@@ -302,18 +357,29 @@ def _get_track_coord(path, track, field, distances):
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]
+    if all(x is None for x in values):
+        # Either the field is misspelled or no interval states it; both
+        # mean the inventory defines nothing here.
+        return None
     kinds = {_annotation_kind(x) for x in values if x is not None}
     kind = kinds.pop() if len(kinds) == 1 else "string"
-    return _fill_from_intervals(distances, intervals, values, kind)
+    filled = _fill_from_intervals(distances, intervals, values, kind)
+    if units := _TRACK_FIELD_UNITS.get(f"{track}.{field}"):
+        return get_coord(data=filled, units=units)
+    return filled
 
 
 def _get_geometry_coord(inventory, path, label, distances):
-    """Return one coordinate axis of the path geometry."""
-    index = inventory.coordinate_reference_system.axis_index(label)
+    """Return one coordinate axis of the path geometry, with its units."""
+    crs = inventory.coordinate_reference_system
+    index = crs.axis_index(label)
+    if not path.geometry:
+        return None
     coords = path.coordinates_at(distances)
     if index >= coords.shape[1]:
         return None
-    return coords[:, index]
+    units = crs.units[index] if index < len(crs.units) else None
+    return get_coord(data=coords[:, index], units=units)
 
 
 def _get_blanket_coord_names(inventory, path) -> list[str]:
@@ -334,7 +400,8 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
 def _get_coord_values(inventory, path, name, distances, optical_distances):
     """Return the values of one requested coordinate, or None if undefined."""
     if name == "distance":
-        return optical_distances
+        # Optical path distance is in meters, as every path length is.
+        return get_coord(data=optical_distances, units="m")
     track, _, field = name.partition(".")
     if track in _TRACK_NAMES and field:
         return _get_track_coord(path, track, field, distances)
@@ -343,9 +410,21 @@ def _get_coord_values(inventory, path, name, distances, optical_distances):
     return _get_annotation_coord(path, name, distances)
 
 
-def _get_coords(
-    inventory, context, patch, coords, channel_name, dim, distances, on_missing
-) -> dict:
+def _coords_equal(existing, values) -> bool:
+    """Return True when a patch coordinate already holds these values."""
+    other = values if isinstance(values, BaseCoord) else get_coord(data=values)
+    if existing.units != other.units or existing.shape != other.shape:
+        return False
+    first, second = existing.values, other.values
+    if first.dtype != second.dtype:
+        return False
+    equal = first == second
+    if np.issubdtype(first.dtype, np.floating):
+        equal |= np.isnan(first) & np.isnan(second)
+    return bool(np.all(equal))
+
+
+def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     """Return the coordinates to add to the patch."""
     path = context.optical_path
     if path is None:
@@ -358,6 +437,10 @@ def _get_coords(
         raise PatchError(msg)
     blanket = coords is True
     names = _get_blanket_coord_names(inventory, path) if blanket else iterate(coords)
+    if not names:
+        # Nothing to project, so the patch needs no channel mapping.
+        return {}
+    channel_name, dim, distances = _get_channel_distances(patch, context.acquisition)
     out = {}
     for name in names:
         if name == channel_name:
@@ -368,13 +451,16 @@ def _get_coords(
                 f"(patch.rename_coords({name}='instrument_distance'))."
             )
             raise PatchError(msg)
-        if name in patch.coords.coord_map:
+        values = _get_coord_values(inventory, path, name, distances, distances)
+        if (existing := patch.coords.coord_map.get(name)) is not None:
+            if values is not None and _coords_equal(existing, values):
+                continue  # re-enriching is a refresh, not a collision
             msg = (
-                f"The patch already has a {name!r} coordinate; enrich will "
-                "not overwrite it. Rename or drop it first."
+                f"The patch already has a {name!r} coordinate which the "
+                "inventory does not agree with; enrich will not overwrite "
+                "it. Rename or drop it first."
             )
             raise PatchError(msg)
-        values = _get_coord_values(inventory, path, name, distances, distances)
         if values is None:
             if blanket or on_missing == "skip":
                 continue
@@ -468,12 +554,7 @@ def enrich(
     updates, drops = _apply_conflicts(patch, new_attrs, conflicts)
     new_coords = {}
     if coords is not False and coords is not None:
-        channel_name, dim, distances = _get_channel_distances(
-            patch, context.acquisition
-        )
-        new_coords = _get_coords(
-            inventory, context, patch, coords, channel_name, dim, distances, on_missing
-        )
+        new_coords = _get_coords(inventory, context, patch, coords, on_missing)
     out = patch
     if drops:
         out = out.new(attrs=dc.PatchAttrs.from_dict(dict(out.attrs)).drop(*drops))

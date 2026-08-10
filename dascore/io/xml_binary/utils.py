@@ -167,7 +167,7 @@ def _paths_to_df(paths, metadata, attr_cls):
             {"time": time_coord, "distance": distance_coord},
             dims=dims,
         )
-        attrs = attr_cls(path=path, **base_attrs).model_dump()
+        attrs = attr_cls(**base_attrs).model_dump()
         record = dict(attrs)
         for name, summary in cm.to_summary_dict().items():
             for field, value in summary.model_dump().items():
@@ -192,7 +192,7 @@ def _read_single_file(path, metadata, time, distance, attr_cls):
     size = np.prod(cm.shape)
     assert memmap.size == size, f"wrong data shape for {path}"
     data = memmap.reshape(cm.shape)
-    attrs = attr_cls(path=path, **base_attrs)
+    attrs = attr_cls(**base_attrs)
     patch = dc.Patch(
         data=data,
         dims=STANDARD_DIMS,

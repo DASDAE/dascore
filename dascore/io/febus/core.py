@@ -62,7 +62,7 @@ class FebusPatchAttrs(dc.PatchAttrs):
     """
 
     gauge_length: float = np.nan
-    pulse_width: float = np.nan
+    pulse_length: float = np.nan
 
     group: str = ""
     source: str = ""

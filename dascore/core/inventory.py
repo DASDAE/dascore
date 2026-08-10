@@ -651,7 +651,10 @@ class DistanceMap(InventoryModel):
     numbers, ``instrument_distance`` when it reports its own nominal meters.
     Values between control points are piecewise-linearly interpolated;
     channels outside the covered range are undefined (NaN). A single-point
-    map takes its slope from the acquisition's nominal ``spatial_interval``.
+    map states an origin and takes its slope from the axis it is written
+    in: the acquisition's nominal ``spatial_interval`` for a channel axis,
+    and one meter of path per interrogator meter for an
+    ``instrument_distance`` axis.
     """
 
     channel: tuple[float, ...] | None = Field(
@@ -711,8 +714,9 @@ class DistanceMap(InventoryModel):
         values
             Channel numbers or instrument distances (per the populated axis).
         slope
-            Distance per input unit, used only for single-point maps
-            (normally the acquisition's nominal ``spatial_interval``).
+            Distance per input unit, used only for single-point maps. The
+            caller supplies it in the units of the populated axis; see
+            ``Acquisition.channel_to_distance``.
         """
         vals = np.atleast_1d(np.asarray(values, dtype=float))
         source = np.asarray(self.source_values, dtype=float)
@@ -797,7 +801,8 @@ class Acquisition(TimeRangedModel):
         description=(
             "Nominal spatial sampling interval between channels in meters. "
             "Participates in channel resolution only as the affine slope, or "
-            "as the slope of a single-point distance_map."
+            "as the slope of a single-point distance_map written on the "
+            "channel axis."
         ),
     )
     start_distance: FiniteFloat | None = Field(
@@ -838,10 +843,12 @@ class Acquisition(TimeRangedModel):
         Uses the measured ``distance_map`` when present, else the affine
         ``start_distance`` + ``spatial_interval`` form.
         """
-        if self.distance_map is not None:
-            return self.distance_map.map_to_distance(
-                values, slope=self.spatial_interval
-            )
+        if (dist_map := self.distance_map) is not None:
+            # The slope carries the units of the map's input axis: meters of
+            # path per channel for a channel axis, and per interrogator
+            # meter -- nominally one -- for an instrument_distance axis.
+            slope = self.spatial_interval if dist_map.channel is not None else 1.0
+            return dist_map.map_to_distance(values, slope=slope)
         if self.start_distance is None or self.spatial_interval is None:
             msg = (
                 "Acquisition defines no channel-resolution mechanism; set "
@@ -866,6 +873,14 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 
 _MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
+
+# Names an annotation group may not take: a group becomes a patch coordinate
+# at enrichment, where it would shadow one of these.
+RESERVED_GROUP_NAMES = frozenset(
+    {"time", "distance", "channel", "instrument_distance"}
+    | {"optical_components", "geometry", "coupling", "annotations"}
+    | set(VALID_COORDINATE_LABELS)
+)
 
 
 def _times_equal(time1, time2) -> bool:
@@ -965,8 +980,10 @@ class OpticalPath(TimeRangedModel):
         """
         Return CRS coordinates at the requested optical distances.
 
-        Uncovered distance returns NaN rows. Segment coverage is half-open;
-        the outermost covered endpoint of the geometry track is included.
+        Uncovered distance returns NaN rows. Segment coverage is half-open,
+        with the end of each coverage run included: a distance on a
+        segment's last control point belongs to that segment unless another
+        segment claims it.
         """
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         if not self.geometry:
@@ -979,13 +996,16 @@ class OpticalPath(TimeRangedModel):
             seg_coords = segment.interpolate(dist)
             filled = ~np.isnan(seg_coords[:, 0])
             out[filled] = seg_coords[filled]
-        # The outermost endpoint of the geometry coverage domain is included.
-        outer = max(seg.interval[1] for seg in self.geometry)
-        at_outer = dist == outer
-        if np.any(at_outer):
-            segment = max(self.geometry, key=lambda s: s.interval[1])
-            coords = np.asarray(segment.coordinates, dtype=float)
-            out[at_outer] = coords[-1]
+        # A distance sitting exactly on a segment's last control point would
+        # otherwise fall outside every half-open segment. It belongs to that
+        # segment unless another one claims it, so the end of each coverage
+        # run is included without a segment elsewhere changing the answer.
+        claimed = ~np.isnan(out[:, 0])
+        for segment in self.geometry:
+            at_end = (dist == segment.interval[1]) & ~claimed
+            if np.any(at_end):
+                coords = np.asarray(segment.coordinates, dtype=float)
+                out[at_end] = coords[-1]
         return out
 
     def check(self, tolerance: float = 1e-9) -> Self:
@@ -1034,6 +1054,12 @@ class OpticalPath(TimeRangedModel):
         for annotation in self.annotations:
             groups.setdefault(annotation.group, []).append(annotation)
         errors = []
+        for group in sorted(set(groups) & RESERVED_GROUP_NAMES):
+            errors.append(
+                f"Annotation group {group!r} is a reserved name; a group "
+                "becomes a coordinate and cannot shadow a structural "
+                "coordinate, a typed track, or a coordinate label."
+            )
         for group, items in groups.items():
             kinds = {_annotation_kind(x.value) for x in items}
             if len(kinds) > 1:

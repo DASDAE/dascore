@@ -1,5 +1,7 @@
 """Shared utilities for IO implementations."""
 
+import warnings
+
 import numpy as np
 
 from dascore.constants import INVENTORY_ATTRS
@@ -37,8 +39,11 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, units_name="") -> 
     Patch attrs record each physical quantity in the units the inventory
     documents, so a file's own unit declaration is spent here at the parse
     boundary rather than travelling beside the value as a companion attr.
-    An absent or unreadable declaration leaves the value alone; the format's
-    documented default is then the assumption, and the reader says so.
+    A file which declares no units keeps its value: the format's documented
+    default is then the assumption, and the reader says so. A file which
+    declares units that cannot be used -- unreadable, or of the wrong
+    dimension -- has a value of unknown scale, so the value is dropped with
+    a warning rather than passed off as canonical.
 
     Parameters
     ----------
@@ -52,16 +57,22 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, units_name="") -> 
         The attr holding the file's units, ``f"{name}_units"`` by default.
         It is always removed, whether or not it could be used.
     """
-    raw_units = attrs.pop(units_name or f"{name}_units", None)
+    raw_units = unbyte(attrs.pop(units_name or f"{name}_units", None))
     value = attrs.get(name)
-    if value is None:
+    if value is None or raw_units is None or raw_units == "":
         return attrs
     try:
-        if units := get_quantity_str(unbyte(raw_units)):
-            value = convert_units(float(value), to_units=to_units, from_units=units)
-            attrs[name] = value
+        attrs[name] = convert_units(
+            float(value), to_units=to_units, from_units=get_quantity_str(raw_units)
+        )
     except (TypeError, ValueError, UnitError):
-        pass
+        msg = (
+            f"Dropping {name}={value!r}: the file states units {raw_units!r}, "
+            f"which cannot be converted to {to_units!r}, so the value's scale "
+            "is unknown."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        attrs.pop(name)
     return attrs
 
 

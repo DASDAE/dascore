@@ -208,13 +208,14 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     zone_attrs = feb.zone.attrs
     attr_mapping = {
         "GaugeLength": "gauge_length",
-        "PulseWidth": "pulse_width",
+        # Febus states the pulse as a length in meters (the vendor's own
+        # parameter tables list it beside the fiber length), so it keeps
+        # terra15's name for the same quantity rather than pulse_width,
+        # which the shared vocabulary defines as a time in seconds.
+        "PulseWidth": "pulse_length",
         "Version": "folog_a1_software_version",
     }
     out = maybe_get_items(zone_attrs, attr_mapping, unpack_names=set(attr_mapping))
-    # Febus states pulse width in nanoseconds; patch attrs use seconds.
-    if (pulse_width := out.get("pulse_width")) is not None:
-        out["pulse_width"] = float(pulse_width) * 1e-9
     out["group"] = feb.group_name
     out["source"] = feb.source_name
     out["zone"] = feb.zone_name

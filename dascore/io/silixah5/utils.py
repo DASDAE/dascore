@@ -88,14 +88,19 @@ def _get_coords(attrs_dict, shape):
     return cm
 
 
-def _get_attr_dict(resource):
-    """Get the attribute map."""
-    ds = resource["Acoustic"]
-    attrs_dict = maybe_get_items(ds.attrs, _ATTR_MAP)
+def _convert_pulse_width(attrs_dict):
+    """Convert the header's nanosecond pulse width to seconds, in place."""
     if (pulse_width := attrs_dict.get("pulse_width")) is not None:
         attrs_dict["pulse_width"] = convert_units(
             float(pulse_width), to_units="s", from_units=_PULSE_WIDTH_UNITS
         )
+    return attrs_dict
+
+
+def _get_attr_dict(resource):
+    """Get the attribute map."""
+    ds = resource["Acoustic"]
+    attrs_dict = _convert_pulse_width(maybe_get_items(ds.attrs, _ATTR_MAP))
     coords = _get_coords(attrs_dict, ds.shape)
     return attrs_dict, coords
 
@@ -219,8 +224,10 @@ def _get_carina_distance_coord(attrs_dict, resource, n_columns):
 
 def _get_carina_attrs_and_coords(resource):
     """Get the attr dict and coordinates for a Carina-variant file."""
-    attrs_dict = maybe_get_items(
-        resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
+    attrs_dict = _convert_pulse_width(
+        maybe_get_items(
+            resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
+        )
     )
     n_time, n_columns = resource[_CARINA_DATA_NAME].shape
     time_coord = _get_carina_time_coord(attrs_dict, n_time)

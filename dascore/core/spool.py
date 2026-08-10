@@ -77,6 +77,31 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.copy(deep=not copy_on_write)
 
 
+def _combine_inventories(first, second) -> tuple:
+    """
+    Return the (inventory, enrich kwargs) a union of two spools carries.
+
+    An inventory attached to only one operand still describes the patches
+    it came with, so it carries over; two different attachments have no
+    single answer and say so.
+    """
+    pairs = [
+        (getattr(x, "_inventory", None), getattr(x, "_enrich_kwargs", None))
+        for x in (first, second)
+    ]
+    attached = [x for x in pairs if x[0] is not None]
+    if not attached:
+        return None, None
+    if len(attached) == 2 and attached[0] != attached[1]:
+        msg = (
+            "The spools carry different inventories (or different enrich "
+            "arguments), which have no combined meaning. Attach one "
+            "inventory to the combined spool instead."
+        )
+        raise InvalidSpoolError(msg)
+    return attached[0]
+
+
 class BaseSpool(NamespaceOwner, abc.ABC):
     """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
@@ -165,6 +190,9 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         union = PatchCatalog.union(members)
         new = Spool()
         new._catalog = union
+        # An attached inventory is part of what a spool yields, so it must
+        # survive the union; two different ones have no combined answer.
+        new._inventory, new._enrich_kwargs = _combine_inventories(self, other)
         return new
 
     def _as_catalog_member(self):

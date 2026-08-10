@@ -12,10 +12,11 @@ import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.io.utils import get_attr_names
 from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-DEFAULT_ATTRS = set(PatchAttrs.model_fields)
+DEFAULT_ATTRS = get_attr_names(PatchAttrs)
 
 
 def type_not_supported(vargin):

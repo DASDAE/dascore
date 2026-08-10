@@ -46,6 +46,10 @@ from dascore.utils.patch import concatenate_patches
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
 
+# Row columns which name dc.read's own keyword arguments; passing one along
+# as a trim hint would collide with the value the loader already supplies.
+_READ_KWARGS = ("path", "file_format", "file_version")
+
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
@@ -371,7 +375,9 @@ class PlanResolver(PatchResolver):
             trim = {
                 k: v
                 for k, v in kwargs.items()
-                if not str(k).startswith("_") and k not in _SOURCE_COLUMNS
+                if not str(k).startswith("_")
+                and k not in _SOURCE_COLUMNS
+                and k not in _READ_KWARGS
             }
         patch = self.loader.resolve(kwargs, **trim)
         return apply_exact_residuals(patch, self.parent_residuals)

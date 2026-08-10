@@ -1566,14 +1566,14 @@ class TestConvertAttrUnits:
             {"gauge_length": "ten", "gauge_length_units": "m"},
         ],
     )
-    def test_unusable_conversion_keeps_value(self, attrs):
+    def test_unusable_conversion_drops_value(self, attrs):
         """
-        An unreadable, wrong-dimension, or non-numeric measure is left alone.
+        A value whose stated units cannot be used has an unknown scale.
 
-        Vendor headers carry junk; a reader which raised here would refuse
-        files whose data is perfectly good.
+        Keeping the number would pass it off as canonical: a gauge length
+        of "5 s" would be read downstream as 5 meters. Vendor headers do
+        carry junk, so this warns rather than refusing the file.
         """
-        expected = attrs["gauge_length"]
-        assert (
-            convert_attr_units(attrs, "gauge_length", "m")["gauge_length"] == expected
-        )
+        with pytest.warns(UserWarning, match="Dropping gauge_length"):
+            out = convert_attr_units(attrs, "gauge_length", "m")
+        assert "gauge_length" not in out

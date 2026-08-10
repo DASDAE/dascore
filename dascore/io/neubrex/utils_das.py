@@ -71,6 +71,7 @@ def _get_attr_dict(acoustic):
     """Get a dict of neubrex attributes."""
     mapping = {
         "GaugeLength": "gauge_length",
+        "GaugeLengthUnit": "gauge_length_units",
         "GaugeLengthUnits": "gauge_length_units",
         "IndexOfRefraction": "index_of_refraction",
         "PhaseToStrainConversion(MicroStrainPerRadian)": "phase_to_strain",
