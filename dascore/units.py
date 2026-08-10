@@ -138,6 +138,11 @@ def get_quantity(
     """
     Convert a value to a pint quantity.
 
+    Returns None for a null-ish input: None, Ellipsis, or the empty
+    string, which is how dascore spells "carries no units". Callers doing
+    arithmetic on the result have to handle that, since an unset unit
+    reaching a multiplication is a real error rather than a typing one.
+
     Parameters
     ----------
     value
@@ -235,9 +240,12 @@ def convert_units(
     return (data * mult1 + add) * mult2
 
 
-def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
+def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity | None:
     """
     Return quantity if it is compatible with dtype.
+
+    A quantity of None passes through for a non-time dtype and raises for
+    a time-like one, where seconds are the only allowable units.
 
     If not raise [UnitError](`dascore.exceptions.UnitError`).
     """
@@ -285,6 +293,8 @@ unit_like = str | bytes | Quantity | PlainUnit | None
 def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
+
+    Returns None for a null input, including the empty string.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
@@ -350,11 +360,11 @@ def get_inverted_quant(quant: Quantity | None, data_units):
 
 
 def get_filter_units(
-    arg1: Quantity | float,
-    arg2: Quantity | float,
+    arg1: Quantity | float | EllipsisType | None,
+    arg2: Quantity | float | EllipsisType | None,
     to_unit: unit_like,
     dim: str | None = None,
-) -> tuple[float, float]:
+) -> tuple[float | None, float | None]:
     """
     Get a tuple for applying filter based on dimension coordinates.
 
@@ -424,7 +434,9 @@ def get_filter_units(
     return out1, out2
 
 
-def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+def quant_sequence_to_quant_array(
+    sequence: Sequence[Quantity] | np.ndarray,
+) -> Quantity:
     """
     Convert a sequence of Quantities (eg list) to a Quantity array.
 
@@ -442,7 +454,10 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
     """
     if is_array(sequence):
         # This is a numpy array, just return multiplied by quantity.
-        return sequence * get_quantity("dimensionless")
+        # Cast because numpy declares ndarray.__mul__ as returning an
+        # ndarray; pint's reflected __rmul__ is what actually runs and it
+        # yields a Quantity.
+        return cast("Quantity", sequence * get_quantity("dimensionless"))
     # iterate the sequence and manually convert to base units.
     try:
         base_unit_sequence = [x.to_base_units() for x in sequence]
@@ -450,7 +465,7 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
         msg = "Not all values in sequence are quantities."
         raise UnitError(msg)
     if not len(base_unit_sequence):
-        return np.array([]) * get_quantity("dimensionless")
+        return cast("Quantity", np.array([]) * get_quantity("dimensionless"))
     units = {x.units for x in base_unit_sequence}
     if len(units) != 1:
         msg = "Not all values in sequence have compatible units."
@@ -469,6 +484,67 @@ def is_percent(value: Any) -> bool:
         Any value of any type to be to test if it is a percent quantity.
     """
     return isinstance(value, Quantity) and value.units == get_unit("percent")
+
+
+def is_data_size(value: Any) -> bool:
+    """
+    Return True if value is a quantity of information (bytes, bits, MB, ...).
+
+    Pint treats information as dimensionless, so a compatibility check
+    against bytes also passes for percents and bare dimensionless
+    quantities. The base unit is the only reliable discriminator.
+
+    Parameters
+    ----------
+    value
+        Any value of any type to test if it is a data size quantity.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import is_data_size
+    >>>
+    >>> assert is_data_size(25 * dc.units.megabytes)
+    >>> assert is_data_size(dc.get_quantity("1 MiB"))
+    >>>
+    >>> # Percents, strain and plain numbers are not sizes.
+    >>> assert not is_data_size(dc.get_quantity("50%"))
+    >>> assert not is_data_size(25)
+    """
+    return isinstance(value, Quantity) and value.to_base_units().units == get_unit(
+        "bit"
+    )
+
+
+def get_byte_count(value: Quantity) -> float:
+    """
+    Return the number of bytes a data size quantity represents.
+
+    Parameters
+    ----------
+    value
+        A quantity of information (eg 25 * dc.units.megabytes).
+
+    Notes
+    -----
+    This is the only correct way to get a byte count from a quantity.
+    In particular [`to_float`](`dascore.utils.time.to_float`) is not:
+    pint converts a dimensionless quantity to its base units, which for
+    information is *bits*, so anything routing a size through a plain
+    `float()` conversion is eight times too large.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import get_byte_count
+    >>>
+    >>> assert get_byte_count(25 * dc.units.megabytes) == 25_000_000
+    >>> assert get_byte_count(dc.get_quantity("1 MiB")) == 1_048_576
+    """
+    if not is_data_size(value):
+        msg = f"Expected a data size quantity (eg '25 MB'), got {value!r}."
+        raise UnitError(msg)
+    return value.to("byte").magnitude
 
 
 def maybe_convert_percent_to_fraction(obj):

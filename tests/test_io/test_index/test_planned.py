@@ -4,6 +4,7 @@ Tests for derived catalogs (plan-as-catalog) and coverage of their edges.
 
 from __future__ import annotations
 
+import pickle
 import re
 
 import numpy as np
@@ -11,14 +12,18 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.core.spool import BaseSpool
+from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.index.planned import (
     PlanResolver,
+    _aux_coord_info,
     _coord_record_from_row,
     _ns,
     collapse_working_df,
     derived_catalog,
 )
+from dascore.units import m
+from dascore.utils.chunk_plan import ChunkPlan, samples_adjusted_envelopes
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +40,9 @@ class TestHelpers:
         ts = pd.Timestamp("2020-01-01")
         assert _ns(ts) == _ns(ts.to_datetime64()) == ts.value
         td = pd.Timedelta(seconds=1)
-        assert _ns(td) == _ns(td.to_timedelta64()) == td.value
+        td_ns = _ns(td)
+        assert td_ns is not None
+        assert td_ns == _ns(td.to_timedelta64()) == td.value
         assert _ns(None) is None
 
     def test_coord_record_numpy_datetimes(self):
@@ -44,6 +51,7 @@ class TestHelpers:
         hi = np.datetime64("2020-01-02", "ns")
         row = {"time_min": lo, "time_max": hi, "time_step": np.timedelta64(1, "s")}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.value_kind == "time"
         assert record.min_ns == _ns(lo)
 
@@ -51,6 +59,7 @@ class TestHelpers:
         """A one-sided timedelta envelope keeps NaT rather than raising."""
         row = {"time_min": pd.Timedelta(seconds=1), "time_max": pd.NaT}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.min_ns == pd.Timedelta(seconds=1).value
         assert pd.isnull(np.timedelta64(record.max_ns, "ns"))
 
@@ -58,6 +67,7 @@ class TestHelpers:
         """A degenerate step leaves length unknown instead of raising."""
         row = {"time_min": 0.0, "time_max": 1.0, "time_step": 0.0}
         record = _coord_record_from_row(row, "time")
+        assert record is not None
         assert record.length is None
 
     def test_coord_record_empty_units_dropped(self):
@@ -69,6 +79,7 @@ class TestHelpers:
             "_distance_units": "",
         }
         record = _coord_record_from_row(row, "distance")
+        assert record is not None
         assert record.units is None
         assert record.length == 11
 
@@ -85,8 +96,6 @@ class TestHelpers:
 
     def test_derived_catalog_adds_patch_ids(self, patches):
         """source_rows without _patch_id get positional ids."""
-        from dascore.utils.chunk_plan import ChunkPlan
-
         spool = dc.spool(patches)
         rows = spool.get_contents().drop(columns=["_patch_id"], errors="ignore")
         rows = rows.reset_index(drop=True)
@@ -152,8 +161,6 @@ class TestDerivedComposition:
 
     def test_union_view_of_live_spools_pickles_composite(self, patches):
         """A selected union pickles a membership-restricted composite."""
-        import pickle
-
         t0 = patches[0].get_coord("time")
         combined = dc.spool(patches[:2]) + dc.spool(patches[2:])
         view = combined.select(time=(None, t0.max()))
@@ -166,8 +173,6 @@ class TestDerivedComposition:
         """A missing registry entry surfaces as MissingPatchError, not
         out-of-bounds.
         """
-        from dascore.exceptions import MissingPatchError
-
         spool = dc.spool(patches[:1])
         _ = spool.get_contents()  # realize rows
         spool._catalog.resolver._registry.clear()
@@ -176,7 +181,6 @@ class TestDerivedComposition:
 
     def test_union_with_third_party_spool(self, patches):
         """The BaseSpool fallback materializes third-party members."""
-        from dascore.core.spool import BaseSpool
 
         class MiniSpool(BaseSpool):
             def __init__(self, inner):
@@ -225,8 +229,6 @@ class TestRemainingEdges:
         """A quantity-selected chunked view re-chunks without applying
         unit-bearing bounds to envelopes (they stay load residuals).
         """
-        from dascore.units import m
-
         chunked = dc.spool(patches).chunk(time=2)
         selected = chunked.select(_coords={"distance": (0 * m, 10 * m)})
         merged = selected.chunk(time=None)
@@ -236,8 +238,6 @@ class TestRemainingEdges:
 
     def test_samples_adjust_skips_missing_columns(self):
         """Residuals naming absent envelope columns pass through."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
         residuals = (({"depth": (0, 5)}, True),)
         out = samples_adjusted_envelopes(df, residuals)
@@ -311,14 +311,10 @@ class TestAuxInfoEdges:
 
     def test_coord_record_missing_envelope_returns_none(self):
         """A row without envelope values yields no coord record."""
-        from dascore.io.index.planned import _coord_record_from_row
-
         assert _coord_record_from_row({}, "time") is None
 
     def test_absent_envelope_columns_skipped(self):
         """A mapped coord with no envelope columns contributes nothing."""
-        from dascore.io.index.planned import _aux_coord_info
-
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [1], "_modified": [False]}
         )
@@ -327,8 +323,6 @@ class TestAuxInfoEdges:
 
     def test_all_null_group_skipped(self):
         """An output whose members carry no values for a coord is skipped."""
-        from dascore.io.index.planned import _aux_coord_info
-
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [1], "_modified": [False]}
         )

@@ -542,7 +542,7 @@ def unbyte(byte_or_str: bytes) -> str: ...
 def unbyte(byte_or_str: _T) -> _T: ...
 
 
-def unbyte(byte_or_str):
+def unbyte(byte_or_str) -> str | _T:
     """
     Decode a bytes value, passing anything else through unchanged.
 
@@ -889,7 +889,8 @@ class _CanonicalRange:
 
     def for_patch_coord(self, coord) -> tuple:
         """Return the range in the representation this coord needs."""
-        from dascore.units import get_quantity
+        # deferred: dascore.units imports this module at import time
+        from dascore.units import get_quantity  # noqa: PLC0415
 
         coord_units = getattr(coord, "units", None)
         if coord_units is None:

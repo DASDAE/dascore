@@ -184,8 +184,9 @@ def _is_dasvader_jld2(h5) -> bool:
         return False
     # Certain refs that all dasvader files have.
     has_expected = EXPECTED.issubset(set(dtype_names))
-    # Data name can change.
-    has_data = DATA_NAMES & set(dtype_names)
+    # Data name can change. Coerced to a bool so an empty intersection
+    # returns False rather than the empty set the `and` would hand back.
+    has_data = bool(DATA_NAMES & set(dtype_names))
     return has_data and has_expected
 
 

@@ -17,10 +17,11 @@ from dascore.compat import random_state
 from dascore.config import config_context
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io import dasdae as dasdae_mod
+from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _SEPARATE_ATTRS_KEY,
     _decode_attr_value,
     _decode_legacy_attr_value,
     _encode_attr_value,
@@ -168,8 +169,6 @@ class TestReadDASDAE:
         self, random_patch, tmp_path_factory
     ):
         """New groups appended to a legacy file must not be legacy-stripped."""
-        from dascore.io.dasdae.utils import _SEPARATE_ATTRS_KEY
-
         path = tmp_path_factory.mktemp("dasdae_legacy_append") / "mixed.h5"
         old_patch = random_patch.update_attrs(tag="old")
         old_patch.io.write(path, "dasdae")
@@ -495,7 +494,7 @@ class TestDASDAEInternalHelpers:
             attrs: ClassVar[dict[str, str]] = {"_attrs_station": "unused"}
 
         monkeypatch.setattr(
-            dasdae_mod.utils,
+            dasdae_utils,
             "_decode_attr_value",
             lambda *_args, **_kwargs: np.asarray("A01"),
         )
@@ -513,7 +512,7 @@ class TestDASDAEInternalHelpers:
             group.attrs["_cdims_time"] = "time"
             group.create_dataset("_coord_time", data=np.array([0, 1]))
             monkeypatch.setattr(
-                dasdae_mod.utils,
+                dasdae_utils,
                 "_decode_attr_value",
                 lambda *_args, **_kwargs: np.asarray("A01"),
             )
@@ -556,7 +555,7 @@ class TestDASDAEInternalHelpers:
             def _forbid_full_read(*_args, **_kwargs):
                 raise AssertionError("full coord reads should be skipped")
 
-            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            monkeypatch.setattr(dasdae_utils, "_read_array", _forbid_full_read)
             coords = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
@@ -584,7 +583,7 @@ class TestDASDAEInternalHelpers:
             def _forbid_full_read(*_args, **_kwargs):
                 raise AssertionError("full coord reads should be skipped")
 
-            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            monkeypatch.setattr(dasdae_utils, "_read_array", _forbid_full_read)
             coords = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
@@ -601,7 +600,7 @@ class TestDASDAEInternalHelpers:
             )
             node.attrs["is_string"] = True
             node.attrs["original_string_dtype"] = "<U8"
-            sample = dasdae_mod.utils._read_array_sample(node, 0)
+            sample = dasdae_utils._read_array_sample(node, 0)
         assert sample == "alpha"
 
     @pytest.mark.parametrize(
@@ -844,9 +843,7 @@ class TestStringArrayHelpers:
             msg = "non-string object arrays should not be string-converted"
             raise AssertionError(msg)
 
-        monkeypatch.setattr(
-            dasdae_mod.utils, "convert_strings_to_bytes", _raise_if_called
-        )
+        monkeypatch.setattr(dasdae_utils, "convert_strings_to_bytes", _raise_if_called)
         with h5py.File(path, mode="w") as h5:
             group = h5.create_group("waveforms")
             with pytest.raises(TypeError, match=r"Object dtype|object arrays"):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +14,7 @@ import dascore as dc
 import dascore.examples
 from dascore.constants import ONE_SECOND
 from dascore.core.spool import Spool
-from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
 from dascore.utils.misc import register_func, suppress_warnings
 
 DIRECTORY_SPOOLS = []
@@ -259,8 +261,6 @@ class TestSelectedDirectorySpools:
         self, spool_dir, random_spool, first_patch_range
     ):
         """D1: any operation severs update()."""
-        from dascore.exceptions import InvalidSpoolError
-
         spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
             spool.update()
@@ -728,16 +728,12 @@ class TestDirectorySpoolSerialization:
 
     def test_pickle_round_trip(self, basic_file_spool):
         """A directory spool pickles and reopens its own connection."""
-        import pickle
-
         loaded = pickle.loads(pickle.dumps(basic_file_spool))
         assert len(loaded) == len(basic_file_spool)
         assert loaded[0].shape == basic_file_spool[0].shape
 
     def test_pickle_selected_view(self, basic_file_spool):
         """Selected views keep their selection through pickling."""
-        import pickle
-
         df = basic_file_spool.get_contents()
         sub = basic_file_spool.select(time=(df["time_min"].min(), None))
         loaded = pickle.loads(pickle.dumps(sub))
@@ -746,8 +742,6 @@ class TestDirectorySpoolSerialization:
     @pytest.mark.concurrency
     def test_process_pool_map(self, basic_file_spool):
         """Spool.map works with a process pool executor."""
-        from concurrent.futures import ProcessPoolExecutor
-
         with ProcessPoolExecutor(max_workers=1) as client:
             out = list(
                 basic_file_spool.map(_patch_shape, client=client, progress=False)

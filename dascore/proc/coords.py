@@ -10,7 +10,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord
+from dascore.core.coords import BaseCoord, CoordSegmented
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -896,8 +896,6 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.BaseSpool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    from dascore.core.coords import CoordSegmented
-
     if dim is not None and dim not in self.dims:
         msg = f"split_gaps dim must be one of {self.dims}, got {dim!r}."
         raise ParameterError(msg)

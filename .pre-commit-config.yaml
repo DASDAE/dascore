@@ -53,3 +53,9 @@ repos:
     rev: v1.6.27
     hooks:
     -   id: actionlint
+
+    # Audits github actions for security issues.
+-   repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+    -   id: zizmor

@@ -465,7 +465,9 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     return out.assign(_modified=~not_modified)
 
 
-def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray:
+def filter_df(
+    df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs
+) -> np.ndarray | pd.Series:
     """
     Determine if each row of the index meets some filter requirements.
 
@@ -487,8 +489,10 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray
 
     Returns
     -------
-    A boolean array of the same len as df indicating if each row meets the
-    requirements.
+    A boolean mask of the same len as df indicating if each row meets the
+    requirements. Whether it comes back as a bare array or a Series
+    depends on which queries applied, so treat it as an opaque boolean
+    container rather than relying on either.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)

@@ -25,13 +25,14 @@ from dascore.compat import UPath
 from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
+from dascore.io.core import is_directory_format
 from dascore.io.index.backend import get_backend, resolve_query
 from dascore.io.index.ingest import (
     SourceRecord,
     hive_path_attrs,
     summaries_to_records,
 )
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS
+from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (
     coerce_to_local_path,
@@ -235,8 +236,6 @@ class DBDirectoryIndexer:
 
     def _directory_format(self, path: Path) -> bool:
         """Return True when a directory is itself one FiberIO scan unit."""
-        from dascore.io.core import is_directory_format
-
         return is_directory_format(path)
 
     @staticmethod
@@ -461,7 +460,7 @@ class DBDirectoryIndexer:
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
         df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
-        return df.rename(columns={"patch_id": "_patch_id"})
+        return df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
 
     __call__ = get_contents
 

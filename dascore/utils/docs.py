@@ -135,7 +135,7 @@ def get_plugin_table() -> pd.DataFrame:
     and sorts alphabetically. Columns are ``namespace``, ``package_name``,
     and ``package_url``.
     """
-    from dascore.utils.namespace import _PLUGIN_REGISTRY_DIR
+    from dascore.utils.namespace import _PLUGIN_REGISTRY_DIR  # noqa: PLC0415
 
     frames = [pd.read_csv(p) for p in sorted(_PLUGIN_REGISTRY_DIR.glob("*.csv"))]
     if not frames:

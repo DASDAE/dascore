@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
+    CoordArray,
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
@@ -27,7 +29,9 @@ def float_gap_coord() -> CoordSegmented:
     """Two evenly sampled float blocks (0..9, 15..24) separated by a gap."""
     c1 = get_coord(start=0.0, stop=10.0, step=1.0)
     c2 = get_coord(start=15.0, stop=25.0, step=1.0)
-    return concat_coords(c1, c2)
+    out = concat_coords(c1, c2)
+    assert isinstance(out, CoordSegmented)
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -37,7 +41,9 @@ def time_gap_coord() -> CoordSegmented:
     t0 = np.datetime64("2020-01-01T00:00:00", "ns")
     c1 = get_coord(start=t0, stop=t0 + 10 * one_s, step=one_s)
     c2 = get_coord(start=t0 + 12 * one_s, stop=t0 + 22 * one_s, step=one_s)
-    return concat_coords(c1, c2)
+    out = concat_coords(c1, c2)
+    assert isinstance(out, CoordSegmented)
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -46,7 +52,9 @@ def mixed_segment_coord() -> CoordSegmented:
     c1 = get_coord(start=0.0, stop=10.0, step=1.0)
     c2 = get_coord(data=np.array([12.0, 12.1, 13.7, 20.0]))
     assert isinstance(c2, CoordMonotonicArray)
-    return concat_coords(c1, c2)
+    out = concat_coords(c1, c2)
+    assert isinstance(out, CoordSegmented)
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -54,7 +62,9 @@ def reverse_gap_coord() -> CoordSegmented:
     """A reverse-sorted segmented coordinate."""
     c1 = get_coord(start=24.0, stop=14.0, step=-1.0)
     c2 = get_coord(start=9.0, stop=-1.0, step=-1.0)
-    return concat_coords(c1, c2)
+    out = concat_coords(c1, c2)
+    assert isinstance(out, CoordSegmented)
+    return out
 
 
 class TestConstruction:
@@ -79,6 +89,7 @@ class TestConstruction:
         c1 = get_coord(data=np.arange(5.0))
         c2 = get_coord(start=8.0, stop=12.0, step=1.0)
         out = concat_coords(c1, c2)
+        assert isinstance(out, CoordSegmented)
         assert all(isinstance(x, CoordRange) for x in out.segments)
 
     def test_canonical_across_construction_orders(self):
@@ -193,6 +204,7 @@ class TestConstruction:
         """Segmented inputs contribute their segments."""
         c3 = get_coord(start=30.0, stop=40.0, step=1.0)
         out = concat_coords(float_gap_coord, c3)
+        assert isinstance(out, CoordSegmented)
         assert out.segment_count == 3
 
     def test_units_param_sets_units(self):
@@ -554,6 +566,7 @@ class TestSimplifyAndSnap:
             get_coord(data=values), get_coord(start=10.0, stop=14.0, step=1.0)
         )
         out = coord.simplify(0.1)
+        assert isinstance(out, CoordSegmented)
         assert all(isinstance(x, CoordRange) for x in out.segments)
 
     def test_negative_tolerance_raises(self, float_gap_coord):
@@ -700,6 +713,7 @@ class TestEdgeCases:
         a = get_coord(start=0.0, stop=10.0, step=1.0)
         b = CoordMonotonicArray(values=np.array([10.0, 11.0, 12.0, 13.5]))
         coord = concat_coords(a, b)
+        assert isinstance(coord, CoordSegmented)
         assert coord.segment_count == 2
         out = coord[0:13]
         assert isinstance(out, CoordRange)
@@ -712,8 +726,6 @@ class TestEdgeCases:
 
     def test_unsupported_segment_class_raises(self):
         """Coord classes other than range/monotonic are rejected."""
-        from dascore.core.coords import CoordArray
-
         bad = CoordArray(values=np.array([3.0, 1.0, 2.0]))
         good = get_coord(start=10.0, stop=20.0, step=1.0)
         with pytest.raises(ValidationError, match="CoordRange or CoordMonotonic"):
@@ -1055,6 +1067,7 @@ class TestFromArray:
         """A lone sample between gaps becomes its own segment."""
         values = np.array([0.0, 1, 2, 10, 20, 21, 22])
         coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
         assert coord.segment_count == 3
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities()) == 2
@@ -1067,6 +1080,7 @@ class TestFromArray:
             [t0 + np.arange(5) * one_s, t0 + (np.arange(5) + 8) * one_s]
         )
         coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
         assert coord.segment_count == 2
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
@@ -1082,6 +1096,7 @@ class TestFromArray:
         """Reverse-sorted arrays segment correctly."""
         values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
         coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
         assert coord.segment_count == 2
         assert coord.reverse_sorted
         assert np.array_equal(coord.values, values)
@@ -1121,8 +1136,6 @@ class TestPlannedSpoolWriteGuard:
     @pytest.fixture()
     def gapped_planned_spool(self, tmp_path):
         """A file-backed planned spool whose output spans a real gap."""
-        import warnings
-
         src = tmp_path / "src"
         src.mkdir()
         p1 = dc.get_example_patch()

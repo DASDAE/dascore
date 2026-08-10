@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect as _inspect
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.utils.chunk_plan as cp
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -14,7 +17,12 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.io.index.catalog import PatchCatalog
-from dascore.utils.chunk_plan import ChunkPlan, build_chunk_plan
+from dascore.utils.chunk_plan import (
+    ChunkPlan,
+    _sampling_group,
+    build_chunk_plan,
+    samples_adjusted_envelopes,
+)
 from dascore.utils.time import to_timedelta64
 
 ONE_S = np.timedelta64(1, "s")
@@ -402,8 +410,6 @@ class TestChunkPlanCoverageEdges:
 
     def test_partial_overlap_members(self):
         """Overlapping sources drop the covered span (non-overlap skip)."""
-        import numpy as np
-
         t0 = np.datetime64("2020-01-01", "ns")
         p1 = dc.get_example_patch(time_min=t0)
         step = p1.get_coord("time").step
@@ -416,9 +422,6 @@ class TestChunkPlanCoverageEdges:
 
     def test_user_stacklevel_fallback(self, monkeypatch):
         """With no user frame in the stack, the stacklevel falls back to 1."""
-        import inspect as _inspect
-
-        import dascore.utils.chunk_plan as cp
 
         # Every frame reports a dascore path, so no "user" frame is found.
         class _Frame:
@@ -433,36 +436,26 @@ class TestSamplingGroups:
 
     def test_close_steps_group(self):
         """Steps within tolerance of the anchor share a group."""
-        from dascore.utils.chunk_plan import _sampling_group
-
         labels = _sampling_group(pd.Series([1.0, 1.04]), 0.05)
         assert labels.nunique() == 1
 
     def test_chain_does_not_drift_past_tolerance(self):
         """Adjacent-close steps cannot chain past the group anchor."""
-        from dascore.utils.chunk_plan import _sampling_group
-
         labels = _sampling_group(pd.Series([1.00, 1.04, 1.08]), 0.05)
         assert list(labels) == [0, 0, 1]
 
     def test_negative_steps_group_by_magnitude(self):
         """Widely different negative steps never share a group."""
-        from dascore.utils.chunk_plan import _sampling_group
-
         labels = _sampling_group(pd.Series([-1.0, -5.0]), 0.05)
         assert labels.nunique() == 2
 
     def test_mixed_orientation_never_groups(self):
         """Equal magnitudes with opposite signs stay separate."""
-        from dascore.utils.chunk_plan import _sampling_group
-
         labels = _sampling_group(pd.Series([1.0, -1.0]), 0.05)
         assert labels.nunique() == 2
 
     def test_unknown_steps_share_one_group(self):
         """NaN steps keep their historical single-group behavior."""
-        from dascore.utils.chunk_plan import _sampling_group
-
         labels = _sampling_group(pd.Series([1.0, np.nan, np.nan]), 0.05)
         assert labels.nunique() == 2
         assert labels.iloc[1] == labels.iloc[2]
@@ -489,37 +482,27 @@ class TestSamplesAdjustedEnvelopes:
 
     def test_exclusive_stop(self):
         """The stop index is exclusive: (0, 5) ends at sample 4."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (0, 5)}, True),))
         assert out["time_max"].iloc[0] == 4.0
 
     def test_empty_window_drops_row(self):
         """A zero-length window contributes nothing."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (3, 3)}, True),))
         assert len(out) == 0
 
     def test_start_past_end_drops_row(self):
         """A window beyond the patch contributes nothing."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (50, 60)}, True),))
         assert len(out) == 0
 
     def test_stop_clamps(self):
         """A stop past the end clamps to the envelope max."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (2, 99)}, True),))
         assert out["time_min"].iloc[0] == 2.0
         assert out["time_max"].iloc[0] == 9.0
 
     def test_descending_orientation(self):
         """On a descending coord, sample 0 sits at the envelope max."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [-1.0]})
         out = samples_adjusted_envelopes(df, (({"time": (0, 5)}, True),))
         assert out["time_max"].iloc[0] == 9.0
@@ -550,15 +533,11 @@ class TestChunkOnlyOnDims:
 
     def test_aux_only_raises_with_detail(self, aux_time_patch):
         """The default error explains the name rides as a coordinate."""
-        from dascore.exceptions import ChunkError
-
         with pytest.raises(ChunkError, match="non-dimensional coordinate"):
             dc.spool([aux_time_patch]).chunk(time=None)
 
     def test_mixed_population_raises_by_default(self, aux_time_patch):
         """Mixed dim/aux populations fail eagerly, not at patch access."""
-        from dascore.exceptions import ChunkError
-
         sp = dc.spool([dc.get_example_patch(), aux_time_patch])
         with pytest.raises(ChunkError, match="lack the chunk dimension"):
             sp.chunk(time=None)
@@ -572,10 +551,6 @@ class TestChunkOnlyOnDims:
 
     def test_segmenting_aux_coord_raises(self):
         """chunk(<aux coord>=value) is rejected, not accidentally served."""
-        import numpy as np
-
-        from dascore.exceptions import ChunkError
-
         p = dc.get_example_patch()
         q = p.update_coords(sensor=("distance", np.arange(p.shape[0], dtype=float)))
         with pytest.raises(ChunkError, match="non-dimensional coordinate"):
@@ -609,23 +584,17 @@ class TestNegativeSamplesEnvelopes:
 
     def test_negative_start_resolves(self):
         """(-3, None) selects the last three samples."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (-3, None)}, True),))
         assert out["time_min"].iloc[0] == 7.0
         assert out["time_max"].iloc[0] == 9.0
 
     def test_negative_stop_resolves(self):
         """(None, -2) drops the last two samples."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(self._frame(), (({"time": (None, -2)}, True),))
         assert out["time_max"].iloc[0] == 7.0
 
     def test_unknown_step_keeps_envelope(self):
         """Rows whose count is unknown keep their candidacy envelope."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [np.nan]})
         out = samples_adjusted_envelopes(df, (({"time": (-3, None)}, True),))
         assert len(out) == 1
@@ -634,8 +603,6 @@ class TestNegativeSamplesEnvelopes:
 
     def test_drop_empty_false_keeps_rows(self):
         """Equality's variant keeps presented-but-empty rows."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         out = samples_adjusted_envelopes(
             self._frame(), (({"time": (3, 3)}, True),), drop_empty=False
         )
@@ -656,8 +623,6 @@ class TestNonIntSamplesIndices:
 
     def test_float_index_skipped(self):
         """A float index cannot adjust; the envelope stays candidacy."""
-        from dascore.utils.chunk_plan import samples_adjusted_envelopes
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [1.0]})
         out = samples_adjusted_envelopes(df, (({"time": (0.5, None)}, True),))
         assert out["time_min"].iloc[0] == 0.0

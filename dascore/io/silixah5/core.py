@@ -13,7 +13,14 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_attr, _get_patches, _get_version_string
+from .utils import (
+    _get_attr,
+    _get_carina_attr,
+    _get_carina_patches,
+    _get_carina_version_string,
+    _get_patches,
+    _get_version_string,
+)
 
 
 class SilixaPatchAttrs(dc.PatchAttrs):
@@ -31,6 +38,11 @@ class SilixaH5V1(FiberIO):
     name = "Silixa_H5"
     preferred_extensions = ("hdf5", "h5")
     version = "1"
+    # Hooks the Carina (netCDF-shell) variant overrides.
+    _data_name = "Acoustic"
+    _version_check = staticmethod(_get_version_string)
+    _attr_getter = staticmethod(_get_attr)
+    _patch_getter = staticmethod(_get_patches)
 
     def get_format(
         self,
@@ -43,23 +55,23 @@ class SilixaH5V1(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            An open h5 file which may contain Silixa data.
         """
-        version_str = _get_version_string(resource, self.version)
+        version_str = self._version_check(resource, self.version)
         if version_str:
             return self.name, version_str
         return False
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
-        attrs, coords = _get_attr(resource, SilixaPatchAttrs)
+        attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
             {
                 "attrs": attrs,
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "dtype": str(resource["Acoustic"].dtype),
+                "dtype": str(resource[self._data_name].dtype),
             }
         ]
 
@@ -71,7 +83,29 @@ class SilixaH5V1(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a single file with Silixa H5 data inside."""
-        patches = _get_patches(
+        patches = self._patch_getter(
             resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs
         )
         return dc.spool(patches)
+
+
+class SilixaH5V2(SilixaH5V1):
+    """
+    Support for the Silixa hdf5 format, Carina netCDF-shell variant.
+
+    These files (e.g. the INGV Mt Etna deployment in the PubDAS Global
+    DAS Month dataset) are written through a netCDF library: the Silixa
+    attrs sit on the file root instead of an "Acoustic" dataset, samples
+    live in a "Fiber" int16 dataset of shape (time, channel), and a
+    "ChannelMap" dataset places each stored column on the physical
+    fiber. The netCDF coordinate variables in the file are empty or
+    zeroed, so coordinates derive from the root attrs (StartTime,
+    Samplerate, Start Distance, SpatialResolution). Data are raw
+    interrogator counts, so no data units are set.
+    """
+
+    version = "2"
+    _data_name = "Fiber"
+    _version_check = staticmethod(_get_carina_version_string)
+    _attr_getter = staticmethod(_get_carina_attr)
+    _patch_getter = staticmethod(_get_carina_patches)

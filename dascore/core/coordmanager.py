@@ -45,7 +45,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -310,7 +310,12 @@ class CoordManager(DascoreBaseModel):
             out[coord_name] = (coord_dims, coord.update(**{attr: value}))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
-        return get_coord_manager(out, dims=dims)
+        # Cast because the factory normalizes the coord mapping in ways the
+        # class constructor does not, so this cannot go through
+        # self.__class__ the way drop_coords does. Exact for CoordManager
+        # itself; a subclass would already lose its type here, which is a
+        # limitation of the factory rather than of this annotation.
+        return cast("Self", get_coord_manager(out, dims=dims))
 
     # we need this here to maintain backwards compatibility
     update_coords = update
@@ -509,14 +514,14 @@ class CoordManager(DascoreBaseModel):
         new = {x: (None, self.coord_map[x]) for x in coord}
         return self.drop_coords(*coord)[0].update(**new)
 
-    def drop_disassociated_coords(self) -> Self:
+    def drop_disassociated_coords(self) -> tuple[Self, MaybeArray]:
         """Drop all coordinates not associated with a dimension."""
         cmap = self.coord_map
         dim_map = self.dim_map
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coords(*no_dim_coords)
 
-    def drop_private_coords(self, array=None) -> Self:
+    def drop_private_coords(self, array=None) -> tuple[Self, MaybeArray]:
         """Drop all coordinates whose name begin with an underscore."""
         cmap = self.coord_map
         private = tuple(x for x in cmap.keys() if x.startswith("_"))

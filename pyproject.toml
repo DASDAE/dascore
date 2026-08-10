@@ -2,11 +2,8 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm", "scikit-build"]
+requires = [ "setuptools>=61", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools-git-versioning]
-enabled = true
 
 [tool.setuptools]
 include-package-data = true
@@ -18,7 +15,7 @@ packages = ["dascore"]
 
 [project]
 name = "dascore"
-dynamic = ["version"]  # version is fetched by setuptools-git-versioning
+dynamic = ["version"]  # version is derived from git tags by setuptools_scm
 
 authors = [
   { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
@@ -119,10 +116,13 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile_base]", "dascore[extra
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
+AI4EPS__V1 = "dascore.io.ai4eps.core:AI4EPSV1"
 APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASVADER__V1 = "dascore.io.dasvader.core:DASVaderV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
+HDAS__V1 = "dascore.io.hdas.core:HDASV1"
+HDAS__V2 = "dascore.io.hdas.core:HDASV2"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 FEBUS_G1_CSV__V1_0 = "dascore.io.febus.core:FebusG1CSV1"
 FEBUS_BSL_H5__V1 = "dascore.io.febus.core:FebusBSLH5V1"
@@ -131,6 +131,7 @@ FEBUS__V1 = "dascore.io.febus.core:Febus1"
 FEBUS__V2 = "dascore.io.febus.core:Febus2"
 FEBUS_T1__V1 = "dascore.io.febus.core:FebusT1V1"
 NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
+ODH4__V1 = "dascore.io.odh4.core:ODH4V1"
 NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 OPTODAS__V9 = "dascore.io.optodas.core:OptoDASV9"
@@ -151,6 +152,7 @@ SEGY__V1_0 = "dascore.io.segy.core:SegyV1_0"
 SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
 SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
+SILIXA_H5__V2 = "dascore.io.silixah5:SilixaH5V2"
 SINTELA_BINARY__V3 = "dascore.io.sintela.core:SintelaBinaryV3"
 SINTELA_PROTOBUF__V1 = "dascore.io.sintela.core:SintelaProtobufV1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
@@ -185,6 +187,7 @@ lint.select = [
     "N",
     "NPY",
     "NPY201",
+    "PLC0415",
 ]
 
 # Exclude a variety of commonly ignored directories.
@@ -264,13 +267,26 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-include = ["dascore"]  # tests/ still has many diagnostics; expand scope later.
+# tests/ is deliberately out of scope. Type checking is worth most where a
+# wrong annotation propagates to users, and tests are leaf code with a fast,
+# loud failure signal and 100% enforced coverage. They also do type-hostile
+# things on purpose -- passing bad input to prove it is rejected, monkey
+# patching, building stubs -- so enforcing here costs suppressions on every
+# new test and risks silently weakening one during a mechanical fix.
+#
+# The value is in the scan, not the enforcement: because tests call the
+# public API the way users do, running ty over them audits whether dascore's
+# signatures are honest. Run it on demand -- after an API change, before a
+# release -- read what it says about dascore/, and fix that:
+#
+#   uvx ty@0.0.65 check --python .venv --config "src.include=['dascore','tests']"
+#
+# Diagnostics that only describe the tests themselves are not worth acting on.
+include = ["dascore"]
 
-# Rules with large pre-existing error counts, ignored until incrementally
-# burned down. Count as of 2026-08-07: invalid-return-type 26.
-# invalid-method-override and invalid-argument-type reached zero and are on.
-[tool.ty.rules]
-invalid-return-type = "ignore"
+# No rule is ignored globally: invalid-method-override,
+# invalid-argument-type and invalid-return-type have each been burned down
+# to zero and left on.
 
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.

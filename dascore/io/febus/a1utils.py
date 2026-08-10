@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import namedtuple
+from collections.abc import Iterator
 from functools import cache
 
 import numpy as np
@@ -289,7 +290,7 @@ def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:
     return cm
 
 
-def _yield_attrs_coords(fi) -> tuple[dict, CoordManager]:
+def _yield_attrs_coords(fi) -> Iterator[tuple[dict, CoordManager, _FebusSlice]]:
     """Scan a febus file, return metadata."""
     febuses = _flatten_febus_info(fi)
     for febus in febuses:

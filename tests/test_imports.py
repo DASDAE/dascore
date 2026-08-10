@@ -9,6 +9,9 @@ import sys
 
 import pytest
 
+import dascore
+from dascore.utils.imports import lazy_import
+
 
 def _run_snippet(code: str) -> None:
     """Run a python snippet in a subprocess."""
@@ -37,6 +40,24 @@ class TestLazyImports:
         _run_snippet(code)
 
     @pytest.mark.concurrency
+    def test_numba_not_imported(self):
+        """Importing dascore should not import numba (it is slow)."""
+        code = "import dascore, sys; assert 'numba' not in sys.modules"
+        _run_snippet(code)
+
+    @pytest.mark.concurrency
+    def test_numba_imported_with_jit_kernels(self):
+        """The jit kernel modules should pull numba in when they are imported."""
+        pytest.importorskip("numba")
+        code = (
+            "import sys, dascore; "
+            "assert 'numba' not in sys.modules; "
+            "import dascore.transform._kurtosis_kernels; "
+            "assert 'numba' in sys.modules"
+        )
+        _run_snippet(code)
+
+    @pytest.mark.concurrency
     def test_lazy_import_doesnt_import_scipy_signal_until_use(self):
         """The lazy proxy should resolve scipy.signal only on first use."""
         code = (
@@ -51,8 +72,6 @@ class TestLazyImports:
 
     def test_lazy_import_proxy_forwards_calls_and_attrs(self):
         """The lazy proxy should behave like the resolved target object."""
-        from dascore.utils.imports import lazy_import
-
         sqrt = lazy_import("math", "sqrt")
         assert sqrt(4) == 2
         assert sqrt.__name__ == "sqrt"
@@ -69,8 +88,6 @@ class TestLazyImports:
 
     def test_viz_module_lazy_loads_in_process(self):
         """Accessing dascore.viz should use the package attribute hook."""
-        import dascore
-
         assert callable(dascore.__getattr__("viz").waterfall)
 
     @pytest.mark.concurrency
@@ -95,7 +112,5 @@ class TestLazyImports:
 
     def test_missing_attribute_raises_in_process(self):
         """Unknown package attributes should raise in the parent process too."""
-        import dascore
-
         with pytest.raises(AttributeError, match="not_a_real_attribute"):
             dascore.__getattr__("not_a_real_attribute")

@@ -8,7 +8,7 @@ import pydantic
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError
 from dascore.utils.pd import (
     _model_list_to_df,
     adjust_segments,
@@ -18,6 +18,7 @@ from dascore.utils.pd import (
     get_interval_columns,
     list_ser_to_str,
     patch_to_dataframe,
+    relative_ranges_to_absolute,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -33,7 +34,7 @@ def example_df_2():
     """Create a simple df for testing. Example from Chris Albon."""
     time = to_datetime64("2020-01-03")
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
     raw_data = {
         "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
         "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
@@ -52,7 +53,7 @@ def example_df_timedeltas(example_df_2):
     """An example dataframe with timedelta columns."""
     time = to_timedelta64(10)
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
 
     out = example_df_2.assign(time_min=time_min, time_max=time_max)
     return out
@@ -226,6 +227,7 @@ class TestFilterDfAdvanced:
         tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
         out = filter_df(example_df_2, time=(tmax, None))
         # just the last row should have been selected
+        assert isinstance(out, pd.Series)
         assert out.iloc[-1] and out.astype(np.int64).sum() == 1
 
     def test_time_query_with_string(self, example_df_2):
@@ -552,18 +554,12 @@ class TestRelativeRangesToAbsolute:
 
     def test_missing_max_column_raises_spool_error(self):
         """A frame with the min but not the max column raises the doc'd error."""
-        from dascore.exceptions import InvalidSpoolQueryError
-        from dascore.utils.pd import relative_ranges_to_absolute
-
         df = pd.DataFrame({"time_min": [0.0]})  # no time_max
         with pytest.raises(InvalidSpoolQueryError, match="relative select"):
             relative_ranges_to_absolute(df, {"time": (1, -1)})
 
     def test_non_tuple_value_raises(self):
         """A non-(start, stop) relative value raises rather than mis-resolving."""
-        from dascore.exceptions import InvalidSpoolQueryError
-        from dascore.utils.pd import relative_ranges_to_absolute
-
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
         with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             relative_ranges_to_absolute(df, {"time": 5})

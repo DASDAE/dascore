@@ -19,6 +19,7 @@ from typing import (
     NotRequired,
     Protocol,
     TypedDict,
+    TypeVar,
     cast,
     get_type_hints,
 )
@@ -30,11 +31,13 @@ import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
+    float_select_type,
     path_types,
-    timeable_types,
+    time_select_type,
 )
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
+from dascore.core.coords import CoordSegmented
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.exceptions import (
@@ -428,7 +431,10 @@ class _FiberIOManager:
         self._fiber_io_by_input_type: dict[str, set[FiberIO]] = {}
         self._fiber_io_name_ver = set()
         # Snapshots derived from the registry; cleared when it changes.
-        self._lookup_cache: dict[tuple, frozenset | tuple] = {}
+        # Kept as two dicts rather than one keyed by a discriminating
+        # prefix so each stays a single value type.
+        self._input_type_cache: dict[str, frozenset[FiberIO]] = {}
+        self._prioritized_cache: dict[str, tuple[FiberIO, ...]] = {}
 
     def __getstate__(self) -> dict:
         """Return copy/pickle state without the process-local lock."""
@@ -467,20 +473,18 @@ class _FiberIOManager:
     @_locked("_lock")
     def _get_fiber_io_by_input_type(self, input_type) -> frozenset[FiberIO]:
         """Get a set of FiberIO instances that meet input type."""
-        key = ("input_type", input_type)
-        if (cached := self._lookup_cache.get(key)) is None:
+        if (cached := self._input_type_cache.get(input_type)) is None:
             if (out := self._fiber_io_by_input_type.get(input_type)) is None:
                 out = set()
                 for input_set in self._fiber_io_by_input_type.values():
                     out |= input_set
-            cached = self._lookup_cache[key] = frozenset(out)
+            cached = self._input_type_cache[input_type] = frozenset(out)
         return cached
 
     @_locked("_lock")
     def _get_prioritized_list(self, input_type="file") -> tuple[FiberIO, ...]:
         """Yield a prioritized list of fiber_ios."""
-        key = ("prioritized", input_type)
-        if (cached := self._lookup_cache.get(key)) is not None:
+        if (cached := self._prioritized_cache.get(input_type)) is not None:
             return cached
         # must load all plugins before getting list
         self.load_plugins()
@@ -499,7 +503,7 @@ class _FiberIOManager:
         valid_fiberio_by_type = self._get_fiber_io_by_input_type(input_type)
         out = tuple(x for x in maybe_ios if x in valid_fiberio_by_type)
         # And return fiberIOs that much the input type.
-        self._lookup_cache[key] = out
+        self._prioritized_cache[input_type] = out
         return out
 
     def load_plugins(self, format: str | None = None):
@@ -566,7 +570,8 @@ class _FiberIOManager:
         self._fiber_io_by_input_type.setdefault(fiberio.input_type, set()).add(fiberio)
         self._fiber_io_name_ver.add(id_tuple)
         # Snapshots derived from the registry are now stale.
-        self._lookup_cache.clear()
+        self._input_type_cache.clear()
+        self._prioritized_cache.clear()
 
     @cached_method
     def get_fiberio(
@@ -1059,8 +1064,8 @@ def read(
     path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
-    time: tuple[timeable_types | None, timeable_types | None] | None = None,
-    distance: tuple[float | None, float | None] | None = None,
+    time: time_select_type | None = None,
+    distance: float_select_type | None = None,
     **kwargs,
 ) -> dc.BaseSpool:
     """
@@ -1641,8 +1646,6 @@ def _resolves_assembled_patches(spool) -> bool:
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    from dascore.core.coords import CoordSegmented
-
     # Gap inspection depends on what the spool resolves, not on where
     # its ultimate members live: only literal file reads are always
     # contiguous (gapped patches are never persisted).
@@ -1680,14 +1683,19 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+# write hands back the path it was given, so the return follows the
+# argument rather than collapsing to the union: a Path in, a Path out.
+_PathT = TypeVar("_PathT", bound=path_types)
+
+
 def write(
     patch_or_spool,
-    path: path_types,
+    path: _PathT,
     file_format: str,
     file_version: str | None = None,
     split: bool = False,
     **kwargs,
-) -> Path:
+) -> _PathT:
     """
     Write a Patch or Spool to disk.
 

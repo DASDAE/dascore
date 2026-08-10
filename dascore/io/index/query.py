@@ -10,6 +10,7 @@ exactly are applied as pandas residual filters.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -186,8 +187,12 @@ def _compatible_coord_units(
     for other in query_units - {first}:
         convert_units(1.0, to_units=first, from_units=other)
     stored = {_normalize_unit(x) for x in rows.get("units", ())}
-    compatible = set()
-    for unit in stored - {None}:
+    compatible: set[str] = set()
+    for unit in stored:
+        # Skipped rather than differenced out so the unitless rows, which
+        # are handled by the check below, stay out of the result set.
+        if unit is None:
+            continue
         try:
             convert_units(1.0, to_units=unit, from_units=first)
         except UnitError:
@@ -475,8 +480,6 @@ def build_sql(
     SQL-resolvable (regex must inspect rows) and the caller must fall
     back to a projected count.
     """
-    import json
-
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
     if patch_ids is not None:

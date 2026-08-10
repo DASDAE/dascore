@@ -15,8 +15,12 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
+import dascore.utils.patch_assembly as assembly_module
+from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
+from dascore.units import get_quantity
 from dascore.utils.misc import get_middle_value
+from dascore.utils.patch import _get_merged_coord
+from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
 from dascore.utils.time import to_timedelta64
 
 
@@ -420,8 +424,6 @@ class TestChunkMerge:
 
     def test_non_si_merge_tolerance_uses_coord_units(self, random_patch):
         """Canonical index steps are not interpreted in native coord units."""
-        from dascore.utils.patch import _get_merged_coord
-
         size = len(random_patch.get_coord("distance"))
         first = dc.get_coord(data=np.arange(size, dtype=float), units="km")
         second = dc.get_coord(
@@ -702,8 +704,6 @@ class TestChunkMerge:
 
 def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
-    from dascore.utils.patch_assembly import PatchAssembler
-
     return PatchAssembler(load_patch=None, merge_kwargs={})
 
 
@@ -715,8 +715,6 @@ class TestStreamingMerge:
 
     def test_streaming_path_used(self, adjacent_spool_no_overlap, monkeypatch):
         """Ensure simple merges take the streaming path."""
-        from dascore.utils.patch_assembly import PatchAssembler
-
         called = []
         original = PatchAssembler._merge_patches_streaming
 
@@ -731,8 +729,6 @@ class TestStreamingMerge:
 
     def test_matches_materialized_merge(self, adjacent_spool_no_overlap, monkeypatch):
         """Streaming and concatenating merges must produce identical patches."""
-        import dascore.utils.patch_assembly as assembly_module
-
         streamed = adjacent_spool_no_overlap.chunk(time=None)[0]
         # Disabling the sample estimate forces the materialized path.
         monkeypatch.setattr(
@@ -978,17 +974,356 @@ class TestChainedChunk:
         assert len(rechunk) == 8
         assert {x.shape for x in rechunk} == {(300, 500)}
 
+    def test_size_after_merge(self, random_spool):
+        """A merged spool still knows its dtype."""
+        target = dc.get_quantity("1 MB")
+        out = random_spool.chunk(time=None).chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_size_after_other_dim_chunk(self, random_spool):
+        """A derived catalog carries the dtype to the next chunk."""
+        target = dc.get_quantity("1 MB")
+        out = random_spool.chunk(distance=100).chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_size_then_size(self, random_spool):
+        """Chunking by size twice narrows the plan monotonically.
+
+        This asserts on the plan rather than the assembled patches: a
+        same-dim rechunk currently mis-assembles one output regardless of
+        how the length is expressed (a plain `chunk(time=3.332).chunk(
+        time=1.664)` hits it too). See #832; tighten this to assert
+        `nbytes` once that is fixed.
+        """
+        first = random_spool.chunk(time=2 * dc.units.MB)
+        plan = first.chunk_plan(time=1 * dc.units.MB)
+        (part,) = plan.params["size"]["partitions"]
+        step = plan.outputs["time_step"].iloc[0]
+        spans = plan.outputs["time_max"] - plan.outputs["time_min"] + step
+        samples = (spans / step).round().astype(int)
+        assert (samples <= part["n_samples"]).all()
+        assert len(plan.outputs) > len(first)
+
 
 class TestMatchMergeUnits:
     """The member unit normalizer's defensive paths."""
 
     def test_incompatible_units_pass_through(self):
         """Dimensionality mismatches pass through for the merge to police."""
-        from dascore.units import get_quantity
-        from dascore.utils.patch_assembly import _match_merge_units
-
         patch = dc.get_example_patch().set_units(distance="m")
         target = get_quantity("s").units
         out, kept = _match_merge_units(patch, "distance", target)
         assert out is patch  # unconverted
         assert kept == target
+
+
+class TestUnitChunkValue:
+    """Chunk lengths carrying the coordinate's own units."""
+
+    def test_seconds_match_bare(self, random_spool):
+        """A duration in seconds equals the bare seconds value."""
+        quant = random_spool.chunk(time=3 * dc.units.s)
+        bare = random_spool.chunk(time=3)
+        assert len(quant) == len(bare)
+        assert [x.shape for x in quant] == [x.shape for x in bare]
+
+    def test_other_time_unit(self, random_spool):
+        """Milliseconds convert to the same chunk as seconds."""
+        out = random_spool.chunk(time=3000 * dc.units.ms)
+        assert len(out) == len(random_spool.chunk(time=3))
+
+    def test_distance_unit_converts(self, random_spool):
+        """A distance in feet converts to the coordinate's metres."""
+        out = random_spool.chunk(distance=100 * dc.units.ft)
+        assert len(out) == len(random_spool.chunk(distance=30.48))
+
+    def test_unitless_coord_raises(self, random_spool):
+        """A unit-bearing length needs a coordinate with units."""
+        patches = [x.set_units(distance=None) for x in random_spool]
+        with pytest.raises(UnitError, match="no units"):
+            dc.spool(patches).chunk(distance=100 * dc.units.ft)
+
+    def test_wrong_dimensionality_raises(self, random_spool):
+        """A length cannot chunk time."""
+        with pytest.raises(UnitError, match="time-like"):
+            random_spool.chunk(time=100 * dc.units.ft)
+
+
+class TestSizeChunk:
+    """Chunk lengths expressed as a data size."""
+
+    @staticmethod
+    def _make(dtype, start, distance=50, samples=400):
+        """A patch of a given dtype starting at a given time."""
+        rng = np.random.default_rng(42)
+        data = rng.random((distance, samples)).astype(dtype)
+        coords = {
+            "distance": np.arange(distance) * 1.0,
+            "time": start + np.arange(samples) * np.timedelta64(4, "ms"),
+        }
+        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+    @pytest.fixture(scope="class")
+    def mixed_dtype_spool(self):
+        """Two contiguous patches whose element types differ."""
+        start = np.datetime64("2020-01-01T00:00:00")
+        second = start + np.timedelta64(1600, "ms")
+        return dc.spool([self._make("float64", start), self._make("float32", second)])
+
+    @pytest.mark.parametrize(
+        "size", ("1 MB", "2 MB", "1 MiB", "500 kB"), ids=lambda x: x.replace(" ", "")
+    )
+    def test_never_exceeds_request(self, random_spool, size):
+        """Every output patch fits inside the requested size."""
+        quant = dc.get_quantity(size)
+        limit = quant.to("byte").magnitude
+        sizes = [x.data.nbytes for x in random_spool.chunk(time=quant)]
+        assert max(sizes) <= limit
+        # and the request is not trivially under-delivered
+        assert max(sizes) > 0.8 * limit
+
+    def test_binary_and_decimal_prefixes_differ(self, random_spool):
+        """MiB is 2**20 bytes while MB is 10**6, as pint defines them."""
+        decimal = random_spool.chunk(time=1 * dc.units.MB)[0]
+        binary = random_spool.chunk(time=1 * dc.units.MiB)[0]
+        assert binary.data.nbytes > decimal.data.nbytes
+        assert binary.data.nbytes <= 1024**2
+
+    def test_smaller_dtype_gives_more_samples(self):
+        """Half the itemsize fits twice the samples in the same bytes."""
+        start = np.datetime64("2020-01-01T00:00:00")
+        target = dc.get_quantity("40 kB")
+        wide = dc.spool([self._make("float64", start)]).chunk(time=target)
+        narrow = dc.spool([self._make("float32", start)]).chunk(time=target)
+        wide_samples = wide[0].shape[wide[0].get_axis("time")]
+        narrow_samples = narrow[0].shape[narrow[0].get_axis("time")]
+        assert narrow_samples == 2 * wide_samples
+
+    def test_mixed_dtype_partition_uses_upcast(self, mixed_dtype_spool):
+        """A mixed partition is sized against the dtype assembly upcasts to."""
+        target = dc.get_quantity("100 kB")
+        plan = mixed_dtype_spool.chunk_plan(time=target)
+        (part,) = plan.params["size"]["partitions"]
+        assert part["dtype"] == "float64"
+        out = mixed_dtype_spool.chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_mixed_steps_in_one_partition_stay_bounded(self):
+        """
+        Sizing must use the partition's smallest step, not its median.
+
+        Steps within `sampling_group_tolerance` share a partition, so a
+        member sampled faster than the median fits more samples into the
+        same length and would overshoot the byte target.
+        """
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        patches, start = [], t0
+        for step_ns in (4_000_000, 4_000_000, 3_850_000):  # 3.75% apart
+            step = np.timedelta64(step_ns, "ns")
+            times = start + np.arange(500) * step
+            patches.append(
+                dc.Patch(
+                    data=np.zeros((25, 500)),
+                    dims=("distance", "time"),
+                    coords={"distance": np.arange(25) * 1.0, "time": times},
+                )
+            )
+            start = times[-1] + step
+        spool = dc.spool(patches).sort("time")
+        target = dc.get_quantity("100 kB")
+        # the steps must actually share one partition or this proves nothing
+        assert len(spool.chunk_plan(time=target).params["size"]["partitions"]) == 1
+        out = spool.chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_int_float_partition_promotes_above_both(self):
+        """
+        A mixed partition is sized by `np.result_type`, not max itemsize.
+
+        int32 and float32 are both 4 bytes but promote to 8-byte
+        float64, so a max-itemsize estimate would under-count and
+        produce patches at twice the requested size.
+        """
+        t0 = np.datetime64("2020-01-01T00:00:00")
+
+        def make(dtype, start):
+            return dc.Patch(
+                data=np.zeros((50, 250), dtype=dtype),
+                dims=("distance", "time"),
+                coords={
+                    "distance": np.arange(50) * 1.0,
+                    "time": start + np.arange(250) * np.timedelta64(4, "ms"),
+                },
+            )
+
+        second = t0 + np.timedelta64(1000, "ms")
+        spool = dc.spool([make("int32", t0), make("float32", second)]).sort("time")
+        target = dc.get_quantity("100 kB")
+        (part,) = spool.chunk_plan(time=target).params["size"]["partitions"]
+        assert part["dtype"] == "float64"
+        assert part["itemsize"] == 8
+        out = spool.chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_slab_larger_than_target_warns(self, random_spool):
+        """One sample is the floor; the request cannot be honored below it."""
+        with pytest.warns(UserWarning, match="larger than the requested size"):
+            out = random_spool.chunk(time=1 * dc.units.kB)
+        patch = out[0]
+        assert patch.shape[patch.get_axis("time")] == 1
+
+    def test_keep_partial_stays_bounded(self, random_spool):
+        """A partial segment is smaller than the request, never larger."""
+        target = dc.get_quantity("2 MB")
+        out = random_spool.chunk(time=target, keep_partial=True)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_overlap_in_coord_units(self, random_spool):
+        """Overlap may use the coordinate's units while the length is a size."""
+        target = dc.get_quantity("2 MB")
+        plain = random_spool.chunk(time=target)
+        out = random_spool.chunk(time=target, overlap=1 * dc.units.s)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+        assert len(out) > len(plain)  # the overlap is honored, not dropped
+
+    def test_overlap_as_size(self, random_spool):
+        """Overlap may also be expressed as a size."""
+        target = dc.get_quantity("2 MB")
+        plain = random_spool.chunk(time=target)
+        out = random_spool.chunk(time=target, overlap=1 * dc.units.MB)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+        assert len(out) > len(plain)  # overlap yields more segments
+
+    def test_overlap_larger_than_length_raises(self, random_spool):
+        """The existing overlap guard applies to sizes too."""
+        with pytest.raises(ParameterError):
+            random_spool.chunk(time=1 * dc.units.MB, overlap=2 * dc.units.MB)
+
+    def test_descending_coord(self, random_spool):
+        """A reverse-sorted coordinate chunks by size like any other."""
+        patches = [
+            x.snap_coords("time").sort_coords("time", reverse=True)
+            for x in random_spool
+        ]
+        target = dc.get_quantity("1 MB")
+        out = dc.spool(patches).chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_one_dimensional_patch(self):
+        """With no other dims a slab is one element."""
+        start = np.datetime64("2020-01-01T00:00:00")
+        data = np.arange(1000, dtype="float64")
+        coords = {"time": start + np.arange(1000) * np.timedelta64(1, "s")}
+        patch = dc.Patch(data=data, coords=coords, dims=("time",))
+        plan = dc.spool([patch]).chunk_plan(time=dc.get_quantity("1 kB"))
+        (part,) = plan.params["size"]["partitions"]
+        assert part["slab_samples"] == 1
+        assert part["n_samples"] == 1000 // 8
+
+    def test_three_dimensional_patch(self):
+        """A slab is the product of every other dimension."""
+        start = np.datetime64("2020-01-01T00:00:00")
+        data = np.zeros((3, 5, 100), dtype="float64")
+        coords = {
+            "distance": np.arange(3) * 1.0,
+            "depth": np.arange(5) * 1.0,
+            "time": start + np.arange(100) * np.timedelta64(1, "s"),
+        }
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "depth", "time"))
+        plan = dc.spool([patch]).chunk_plan(time=dc.get_quantity("1 kB"))
+        (part,) = plan.params["size"]["partitions"]
+        assert part["slab_samples"] == 15
+
+    def test_sub_sample_gaps_stay_bounded(self):
+        """
+        Members packed closer than one sample must not overshoot.
+
+        Near-contiguous files whose boundaries miss the grid fit more
+        samples into a span than span/step + 1, because each member
+        contributes its own trailing sample.
+        """
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        second = np.timedelta64(1_000_000_000, "ns")
+        patches, offset = [], 0
+        for _ in range(30):
+            start = t0 + np.timedelta64(offset, "ns")
+            patches.append(
+                dc.Patch(
+                    data=np.zeros((50, 20)),
+                    dims=("distance", "time"),
+                    coords={
+                        "distance": np.arange(50) * 1.0,
+                        "time": start + np.arange(20) * second,
+                    },
+                )
+            )
+            offset += 19 * 1_000_000_000 + 10_000_000  # 10 ms short of the grid
+        target = dc.get_quantity("100 kB")
+        out = dc.spool(patches).chunk(time=target)
+        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
+
+    def test_gridded_partition_has_unit_packing(self, random_spool):
+        """A partition that tiles its grid is sized without correction."""
+        plan = random_spool.chunk_plan(time=1 * dc.units.MB)
+        (part,) = plan.params["size"]["partitions"]
+        assert part["packing"] == 1.0
+
+    def test_output_dtype_matches_assembled_patch(self):
+        """
+        A plan row must claim the dtype its patch actually assembles to.
+
+        Claiming the partition-wide upcast would both over-size a later
+        size chunk and make a chunked spool compare unequal to its own
+        materialized twin.
+        """
+        t0 = np.datetime64("2020-01-01T00:00:00")
+
+        def make(dtype, start):
+            rng = np.random.default_rng(1)
+            return dc.Patch(
+                data=rng.random((40, 400)).astype(dtype),
+                dims=("distance", "time"),
+                coords={
+                    "distance": np.arange(40) * 1.0,
+                    "time": start + np.arange(400) * np.timedelta64(4, "ms"),
+                },
+            )
+
+        spool = dc.spool(
+            [make("float32", t0), make("float64", t0 + np.timedelta64(1600, "ms"))]
+        ).sort("time")
+        out = spool.chunk(time=1.0)
+        claimed = out.get_contents()["_dtype"].tolist()
+        assert claimed == [str(x.data.dtype) for x in out]
+        assert out == dc.spool(list(out))
+
+    def test_merge_mode_records_no_size(self, random_spool):
+        """A merge takes no length, so no size is ever resolved."""
+        plan = random_spool.chunk_plan(time=None)
+        assert plan.merge_mode
+        assert "size" not in plan.params
+        assert len(random_spool.chunk(time=None)) == 1
+
+    def test_merge_mode_rejects_size_overlap(self, random_spool):
+        """A size overlap is still an overlap, which merging forbids."""
+        with pytest.raises(ParameterError, match="keep_partial and overlap"):
+            random_spool.chunk(time=None, overlap=1 * dc.units.MB)
+
+    @pytest.mark.parametrize(
+        "value", (float("inf") * dc.units.MB, float("nan") * dc.units.MB)
+    )
+    def test_non_finite_size_raises(self, random_spool, value):
+        """
+        A non-finite size is a bad request, not a merge.
+
+        NaN is null, so without an explicit guard a nan-valued size
+        would silently merge the whole spool into one patch when the
+        user asked for a size cap.
+        """
+        with pytest.raises(ParameterError, match="finite"):
+            random_spool.chunk(time=value)
+
+    def test_array_size_raises(self, random_spool):
+        """A chunk length is one value, not an array of them."""
+        with pytest.raises(ParameterError, match="single quantity"):
+            random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)

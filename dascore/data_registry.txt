@@ -19,7 +19,6 @@ dispersion_event.h5 598c8baa2a5610c930e1c003f2ba02da13f8d8686e3ccf2a034e94bfc5e1
 PoroTomo_iDAS_1.h5 967a2885e79937ac0426b2022a9c03d5f24790ecf3abbaa9a16eb28055566fc6 https://github.com/dasdae/test_data/raw/master/das/PoroTomo_iDAS_1.h5
 DASDMSShot00_20230328155653619.das 12ac53f78b32d8b0e32cc674c43ff5b4c79a6c8b19de2ad577fd481679b2b7b3 https://github.com/dasdae/test_data/raw/master/das/DASDMSShot00_20230328155653619.das
 opto_das_1.hdf5 0437d1f02d93c9f00d31133388efaf6a28c21883bcfac457b97f1224464c7dca https://github.com/dasdae/test_data/raw/master/das/opto_das_1.hdf5
-whale_1.hdf5 a09922969e740307bf26dc6ffa7fb9fbb834dc7cd7d4ced02c66b159fb1ce0cd http://piweb.ooirsn.uw.edu/das/data/Optasense/NorthCable/TransmitFiber/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-03T15_06_51-0700/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-04T020002Z.h5
 febus_1.h5 73eba2b6e183b3bca51f8a1448c3b423c979d05ce6c18bfd7fb76b4f9bda5c0b https://github.com/dasdae/test_data/raw/master/das/febus_1.h5
 ap_sensing_1.hdf5 322429f2c44bed5dc72fb9a02f79bb0d3cb71048e93d906d3d24b0605b431b12 https://github.com/dasdae/test_data/raw/master/das/ap_sensing_1.hdf5
 silixa_h5_1.hdf5 d3f1b92b17ae2d00f900426e80d48964fb5a33b9480ef9805721ac756acd4a21 https://github.com/dasdae/test_data/raw/master/das/silixa_h5_1.hdf5
@@ -49,3 +48,8 @@ ofl100_1.sor 2af23609ac952f588d97ee195338f44227f61322422756e54a5c4a18b6704749 ht
 ofl100_2.sor d8787d6171e2a2b3c6443c28b724440274694d525da617202c6b7a7bb2e13a8c https://github.com/dasdae/test_data/raw/master/otdr/ofl100_2.sor
 ofl100_3.sor d9167fffc91565eaa48b65fd55e5f0600b7a96ebac549f1b2344ffb7bacf2336 https://github.com/dasdae/test_data/raw/master/otdr/ofl100_3.sor
 sintela_protobuf_1.pb cafa038c033cb5e4cf4aa90bab203eb1e10dc05a6052c0576dc80d6a5b3b42dc https://github.com/dasdae/test_data/raw/master/das/sintela_protobuf_1.pb
+hdas_1.h5 aab81959bfbe2c10b2f29a074c6cf58c0564d3a822e71facbc5c62d90ca76749 https://github.com/dasdae/test_data/raw/master/das/hdas_1.h5
+hdas_2.h5 d53841ee6d8608908e15114396f94948781ece1a3224f293ab21f5f8335570c4 https://github.com/dasdae/test_data/raw/master/das/hdas_2.h5
+silixa_h5_ingv_1.h5 738a359fb0f7848fc352f6d2879967dd15bd5c3f04b4c3e12c553825b9df861d https://github.com/dasdae/test_data/raw/master/das/silixa_h5_ingv_1.h5
+ai4eps_1.h5 2dd3d8bd16a9d775b69601f3683dad807caa51953488f495def70388e031e731 https://github.com/dasdae/test_data/raw/master/das/ai4eps_1.h5
+optasense_odh4_1.h5 50becf9a3f83492c35f29ddfa1969338d3cfff165b1a7b4d199ed2e9d40c5822 https://github.com/dasdae/test_data/raw/master/das/optasense_odh4_1.h5

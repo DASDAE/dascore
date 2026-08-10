@@ -59,7 +59,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         self, resource: H5Reader, snap: bool = True, **kwargs
     ) -> list[ScanPayload]:
         """Scan a prodml file, return summary information about the file's contents."""
-        out = []
+        out: list[ScanPayload] = []
         for attr, coords, source_patch_id in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
