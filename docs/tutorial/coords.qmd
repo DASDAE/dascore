@@ -346,7 +346,7 @@ coord_dict = {
 }
 
 cm_many_coords = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
-print(cm)
+print(cm_many_coords)
 ```
 
 ### Update
@@ -390,8 +390,10 @@ and drop or disassociate coordinates.
 # Disassociate "new_coord" from dimension distance.
 new_cm_3 = new_cm_1.update(new_coord=(None, new_coord))
 
-# Drop coordinate "new_coord".
-new_cm_4 = cm.update(new_coord=None)
+# Drop coordinate "new_coord". Note this must be done on a coord manager
+# which actually has "new_coord"; dropping a missing coord is a no-op.
+new_cm_4 = new_cm_1.update(new_coord=None)
+assert "new_coord" not in new_cm_4.coord_map
 
 # Drop dimension "time".
 new_cm_5 = cm.update(time=None)

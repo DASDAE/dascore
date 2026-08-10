@@ -7,21 +7,31 @@ import pint
 import pytest
 
 import dascore as dc
+import dascore.units
 import dascore.units as units_module
+from dascore import units
 from dascore.exceptions import UnitError
 from dascore.units import (
+    Hz,
     Quantity,
     assert_dtype_compatible_with_units,
     convert_units,
+    ft,
+    get_byte_count,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
     get_quantity_str,
     get_unit,
     invert_quantity,
+    is_data_size,
+    km,
+    m,
     maybe_convert_percent_to_fraction,
+    miles,
     quant_sequence_to_quant_array,
 )
+from dascore.utils.time import to_float
 
 
 class TestUnitInit:
@@ -29,7 +39,6 @@ class TestUnitInit:
 
     def test_stale_pint_cache_falls_back(self, monkeypatch):
         """Stale Pint disk cache should not prevent registry creation."""
-        from dascore import units
 
         class FakeRegistry:
             pass
@@ -145,6 +154,7 @@ class TestUnitAndFactor:
     def test_quantx_units(self):
         """Tests for the quantx unit str."""
         mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
+        assert ustr is not None
         # sometimes it is "rad * π" other times "π * rad", so just use set.
         assert set(ustr) == set("rad * π")
         assert np.isclose(mag, (2 / (2**16)))
@@ -209,8 +219,6 @@ class TestConvenientImport:
 
     def test_import_common(self):
         """Ensure common units are importable."""
-        from dascore.units import Hz, ft, km, m, miles
-
         assert m == get_quantity("m")
         assert ft == get_quantity("ft")
         assert miles == get_quantity("miles")
@@ -224,8 +232,6 @@ class TestConvenientImport:
 
     def test_empty_name_raises(self):
         """The empty string is the one name get_quantity maps to None."""
-        import dascore.units
-
         with pytest.raises(AttributeError):
             getattr(dascore.units, "")
 
@@ -373,7 +379,7 @@ class TestConvertUnits:
 
     def test_array_quantity(self):
         """Test that an array quantity works."""
-        array = np.arange(10) * get_quantity("m")
+        array = get_quantity("m") * np.arange(10)
         out = convert_units(array, to_units="ft")
         np.allclose(array.magnitude, out * 3.28084)
 
@@ -386,7 +392,7 @@ class TestQuantSequenceToQuantArray:
         meter = get_quantity("m")
         sequence = [1 * meter, 2 * meter, 3 * meter]
         result = quant_sequence_to_quant_array(sequence)
-        expected = np.array([1, 2, 3]) * meter
+        expected = meter * np.array([1, 2, 3])
         np.testing.assert_array_equal(result.magnitude, expected.magnitude)
         assert result.units == expected.units
 
@@ -396,7 +402,7 @@ class TestQuantSequenceToQuantArray:
 
         sequence = [1 * m, 100 * cm, 0.001 * km]
         result = quant_sequence_to_quant_array(sequence)
-        expected = np.array([1, 1, 1]) * m
+        expected = m * np.array([1, 1, 1])
         assert np.allclose(result.magnitude, expected.magnitude)
         assert result.units == expected.units
 
@@ -526,3 +532,76 @@ class TestUnitConcurrency:
             assert new_lock is not old_lock
         finally:
             units_module._UNIT_LOCK = old_lock
+
+
+class TestDataSize:
+    """Tests for identifying and measuring data size quantities."""
+
+    sizes = ("1 byte", "1 bit", "25 MB", "3 kB", "1 MiB", "2 GiB")
+    not_sizes = ("1 m", "10 s", "50%", "1 strain", "1 dimensionless")
+
+    @pytest.mark.parametrize("value", sizes)
+    def test_sizes_detected(self, value):
+        """Quantities of information are data sizes."""
+        assert is_data_size(get_quantity(value))
+
+    @pytest.mark.parametrize("value", not_sizes)
+    def test_non_sizes_rejected(self, value):
+        """Percents and dimensionless quantities are not data sizes."""
+        assert not is_data_size(get_quantity(value))
+
+    @pytest.mark.parametrize("value", (25, 1.0, None, "25 MB"))
+    def test_non_quantities_rejected(self, value):
+        """Only quantities can be data sizes."""
+        assert not is_data_size(value)
+
+    def test_millibarn_is_not_megabytes(self):
+        """`mb` is millibarn (an area) in pint; only `MB` is megabytes."""
+        assert not is_data_size(dc.units.mb)
+        assert is_data_size(dc.units.MB)
+
+    def test_undefined_byte_alias_raises(self):
+        """`KB` is not a pint unit; the kilobyte spelling is `kB`."""
+        with pytest.raises(pint.UndefinedUnitError):
+            dc.units.KB
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        (
+            ("25 MB", 25_000_000),
+            ("1 MiB", 1_048_576),
+            ("1 kB", 1_000),
+            ("8 bit", 1),
+            ("1 byte", 1),
+        ),
+    )
+    def test_byte_count(self, value, expected):
+        """Byte counts follow pint's decimal/binary prefixes."""
+        assert get_byte_count(get_quantity(value)) == expected
+
+    @pytest.mark.parametrize("value", not_sizes)
+    def test_byte_count_requires_size(self, value):
+        """Non-sizes cannot be measured in bytes."""
+        with pytest.raises(UnitError, match="data size"):
+            get_byte_count(get_quantity(value))
+
+    def test_byte_count_is_not_to_float(self):
+        """
+        Guard the bits trap.
+
+        pint converts a dimensionless quantity to base units, and
+        information's base unit is the bit, so routing a size through
+        `float()` makes it eight times too large. Assert the byte count
+        directly rather than the wrong value, so this holds however
+        `to_float` treats quantities.
+        """
+        quant = get_quantity("25 MB")
+        assert get_byte_count(quant) == 25_000_000
+        # the trap: what a bare float() conversion would have produced
+        assert quant.to_base_units().magnitude == 8 * 25_000_000
+        # to_float is not a byte converter; it either raises or answers
+        # in seconds, but must never be mistaken for get_byte_count
+        try:
+            assert to_float(quant) != get_byte_count(quant)
+        except UnitError:
+            pass

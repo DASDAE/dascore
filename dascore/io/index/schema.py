@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 5
+INDEX_VERSION = 6
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -100,6 +100,7 @@ class PatchRow(NamedTuple):
     n_dims: int
     dims: str
     shape: str
+    dtype: str  # the data array's dtype, eg "float64"
     sample_count_total: int | None
     time_min: int | None  # epoch ns; NULL for relative-time patches
     time_max: int | None
@@ -265,6 +266,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "n_dims",
         "dims",
         "shape",
+        "dtype",
         "sample_count_total",
         "coord_def_id",
         "def_key",
@@ -296,6 +298,13 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # values block chunk merge-compatibility grouping, which compares all
 # non-private columns.
 SPOOL_HIDDEN_COLUMNS = ("n_dims", "sample_count_total", "shape")
+
+# Structural columns the spool relation carries *privately*. The leading
+# underscore is load-bearing, not cosmetic: chunk's merge-compatibility
+# grouping and conflict policing both compare all non-private columns, so
+# a public `dtype` would raise CoordMergeError on every merge of patches
+# with differing element types.
+SPOOL_PRIVATE_RENAMES = MappingProxyType({"patch_id": "_patch_id", "dtype": "_dtype"})
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,

@@ -13,7 +13,6 @@ from dascore.config import get_config
 from dascore.constants import DATA_VERSION
 
 REGISTRY_PATH = Path(str(files("dascore").joinpath("data_registry.txt")))
-LARGE_REGISTRY_FILES = frozenset({"whale_1.hdf5"})
 
 
 @cache
@@ -50,7 +49,7 @@ fetcher = _FetcherProxy()
 
 
 @cache
-def get_registry_df(*, exclude_large: bool = False) -> pd.DataFrame:
+def get_registry_df() -> pd.DataFrame:
     """Return a dataframe of files in the data registry."""
     names = (
         "name",
@@ -58,8 +57,6 @@ def get_registry_df(*, exclude_large: bool = False) -> pd.DataFrame:
         "url",
     )
     df = pd.read_csv(REGISTRY_PATH, sep=r"\s+", skiprows=1, names=names)
-    if exclude_large:
-        df = df.loc[~df["name"].isin(LARGE_REGISTRY_FILES)]
     return df
 
 

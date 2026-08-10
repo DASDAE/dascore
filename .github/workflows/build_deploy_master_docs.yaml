@@ -11,12 +11,15 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+# The docs publish to netlify with its own token, so the GITHUB_TOKEN only
+# needs to read the repo.
 permissions:
   contents: read
-  pages: write
-  deployments: write
-  id-token: write
+
+env:
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
 # Allow one concurrent deployment
 concurrency:
@@ -31,18 +34,19 @@ jobs:
       name: github-pages
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
-          persist-credentials: false
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
           environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 

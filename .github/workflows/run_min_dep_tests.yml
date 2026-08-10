@@ -14,11 +14,20 @@ on:
       - '**.py'
       - '.github/workflows/run_min_dep_tests.yml'
       - '.github/actions/**/*.yml'
+      # Registry edits change the test-data cache key; run the suite so the
+      # prime script validates new entries before merge.
+      - 'dascore/data_registry.txt'
+
+permissions:
+  contents: read
 
 env:
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
 # Cancel previous runs when this one starts.
 concurrency:
@@ -28,24 +37,32 @@ concurrency:
 jobs:
   # Load Python version matrix from shared vars
   setup:
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
       os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
+      # Make sure the shared cross-OS test-data cache exists before the matrix
+      # jobs start; see the same step in runtests.yml.
+      - uses: ./.github/actions/prime-test-data-cache
+        with:
+          lookup-only: "true"
 
   test_code_min_deps:
     needs: setup
     timeout-minutes: 35
     runs-on: ${{ matrix.os }}
     strategy:
-      # See the note in runtests.yml: a cancelled job never saves its cache.
+      # One job failing used to cancel the rest, which both hid the other
+      # results and wasted the work those jobs had already done.
       fail-fast: false
       matrix:
         # Defined in .github/actions/load-shared-vars/action.yml
@@ -62,7 +79,7 @@ jobs:
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-tags: "true"
           fetch-depth: '0'
@@ -73,7 +90,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           environment-file: './.github/min_deps_environment.yml'
           install-group-str: "[test]"
-          cache-number: 1
           prepare-test-data: "true"
 
       # Runs test suite and calculates coverage
@@ -94,7 +110,7 @@ jobs:
       # Connect from a machine that has the matching private key loaded.
       - name: Setup tmate session
         if: env.debug_enabled == 'true' && (steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure')
-        uses: mxschmitt/action-tmate@v3
+        uses: mxschmitt/action-tmate@f309efdef7da88e388f96a3cafc4f181ac639f7a  # v3.9
         timeout-minutes: 30
         with:
           limit-access-to-actor: true

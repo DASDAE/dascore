@@ -5,27 +5,35 @@ on:
     types:
       - published
 
+permissions:
+  contents: read
+
 jobs:
   upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed for PyPI trusted publishing (OIDC).
+      id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
-          persist-credentials: false
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
       - name: setup conda
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5  # v4.0.1
         with:
           mamba-version: "*"
           channels: conda-forge,defaults
           channel-priority: true
           environment-file: environment.yml
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
 
       - name: create dists
         shell: bash -l {0}
@@ -33,7 +41,6 @@ jobs:
           python -m pip install build
           python -m build
 
+      # Authenticates via PyPI trusted publishing (OIDC); no token needed.
       - name: publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

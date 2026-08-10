@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.core.coords import CoordArray, CoordMonotonicArray, CoordRange
 from dascore.exceptions import CoordMergeError
 from dascore.utils.coordmanager import merge_coord_managers
@@ -172,11 +173,6 @@ class TestRawMergeKeepsUnits:
 
     def test_units_survive_value_merge(self):
         """Merging value-backed coords with one common unit keeps it."""
-        import numpy as np
-
-        import dascore as dc
-        from dascore.utils.coordmanager import merge_coord_managers
-
         p1 = dc.get_example_patch().set_units(distance="m")
         d = p1.get_coord("distance")
         # non-uniform values force the raw concatenation path

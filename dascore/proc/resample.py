@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
-from dascore.exceptions import FilterValueError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
 from dascore.utils.imports import lazy_import
 from dascore.utils.patch import (
@@ -229,6 +229,12 @@ def resample(
         if coord_units is not None:
             coord_units = 1 / coord_units
         new_step, _ = get_filter_units(value, value, to_unit=coord_units)
+        if new_step is None:
+            msg = (
+                f"resample requires a sampling period for dimension {dim!r}; "
+                f"got {value!r}. Pass samples=True to resample by length."
+            )
+            raise ParameterError(msg)
         # nasty hack so that ints/floats get converted to seconds.
         if isinstance(step, np.timedelta64):
             new_step = to_timedelta64(new_step)

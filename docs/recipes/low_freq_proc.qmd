@@ -55,37 +55,26 @@ Notes:
 2. The `memory_safety_factor` is optional and helps prevent getting too close to the memory limit.
 
 ```{python}
-# Get patch's number of bytes per seconds (based on patch's data type) 
-pa_bytes_per_second = pa.data.nbytes / pa.seconds
-# Define processing factor and safety factor 
-processing_factor = 5  
-memory_safety_factor = 1.2 
+# Define processing factor and safety factor
+processing_factor = 5
+memory_safety_factor = 1.2
 
-# Calculate memory size required for each second of data to get processed
-memory_size_per_second = pa_bytes_per_second * processing_factor * memory_safety_factor
-memory_size_per_second_MB = memory_size_per_second / 1e6
-
-# Calculate chunk size that can be loaded (in seconds)
-chunk_size = memory_limit_MB / memory_size_per_second_MB
-
-# Ensure `chunk_size` does not exceed the spool length
-time_step = sp[0].get_coord('time').step
-time_min = sp[0].get_coord('time').min()
-time_max = sp[-1].get_coord('time').max()
-spool_length = dc.to_float((time_max - time_min + time_step))
-if chunk_size > spool_length:
-   print(
-   f"Warning: Specified `chunk_size` ({chunk_size:.2f} seconds) exceeds the spool length "
-   f"({spool_length:.2f} seconds). Adjusting `chunk_size` to match spool length."
-   )
-   chunk_size = spool_length
+# How large each loaded patch may be, once the copies made during
+# processing are accounted for. `chunk` takes this size directly and
+# works out the sample arithmetic from the patch's dtype and shape.
+patch_size = (
+    memory_limit_MB * dc.units.megabytes / (processing_factor * memory_safety_factor)
+)
 ```
 
 Next, we need to determine the extent of artifacts introduced by low-pass filtering at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
 
 ```{python}
 # Retrieve a patch of appropriate size for LF processing that fits into memory
-pa_chunked_sp = sp.chunk(time=chunk_size, keep_partial=True)[0] 
+# (`keep_partial` also covers a budget larger than the whole spool).
+pa_chunked_sp = sp.chunk(time=patch_size, keep_partial=True)[0]
+# The duration that size worked out to, used to validate the edges below.
+chunk_size = pa_chunked_sp.seconds
 # Create a delta patch based on new patch size
 delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
 
@@ -130,8 +119,8 @@ if np.ceil(edge) >= chunk_size / 2:
 ## Perform low-frequency processing and save results on disk
 ```{python}
 
-# First we chunk the spool based on the `chunk_size` and `edge` calculated before.
-sp_chunked_overlap = sp.chunk(time=chunk_size, overlap=2*edge, keep_partial=True)
+# First we chunk the spool based on the `patch_size` and `edge` calculated before.
+sp_chunked_overlap = sp.chunk(time=patch_size, overlap=2*edge, keep_partial=True)
 
 # Process each patch in the spool and save the result patch
 lf_patches = []

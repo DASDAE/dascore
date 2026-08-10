@@ -6,6 +6,7 @@ import gc
 import operator
 import re
 import weakref
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -83,7 +84,7 @@ class TestInit:
             time=self.time1 + time_deltas,
         )
         dims = tuple(coords)
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        out: dict[str, Any] = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     @pytest.fixture(scope="class")
@@ -101,7 +102,7 @@ class TestInit:
             quality=(("distance", "time"), array),
         )
         dims = ("distance", "time")
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        out: dict[str, Any] = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
@@ -1134,7 +1135,9 @@ class TestBool:
         gt = pa > 0
         assert isinstance(gt, dc.Patch)
         assert gt.data.dtype == np.bool_
-        rgt = 0 < pa
+        # Deliberately number-first: this exercises the reflected operator,
+        # which int.__lt__ is declared to answer with a bool.
+        rgt = cast("dc.Patch", 0 < pa)
         assert rgt.equals(gt)
         # equality across self should be all True for <= and >=
         assert np.all((pa <= pa).data)

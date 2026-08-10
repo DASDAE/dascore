@@ -10,7 +10,7 @@ from matplotlib.image import AxesImage
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.units import get_quantity_str
+from dascore.units import get_quantity_str, percent
 from dascore.utils.time import is_datetime64, to_timedelta64
 
 
@@ -392,8 +392,6 @@ class TestWaterfall:
 
     def test_percent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""
-        from dascore.units import percent
-
         ax = random_patch.viz.waterfall(scale=10 * percent, scale_type="absolute")
         assert ax is not None
 

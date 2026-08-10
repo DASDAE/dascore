@@ -5,8 +5,10 @@ from __future__ import annotations
 import datetime
 import pickle
 import re
+from collections.abc import Mapping
 from functools import partial
 from io import BytesIO
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -441,6 +443,49 @@ class TestCoordSummary:
         """Ensure the dtypes are correctly determined if not specified."""
         out = CoordSummary(**data)
         assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
+
+    def test_dtype_is_optional(self):
+        """The dtype is derived from min, so the constructor must not demand it."""
+        summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m")
+        assert summary.dtype == "float64"
+
+    def test_dtype_derived_from_any_mapping(self):
+        """A non-dict mapping must derive dtype rather than take the default."""
+
+        class _Mapping(Mapping):
+            """A mapping which is deliberately not a dict subclass."""
+
+            def __init__(self, data):
+                self._data = data
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+            def __iter__(self):
+                return iter(self._data)
+
+            def __len__(self):
+                return len(self._data)
+
+        summary = CoordSummary.model_validate(_Mapping({"min": 1.0, "max": 2.0}))
+        assert summary.dtype == "float64"
+
+    def test_dtype_derived_from_attributes(self):
+        """Attribute-based validation must not keep the empty default."""
+        # The before-validator only sees mappings, so this path relies on
+        # the after-validator; an empty dtype makes the indexer skip the
+        # coordinate entirely.
+        source = SimpleNamespace(min=1.0, max=2.0)
+        summary = CoordSummary.model_validate(source, from_attributes=True)
+        assert summary.dtype == "float64"
+
+    def test_attribute_values_conform_to_derived_dtype(self):
+        """A derived dtype must not leave the values contradicting it."""
+        # Deriving float64 but keeping strings made to_coord raise in np.sign.
+        source = SimpleNamespace(min=0.0, max="2.0", step="0.5")
+        summary = CoordSummary.model_validate(source, from_attributes=True)
+        assert summary == CoordSummary(min=0.0, max="2.0", step="0.5")
+        assert summary.to_coord() == CoordRange(start=0.0, stop=2.5, step=0.5)
 
     def test_json_dump(self):
         """JSON dumps should preserve coord summary fields."""
@@ -1350,6 +1395,7 @@ class TestCoordRange:
             action="always", category=DeprecationWarning, record=True
         ) as records:
             coord = get_coord(shape=601, start=np.array([0]), step=1)
+        assert isinstance(coord, CoordRange)
         assert coord.start == 0
         assert coord.stop == 601
         assert coord.shape == (601,)
@@ -1804,6 +1850,7 @@ class TestPartialCoord:
         assert coord.step == 1
         # Test start/stop
         coord = get_coord(start=10, shape=10)
+        assert isinstance(coord, CoordPartial)
         assert coord.start == 10
         assert len(coord) == 10
 
@@ -2076,7 +2123,7 @@ class TestGetNextIndex:
     def test_units(self, evenly_sampled_float_coord_with_units):
         """Ensure values with units work."""
         coord = evenly_sampled_float_coord_with_units
-        val1 = np.array([10, 20]) * get_quantity("m")
+        val1 = get_quantity("m") * np.array([10, 20])
         val2 = val1.to(get_quantity("ft"))
         ind1 = coord.get_next_index(val1)
         ind2 = coord.get_next_index(val2)
@@ -2423,6 +2470,7 @@ class TestStringCoords:
         coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_10", "xx_1"]))
         out, indexer = coord.select("ch_?")
         assert np.array_equal(out.values, np.array(["ch_1", "ch_2"]))
+        assert isinstance(indexer, np.ndarray)
         assert np.array_equal(indexer, np.array([True, True, False, False]))
 
     def test_wildcard_select_no_match_returns_empty(self, string_coord):

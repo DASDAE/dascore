@@ -15,10 +15,17 @@ on:
       - '**.py'
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'
+      # Registry edits change the test-data cache key; run the suite so the
+      # prime script validates new entries before merge.
+      - 'dascore/data_registry.txt'
+
+permissions:
+  contents: read
 
 env:
-  # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 1
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
@@ -31,6 +38,8 @@ concurrency:
 jobs:
   # Load Python version matrix from shared vars
   setup:
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
@@ -38,20 +47,26 @@ jobs:
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
       os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/load-shared-vars
         id: load-vars
+      # Make sure the shared cross-OS test-data cache exists before the matrix
+      # jobs start, so at most one job builds it. On a simultaneous cold miss
+      # the other test workflow's setup job may benignly race-prime the same
+      # key; the losing save just logs a warning.
+      - uses: ./.github/actions/prime-test-data-cache
+        with:
+          lookup-only: "true"
 
   test_code:
     needs: setup
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
-      # One job failing used to cancel the rest, and a cancelled job never
-      # reaches its cache-save step - so a single unrelated failure both hid
-      # the other results and forced every other job to re-prime next run.
+      # One job failing used to cancel the rest, which both hid the other
+      # results and wasted the work those jobs had already done.
       fail-fast: false
       matrix:
         # Defined in .github/actions/load-shared-vars/action.yml
@@ -69,7 +84,7 @@ jobs:
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
@@ -78,7 +93,6 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
-          cache-number: ${{ env.CACHE_NUMBER }}
           prepare-test-data: "true"
 
       - name: generate qmd docs tests
@@ -110,13 +124,13 @@ jobs:
 
       - name: Setup tmate session
         if: env.debug_enabled == 'true' && (steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure')
-        uses: mxschmitt/action-tmate@v3
+        uses: mxschmitt/action-tmate@f309efdef7da88e388f96a3cafc4f181ac639f7a  # v3.9
         timeout-minutes: 30
         with:
           limit-access-to-actor: true
 
       # Upload coverage files
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
@@ -146,7 +160,7 @@ jobs:
       env_file: 'environment.yml'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-tags: 'true'
           fetch-depth: '0'
@@ -155,14 +169,13 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ needs.setup.outputs.python-default }}
-          cache-number: ${{ env.CACHE_NUMBER }}
           prepare-test-data: "true"
 
       - name: run network tests
         shell: bash -el {0}
         run: ./.github/test_code.sh network
 
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           fail_ci_if_error: false
           files: ./coverage.xml

@@ -8,31 +8,66 @@ full line coverage.
 
 from __future__ import annotations
 
+import datetime
+import gc
 import os
+import pickle
 import re
 import sqlite3
+import sys
+import threading
+import warnings as warnings_mod
+from typing import Any
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
 from test_index_contract import _time_coord, make_summaries
 
 import dascore as dc
-from dascore.core.summary import PatchSummary
-from dascore.exceptions import UnitError
-from dascore.io.index import Query, get_backend, summaries_to_records
-from dascore.io.index.backend import _ns_to_time, adapt_params, resolve_query
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.core.spool import Spool
+from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.exceptions import (
+    InvalidIndexError,
+    MissingPatchError,
+    ParameterError,
+    UnitError,
+)
+from dascore.io.core import is_directory_format
+from dascore.io.index import Query, summaries_to_records
+from dascore.io.index.backend import (
+    SQLIndexBackend,
+    _ns_to_time,
+    adapt_params,
+    get_backend,
+    resolve_query,
+)
+from dascore.io.index.catalog import LiveResolver, PatchCatalog, _canonical_range
+from dascore.io.index.indexer import (
+    DBDirectoryIndexer,
+    _set_mapped_index_path,
+)
 from dascore.io.index.ingest import (
     SourceRecord,
     _coord_record,
+    _py_scalar,
+    assemble_source_records,
+    patch_record,
     typed_value,
 )
 from dascore.io.index.ingest import (
     summaries_to_records as s2r,
 )
-from dascore.io.index.query import InvalidSpoolQueryError
-from dascore.units import get_quantity, m
+from dascore.io.index.lite import SQLiteBackend
+from dascore.io.index.query import (
+    _UNSET,
+    InvalidSpoolQueryError,
+    _range_bounds,
+    _to_target_unit,
+)
+from dascore.units import get_quantity, m, s
+from dascore.units import get_quantity as _gq
 
 
 class TestIndexCoverageEdges:
@@ -40,17 +75,12 @@ class TestIndexCoverageEdges:
 
     def test_live_resolver_missing_patch(self):
         """A row for a patch absent from the registry raises MissingPatchError."""
-        from dascore.exceptions import MissingPatchError
-        from dascore.io.index.catalog import LiveResolver
-
         resolver = LiveResolver([dc.get_example_patch()])
         with pytest.raises(MissingPatchError, match="not available"):
             resolver.resolve({"path": "memorypatch://not-a-real-id"})
 
     def test_mixed_compatible_unit_range(self):
         """A coord range mixing compatible units resolves."""
-        from dascore.units import get_quantity
-
         cm = get_quantity("cm")
         out = dc.spool([dc.get_example_patch()]).select(distance=(1 * m, 200 * cm))
         assert len(out.get_contents()) == 1
@@ -61,8 +91,6 @@ class TestIndexCoverageEdges:
         The catalog canonicalizes units before the backend, so only a
         direct Query reaches the multi-unit compatibility check.
         """
-        from dascore.units import s
-
         with pytest.raises(UnitError, match="Cannot convert"):
             backend.query(Query(coords={"distance": (1 * m, 2 * s)}))
 
@@ -78,7 +106,6 @@ class TestIndexCoverageEdges:
 
     def test_attr_meta_units_backfilled(self, tmp_path):
         """An attr first seen unitless gets its unit backfilled by a later write."""
-        from dascore.core.summary import PatchSummary
 
         def _summary(gain, path):
             return PatchSummary(
@@ -115,10 +142,6 @@ class TestIndexCoverageEdges:
 
     def test_reopen_missing_meta_row(self, tmp_path):
         """An index whose meta row was lost is rejected on reopen."""
-        import sqlite3
-
-        from dascore.exceptions import InvalidIndexError
-
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
         con = sqlite3.connect(path)
@@ -130,10 +153,6 @@ class TestIndexCoverageEdges:
 
     def test_reopen_table_missing_column(self, tmp_path):
         """An index whose table lost a column is rejected on reopen."""
-        import sqlite3
-
-        from dascore.exceptions import InvalidIndexError
-
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
         con = sqlite3.connect(path)
@@ -154,7 +173,6 @@ class TestIndexCoverageEdges:
 
     def test_schema_creation_rolls_back_on_failure(self, tmp_path):
         """A failure while creating the schema rolls back and re-raises."""
-        from dascore.io.index.lite import SQLiteBackend
 
         class _BoomBackend(SQLiteBackend):
             def _execute(self, sql, params=()):
@@ -167,7 +185,6 @@ class TestIndexCoverageEdges:
 
     def test_schema_commit_failure_rolls_back(self, tmp_path):
         """A schema commit failure follows the protected rollback path."""
-        from dascore.io.index.lite import SQLiteBackend
 
         class _CommitBoomBackend(SQLiteBackend):
             rolled_back = False
@@ -185,10 +202,6 @@ class TestIndexCoverageEdges:
 
     def test_reopen_missing_dynamic_attr_column(self, tmp_path):
         """attr_meta referencing an absent attrs column is rejected on reopen."""
-        import sqlite3
-
-        from dascore.exceptions import InvalidIndexError
-
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
         con = sqlite3.connect(path)
@@ -207,18 +220,12 @@ class TestPureHelpers:
 
     def test_is_directory_format_on_file(self, tmp_path):
         """A plain file is never a directory scan unit."""
-        from dascore.io.core import is_directory_format
-
         f = tmp_path / "a.txt"
         f.write_text("x")
         assert is_directory_format(f) is False
 
     def test_memory_backend_refuses_pickle(self):
         """An in-memory backend cannot be pickled (owners serialize rows)."""
-        import pickle
-
-        from dascore.io.index.lite import SQLiteBackend
-
         back = SQLiteBackend(":memory:")
         try:
             with pytest.raises(TypeError, match="cannot be pickled"):
@@ -228,23 +235,17 @@ class TestPureHelpers:
 
     def test_py_scalar_bool_and_int(self):
         """_py_scalar unwraps numpy bool/int to plain python scalars."""
-        from dascore.io.index.ingest import _py_scalar
-
         assert _py_scalar(np.bool_(True)) is True
         assert _py_scalar(np.int64(5)) == 5
         assert isinstance(_py_scalar(np.int64(5)), int)
 
     def test_assemble_records_empty_sources(self):
         """No sources yields no records."""
-        from dascore.io.index.ingest import assemble_source_records
-
         empty = pd.DataFrame()
         assert assemble_source_records(empty, empty, empty, empty, empty, empty) == []
 
     def test_units_compatible(self):
         """_units_compatible is True for same dimensionality, False otherwise."""
-        from dascore.io.index.backend import SQLIndexBackend
-
         assert SQLIndexBackend._units_compatible("m", "ft") is True
         assert SQLIndexBackend._units_compatible("m", "s") is False
 
@@ -255,16 +256,11 @@ class TestPureHelpers:
 
     def test_wrong_arity_coord_query_raises(self, backend):
         """A hand-built coord range of the wrong length is rejected."""
-        from dascore.exceptions import ParameterError
-
         with pytest.raises(ParameterError, match="length 2 sequence"):
             backend.query(Query(coords={"distance": (1, 2, 3)}))
 
     def test_to_target_unit_paths(self):
         """Quantity on a unitless target raises; on a unit target it converts."""
-        from dascore.io.index.query import _to_target_unit
-        from dascore.units import get_quantity as _gq
-
         typed = typed_value(5 * m)  # a numeric TypedValue carrying units
         with pytest.raises(UnitError, match="unitless"):
             _to_target_unit(typed, None, "distance")
@@ -274,10 +270,10 @@ class TestPureHelpers:
 
     def test_range_bounds_unset_is_not_none(self):
         """Omitting target units must not mean the target is unitless."""
-        from dascore.io.index.query import _UNSET, _range_bounds
-
         value = (5 * m, 10 * m)
-        kinds = {typed_value(5 * m).kind}
+        kind_probe = typed_value(5 * m)
+        assert kind_probe is not None
+        kinds = {kind_probe.kind}
         # Omitted: bounds pass through with no conversion attempted.
         _, lo, hi, _ = _range_bounds(value, kinds, _UNSET, "distance")
         assert (lo, hi) == pytest.approx((5.0, 10.0))
@@ -292,8 +288,6 @@ class TestNormalizeSourcePatchId:
 
     def test_missing_forms_become_empty(self):
         """None, empty string, and pandas NaN/NaT all normalize to ''."""
-        from dascore.core.summary import normalize_source_patch_id
-
         assert normalize_source_patch_id(None) == ""
         assert normalize_source_patch_id("") == ""
         assert normalize_source_patch_id(float("nan")) == ""
@@ -302,21 +296,15 @@ class TestNormalizeSourcePatchId:
 
     def test_numpy_scalar_becomes_plain_string(self):
         """A numpy scalar is unwrapped before stringifying."""
-        from dascore.core.summary import normalize_source_patch_id
-
         assert normalize_source_patch_id(np.int64(42)) == "42"
 
     def test_plain_values_stringify(self):
         """Ordinary ids pass through as strings."""
-        from dascore.core.summary import normalize_source_patch_id
-
         assert normalize_source_patch_id("abc") == "abc"
         assert normalize_source_patch_id(7) == "7"
 
     def test_non_scalar_falls_through(self):
         """A value pd.isnull cannot evaluate as a scalar still stringifies."""
-        from dascore.core.summary import normalize_source_patch_id
-
         # pd.isnull on a list returns an array (truth value is ambiguous),
         # so the helper must swallow that and fall through to str().
         assert normalize_source_patch_id([1, 2]) == "[1, 2]"
@@ -327,17 +315,19 @@ class TestCanonicalRange:
 
     def test_bare_and_quantity_bounds(self):
         """Bare numbers and quantities become SI magnitudes."""
-        from dascore.io.index.catalog import _canonical_range
-
-        assert _canonical_range((20, 60)).magnitudes == (20.0, 60.0)
+        bare = _canonical_range((20, 60))
+        assert bare is not None
+        assert bare.magnitudes == (20.0, 60.0)
         # 20 m .. 60 m -> SI metres
-        assert _canonical_range((20 * m, 60 * m)).magnitudes == (20.0, 60.0)
+        quant = _canonical_range((20 * m, 60 * m))
+        assert quant is not None
+        assert quant.magnitudes == (20.0, 60.0)
 
     def test_open_bounds_kept(self):
         """A half-open numeric range keeps its open end as None."""
-        from dascore.io.index.catalog import _canonical_range
-
-        assert _canonical_range((None, 60)).magnitudes == (None, 60.0)
+        half_open = _canonical_range((None, 60))
+        assert half_open is not None
+        assert half_open.magnitudes == (None, 60.0)
 
     @pytest.mark.parametrize(
         "value",
@@ -351,8 +341,6 @@ class TestCanonicalRange:
     )
     def test_non_numeric_ranges_return_none(self, value):
         """Anything that is not a bounded numeric range yields None."""
-        from dascore.io.index.catalog import _canonical_range
-
         assert _canonical_range(value) is None
 
 
@@ -406,7 +394,7 @@ class TestAdaptAndBackendBasics:
         assert len(back._attr_meta()) == 1
         back.close()
 
-    def test_write_failure_rolls_back(self, tmp_path):
+    def test_write_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing write leaves the index unchanged."""
         back = get_backend(tmp_path / "rollback.sqlite3")
         records = summaries_to_records(make_summaries())
@@ -416,10 +404,10 @@ class TestAdaptAndBackendBasics:
         def boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        back._bulk_insert = boom
+        monkeypatch.setattr(back, "_bulk_insert", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.write_sources(records[1:])
-        del back.__dict__["_bulk_insert"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -474,7 +462,7 @@ class TestAdaptAndBackendBasics:
         assert back.get_metadata()["last_indexed_ns"] == before
         back.close()
 
-    def test_delete_failure_rolls_back(self, tmp_path):
+    def test_delete_failure_rolls_back(self, tmp_path, monkeypatch):
         """A failing delete leaves the index unchanged."""
         back = get_backend(tmp_path / "delete.sqlite3")
         back.write_sources(summaries_to_records(make_summaries()))
@@ -483,10 +471,10 @@ class TestAdaptAndBackendBasics:
         def boom(paths, base_uri=""):
             raise RuntimeError("simulated failure")
 
-        back._delete_by_paths = boom
+        monkeypatch.setattr(back, "_delete_by_paths", boom)
         with pytest.raises(RuntimeError, match="simulated"):
             back.delete_sources(["das/file_1.h5"])
-        del back.__dict__["_delete_by_paths"]
+        monkeypatch.undo()
         assert len(back.query()) == before
         back.close()
 
@@ -864,6 +852,7 @@ class TestIngestEdges:
         """A coord with a missing or unsupported dtype produces no record."""
 
         class _Stub:
+            dtype: object = None
             dims = ("x",)
             len = 2
             units = None
@@ -880,9 +869,12 @@ class TestIngestEdges:
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_ids."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
-        two = PatchSummary(**{**base, "attrs": {"station": "STA9"}})
+        # Bound and annotated: merging a str literal into the dict widens
+        # the value type to `Any | str`, which no field then accepts.
+        other: dict[str, Any] = {**base, "attrs": {"station": "STA9"}}
+        two = PatchSummary(**other)
         records = s2r([one, two])
         assert len(records) == 1
         ids = [p.source_patch_id for p in records[0].patches]
@@ -961,10 +953,8 @@ class TestIndexerEdges:
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
-        import sys
-
         sys.path.insert(0, "tests/test_io/test_xml_binary")
-        from test_xml_binary import metadata
+        from test_xml_binary import metadata  # noqa: PLC0415
 
         sub = tmp_path / "unit"
         sub.mkdir()
@@ -995,8 +985,6 @@ class TestDirSpoolPassthrough:
 
     def test_spool_from_indexer(self, tmp_path, random_patch):
         """Passing an indexer instance to from_directory works."""
-        from dascore.core.spool import Spool
-
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         indexer = DBDirectoryIndexer(tmp_path)
         spool = Spool.from_directory(indexer).update(progress=None)
@@ -1008,8 +996,6 @@ class TestFinalCoverage:
 
     def test_datetime_object_becomes_time(self):
         """A python datetime routes through the datetime fallback."""
-        import datetime
-
         out = typed_value(datetime.datetime(2024, 1, 1))
         assert out is not None and out.kind == "time"
 
@@ -1077,6 +1063,7 @@ class TestCoordDeduplication:
         patch = patch.update_coords(distance=values)
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
+        assert record is not None
         assert record.coord_hash == patch.get_coord("distance").fingerprint()
         assert record.def_key.startswith("fp:")
 
@@ -1095,6 +1082,7 @@ class TestCoordDeduplication:
             source_version="1",
         )
         fresh = _coord_record("time", summary.coords["time"])
+        assert fresh is not None
         assert fresh.def_key.startswith("sum:")
         back = get_backend(tmp_path / "sum.sqlite3")
         back.write_sources(summaries_to_records([summary]))
@@ -1142,16 +1130,20 @@ class TestCompositeSourceIdentity:
 
     def test_same_path_different_base_coexist(self, tmp_path):
         """Identical relative paths under different bases don't collide."""
-        base = make_summaries()[0].dump_structured()
+        base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         records_a = summaries_to_records([one], base_uri="s3://bucket-a")
+
         # base_uri strip only applies when paths share the base; set directly
-        records_a = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-a"}) for r in records_a
-        ]
-        records_b = [
-            type(r)(**{**r.__dict__, "base_uri": "s3://bucket-b"}) for r in records_a
-        ]
+        def _rebase(record, base_uri: str):
+            """Rebuild a record under a different base."""
+            # Annotated because merging a str literal in widens the value
+            # type to `Any | str`, which none of the fields accept.
+            fields: dict[str, Any] = {**record.__dict__, "base_uri": base_uri}
+            return type(record)(**fields)
+
+        records_a = [_rebase(r, "s3://bucket-a") for r in records_a]
+        records_b = [_rebase(r, "s3://bucket-b") for r in records_a]
         back = get_backend(tmp_path / "multi.sqlite3")
         back.write_sources(records_a)
         back.write_sources(records_b)
@@ -1171,8 +1163,10 @@ class TestCompositeSourceIdentity:
         base = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         rec = summaries_to_records([one])[0]
-        rec_a = type(rec)(**{**rec.__dict__, "base_uri": "s3://a"})
-        rec_b = type(rec)(**{**rec.__dict__, "base_uri": "s3://b"})
+        fields_a: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://a"}
+        fields_b: dict[str, Any] = {**rec.__dict__, "base_uri": "s3://b"}
+        rec_a = type(rec)(**fields_a)
+        rec_b = type(rec)(**fields_b)
         back = get_backend(tmp_path / "scoped.sqlite3")
         back.write_sources([rec_a, rec_b])
         assert len(back.query()) == 2
@@ -1186,11 +1180,6 @@ class TestResourceCleanup:
 
     def test_gc_closes_connection(self):
         """Garbage collection closes the backend connection silently."""
-        import gc
-        import warnings as warnings_mod
-
-        import dascore as dc
-
         spool = dc.spool([dc.get_example_patch()])
         spool.get_contents()  # realize the backend
         # Drain any garbage other tests left behind before opening the
@@ -1207,9 +1196,6 @@ class TestResourceCleanup:
 
     def test_explicit_close_idempotent(self):
         """Explicit close works and GC afterwards stays quiet."""
-        import dascore as dc
-        from dascore.io.index.catalog import PatchCatalog
-
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
         catalog.close()
@@ -1217,12 +1203,6 @@ class TestResourceCleanup:
     @pytest.mark.concurrency
     def test_finalization_from_worker_thread(self):
         """Dropping the last backend reference off-thread does not raise."""
-        import gc
-        import sys
-        import threading
-
-        from dascore.io.index.lite import SQLiteBackend
-
         holder = [SQLiteBackend(":memory:")]
         unraisable = []
         original = sys.unraisablehook
@@ -1248,13 +1228,6 @@ class TestLegacyIndexMap:
 
     def test_legacy_entry_ignored(self, tmp_path):
         """A mapped legacy HDF5 index does not break index creation."""
-        import h5py
-
-        import dascore as dc
-        from dascore.io.index.indexer import (
-            _set_mapped_index_path,
-        )
-
         # data directory with one file, plus a fake legacy index mapping.
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -1278,8 +1251,6 @@ class TestReservedAttrNames:
     )
     def test_reserved_attr_warns_and_skips(self, name, value):
         """Reserved names warn at ingest and never corrupt the relation."""
-        import dascore as dc
-
         patch = dc.get_example_patch().update_attrs(**{name: value})
         with pytest.warns(UserWarning, match="reserved attr"):
             df = dc.spool([patch]).get_contents()
@@ -1289,8 +1260,6 @@ class TestReservedAttrNames:
 
     def test_non_reserved_attr_round_trips(self):
         """Ordinary arbitrary attrs still index and select normally."""
-        import dascore as dc
-
         patch = dc.get_example_patch().update_attrs(experiment="exp42")
         spool = dc.spool([patch])
         assert spool.get_contents()["experiment"].iloc[0] == "exp42"
@@ -1298,8 +1267,6 @@ class TestReservedAttrNames:
 
     def test_cross_patch_envelope_attr_clobbered_not_reserved(self):
         """An envelope-shaped attr indexes normally; the coord wins the column."""
-        import dascore as dc
-
         base = dc.get_example_patch()
         p1 = base.update_attrs(event_time_min=123.0)
         p2 = dc.get_example_patch().rename_coords(time="event_time")
@@ -1316,8 +1283,6 @@ class TestReservedAttrNames:
 
     def test_data_units_attr_still_indexed(self):
         """A real ``*_units`` attr is not an envelope column; stays queryable."""
-        import dascore as dc
-
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
         assert "data_units" in spool._catalog.backend.attr_names()
@@ -1327,13 +1292,8 @@ class TestTransactionIsolation:
     """The statement lock covers whole transactions (round-4 F5)."""
 
     @pytest.mark.concurrency
-    def test_reader_never_sees_half_written_replacement(self, tmp_path):
+    def test_reader_never_sees_half_written_replacement(self, tmp_path, monkeypatch):
         """A concurrent reader blocks during a source replacement."""
-        import threading
-
-        from dascore.io.index.backend import get_backend
-        from dascore.io.index.ingest import SourceRecord, patch_record
-
         patch = dc.get_example_patch()
         record = SourceRecord(
             source_path="mem://one",
@@ -1363,7 +1323,7 @@ class TestTransactionIsolation:
         writer = threading.Thread(
             target=lambda: backend.write_sources([record]), daemon=True
         )
-        type(backend)._delete_by_paths = paused_delete
+        monkeypatch.setattr(type(backend), "_delete_by_paths", paused_delete)
         try:
             writer.start()
             assert in_delete.wait(timeout=10)
@@ -1378,7 +1338,6 @@ class TestTransactionIsolation:
             writer.join(timeout=10)
             reader.join(timeout=10)
         finally:
-            type(backend)._delete_by_paths = original
             release.set()
         assert counts == [1]
         backend.close()

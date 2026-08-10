@@ -18,6 +18,7 @@ from dascore.exceptions import (
 )
 from dascore.units import Hz, convert_units, get_unit, m
 from dascore.utils.misc import broadcast_for_index
+from dascore.utils.patch import get_dim_sampling_rate
 
 
 class TestPassFilterChecks:
@@ -283,7 +284,7 @@ class TestNotchFilter:
 
     def test_notch_filter_high_frequency_error(self, random_patch):
         """Test notch filter raises error for frequency beyond Nyquist."""
-        sr = dc.utils.patch.get_dim_sampling_rate(random_patch, "time")
+        sr = get_dim_sampling_rate(random_patch, "time")
         nyquist = 0.5 * sr
         too_high_freq = nyquist + 1
         msg = f"possible filter values are in [0, {nyquist}] you passed {too_high_freq}"

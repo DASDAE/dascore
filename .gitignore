@@ -103,6 +103,10 @@ worktrees/
 # profile stuff
 prof/
 
+# CI test-data cache workspace dirs (see .github/actions/prime-test-data-cache)
+.test_data_cache/
+.test_data_repo/
+
 ## Common IDE project files
 #Spyder
 *.spyproject

@@ -19,6 +19,7 @@ from typing import (
     NotRequired,
     Protocol,
     TypedDict,
+    TypeVar,
     cast,
     get_type_hints,
 )
@@ -30,11 +31,13 @@ import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
+    float_select_type,
     path_types,
-    timeable_types,
+    time_select_type,
 )
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
+from dascore.core.coords import CoordSegmented
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
 from dascore.exceptions import (
@@ -1061,8 +1064,8 @@ def read(
     path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
-    time: tuple[timeable_types | None, timeable_types | None] | None = None,
-    distance: tuple[float | None, float | None] | None = None,
+    time: time_select_type | None = None,
+    distance: float_select_type | None = None,
     **kwargs,
 ) -> dc.BaseSpool:
     """
@@ -1643,8 +1646,6 @@ def _resolves_assembled_patches(spool) -> bool:
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    from dascore.core.coords import CoordSegmented
-
     # Gap inspection depends on what the spool resolves, not on where
     # its ultimate members live: only literal file reads are always
     # contiguous (gapped patches are never persisted).
@@ -1682,14 +1683,19 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+# write hands back the path it was given, so the return follows the
+# argument rather than collapsing to the union: a Path in, a Path out.
+_PathT = TypeVar("_PathT", bound=path_types)
+
+
 def write(
     patch_or_spool,
-    path: path_types,
+    path: _PathT,
     file_format: str,
     file_version: str | None = None,
     split: bool = False,
     **kwargs,
-) -> path_types:
+) -> _PathT:
     """
     Write a Patch or Spool to disk.
 

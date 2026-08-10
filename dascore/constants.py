@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import EllipsisType, MappingProxyType
 from typing import Literal, Protocol, TypeVar, get_args, runtime_checkable
 
 import numpy as np
@@ -23,7 +23,14 @@ SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 class ExecutorType(Protocol):
     """Protocol for Executors that DASCore can use."""
 
-    def map(self, func, iterables, **kwargs):
+    # Two positional-only parameters, which is exactly what DASCore calls
+    # this with. A named `iterables` plus a **kwargs catch-all excluded
+    # ThreadPoolExecutor and ProcessPoolExecutor, which provide neither;
+    # spelling the second parameter as *iterables instead would demand
+    # arbitrarily many iterables and so exclude single-iterable clients.
+    # The annotations are what stop a map() of the wrong shape (say one
+    # taking an int) from satisfying this and failing at runtime.
+    def map(self, fn: Callable, iterable: Iterable, /) -> Iterable:
         """Map function for applying concurrency of some flavor."""
 
 
@@ -33,6 +40,14 @@ DATA_VERSION = "0.0.0"
 # Types dascore can convert into time representations
 timeable_types = int | float | str | np.datetime64 | pd.Timestamp
 opt_timeable_types = None | timeable_types
+
+# A (start, stop) selection range. Either end may be `...` to leave that
+# side open, which is why these are not simply tuples of the value type.
+time_select_type = tuple[
+    opt_timeable_types | EllipsisType,
+    opt_timeable_types | EllipsisType,
+]
+float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
 
 # Number types
 numeric_types = int | float

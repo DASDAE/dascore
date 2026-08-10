@@ -7,8 +7,10 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import h5py
+import h5py._hl.group as h5py_group
 import numpy as np
 import pytest
 from h5py.h5r import Reference
@@ -78,7 +80,12 @@ def _write_modern_dasvader_file(
         )
         htime = fi.create_dataset("htime", data=np.array([MODERN_DASVADER.htime_ms]))
 
-        ddas = np.zeros((), dtype=ddas_dtype)
+        # Cast because numpy types np.zeros(..., dtype=<dtype object>) as
+        # float64: a structured dtype built at runtime is invisible to the
+        # stubs, which then reject every field-name index below.
+        ddas = cast(
+            "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+        )
         ddas[data_name] = data.ref
         ddas["htime"] = htime.ref
         ddas["time"]["ref"]["hi"] = 0.0
@@ -112,7 +119,9 @@ def _write_modern_dasvader_file(
                 data=MODERN_DASVADER.pipeline_tracker,
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
-            atrib = np.zeros((), dtype=atrib_dtype)
+            atrib = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=atrib_dtype)
+            )
             atrib["GaugeLength"] = gauge.ref
             atrib["Hostname"] = host.ref
             atrib["PipelineTracker"] = tracker.ref
@@ -166,7 +175,9 @@ class TestDASVader:
             )
             htime = fi.create_dataset("htime", data=np.array([62_135_683_200_000]))
 
-            ddas = np.zeros((), dtype=ddas_dtype)
+            ddas = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+            )
             ddas["strainrate"] = strainrate.ref
             ddas["htime"] = htime.ref
             ddas["time"]["ref"]["hi"] = 0.0
@@ -193,14 +204,14 @@ class TestDASVader:
         # This intentionally patches h5py internals to simulate dereference
         # failures that are otherwise hard to trigger from the public API.
         # TODO: revisit if h5py internals change or a higher-level hook appears.
-        original_getitem = h5py._hl.group.Group.__getitem__
+        original_getitem = h5py_group.Group.__getitem__
 
         def _patched_getitem(group, key):
             if isinstance(key, Reference):
                 raise KeyError("simulated token dereference failure")
             return original_getitem(group, key)
 
-        monkeypatch.setattr(h5py._hl.group.Group, "__getitem__", _patched_getitem)
+        monkeypatch.setattr(h5py_group.Group, "__getitem__", _patched_getitem)
 
         patch = dc.read(dasvader_modern_path)[0]
         scanned = dc.scan(dasvader_modern_path)

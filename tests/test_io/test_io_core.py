@@ -6,7 +6,7 @@ import copy
 import io
 import threading
 from pathlib import Path
-from typing import ClassVar, TypeVar
+from typing import ClassVar, Literal, TypeVar
 
 import h5py
 import numpy as np
@@ -17,11 +17,13 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.constants import SpoolType
+from dascore.core.coords import CoordSegmented
 from dascore.exceptions import (
+    DependencyError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
+    PatchAttributeError,
     RemoteCacheError,
     UnknownFiberFormatError,
 )
@@ -31,8 +33,11 @@ from dascore.io.core import (
     _get_reloadable_source_path,
     _make_scan_payload,
     _reinit_manager_lock,
+    _resolve_read_spool,
     _scan_result_to_summary,
+    _select_patch_from_spool,
     _validate_scan_payload,
+    is_directory_format,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import get_exact_coord
@@ -66,13 +71,13 @@ class _FiberImplementer(FiberIO):
     def read(self, resource, **kwargs):
         """Dummy read."""
 
-    def write(self, spool: SpoolType, resource):
+    def write(self, spool, resource, **kwargs):
         """Dummy write."""
 
-    def scan(self, resource: BinaryReader):
+    def scan(self, resource: BinaryReader, *, snap: bool = True, **kwargs):
         """Dummy scan."""
 
-    def get_format(self, resource):
+    def get_format(self, resource, **kwargs):
         """Dummy get_format."""
 
 
@@ -82,15 +87,15 @@ class _FiberCaster(FiberIO):
     name = "_TestFormatter"
     version = "2"
 
-    def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
+    def read(self, resource: BinaryReader, **kwargs):
         """Just ensure read was cast to correct type."""
         assert isinstance(resource, io.BufferedReader)
 
-    def write(self, spool: SpoolType, resource: BinaryWriter):
+    def write(self, spool, resource: BinaryWriter, **kwargs):
         """Ditto for write."""
         assert isinstance(resource, io.BufferedWriter)
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """And get format."""
         assert isinstance(resource, Path)
         return False
@@ -132,7 +137,7 @@ class _FiberDirectory(FiberIO):
     version = "0.1"
     input_type = "directory"
 
-    def get_format(self, resource) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept directories which have specific naming."""
         path = Path(resource)
         name = path.name
@@ -160,7 +165,7 @@ class _ReadOnlySummaryFormatter(FiberIO):
     name = "_read_only_summary_formatter"
     version = "1"
 
-    def read(self, resource: Path, snap_dims=True, **kwargs) -> SpoolType:
+    def read(self, resource: Path, snap_dims=True, **kwargs) -> dc.BaseSpool:
         """Return a simple spool for default scan conversion."""
         patch = dc.get_example_patch().update_attrs(tag="fallback")
         values = patch.get_coord("time").values.copy()
@@ -170,7 +175,7 @@ class _ReadOnlySummaryFormatter(FiberIO):
             time = time.snap()
         return dc.spool([patch.update_coords(time=time)])
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept the explicit fallback-scan test resource."""
         path = Path(resource)
         if path.suffix == ".h5" and path.name == "fallback_scan.h5":
@@ -192,10 +197,29 @@ class _MissingOptionalFormatter(FiberIO):
         )
         raise MissingOptionalDependencyError(msg)
 
-    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
         """Only accept the explicit missing-optional test resource."""
         path = Path(resource)
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
+            return self.name, self.version
+        return False
+
+
+class _DependencyErrorFormatter(FiberIO):
+    """A formatter whose scan path hits a dependency/compatibility problem."""
+
+    name = "_dependency_error_formatter"
+    version = "1"
+
+    def scan(self, resource: Path, **kwargs):
+        """Raise a stable dependency error for scan coverage tests."""
+        msg = "simulated stack incompatibility while scanning"
+        raise DependencyError(msg)
+
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        """Only accept the explicit dependency-error test resource."""
+        path = Path(resource)
+        if path.suffix == ".dep" and path.name == "dependency_error.dep":
             return self.name, self.version
         return False
 
@@ -222,8 +246,6 @@ class TestGetExactCoord:
 
     def test_jittery_array_does_not_over_segment(self):
         """Sub-step jitter must not explode into a per-sample segmented coord."""
-        from dascore.core.coords import CoordSegmented
-
         rng = np.random.default_rng(0)
         n = 5_000
         values = np.maximum.accumulate(
@@ -248,8 +270,6 @@ class TestGetExactCoord:
 
     def test_piecewise_uniform_array_stays_segmented(self):
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
-        from dascore.core.coords import CoordSegmented
-
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
         coord = get_exact_coord(values, units="m")
@@ -958,6 +978,26 @@ class TestScan:
         assert len(out) == 1
         assert out[0].source_format == _ReadOnlySummaryFormatter.name
 
+    def test_scan_dependency_error_warns_and_skips(self, tmp_path):
+        """
+        A scan-time dependency/compatibility problem warns and keeps scanning.
+
+        Scan is best-effort across many resources, so such problems must
+        surface as warnings on the affected file rather than aborting the
+        whole scan. (The DASVader legacy file used to exercise this branch,
+        but whether it does depends on the installed HDF5 stack.)
+        """
+        dep_path = tmp_path / "dependency_error.dep"
+        dep_path.write_text("placeholder")
+        readable_path = tmp_path / "fallback_scan.h5"
+        readable_path.write_text("placeholder")
+
+        with pytest.warns(UserWarning, match="simulated stack incompatibility"):
+            out = dc.scan([dep_path, readable_path])
+
+        assert len(out) == 1
+        assert out[0].source_format == _ReadOnlySummaryFormatter.name
+
     def test_local_upath_file_interfaces(self, terra15_v6_path):
         """Ensure core file IO accepts local UPath inputs."""
         path = UPath(terra15_v6_path)
@@ -1321,21 +1361,21 @@ class TestReloadableSourcePath:
         assert out[0]["source_version"] == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """Default scan should not invent source ids for multi-patch readers."""
         path = tmp_path / "fallback_scan.h5"
         path.write_text("placeholder")
         fio = _ReadOnlySummaryFormatter()
 
-        def read_two_patches(resource: Path, **kwargs) -> SpoolType:
+        def read_two_patches(resource: Path, **kwargs) -> dc.BaseSpool:
             patches = [
                 dc.get_example_patch().update_attrs(tag="first"),
                 dc.get_example_patch().update_attrs(tag="second"),
             ]
             return dc.spool(patches)
 
-        fio.read = read_two_patches  # type: ignore[method-assign]
+        monkeypatch.setattr(fio, "read", read_two_patches)
         out = fio.scan(path)
 
         assert len(out) == 2
@@ -1431,7 +1471,6 @@ class TestIOCoreCoverageEdges:
 
     def test_directory_format_ignores_unknown_format(self, monkeypatch, tmp_path):
         """An unsupported directory is not itself a scan unit."""
-        from dascore.io.core import is_directory_format
 
         def _raise_unknown_format(_path):
             raise UnknownFiberFormatError
@@ -1441,7 +1480,6 @@ class TestIOCoreCoverageEdges:
 
     def test_directory_format_propagates_unexpected_error(self, monkeypatch, tmp_path):
         """Unexpected format-detection failures remain visible to callers."""
-        from dascore.io.core import is_directory_format
 
         def _raise_unexpected_error(_path):
             raise RuntimeError("format detection failed")
@@ -1452,18 +1490,12 @@ class TestIOCoreCoverageEdges:
 
     def test_numeric_singleton_without_identity_not_trusted(self):
         """A positional ID cannot resolve an anonymous trimmed singleton."""
-        from dascore.exceptions import PatchAttributeError
-        from dascore.io.core import _resolve_read_spool
-
         spool = dc.spool([dc.get_example_patch()])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             _resolve_read_spool(spool, source_patch_id="1")
 
     def test_non_unique_patch_resolution_raises(self):
         """An unresolvable source id in a multi-patch read raises clearly."""
-        from dascore.exceptions import PatchAttributeError
-        from dascore.io.core import _select_patch_from_spool
-
         spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             _select_patch_from_spool(spool, source_patch_id="neither-id-nor-index")
@@ -1476,15 +1508,11 @@ class TestIOCoreCoverageEdges:
         these (see #583); the guard must fire before any identity matching,
         with or without a requested source id.
         """
-        from dascore.io.core import _select_patch_from_spool
-
         with pytest.raises(MissingPatchError, match="No patch remained"):
             _select_patch_from_spool(dc.spool([]), source_patch_id=source_patch_id)
 
     def test_single_patch_resolved_by_name(self):
         """A one-patch read resolves when the id matches the patch name."""
-        from dascore.io.core import _select_patch_from_spool
-
         patch = dc.get_example_patch()
         spool = dc.spool([patch])
         resolved = _select_patch_from_spool(
@@ -1494,8 +1522,6 @@ class TestIOCoreCoverageEdges:
 
     def test_corrupt_file_format_detection_is_robust(self, tmp_path):
         """A reader raising during format detection is caught, not propagated."""
-        from dascore.exceptions import UnknownFiberFormatError
-
         # valid HDF5 magic followed by garbage: an HDF5 reader raises while
         # probing, which format detection must swallow before giving up.
         bad = tmp_path / "bad.h5"
