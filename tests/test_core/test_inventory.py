@@ -37,11 +37,13 @@ def build_inventory() -> inv.Inventory:
         geometry=(geometry,),
         coupling=(
             inv.CouplingCondition(
-                distance=0.0, optical_length=200.0, coupling_type="trench"
+                start_distance=0.0, end_distance=200.0, coupling_type="trench"
             ),
         ),
         annotations=(
-            inv.OpticalPathAnnotation(distance=0.0, optical_length=100.0, label="east"),
+            inv.OpticalPathAnnotation(
+                start_distance=0.0, end_distance=100.0, label="east"
+            ),
         ),
     )
     array = inv.FiberArray(
@@ -102,10 +104,10 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    distance=0.0, optical_length=60.0, coupling_type="trench"
+                    start_distance=0.0, end_distance=60.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    distance=50.0, optical_length=20.0, coupling_type="conduit"
+                    start_distance=50.0, end_distance=70.0, coupling_type="conduit"
                 ),
             ),
         )
@@ -130,9 +132,11 @@ class TestPathTracks:
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             annotations=(
-                inv.OpticalPathAnnotation(distance=0.0, optical_length=60.0, label="a"),
                 inv.OpticalPathAnnotation(
-                    distance=50.0, optical_length=20.0, label="b"
+                    start_distance=0.0, end_distance=60.0, label="a"
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=50.0, end_distance=70.0, label="b"
                 ),
             ),
         )
@@ -144,7 +148,7 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    distance=90.0, optical_length=60.0, coupling_type="trench"
+                    start_distance=90.0, end_distance=150.0, coupling_type="trench"
                 ),
             ),
         )
@@ -404,9 +408,9 @@ class TestPathOperations:
         """Reverse rewrites all tracks."""
         rev = path.reverse()
         # 0-100 annotation on a 0-250 path becomes 150-250.
-        assert np.isclose(rev.annotations[0].distance, 150.0)
+        assert rev.annotations[0].interval == (150.0, 250.0)
         # 0-200 coupling becomes 50-250.
-        assert np.isclose(rev.coupling[0].distance, 50.0)
+        assert rev.coupling[0].interval == (50.0, 250.0)
         rev.check()
 
     def test_empty_selection_raises(self, path):
@@ -840,7 +844,7 @@ class TestCodexReviewRegressions:
         """Nonfinite interval values raise."""
         with pytest.raises(ValidationError):
             inv.CouplingCondition(
-                distance=np.nan, optical_length=10.0, coupling_type="trench"
+                start_distance=np.nan, end_distance=10.0, coupling_type="trench"
             )
         with pytest.raises(ValidationError, match="finite"):
             inv.Geometry(distance=(0.0, np.inf), coordinates=((0.0, 0.0), (1.0, 1.0)))
@@ -1046,7 +1050,7 @@ class TestPointMarkers:
     def test_aerial_coupling_type(self):
         """Aerial coupling type."""
         cond = inv.CouplingCondition(
-            distance=0.0, optical_length=100.0, coupling_type="aerial"
+            start_distance=0.0, end_distance=100.0, coupling_type="aerial"
         )
         assert cond.coupling_type == "aerial"
 
@@ -1056,11 +1060,11 @@ class TestPointMarkers:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    distance=0.0, optical_length=80.0, coupling_type="trench"
+                    start_distance=0.0, end_distance=80.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    distance=40.0,
-                    optical_length=0.0,
+                    start_distance=40.0,
+                    end_distance=40.0,
                     coupling_type="other",
                     notes="clamp point",
                 ),
@@ -1071,13 +1075,13 @@ class TestPointMarkers:
     def test_point_annotation(self):
         """Point annotation."""
         anno = inv.OpticalPathAnnotation(
-            distance=350.0, optical_length=0.0, label="wellhead"
+            start_distance=350.0, end_distance=350.0, label="wellhead"
         )
         assert anno.interval == (350.0, 350.0)
 
-    def test_negative_length_still_rejected(self):
-        """Negative length still rejected."""
-        with pytest.raises(ValidationError):
+    def test_reversed_interval_rejected(self):
+        """An end before the start is rejected."""
+        with pytest.raises(ValidationError, match="must not precede"):
             inv.CouplingCondition(
-                distance=0.0, optical_length=-1.0, coupling_type="trench"
+                start_distance=10.0, end_distance=5.0, coupling_type="trench"
             )

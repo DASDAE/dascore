@@ -451,35 +451,55 @@ class Geometry(InventoryModel):
 
 class _IntervalModel(InventoryModel):
     """
-    Base for items placed by start distance plus optical length.
+    Base for items covering the half-open interval [start, end) of optical
+    distance, matching the start/end idiom of time epochs and how interval
+    bounds read off OTDR and interrogator displays.
 
-    A zero optical_length makes the item a point marker (e.g. a clamp or a
+    Equal start and end make the item a point marker (e.g. a clamp or a
     labeled spot): it documents a location but covers no distance, so it
     never participates in coverage, enrichment, or overlap checks.
     """
 
-    distance: float = Field(
+    start_distance: float = Field(
         allow_inf_nan=False,
-        description="Start optical distance for this interval in meters.",
+        description="Start optical distance of this interval in meters.",
     )
-    optical_length: float = Field(
-        ge=0.0,
+    end_distance: float = Field(
         allow_inf_nan=False,
-        description="Interval length in meters; 0 marks a point.",
+        description=(
+            "End optical distance of this interval in meters; equal to "
+            "start_distance for a point marker."
+        ),
     )
+
+    @model_validator(mode="after")
+    def _check_interval_order(self) -> Self:
+        """The end may not precede the start."""
+        if self.end_distance < self.start_distance:
+            msg = (
+                f"end_distance {self.end_distance} must not precede "
+                f"start_distance {self.start_distance}."
+            )
+            raise InvalidInventoryError(msg)
+        return self
+
+    @property
+    def optical_length(self) -> float:
+        """The interval length in meters."""
+        return self.end_distance - self.start_distance
 
     @property
     def interval(self) -> tuple[float, float]:
         """The (start, end) optical distance covered by this item."""
-        return (self.distance, self.distance + self.optical_length)
+        return (self.start_distance, self.end_distance)
 
 
 class CouplingCondition(_IntervalModel):
     """
     Acoustic coupling condition for an interval of an optical path.
 
-    Placed by start ``distance`` plus ``optical_length`` (the annotation
-    idiom). Coverage may be partial and conditions may not overlap.
+    Covers ``[start_distance, end_distance)``. Coverage may be partial
+    and conditions may not overlap.
     """
 
     coupling_type: CouplingType = Field(description="Controlled coupling category.")
@@ -951,19 +971,21 @@ class OpticalPath(TimeRangedModel):
                 )
             )
         geometry.sort(key=lambda s: s.distance[0])
+
+        def flip_item(item):
+            update = {
+                "start_distance": flip(item.end_distance),
+                "end_distance": flip(item.start_distance),
+            }
+            return item.model_copy(update=update)
+
         coupling = sorted(
-            (
-                c.model_copy(update={"distance": flip(c.interval[1])})
-                for c in self.coupling
-            ),
-            key=lambda c: c.distance,
+            (flip_item(c) for c in self.coupling),
+            key=lambda c: c.start_distance,
         )
         annotations = sorted(
-            (
-                a.model_copy(update={"distance": flip(a.interval[1])})
-                for a in self.annotations
-            ),
-            key=lambda a: a.distance,
+            (flip_item(a) for a in self.annotations),
+            key=lambda a: a.start_distance,
         )
         return self.model_copy(
             update={
@@ -983,14 +1005,16 @@ class OpticalPath(TimeRangedModel):
             seg.model_copy(update={"distance": tuple(d + offset for d in seg.distance)})
             for seg in other.geometry
         )
-        coupling = tuple(
-            c.model_copy(update={"distance": c.distance + offset})
-            for c in other.coupling
-        )
-        annotations = tuple(
-            a.model_copy(update={"distance": a.distance + offset})
-            for a in other.annotations
-        )
+
+        def shift_item(item):
+            update = {
+                "start_distance": item.start_distance + offset,
+                "end_distance": item.end_distance + offset,
+            }
+            return item.model_copy(update=update)
+
+        coupling = tuple(shift_item(c) for c in other.coupling)
+        annotations = tuple(shift_item(a) for a in other.annotations)
         return self.model_copy(
             update={
                 "optical_components": (
@@ -1020,9 +1044,7 @@ def _clip_intervals(items, lo: float, hi: float) -> list:
         if new_hi <= new_lo:
             continue
         out.append(
-            item.model_copy(
-                update={"distance": new_lo, "optical_length": new_hi - new_lo}
-            )
+            item.model_copy(update={"start_distance": new_lo, "end_distance": new_hi})
         )
     return out
 
