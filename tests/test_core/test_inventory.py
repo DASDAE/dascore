@@ -1017,20 +1017,20 @@ class TestTypeTag:
 
 
 class TestUniformAttachments:
-    """Every inventory object carries notes and extra_fields."""
+    """Every inventory object carries description and extra_fields."""
 
-    def test_notes_on_previous_gaps(self):
-        """Notes on previous gaps."""
-        acq = inv.Acquisition(code="RAW", notes="tap tested twice")
-        path = inv.OpticalPath(notes="post-repair epoch")
-        assert acq.notes and path.notes
+    def test_description_on_previous_gaps(self):
+        """Descriptions on previous gaps."""
+        acq = inv.Acquisition(code="RAW", description="tap tested twice")
+        path = inv.OpticalPath(description="post-repair epoch")
+        assert acq.description and path.description
 
     def test_yaml_omits_empty_fields(self):
         """Empty strings, dicts, and tuples do not serialize."""
         pytest.importorskip("yaml")
         inventory = build_inventory()
         text = inventory.to_yaml()
-        assert "notes:" not in text
+        assert "description:" not in text
         assert "extra_fields:" not in text
         loaded = inv.Inventory.from_yaml(text)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
@@ -1070,7 +1070,7 @@ class TestPointMarkers:
                     start_distance=40.0,
                     end_distance=40.0,
                     coupling_type="other",
-                    notes="clamp point",
+                    description="clamp point",
                 ),
             ),
         )

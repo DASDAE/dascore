@@ -161,8 +161,7 @@ class CoordinateReferenceSystem(InventoryModel):
     units: tuple[str, ...] = Field(
         default=("degree", "degree", "meter"),
         description=(
-            "Units of the canonical axes, in order; same length as "
-            "coordinate_labels."
+            "Units of the canonical axes, in order; same length as coordinate_labels."
         ),
     )
     vertical_datum: str = Field(
@@ -1255,7 +1254,6 @@ class Network(InventoryModel):
 
     code: CodeStr = Field(description="Network code.")
     name: str = Field(default="", description="Human-readable network name.")
-    description: str = Field(default="", description="Network description.")
     fiber_arrays: tuple[FiberArray, ...] = Field(
         default=(), description="Fiber arrays in this network."
     )
