@@ -40,6 +40,24 @@ class TestLazyImports:
         _run_snippet(code)
 
     @pytest.mark.concurrency
+    def test_numba_not_imported(self):
+        """Importing dascore should not import numba (it is slow)."""
+        code = "import dascore, sys; assert 'numba' not in sys.modules"
+        _run_snippet(code)
+
+    @pytest.mark.concurrency
+    def test_numba_imported_with_jit_kernels(self):
+        """The jit kernel modules should pull numba in when they are imported."""
+        pytest.importorskip("numba")
+        code = (
+            "import sys, dascore; "
+            "assert 'numba' not in sys.modules; "
+            "import dascore.transform._kurtosis_kernels; "
+            "assert 'numba' in sys.modules"
+        )
+        _run_snippet(code)
+
+    @pytest.mark.concurrency
     def test_lazy_import_doesnt_import_scipy_signal_until_use(self):
         """The lazy proxy should resolve scipy.signal only on first use."""
         code = (

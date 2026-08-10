@@ -5,7 +5,8 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.transform.taup import _jit_taup_general, _jit_taup_uniform, tau_p
+from dascore.transform._taup_kernels import _jit_taup_general, _jit_taup_uniform
+from dascore.transform.taup import tau_p
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_timedelta64
 
