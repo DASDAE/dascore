@@ -233,7 +233,6 @@ class ExternalResource(InventoryModel):
     resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
-    description: str = Field(default="", description="Free-form description.")
 
 
 class OpticalMeasurement(InventoryModel):
