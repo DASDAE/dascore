@@ -277,10 +277,10 @@ class OpticalMeasurement(InventoryModel):
         default=np.datetime64("NaT", "ns"),
         description="Time of the measurement (UTC).",
     )
-    wavelength: float | None = Field(
+    wavelength: FiniteFloat | None = Field(
         default=None, description="Measurement wavelength in nm."
     )
-    pulse_width: float | None = Field(
+    pulse_width: FiniteFloat | None = Field(
         default=None, description="OTDR pulse width in seconds."
     )
     direction: str = Field(
@@ -322,7 +322,7 @@ class Enclosure(InventoryModel):
     material: str = Field(default="", description="Material of the enclosure.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
-    inner_diameter: float | None = Field(
+    inner_diameter: FiniteFloat | None = Field(
         default=None, description="Inner diameter in meters."
     )
     specification: ExternalResource | str | None = Field(
@@ -338,7 +338,7 @@ class Cable(InventoryModel):
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
-    diameter: float | None = Field(
+    diameter: FiniteFloat | None = Field(
         default=None, description="Outer cable diameter in meters."
     )
     specification: ExternalResource | str | None = Field(
@@ -369,14 +369,14 @@ class _OpticalComponentBase(InventoryModel):
     with their measurements, which carry the wavelengths.
     """
 
-    optical_length: float = Field(
+    optical_length: FiniteFloat = Field(
         default=0.0,
         ge=0.0,
         allow_inf_nan=False,
         description="Optical component length along the optical path in meters.",
     )
     name: str = Field(default="", description="Human-readable component name.")
-    loss_db: float | tuple[float, ...] | None = Field(
+    loss_db: FiniteFloat | tuple[FiniteFloat, ...] | None = Field(
         default=None,
         description="One-way transmission loss across this component in dB.",
     )
@@ -386,7 +386,7 @@ class _OpticalComponentBase(InventoryModel):
         default=None,
         description="Measurement record(s) the loss value(s) came from.",
     )
-    reflectance_db: float | tuple[float, ...] | None = Field(
+    reflectance_db: FiniteFloat | tuple[FiniteFloat, ...] | None = Field(
         default=None,
         description="Return loss (reflectance) of this component in dB.",
     )
@@ -793,16 +793,16 @@ class Acquisition(TimeRangedModel):
         default="",
         description="Acquisition software version during this acquisition.",
     )
-    gauge_length: float | None = Field(
+    gauge_length: FiniteFloat | None = Field(
         default=None, description="Gauge length in meters."
     )
-    pulse_rate: float | None = Field(
+    pulse_rate: FiniteFloat | None = Field(
         default=None, description="Pulse repetition rate in Hz."
     )
-    pulse_width: float | None = Field(
+    pulse_width: FiniteFloat | None = Field(
         default=None, description="Pulse width in seconds."
     )
-    sample_rate: float | None = Field(
+    sample_rate: FiniteFloat | None = Field(
         default=None, description="FDSN-style acquisition sample rate in Hz."
     )
     spatial_interval: FiniteFloat | None = Field(
@@ -1188,7 +1188,13 @@ class OpticalPath(TimeRangedModel):
         )
 
     def __add__(self, other) -> Self:
-        """Concatenate paths, rewriting the second onto the combined axis."""
+        """
+        Concatenate paths, rewriting the second onto the combined axis.
+
+        Both paths must share a lineage and an epoch: the result carries the
+        left path's ``location_code``, ``start_time``, and ``end_time``, so
+        combining across either would misattribute the right path's metadata.
+        """
         if not isinstance(other, OpticalPath):
             return NotImplemented
         differing = [
@@ -1262,7 +1268,7 @@ def _clip_intervals(items, lo: float, hi: float, outer: float | None = None) -> 
 class Response(InventoryModel):
     """Station-specific response model associated with a channel."""
 
-    sensitivity: float | None = Field(
+    sensitivity: FiniteFloat | None = Field(
         default=None, description="Overall channel sensitivity."
     )
     input_units: UnitQuantity | None = Field(
@@ -1301,7 +1307,9 @@ class Channel(TimeRangedModel):
             "coordinate_labels declare their meaning."
         ),
     )
-    sample_rate: float | None = Field(default=None, description="Sample rate in Hz.")
+    sample_rate: FiniteFloat | None = Field(
+        default=None, description="Sample rate in Hz."
+    )
     azimuth: Azimuth | None = Field(
         default=None,
         description=(
@@ -1913,8 +1921,9 @@ class Inventory(InventoryModel):
         if replaced > 1:
             msg = (
                 f"{type(old).__name__} to replace matches {replaced} items; "
-                "equal items are indistinguishable, so give the intended one "
-                "a distinguishing field (such as a name) before correcting it."
+                "equal items are indistinguishable, so set a distinguishing "
+                "field (a name, or a description on items without one) on the "
+                "intended item before correcting it."
             )
             raise InvalidInventoryError(msg)
         return self.new(networks=tuple(networks))

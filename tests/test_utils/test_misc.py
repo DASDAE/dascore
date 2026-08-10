@@ -1143,8 +1143,9 @@ class TestIsStrictlyMonotonic:
         assert is_strictly_monotonic([])
 
     def test_multidimensional(self):
-        """Monotonicity is undefined for more than one dimension."""
+        """Monotonicity is undefined for anything but a single dimension."""
         assert not is_strictly_monotonic(np.arange(4).reshape(2, 2))
+        assert not is_strictly_monotonic(5)
 
     def test_uncomparable_values(self):
         """Values which cannot be ordered are not monotonic."""

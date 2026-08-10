@@ -1206,14 +1206,15 @@ def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
         (True) or strictly decreasing (False) values.
     """
     data = np.asarray(values)
-    if data.ndim > 1:
+    if data.ndim != 1:
         return False
     view1, view2 = data[:-1], data[1:]
     try:
-        up = bool(np.all(view2 > view1))
-        down = bool(np.all(view1 > view2))
+        # Ascending is by far the common case; answer without a second pass.
+        if increasing is not False and bool(np.all(view2 > view1)):
+            return True
+        if increasing is True:
+            return False
+        return bool(np.all(view1 > view2))
     except TypeError:  # values which do not support comparison
         return False
-    if increasing is None:
-        return up or down
-    return up if increasing else down

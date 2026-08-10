@@ -1605,6 +1605,13 @@ class TestConstraintsMatchDescriptions:
         )
         assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
 
+    def test_physical_quantities_must_be_finite(self):
+        """A nan quantity is not a measurement."""
+        with pytest.raises(ValidationError):
+            inv.Acquisition(code="RAW", sample_rate=np.nan)
+        with pytest.raises(ValidationError):
+            inv.FiberSegment(optical_length=10.0, loss_db=(0.4, np.inf))
+
     def test_annotation_value_must_be_finite(self):
         """A non-finite value cannot survive a JSON round trip."""
         with pytest.raises(ValidationError, match="must be finite"):
