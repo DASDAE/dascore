@@ -1190,3 +1190,30 @@ def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
     q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
     lower_and_top = np.asarray([q_lower, q_upper])
     return lower_and_top
+
+
+def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
+    """
+    Return True if a 1D sequence is strictly monotonic.
+
+    Parameters
+    ----------
+    values
+        The sequence to test. Sequences shorter than two elements are
+        trivially monotonic; multidimensional inputs never are.
+    increasing
+        If None either direction qualifies, else require strictly increasing
+        (True) or strictly decreasing (False) values.
+    """
+    data = np.asarray(values)
+    if data.ndim > 1:
+        return False
+    view1, view2 = data[:-1], data[1:]
+    try:
+        up = bool(np.all(view2 > view1))
+        down = bool(np.all(view1 > view2))
+    except TypeError:  # values which do not support comparison
+        return False
+    if increasing is None:
+        return up or down
+    return up if increasing else down

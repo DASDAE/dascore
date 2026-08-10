@@ -44,7 +44,7 @@ def build_inventory() -> inv.Inventory:
         ),
         annotations=(
             inv.OpticalPathAnnotation(
-                start_distance=0.0, end_distance=100.0, label="east"
+                start_distance=0.0, end_distance=100.0, group="zone", value="east"
             ),
         ),
     )
@@ -129,16 +129,78 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
             path.check()
 
-    def test_annotations_overlap_freely(self):
-        """Annotations overlap freely."""
+    def test_boolean_annotations_overlap_freely(self):
+        """Membership annotations overlap, within and across groups."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             annotations=(
                 inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=60.0, label="a"
+                    start_distance=0.0, end_distance=60.0, group="noisy"
                 ),
                 inv.OpticalPathAnnotation(
-                    start_distance=50.0, end_distance=70.0, label="b"
+                    start_distance=50.0, end_distance=70.0, group="noisy"
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=40.0, end_distance=80.0, group="repaired"
+                ),
+            ),
+        )
+        assert path.check() is path
+
+    def test_valued_annotation_groups_may_not_overlap(self):
+        """A single-valued group cannot claim two values at one distance."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0,
+                    end_distance=60.0,
+                    group="rock_type",
+                    value="granite",
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=50.0,
+                    end_distance=70.0,
+                    group="rock_type",
+                    value="shale",
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="only boolean groups"):
+            path.check()
+
+    def test_annotation_group_holds_one_kind_of_value(self):
+        """Mixing value kinds in one group is a modeling error."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0, end_distance=10.0, group="zone", value="east"
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=20.0, end_distance=30.0, group="zone", value=True
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="one kind of value"):
+            path.check()
+
+    def test_numeric_annotation_group(self):
+        """Numeric groups are single valued but otherwise ordinary."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0,
+                    end_distance=40.0,
+                    group="frost_depth",
+                    value=1.2,
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=40.0,
+                    end_distance=90.0,
+                    group="frost_depth",
+                    value=0.8,
                 ),
             ),
         )
@@ -487,7 +549,7 @@ class TestInventory:
 
     def test_crs_vocabulary_enforced(self):
         """Structural column names are outside the coordinate vocabulary."""
-        with pytest.raises(ValidationError, match="vocabulary"):
+        with pytest.raises(ValidationError):
             inv.CoordinateReferenceSystem(coordinate_labels=("x", "distance"))
 
 
@@ -575,7 +637,7 @@ class TestCanonicalAxes:
 
     def test_labels_outside_vocabulary_raise(self):
         """Labels outside vocabulary raise."""
-        with pytest.raises(ValidationError, match="vocabulary"):
+        with pytest.raises(ValidationError):
             inv.CoordinateReferenceSystem(coordinate_labels=("depth", "along"))
 
     def test_two_axis_crs_has_no_z(self):
@@ -1133,7 +1195,7 @@ class TestPointMarkers:
     def test_point_annotation(self):
         """Point annotation."""
         anno = inv.OpticalPathAnnotation(
-            start_distance=350.0, end_distance=350.0, label="wellhead"
+            start_distance=350.0, end_distance=350.0, group="wellhead"
         )
         assert anno.interval == (350.0, 350.0)
 
@@ -1268,3 +1330,195 @@ class TestCrsShape:
             wkt='ENGCRS["mine grid",EDATUM["portal"],CS[Cartesian,3]]',
         )
         assert crs.wkt.startswith("ENGCRS")
+
+
+class TestPrReviewFindings:
+    """Regressions for findings raised while reviewing the model PR."""
+
+    def test_non_finite_spatial_interval_rejected(self):
+        """A nan interval would silently poison every resolved distance."""
+        with pytest.raises(ValidationError):
+            inv.Acquisition(code="RAW", spatial_interval=np.nan)
+
+    def test_non_finite_start_distance_rejected(self):
+        """The affine origin must be a real distance."""
+        with pytest.raises(ValidationError):
+            inv.Acquisition(code="RAW", start_distance=np.inf)
+
+    def test_duplicate_channel_identity_raises(self):
+        """Channel (location_code, code) names a stream; it must be unique."""
+        channel = inv.Channel(code="BHZ", location_code="00")
+        station = inv.Station(code="VA01", channels=(channel, channel))
+        with pytest.raises(InvalidInventoryError, match="Duplicate channel identity"):
+            station.check()
+
+    def test_station_channels_checked_from_network(self):
+        """Station rules are reached by a whole-tree check."""
+        channel = inv.Channel(code="BHZ")
+        station = inv.Station(code="VA01", channels=(channel, channel))
+        network = inv.Network(code="XX", stations=(station,))
+        with pytest.raises(InvalidInventoryError, match="Duplicate channel identity"):
+            inv.Inventory(networks=(network,)).check()
+
+    def test_distinct_channel_epochs_are_legal(self):
+        """The same stream may be described by successive epochs."""
+        station = inv.Station(
+            code="VA01",
+            channels=(
+                inv.Channel(code="BHZ", start_time="2020-01-01", end_time="2021-01-01"),
+                inv.Channel(code="BHZ", start_time="2021-01-01"),
+            ),
+        )
+        assert station.check() is station
+
+    def test_add_rejects_different_lineage(self):
+        """Concatenating unrelated paths would misattribute the result."""
+        left = inv.OpticalPath(
+            location_code="00",
+            optical_components=(inv.FiberSegment(optical_length=10.0),),
+        )
+        right = left.new(location_code="01")
+        with pytest.raises(InvalidInventoryError, match="one lineage and"):
+            _ = left + right
+
+    def test_add_rejects_different_epoch(self):
+        """Concatenating across epochs would advertise the wrong validity."""
+        left = inv.OpticalPath(
+            start_time="2020-01-01",
+            optical_components=(inv.FiberSegment(optical_length=10.0),),
+        )
+        right = left.new(start_time="2021-01-01")
+        with pytest.raises(InvalidInventoryError, match="one lineage and"):
+            _ = left + right
+
+    def test_add_allows_matching_ongoing_epochs(self):
+        """Two unset end times are the same epoch, not two unknowns."""
+        path = inv.OpticalPath(
+            start_time="2020-01-01",
+            optical_components=(inv.FiberSegment(optical_length=10.0),),
+        )
+        assert (path + path).optical_length == 20.0
+
+    def test_replace_rejects_ambiguous_match(self):
+        """Equal items are indistinguishable, so replacing one is undefined."""
+        connector = inv.Connector(connector_type="E2000")
+        path = inv.OpticalPath(
+            optical_components=(
+                connector,
+                inv.FiberSegment(optical_length=10.0),
+                connector,
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(InvalidInventoryError, match="matches 2 items"):
+            inventory.replace(connector, connector.new(name="first"))
+
+    def test_replace_resource_leaves_equal_twin_alone(self):
+        """Resources are addressed by resource_id, not by equal content."""
+        first = inv.Enclosure(resource_id="e1", name="box")
+        twin = inv.Enclosure(resource_id="e2", name="box")
+        inventory = inv.Inventory(resources={"e1": first, "e2": twin})
+        out = inventory.replace(first, first.new(material="steel"))
+        assert out.get_resource("e1").material == "steel"
+        assert out.get_resource("e2").material == ""
+
+    def test_replace_reaches_optical_measurements(self):
+        """Measurements are pooled resources like any other."""
+        measurement = inv.OpticalMeasurement(resource_id="m1", method="otdr")
+        inventory = inv.Inventory(resources={"m1": measurement})
+        out = inventory.replace(measurement, measurement.new(wavelength=1550.0))
+        assert out.get_resource("m1").wavelength == 1550.0
+
+    def test_coordinates_at_rejects_mixed_dimensions(self):
+        """An unchecked, mixed-dimension path fails loudly, not by broadcast."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            geometry=(
+                inv.Geometry(
+                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                ),
+                inv.Geometry(
+                    distance=(20.0, 30.0),
+                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="mix coordinate"):
+            path.coordinates_at([5.0])
+
+    def test_coordinate_width_must_match_crs(self):
+        """Coordinates are read through the CRS, so they must fit its axes."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            geometry=(
+                inv.Geometry(
+                    name="flat",
+                    distance=(0.0, 10.0),
+                    coordinates=((0.0, 0.0), (1.0, 1.0)),
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(InvalidInventoryError, match="CRS declares 3 axes"):
+            inventory.check()
+
+    def test_station_coordinate_width_must_match_crs(self):
+        """Point coordinates answer to the same frame as fiber geometry."""
+        station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
+        channel = inv.Channel(code="BHZ", coordinates=(1.0, 2.0))
+        network = inv.Network(
+            code="XX", stations=(station, inv.Station(code="VA02", channels=(channel,)))
+        )
+        with pytest.raises(InvalidInventoryError, match="coordinate values"):
+            inv.Inventory(networks=(network,)).check()
+
+    def test_two_axis_crs_accepts_two_axis_coordinates(self):
+        """A declared 2D frame makes 2D coordinates correct, not deficient."""
+        station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", stations=(station,)),),
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                coordinate_labels=("x", "y"), units=("meter", "meter")
+            ),
+        )
+        assert inventory.check() is inventory
+
+
+class TestFiberSegmentFields:
+    """Fiber-level naming and optical calibration fields."""
+
+    def test_fiber_number_and_color(self):
+        """Fiber identity within a cable uses telecom naming."""
+        segment = inv.FiberSegment(
+            optical_length=10.0, fiber_number=3, fiber_color="blue"
+        )
+        assert segment.fiber_number == 3
+        assert segment.fiber_color == "blue"
+
+    def test_refractive_index(self):
+        """The group index converts time of flight into distance."""
+        segment = inv.FiberSegment(optical_length=10.0, refractive_index=1.4682)
+        assert segment.refractive_index == 1.4682
+
+    def test_refractive_index_must_be_finite(self):
+        """A non-finite index would poison every distance it scales."""
+        with pytest.raises(ValidationError):
+            inv.FiberSegment(optical_length=10.0, refractive_index=np.nan)
+
+
+class TestDepthLabel:
+    """Boreholes and mines measure down, not up."""
+
+    def test_depth_is_in_the_vocabulary(self):
+        """Depth is a canonical vertical axis label."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing", "depth"),
+            units=("meter", "meter", "meter"),
+        )
+        assert crs.axis_index("depth") == 2

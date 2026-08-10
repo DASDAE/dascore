@@ -5,26 +5,11 @@ The inventory extends the StationXML concept with first-class support for
 fiber-optic arrays. It describes the physical optical path (fiber, connectors,
 splices), the geometry, coupling, and annotation tracks along optical
 distance, and the interrogator configurations (acquisitions) that produced
-DAS patches. Patches carry a ``data_source_id``
+patches. Patches carry a ``data_source_id``
 (``network.fiber_array.location.acquisition``) which, together with time,
 resolves against an inventory.
 
-Key model rules (see the DASDAE inventory specification):
-
-- Validity intervals are half-open ``[start, end)`` in UTC; an unset (NaT)
-  end time means ongoing. The outermost endpoint of a coverage domain is
-  included.
-- No more than one ``OpticalPath`` per ``(FiberArray, location_code)`` is
-  valid at a given time.
-- Optical components are the tiling track: they cover the whole path exactly
-  once. Geometry and coupling are function tracks: coverage may be partial
-  (uncovered distance is undefined), overlap raises. Annotations overlap
-  freely.
-- Codes use letters, digits, and ``-``; ``.`` is the ``data_source_id``
-  separator. All codes are non-empty except ``location_code``.
-- ``Acquisition`` maps channels onto path distance through either the affine
-  form (``start_distance`` + ``spatial_interval``) or a measured
-  ``DistanceMap``; the two are mutually exclusive.
+Each object documents the rules it enforces.
 """
 
 from __future__ import annotations
@@ -41,7 +26,7 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import is_strictly_monotonic, optional_import
 from dascore.utils.models import (
     DateTime64,
     InventoryModel,
@@ -63,16 +48,18 @@ VALID_COUPLING_TYPES = get_args(CouplingType)
 
 # Coordinates are stored on the canonical (x, y, z) axes; these labels are
 # resolvable aliases whose meaning the inventory CRS declares.
-VALID_COORDINATE_LABELS = (
+CoordinateLabel = Literal[
     "x",
     "y",
     "z",
     "latitude",
     "longitude",
     "elevation",
+    "depth",
     "easting",
     "northing",
-)
+]
+VALID_COORDINATE_LABELS = get_args(CoordinateLabel)
 
 _CODE_RE = re.compile(r"[A-Za-z0-9-]+")
 _LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
@@ -90,6 +77,8 @@ def _check_code(value: str, allow_blank: bool = False) -> str:
 
 # Code tokens used in data_source_id; location codes alone may be blank.
 CodeStr = Annotated[str, AfterValidator(_check_code)]
+# A float which must be finite; nan/inf silently poison downstream math.
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 LocationCodeStr = Annotated[
     str, AfterValidator(lambda value: _check_code(value, allow_blank=True))
 ]
@@ -113,12 +102,6 @@ def _type_tag(name: str):
     is hidden from repr.
     """
     return Field(default=name, repr=False)
-
-
-def _is_strictly_increasing(values) -> bool:
-    """Return True if a sequence is strictly increasing."""
-    arr = np.asarray(values, dtype=float)
-    return bool(len(arr) < 2 or np.all(np.diff(arr) > 0))
 
 
 class CreationInfo(InventoryModel):
@@ -145,14 +128,13 @@ class CoordinateReferenceSystem(InventoryModel):
     Inventory-wide coordinate reference system.
 
     All coordinate-bearing metadata is interpreted using this CRS. The default
-    is geographic WGS84 3D (EPSG:4979); override it only for exceptional
-    frames such as mines or laboratories.
+    is geographic WGS84 3D (EPSG:4979).
     """
 
     authority: str = Field(default="EPSG", description="CRS authority.")
     code: str = Field(default="4979", description="Authority code for this CRS.")
     name: str = Field(default="WGS 84 3D", description="Human-readable CRS name.")
-    coordinate_labels: tuple[str, ...] = Field(
+    coordinate_labels: tuple[CoordinateLabel, ...] = Field(
         default=("longitude", "latitude", "elevation"),
         description=(
             "Meaning of the canonical (x, y, z) axes, in order. Labels come "
@@ -179,14 +161,7 @@ class CoordinateReferenceSystem(InventoryModel):
     @field_validator("coordinate_labels")
     @classmethod
     def _check_labels(cls, value):
-        """Labels come from the controlled vocabulary and are unique."""
-        bad = set(value) - set(VALID_COORDINATE_LABELS)
-        if bad:
-            msg = (
-                f"coordinate_labels {sorted(bad)} not in the coordinate "
-                f"vocabulary {VALID_COORDINATE_LABELS}."
-            )
-            raise InvalidInventoryError(msg)
+        """Labels are unique; the vocabulary itself is enforced by the type."""
         if len(set(value)) != len(value):
             msg = f"coordinate_labels must be unique; got {value}."
             raise InvalidInventoryError(msg)
@@ -275,7 +250,7 @@ class OpticalMeasurement(InventoryModel):
 
 
 class Interrogator(InventoryModel):
-    """DAS interrogator unit used for data collection."""
+    """DFOS interrogator unit used for data collection."""
 
     type: Literal["Interrogator"] = _type_tag("Interrogator")
     resource_id: ResourceIdStr
@@ -411,15 +386,22 @@ class FiberSegment(_OpticalComponentBase):
     container: Cable | str | None = Field(
         default=None, description="Cable containing this fiber."
     )
-    fiber_index: int | None = Field(
+    fiber_number: int | None = Field(
         default=None, description="Fiber position within the parent cable."
     )
-    color: str | None = Field(default=None, description="Fiber color code.")
+    fiber_color: str | None = Field(default=None, description="Fiber color code.")
     fiber_type: str = Field(
         default="", description="Fiber type, such as single_mode or multi_mode."
     )
     fiber_standard: str = Field(
         default="", description="Fiber standard or grade, such as ITU-T G.652.D."
+    )
+    refractive_index: FiniteFloat | None = Field(
+        default=None,
+        description=(
+            "Effective group index used to convert optical time of flight to "
+            "distance; the OTDR group index setting."
+        ),
     )
     buffer_type: str = Field(
         default="", description="Buffer construction, such as tight_buffered."
@@ -482,7 +464,8 @@ class Geometry(InventoryModel):
     least two strictly increasing optical distances, each paired with the
     coordinate at that point (interpreted using the inventory CRS). Coverage
     is the half-open span of the array; there is no separate length field. A
-    coil is a segment whose coordinates repeat while distance advances.
+    coil, or other "clump", is a segment whose coordinates repeat while
+    distance advances.
     Interpolation between points is piecewise linear in the CRS and never
     crosses segments; uncovered distance has undefined coordinates.
     """
@@ -507,7 +490,7 @@ class Geometry(InventoryModel):
         if not np.all(np.isfinite(self.distance)):
             msg = "Geometry distance values must be finite."
             raise InvalidInventoryError(msg)
-        if not _is_strictly_increasing(self.distance):
+        if not is_strictly_monotonic(self.distance, increasing=True):
             msg = "Geometry distance values must be strictly increasing."
             raise InvalidInventoryError(msg)
         if len(self.coordinates) != len(self.distance):
@@ -610,9 +593,19 @@ class CouplingCondition(_IntervalModel):
 
 
 class OpticalPathAnnotation(_IntervalModel):
-    """Named interval on an optical path; annotations may overlap freely."""
+    """
+    Key/value annotation attached to an interval of an optical path.
 
-    label: str = Field(default="", description="Label for this interval.")
+    ``group`` names the variable and ``value`` is its state over the
+    interval, so a bare flag is simply a boolean value. String and numeric
+    groups are single valued and their intervals may not overlap; boolean
+    groups state membership and may overlap freely.
+    """
+
+    group: str = Field(default="", description="Name of the annotated variable.")
+    value: str | bool | int | float = Field(
+        default=True, description="Value of the variable over this interval."
+    )
 
 
 class DistanceMap(InventoryModel):
@@ -661,10 +654,10 @@ class DistanceMap(InventoryModel):
         if not (np.all(np.isfinite(source)) and np.all(np.isfinite(self.distance))):
             msg = "DistanceMap control points must be finite."
             raise InvalidInventoryError(msg)
-        if not _is_strictly_increasing(source):
+        if not is_strictly_monotonic(source, increasing=True):
             msg = "DistanceMap input values must be strictly increasing."
             raise InvalidInventoryError(msg)
-        if not _is_strictly_increasing(self.distance):
+        if not is_strictly_monotonic(self.distance, increasing=True):
             msg = "DistanceMap distance values must be strictly increasing."
             raise InvalidInventoryError(msg)
         return self
@@ -706,7 +699,7 @@ class DistanceMap(InventoryModel):
 
 class Acquisition(TimeRangedModel):
     """
-    Time-aware, channel-like DAS acquisition setup.
+    Time-aware, channel-like DFOS acquisition setup.
 
     ``(location_code, code)`` pairs are unique within a ``FiberArray`` for
     overlapping time ranges. The ``location_code`` names the optical path
@@ -766,7 +759,7 @@ class Acquisition(TimeRangedModel):
     sample_rate: float | None = Field(
         default=None, description="FDSN-style acquisition sample rate in Hz."
     )
-    spatial_interval: float | None = Field(
+    spatial_interval: FiniteFloat | None = Field(
         default=None,
         description=(
             "Nominal spatial sampling interval between channels in meters. "
@@ -774,7 +767,7 @@ class Acquisition(TimeRangedModel):
             "as the slope of a single-point distance_map."
         ),
     )
-    start_distance: float | None = Field(
+    start_distance: FiniteFloat | None = Field(
         default=None,
         description=(
             "Optical path distance corresponding to channel position 0. "
@@ -837,6 +830,26 @@ def _overlapping_epochs(items, key) -> list[tuple]:
             if first.overlaps(second):
                 out.append((group_key, first, second))
     return out
+
+
+_MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
+
+
+def _times_equal(time1, time2) -> bool:
+    """Compare two epoch times, treating unset (NaT) times as equal."""
+    null1, null2 = np.isnat(time1), np.isnat(time2)
+    if null1 or null2:
+        return bool(null1 and null2)
+    return bool(time1 == time2)
+
+
+def _annotation_kind(value) -> str:
+    """Return the value kind which decides an annotation group's shape."""
+    if isinstance(value, bool):  # bool before int; bool is an int subclass
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    return "numeric"
 
 
 def _intervals_overlap(intervals: list[tuple[float, float]]) -> tuple | None:
@@ -924,8 +937,10 @@ class OpticalPath(TimeRangedModel):
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         if not self.geometry:
             return np.full((len(dist), 1), np.nan)
-        ndim = len(self.geometry[0].coordinates[0])
-        out = np.full((len(dist), ndim), np.nan)
+        dims = {len(seg.coordinates[0]) for seg in self.geometry}
+        if len(dims) > 1:
+            raise InvalidInventoryError(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
+        out = np.full((len(dist), dims.pop()), np.nan)
         for segment in self.geometry:
             seg_coords = segment.interpolate(dist)
             filled = ~np.isnan(seg_coords[:, 0])
@@ -965,9 +980,7 @@ class OpticalPath(TimeRangedModel):
                     )
         dims = {len(seg.coordinates[0]) for seg in self.geometry}
         if len(dims) > 1:
-            errors.append(
-                f"Geometry segments mix coordinate dimensionalities {sorted(dims)}."
-            )
+            errors.append(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
         for name, spans in (("geometry", geo_spans), ("coupling", coup_spans)):
             overlap = _intervals_overlap(spans)
             if overlap is not None:
@@ -975,10 +988,36 @@ class OpticalPath(TimeRangedModel):
                     f"Overlapping {name} intervals {overlap[0]} and "
                     f"{overlap[1]}; {name} is a function track."
                 )
+        errors.extend(self._check_annotation_groups())
         if errors:
             msg = "Optical path validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
         return self
+
+    def _check_annotation_groups(self) -> list[str]:
+        """Check that each annotation group holds one kind of value."""
+        groups: dict[str, list] = {}
+        for annotation in self.annotations:
+            groups.setdefault(annotation.group, []).append(annotation)
+        errors = []
+        for group, items in groups.items():
+            kinds = {_annotation_kind(x.value) for x in items}
+            if len(kinds) > 1:
+                errors.append(
+                    f"Annotation group {group!r} mixes {sorted(kinds)} values; "
+                    "a group holds one kind of value."
+                )
+                continue
+            if kinds == {"boolean"}:  # membership groups may overlap
+                continue
+            overlap = _intervals_overlap([x.interval for x in items])
+            if overlap is not None:
+                errors.append(
+                    f"Overlapping intervals {overlap[0]} and {overlap[1]} in "
+                    f"annotation group {group!r}; only boolean groups, which "
+                    "state membership, may overlap."
+                )
+        return errors
 
     def select(self, *, distance: tuple[float | None, float | None]) -> Self:
         """
@@ -996,7 +1035,7 @@ class OpticalPath(TimeRangedModel):
             raise ParameterError(msg)
         components = []
         for comp, (c_lo, c_hi) in zip(
-            self.optical_components, self.component_intervals()
+            self.optical_components, self.component_intervals(), strict=True
         ):
             new_lo, new_hi = max(c_lo, lo), min(c_hi, hi)
             at_outer = c_lo == hi == self.end_distance
@@ -1104,6 +1143,22 @@ class OpticalPath(TimeRangedModel):
         """Concatenate paths, rewriting the second onto the combined axis."""
         if not isinstance(other, OpticalPath):
             return NotImplemented
+        differing = [
+            name
+            for name, same in (
+                ("location_code", self.location_code == other.location_code),
+                ("start_time", _times_equal(self.start_time, other.start_time)),
+                ("end_time", _times_equal(self.end_time, other.end_time)),
+            )
+            if not same
+        ]
+        if differing:
+            msg = (
+                "Optical paths are only concatenable within one lineage and "
+                f"epoch; {differing} differ. The result would advertise the "
+                "left path's identity for both."
+            )
+            raise InvalidInventoryError(msg)
         offset = self.end_distance - other.start_distance
         geometry = tuple(
             seg.model_copy(update={"distance": tuple(d + offset for d in seg.distance)})
@@ -1226,6 +1281,24 @@ class Station(TimeRangedModel):
         default=(), description="Channels associated with this station."
     )
 
+    def check(self) -> Self:
+        """
+        Check channel rules for this station.
+
+        Channel ``(location_code, code)`` identities, which name a stream,
+        must be unique for overlapping time ranges.
+        """
+        errors = [
+            f"Duplicate channel identity {key} for overlapping time ranges."
+            for key, *_ in _overlapping_epochs(
+                self.channels, lambda x: (x.location_code, x.code)
+            )
+        ]
+        if errors:
+            msg = f"Station {self.code!r} validation failed:\n" + "\n".join(errors)
+            raise InvalidInventoryError(msg)
+        return self
+
 
 class FiberArray(TimeRangedModel):
     """
@@ -1303,7 +1376,7 @@ class Network(TimeRangedModel):
         Check code rules for this network.
 
         Station and fiber-array codes must be disjoint for overlapping time
-        ranges; contained fiber arrays are also validated.
+        ranges; contained fiber arrays and stations are also validated.
         """
         errors = []
         for array in self.fiber_arrays:
@@ -1326,6 +1399,8 @@ class Network(TimeRangedModel):
             raise InvalidInventoryError(msg)
         for array in self.fiber_arrays:
             array.check()
+        for station in self.stations:
+            station.check()
         return self
 
 
@@ -1551,9 +1626,42 @@ class Inventory(InventoryModel):
         if len(codes) != len(set(codes)):
             msg = f"Network codes must be unique; got {codes}."
             raise InvalidInventoryError(msg)
+        errors = self._check_coordinate_widths()
+        if errors:
+            msg = "Inventory validation failed:\n" + "\n".join(errors)
+            raise InvalidInventoryError(msg)
         for net in self.networks:
             net.check()
         return self
+
+    def _check_coordinate_widths(self) -> list[str]:
+        """Check coordinates carry one value per axis the CRS declares."""
+        crs = self.coordinate_reference_system
+        axes = len(crs.coordinate_labels)
+        errors = []
+
+        def check_width(width, what):
+            if width != axes:
+                errors.append(
+                    f"{what} has {width} coordinate values but the inventory "
+                    f"CRS declares {axes} axes {crs.coordinate_labels}."
+                )
+
+        for net in self.networks:
+            for array in net.fiber_arrays:
+                for path in array.optical_paths:
+                    for segment in path.geometry:
+                        what = f"Geometry {segment.name!r}"
+                        check_width(len(segment.coordinates[0]), what)
+            for station in net.stations:
+                if station.coordinates is not None:
+                    check_width(len(station.coordinates), f"Station {station.code!r}")
+                for channel in station.channels:
+                    if channel.coordinates is None:
+                        continue
+                    what = f"Channel {station.code!r}.{channel.code!r}"
+                    check_width(len(channel.coordinates), what)
+        return errors
 
     def resolve(self, data_source_id: str, time=None) -> ResolvedContext:
         """
@@ -1622,15 +1730,17 @@ class Inventory(InventoryModel):
 
         This is the correction mechanism: the change applies in place and
         retroactively. ``old`` is matched by equality at any addressable
-        level: pooled resources, networks, stations, channels, fiber arrays,
-        acquisitions, optical paths, and path track items (components,
-        geometry, coupling, annotations). Singletons such as the CRS or a
-        distance map are corrected with ``new()`` on their parent. ``new``
-        must be the same type as ``old``. Note that resource normalization
-        rewrites inline resource objects to id references at construction, so
-        match against the stored (normalized) object — e.g. an acquisition
-        whose ``interrogator`` is the id string — not a pre-construction
-        handle holding the inline object.
+        level: networks, stations, channels, fiber arrays, acquisitions,
+        optical paths, and path track items (components, geometry, coupling,
+        annotations); pooled resources are addressed by their resource_id.
+        An ``old`` matching more than one item is ambiguous and raises.
+        Singletons such as the CRS or a distance map are corrected with
+        ``new()`` on their parent. ``new`` must be the same type as ``old``.
+        Note that resource normalization rewrites inline resource objects to
+        id references at construction, so match against the stored
+        (normalized) object — e.g. an acquisition whose ``interrogator`` is
+        the id string — not a pre-construction handle holding the inline
+        object.
         """
         if type(new) is not type(old):
             msg = (
@@ -1638,9 +1748,8 @@ class Inventory(InventoryModel):
                 f"{type(old).__name__}."
             )
             raise InvalidInventoryError(msg)
-        if isinstance(old, Interrogator | Cable | Enclosure | ExternalResource):
-            matches = [r for r, res in self.resources.items() if res == old]
-            if not matches:
+        if isinstance(old, get_args(get_args(_Resource)[0])):
+            if self.resources.get(old.resource_id) != old:
                 msg = "Component to replace was not found in the inventory."
                 raise InvalidInventoryError(msg)
             if new.resource_id != old.resource_id:
@@ -1650,9 +1759,7 @@ class Inventory(InventoryModel):
                     "references throughout the tree would dangle."
                 )
                 raise InvalidInventoryError(msg)
-            pool = dict(self.resources)
-            for rid in matches:
-                pool[rid] = new
+            pool = dict(self.resources) | {old.resource_id: new}
             return self.new(resources=pool)
         replaced = 0
 
@@ -1718,6 +1825,13 @@ class Inventory(InventoryModel):
             )
         if not replaced:
             msg = "Component to replace was not found in the inventory."
+            raise InvalidInventoryError(msg)
+        if replaced > 1:
+            msg = (
+                f"{type(old).__name__} to replace matches {replaced} items; "
+                "equal items are indistinguishable, so give the intended one "
+                "a distinguishing field (such as a name) before correcting it."
+            )
             raise InvalidInventoryError(msg)
         return self.new(networks=tuple(networks))
 
