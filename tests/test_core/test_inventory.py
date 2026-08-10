@@ -7,8 +7,10 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
+from dascore.utils.models import _values_equal
 
 
 def build_inventory() -> inv.Inventory:
@@ -817,8 +819,6 @@ class TestInternalReviewRegressions:
 
     def test_core_namespace_export(self):
         """Core namespace export."""
-        from dascore.core import Inventory
-
         assert Inventory is inv.Inventory
 
 
@@ -847,10 +847,8 @@ class TestCodexReviewRegressions:
 
     def test_nested_null_not_equal_to_value(self):
         """A nested null array is not equal to a non-null one."""
-        import dascore as _dc
-
-        a = _dc.PatchAttrs(foo={"x": np.array([np.nan])})
-        b = _dc.PatchAttrs(foo={"x": np.array([1.0])})
+        a = dc.PatchAttrs(foo={"x": np.array([np.nan])})
+        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
         assert a != b
 
     def test_nonfinite_interval_values_raise(self):
@@ -990,8 +988,6 @@ class TestCoverageCompleteness:
 
     def test_values_equal_branches(self):
         """Null-pattern and key mismatches compare unequal."""
-        from dascore.utils.models import _values_equal
-
         assert not _values_equal(np.array([np.nan]), np.array([1.0]))
         assert _values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
         assert not _values_equal({"a": 1}, {"b": 1})

@@ -19,6 +19,7 @@ from pydantic import (
 from typing_extensions import Self
 
 from dascore.compat import array, is_array_like
+from dascore.exceptions import InvalidInventoryError
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _all_null, all_close, to_str, unbyte
@@ -213,8 +214,6 @@ class TimeRangedModel(InventoryModel):
     @model_validator(mode="after")
     def _check_time_order(self):
         """A set end time must follow the start time."""
-        from dascore.exceptions import InvalidInventoryError
-
         start, end = self.start_time, self.end_time
         if not pd.isnull(start) and not pd.isnull(end) and end <= start:
             msg = f"end_time {end} must be after start_time {start}."
@@ -223,8 +222,6 @@ class TimeRangedModel(InventoryModel):
 
     def is_effective_at(self, time) -> bool:
         """Return True if this epoch is valid at the supplied time (half-open)."""
-        from dascore.utils.time import to_datetime64
-
         time = to_datetime64(time)
         if pd.isnull(time):
             return True

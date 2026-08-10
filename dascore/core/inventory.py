@@ -30,6 +30,7 @@ Key model rules (see the DASDAE inventory specification):
 from __future__ import annotations
 
 import itertools
+import os
 import re
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
@@ -1742,8 +1743,6 @@ class Inventory(InventoryModel):
             A path to a YAML file, or YAML text (must contain a newline to
             be treated as text rather than a missing path).
         """
-        import os
-
         text = source
         if isinstance(source, os.PathLike) or (
             isinstance(source, str) and "\n" not in source
@@ -1777,8 +1776,6 @@ def inventory(source=None) -> Inventory:
     >>> empty = dc.inventory()
     >>> assert dc.inventory(empty) is empty
     """
-    import os
-
     if source is None:
         return Inventory()
     if isinstance(source, Inventory):
