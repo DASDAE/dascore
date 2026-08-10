@@ -13,15 +13,18 @@ from dascore.units import (
     Quantity,
     assert_dtype_compatible_with_units,
     convert_units,
+    get_byte_count,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
     get_quantity_str,
     get_unit,
     invert_quantity,
+    is_data_size,
     maybe_convert_percent_to_fraction,
     quant_sequence_to_quant_array,
 )
+from dascore.utils.time import to_float
 
 
 class TestUnitInit:
@@ -527,3 +530,76 @@ class TestUnitConcurrency:
             assert new_lock is not old_lock
         finally:
             units_module._UNIT_LOCK = old_lock
+
+
+class TestDataSize:
+    """Tests for identifying and measuring data size quantities."""
+
+    sizes = ("1 byte", "1 bit", "25 MB", "3 kB", "1 MiB", "2 GiB")
+    not_sizes = ("1 m", "10 s", "50%", "1 strain", "1 dimensionless")
+
+    @pytest.mark.parametrize("value", sizes)
+    def test_sizes_detected(self, value):
+        """Quantities of information are data sizes."""
+        assert is_data_size(get_quantity(value))
+
+    @pytest.mark.parametrize("value", not_sizes)
+    def test_non_sizes_rejected(self, value):
+        """Percents and dimensionless quantities are not data sizes."""
+        assert not is_data_size(get_quantity(value))
+
+    @pytest.mark.parametrize("value", (25, 1.0, None, "25 MB"))
+    def test_non_quantities_rejected(self, value):
+        """Only quantities can be data sizes."""
+        assert not is_data_size(value)
+
+    def test_millibarn_is_not_megabytes(self):
+        """`mb` is millibarn (an area) in pint; only `MB` is megabytes."""
+        assert not is_data_size(dc.units.mb)
+        assert is_data_size(dc.units.MB)
+
+    def test_undefined_byte_alias_raises(self):
+        """`KB` is not a pint unit; the kilobyte spelling is `kB`."""
+        with pytest.raises(pint.UndefinedUnitError):
+            dc.units.KB
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        (
+            ("25 MB", 25_000_000),
+            ("1 MiB", 1_048_576),
+            ("1 kB", 1_000),
+            ("8 bit", 1),
+            ("1 byte", 1),
+        ),
+    )
+    def test_byte_count(self, value, expected):
+        """Byte counts follow pint's decimal/binary prefixes."""
+        assert get_byte_count(get_quantity(value)) == expected
+
+    @pytest.mark.parametrize("value", not_sizes)
+    def test_byte_count_requires_size(self, value):
+        """Non-sizes cannot be measured in bytes."""
+        with pytest.raises(UnitError, match="data size"):
+            get_byte_count(get_quantity(value))
+
+    def test_byte_count_is_not_to_float(self):
+        """
+        Guard the bits trap.
+
+        pint converts a dimensionless quantity to base units, and
+        information's base unit is the bit, so routing a size through
+        `float()` makes it eight times too large. Assert the byte count
+        directly rather than the wrong value, so this holds however
+        `to_float` treats quantities.
+        """
+        quant = get_quantity("25 MB")
+        assert get_byte_count(quant) == 25_000_000
+        # the trap: what a bare float() conversion would have produced
+        assert quant.to_base_units().magnitude == 8 * 25_000_000
+        # to_float is not a byte converter; it either raises or answers
+        # in seconds, but must never be mistaken for get_byte_count
+        try:
+            assert to_float(quant) != get_byte_count(quant)
+        except UnitError:
+            pass

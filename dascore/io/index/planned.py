@@ -62,6 +62,11 @@ def _num(value) -> float | None:
     return float(value)
 
 
+def _dtype_str(value) -> str:
+    """Convert a stored element dtype to its string, "" when unknown."""
+    return "" if value is None or pd.isnull(value) else str(value)
+
+
 def _coord_record_from_row(
     row: Mapping, name: str, dims: tuple[str, ...] | None = None
 ) -> CoordRecord | None:
@@ -273,6 +278,11 @@ def _output_records(
             source_patch_id=str(output_id),
             dims=dims,
             shape="",
+            # the plan carries the element dtype privately so a chained
+            # chunk can still size patches by their memory footprint.
+            # NaN is truthy, so `or ""` alone would store the string
+            # "nan" and poison every later np.dtype() of this column.
+            dtype=_dtype_str(row.get("_dtype")),
             n_dims=len(dim_names),
             sample_count_total=None,
             time_min=_ns(row.get("time_min")),

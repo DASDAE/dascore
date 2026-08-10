@@ -486,6 +486,67 @@ def is_percent(value: Any) -> bool:
     return isinstance(value, Quantity) and value.units == get_unit("percent")
 
 
+def is_data_size(value: Any) -> bool:
+    """
+    Return True if value is a quantity of information (bytes, bits, MB, ...).
+
+    Pint treats information as dimensionless, so a compatibility check
+    against bytes also passes for percents and bare dimensionless
+    quantities. The base unit is the only reliable discriminator.
+
+    Parameters
+    ----------
+    value
+        Any value of any type to test if it is a data size quantity.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import is_data_size
+    >>>
+    >>> assert is_data_size(25 * dc.units.megabytes)
+    >>> assert is_data_size(dc.get_quantity("1 MiB"))
+    >>>
+    >>> # Percents, strain and plain numbers are not sizes.
+    >>> assert not is_data_size(dc.get_quantity("50%"))
+    >>> assert not is_data_size(25)
+    """
+    return isinstance(value, Quantity) and value.to_base_units().units == get_unit(
+        "bit"
+    )
+
+
+def get_byte_count(value: Quantity) -> float:
+    """
+    Return the number of bytes a data size quantity represents.
+
+    Parameters
+    ----------
+    value
+        A quantity of information (eg 25 * dc.units.megabytes).
+
+    Notes
+    -----
+    This is the only correct way to get a byte count from a quantity.
+    In particular [`to_float`](`dascore.utils.time.to_float`) is not:
+    pint converts a dimensionless quantity to its base units, which for
+    information is *bits*, so anything routing a size through a plain
+    `float()` conversion is eight times too large.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import get_byte_count
+    >>>
+    >>> assert get_byte_count(25 * dc.units.megabytes) == 25_000_000
+    >>> assert get_byte_count(dc.get_quantity("1 MiB")) == 1_048_576
+    """
+    if not is_data_size(value):
+        msg = f"Expected a data size quantity (eg '25 MB'), got {value!r}."
+        raise UnitError(msg)
+    return value.to("byte").magnitude
+
+
 def maybe_convert_percent_to_fraction(obj):
     """
     Iterate an object and convert any percentages to fractions.

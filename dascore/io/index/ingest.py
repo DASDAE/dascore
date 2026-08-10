@@ -127,6 +127,7 @@ class PatchRecord:
     source_patch_id: str
     dims: str
     shape: str
+    dtype: str
     n_dims: int
     sample_count_total: int | None
     time_min: int | None
@@ -395,6 +396,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         source_patch_id=normalize_source_patch_id(summary.source_patch_id),
         dims=",".join(summary.dims),
         shape=",".join(str(x) for x in shape),
+        dtype=str(summary.dtype or ""),
         n_dims=len(summary.dims),
         sample_count_total=int(np.prod(shape)) if shape else None,
         time_min=time_min,
@@ -496,7 +498,7 @@ _COORD_DEF_FIELDS = tuple(
 _PATCH_ROW_FIELDS = tuple(
     f.name
     for f in fields(PatchRecord)
-    if f.name not in ("source_patch_id", "dims", "shape", "attrs", "coords")
+    if f.name not in ("source_patch_id", "dims", "shape", "dtype", "attrs", "coords")
 )
 # Backends with no boolean type hand these columns back as 0/1, which
 # def_key would hash differently than the bool a scan produced.
@@ -609,6 +611,7 @@ def assemble_source_records(
                     source_patch_id=normalize_source_patch_id(patch.source_patch_id),
                     dims=_py_scalar(patch.dims) or "",
                     shape=_py_scalar(patch.shape) or "",
+                    dtype=_py_scalar(patch.dtype) or "",
                     attrs=typed,
                     coords=tuple(coords),
                     **{f: _py_scalar(getattr(patch, f)) for f in _PATCH_ROW_FIELDS},
