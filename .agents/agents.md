@@ -74,6 +74,7 @@ Unless otherwise specified, a job is not finished until the tests pass.
 
 ## Code conventions
 
+- Import stdlib modules and required dependencies at module top, never inside functions or methods (tests included). Function-level imports are reserved for optional dependencies (use `dascore.utils.misc.optional_import`) and genuine circular-import avoidance; when used, a brief comment should say which.
 - For dataframes, use snake_case column names and access via getitem, not getattr.
 - Prefer non-inplace dataframe operations unless inplace is explicitly required.
 - Add type hints for public functions/methods.
