@@ -7,12 +7,12 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
-from dascore.transform.kurtosis import (
-    _get_window_samples,
+from dascore.transform._kurtosis_kernels import (
     _moving_sum,
     _recursive_kurtosis,
     _windowed_kurtosis,
 )
+from dascore.transform.kurtosis import _get_window_samples
 
 
 class TestKurtosisHelpers:
