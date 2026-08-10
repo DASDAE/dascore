@@ -643,7 +643,10 @@ def get_patch_names(
         ser = path_ser.astype(str)
         split_ser = ser.str.split("/")
         if strip_extension:
-            file_names = [x[-1].split(".")[0] for x in split_ser]
+            # Only the extension: a data_source_id puts dots in the name
+            # itself, and splitting on the first one would collide every
+            # patch of one source onto a single truncated name.
+            file_names = [x[-1].rsplit(".", 1)[0] for x in split_ser]
         else:
             file_names = [x[-1] for x in split_ser]
         return pd.Series(file_names)

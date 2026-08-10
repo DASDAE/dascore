@@ -1116,6 +1116,13 @@ class Spool(BaseSpool):
             return True
         if not isinstance(other, Spool):
             return super().__eq__(other)
+        # Models compare with ==; deep_equality_check walks their fields,
+        # where an unset (NaT) time never equals itself.
+        if (self._inventory, self._enrich_kwargs) != (
+            other._inventory,
+            other._enrich_kwargs,
+        ):
+            return False
         # views over the same catalog state are equal without realizing
         # the relations (a 200k-row archive must not materialize for ==)
         mine, theirs = self._catalog, other._catalog
@@ -1130,8 +1137,6 @@ class Spool(BaseSpool):
             and mine._residuals == theirs._residuals
             and mine._order == theirs._order
             and mine._ids == theirs._ids
-            and self._inventory == other._inventory
-            and self._enrich_kwargs == other._enrich_kwargs
         ):
             return True
         return deep_equality_check(self._eq_state(), other._eq_state())
@@ -1182,13 +1187,7 @@ class Spool(BaseSpool):
             rows = samples_adjusted_envelopes(
                 rows, catalog._residuals, drop_empty=False
             )
-        # An attached inventory is part of the contents: it decides what
-        # the extracted patches carry.
-        return {
-            "rows": _strip_identity(rows),
-            "inventory": self._inventory,
-            "enrich_kwargs": self._enrich_kwargs,
-        }
+        return {"rows": _strip_identity(rows)}
 
     def __rich__(self):
         base = super().__rich__()

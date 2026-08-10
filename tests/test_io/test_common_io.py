@@ -131,6 +131,10 @@ SKIP_DATA_FILES = {
 # of the inventory's facts under a vendor spelling, in which case it belongs
 # under the canonical name, and whether it states units the reader should
 # have converted away at the parse boundary.
+# Formats which hand back the attrs stored in the file rather than building
+# them from a header, so the file, not the reader, chooses the names.
+_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF"})
+
 VENDOR_ATTRS = frozenset(
     {
         "acq_res",
@@ -185,6 +189,9 @@ VENDOR_ATTRS = frozenset(
         "magnitude",
         "magnitude_type",
         "mode",
+        "mseed_encoding",
+        "mseed_publication_version",
+        "mseed_record_length",
         "phase_to_strain",
         "packet_type",
         "project",
@@ -195,6 +202,7 @@ VENDOR_ATTRS = frozenset(
         "recorder_namespace",
         "refractive_index",
         "sample_scale",
+        "sample_type",
         "scale_factor_to_strain",
         "sample_spacing_usec",
         "sampling_resolution",
@@ -230,15 +238,15 @@ VENDOR_ATTRS = frozenset(
 
 def _replays_stored_attrs(path) -> bool:
     """
-    Return True for a format which stores whole patch attrs and replays them.
+    Return True for a format which passes a file's own attrs through.
 
     A DASDAE file returns the attrs it was written with, so it speaks the
-    vocabulary of its own era rather than the current one. Only readers
-    which build attrs from a native header are held to the shared
-    vocabulary.
+    vocabulary of its own era; a CF NetCDF file carries whatever attrs its
+    writer chose. Only readers which build attrs from a header they parse
+    are held to the shared vocabulary.
     """
     with suppress(UnknownFiberFormatError):
-        return dc.get_format(path)[0] == "DASDAE"
+        return dc.get_format(path)[0] in _PASS_THROUGH_FORMATS
     return False
 
 

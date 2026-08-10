@@ -174,7 +174,7 @@ name and who may change it later.
    carries those codes; most archives supply it through the directory layout
    instead.
 2. **Observing-system facts** — what the instrument was doing. Use the names
-   in [`INVENTORY_ATTRS`](`dascore.constants.INVENTORY_ATTRS`), which are the
+   in `dascore.constants.INVENTORY_ATTRS`, which are the
    fields of the DASDAE inventory's acquisition (`gauge_length`,
    `spatial_interval`, `pulse_width`, …) and of its interrogator, dotted
    (`interrogator.serial_number`). Using a vendor spelling for one of these

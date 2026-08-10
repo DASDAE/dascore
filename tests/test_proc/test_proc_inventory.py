@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 
@@ -838,3 +840,8 @@ class TestSecondReviewFindings:
         with_channel = patch.update_coords(channel=("distance", channels))
         with pytest.raises(PatchError, match="None of the patch's coordinates"):
             with_channel.enrich(no_slope, attrs=False, coords=("zone",))
+
+    def test_attached_spool_survives_pickle(self, patch, inventory):
+        """A spool and its pickle are the same spool, inventory and all."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert pickle.loads(pickle.dumps(spool)) == spool

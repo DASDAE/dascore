@@ -1159,3 +1159,15 @@ class TestForcePatchMergeOverlap:
         out = _force_patch_merge(infos, merge_kwargs={})
         assert len(out) == 1
         assert out[0]["patch"] is random_patch
+
+
+class TestDottedPatchNames:
+    """A data_source_id puts dots in the name it generates."""
+
+    def test_name_round_trips_through_a_file(self, tmp_path, random_patch):
+        """Writing a patch under its own name and re-reading keeps the name."""
+        patch = random_patch.update_attrs(data_source_id="DAS.R2D1..RAW")
+        name = patch.get_patch_name()
+        assert "DAS.R2D1..RAW" in name
+        patch.io.write(tmp_path / f"{name}.h5", "dasdae")
+        assert get_patch_names(dc.spool(tmp_path).update()).iloc[0] == name

@@ -331,9 +331,18 @@ def _get_distance_info(coord):
 
 
 def _get_measure(attrs, name):
-    """Return a usable positive measure, or None. Units are canonical."""
+    """
+    Return a usable positive measure, or None.
+
+    The value is expected in the units the attr contract states. A patch
+    written before those units were fixed still carries the companion attr
+    naming its own, so it is honored rather than being stamped with a unit
+    the number is not in.
+    """
+    values = {name: attrs.get(name), f"{name}_units": attrs.get(f"{name}_units")}
+    convert_attr_units(values, name, _MEASURE_UNITS[name])
     try:
-        value = float(attrs.get(name))
+        value = float(values.get(name))
     except (TypeError, ValueError):
         return None
     if not np.isfinite(value) or value <= 0:

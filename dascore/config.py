@@ -72,6 +72,12 @@ class DascoreConfig(BaseModel):
             "data_type",
             "data_category",
             "tag",
+            # Archives predating data_source_id partition by these, and a
+            # name missing from a spool is ignored. Grouping too finely
+            # only leaves patches unmerged; too coarsely merges patches
+            # which describe different places.
+            "network",
+            "station",
         ),
         description=(
             "Attributes which partition patches into separate groups for "
