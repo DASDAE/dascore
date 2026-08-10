@@ -53,6 +53,9 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
+# Longest repr a single history argument may contribute.
+_MAX_HISTORY_VALUE_LEN = 120
+
 
 def _format_values(val):
     """String formatting for values for history string."""
@@ -72,6 +75,10 @@ def _format_values(val):
         out = "Patch..."
     else:
         out = str(val)
+        if len(out) > _MAX_HISTORY_VALUE_LEN:
+            # An argument with a large repr (an inventory, say) would
+            # otherwise be pasted into the history of every patch it touches.
+            out = f"{type(val).__name__}..."
     return out
 
 

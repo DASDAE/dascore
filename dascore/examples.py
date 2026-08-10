@@ -14,6 +14,19 @@ import dascore as dc
 import dascore.core
 from dascore.compat import random_state
 from dascore.config import config_context
+from dascore.core.inventory import (
+    Acquisition,
+    CouplingCondition,
+    DistanceMap,
+    FiberArray,
+    FiberSegment,
+    Geometry,
+    Interrogator,
+    Inventory,
+    Network,
+    OpticalPath,
+    OpticalPathAnnotation,
+)
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
 from dascore.utils.imports import lazy_import
@@ -749,3 +762,80 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
         )
         raise UnknownExampleError(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
+
+
+def inventory_patch_pair():
+    """
+    Return a patch and an inventory which resolves it.
+
+    The patch is the random DAS example carrying the data source id of the
+    inventory's one acquisition. That acquisition places its 300 channels on
+    an optical path through a measured two-point distance map, so the path's
+    geometry, coupling, and annotations project onto the patch. Used by the
+    enrich documentation and tests.
+    """
+    patch = random_patch(data_source_id="DAS.R2D1..RAW")
+    distance = patch.get_coord("distance")
+    # The interrogator's own axis starts at its channel 0; the path axis
+    # starts 100 m later, at the far end of the lead-in cable.
+    acquisition = Acquisition(
+        code="RAW",
+        location_code="",
+        data_type="velocity",
+        data_category="DAS",
+        gauge_length=10.0,
+        spatial_interval=1.0,
+        sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
+        pulse_width=1e-8,
+        interrogator=Interrogator(
+            manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
+        ),
+        distance_map=DistanceMap(
+            instrument_distance=(float(distance.min()), float(distance.max())),
+            distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+        ),
+    )
+    path = OpticalPath(
+        name="main",
+        location_code="",
+        optical_components=(FiberSegment(name="cable", optical_length=500.0),),
+        geometry=(
+            Geometry(
+                name="trench",
+                distance=(100.0, 400.0),
+                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+            ),
+        ),
+        coupling=(
+            CouplingCondition(
+                start_distance=100.0,
+                end_distance=250.0,
+                coupling_type="trench",
+                medium="soil",
+            ),
+        ),
+        annotations=(
+            OpticalPathAnnotation(
+                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+            ),
+            OpticalPathAnnotation(
+                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+            ),
+            OpticalPathAnnotation(
+                start_distance=150.0, end_distance=300.0, group="noisy"
+            ),
+        ),
+    )
+    inventory = Inventory(
+        networks=(
+            Network(
+                code="DAS",
+                fiber_arrays=(
+                    FiberArray(
+                        code="R2D1", acquisitions=(acquisition,), optical_paths=(path,)
+                    ),
+                ),
+            ),
+        )
+    ).check()
+    return patch, inventory
