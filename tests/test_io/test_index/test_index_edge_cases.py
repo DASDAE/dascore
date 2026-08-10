@@ -43,7 +43,7 @@ from dascore.io.index.backend import (
     get_backend,
     resolve_query,
 )
-from dascore.io.index.catalog import LiveResolver, PatchCatalog, _canonical_range
+from dascore.io.index.catalog import LiveResolver, PatchCatalog
 from dascore.io.index.indexer import (
     DBDirectoryIndexer,
     _set_mapped_index_path,
@@ -68,6 +68,7 @@ from dascore.io.index.query import (
 )
 from dascore.units import get_quantity, m, s
 from dascore.units import get_quantity as _gq
+from dascore.utils.misc import _canonical_range
 
 
 class TestIndexCoverageEdges:

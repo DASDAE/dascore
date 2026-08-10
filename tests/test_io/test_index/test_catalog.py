@@ -10,8 +10,8 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _canonical_range, _CanonicalRange
 from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.utils.misc import _canonical_range, _CanonicalRange
 
 
 @pytest.fixture(scope="class")

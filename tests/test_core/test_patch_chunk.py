@@ -877,6 +877,59 @@ class TestMixedUnitChunk:
         assert str(out[0].get_coord("distance").units) == "1 m"
 
 
+class TestNonSIUnitTrim:
+    """Plan trims are canonical SI; a patch coordinate may not be."""
+
+    @pytest.fixture()
+    def foot_spool(self):
+        """A one patch spool whose distance coordinate is in feet."""
+        return dc.spool([dc.get_example_patch().convert_units(distance="ft")])
+
+    def test_chunk_keeps_every_sample(self, foot_spool):
+        """Chunking a non-SI coordinate must not drop data."""
+        patch = foot_spool[0]
+        axis = patch.get_axis("distance")
+        expected = patch.shape[axis]
+        # keep_partial so the chunks cover the coordinate exactly; without
+        # it the dropped remainder would mask the samples a bad trim loses
+        out = foot_spool.chunk(distance=100, keep_partial=True)
+        assert sum(x.shape[x.get_axis("distance")] for x in out) == expected
+
+    def test_chunk_pieces_match_the_plan(self, foot_spool):
+        """Each assembled piece spans the interval the plan advertised."""
+        plan = foot_spool.chunk_plan(distance=100)
+        out = foot_spool.chunk(distance=100)
+        assert len(out) == len(plan.outputs)
+        for patch, (_, row) in zip(out, plan.outputs.iterrows(), strict=True):
+            coord = patch.get_coord("distance")
+            # the plan speaks SI, the coordinate speaks feet
+            in_si = coord.convert_units("m")
+            assert float(in_si.min()) == pytest.approx(row["distance_min"])
+            assert float(in_si.max()) == pytest.approx(row["distance_max"])
+
+    def test_trim_is_the_same_physical_interval(self, foot_spool):
+        """A 100 m chunk covers 100 m of a coordinate stored in feet."""
+        out = foot_spool.chunk(distance=100)
+        span = out[0].get_coord("distance").convert_units("m")
+        assert float(span.max() - span.min()) == pytest.approx(99, abs=1.0)
+
+    def test_si_coord_unchanged(self):
+        """The ordinary SI case keeps its behavior."""
+        spool = dc.spool([dc.get_example_patch()])
+        patch = spool[0]
+        axis = patch.get_axis("distance")
+        out = spool.chunk(distance=None)
+        assert sum(x.shape[x.get_axis("distance")] for x in out) == patch.shape[axis]
+
+    def test_unitless_coord_unchanged(self):
+        """A coordinate with no units is trimmed by bare magnitudes."""
+        patch = dc.get_example_patch().set_units(distance=None)
+        spool = dc.spool([patch])
+        axis = patch.get_axis("distance")
+        out = spool.chunk(distance=None)
+        assert sum(x.shape[x.get_axis("distance")] for x in out) == patch.shape[axis]
+
+
 class TestChainedChunk:
     """Chunking a derived spool along another dimension (round-4 F1)."""
 
