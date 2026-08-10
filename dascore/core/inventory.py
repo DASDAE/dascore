@@ -131,7 +131,10 @@ class CreationInfo(InventoryModel):
     )
     update_time: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
-        description="Time this inventory was last updated (UTC).",
+        description=(
+            "Time the content was last updated (UTC); by convention set "
+            "alongside a version bump when a correction is made."
+        ),
     )
     version: str = Field(default="", description="Content version of the document.")
 
@@ -1311,7 +1314,8 @@ class Inventory(InventoryModel):
         default=1, description="Version of the inventory manifest envelope."
     )
     resource_id: str = Field(
-        default="", description="Optional identifier for the inventory manifest."
+        default_factory=lambda: str(uuid4()),
+        description="Identifier for the inventory manifest.",
     )
     creation_info: CreationInfo = Field(
         default_factory=CreationInfo,

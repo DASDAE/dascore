@@ -1026,13 +1026,12 @@ class TestUniformAttachments:
     def test_yaml_omits_empty_fields(self):
         """Empty strings, dicts, and tuples do not serialize."""
         pytest.importorskip("yaml")
-        text = build_inventory().to_yaml()
+        inventory = build_inventory()
+        text = inventory.to_yaml()
         assert "notes:" not in text
         assert "extra_fields:" not in text
         loaded = inv.Inventory.from_yaml(text)
-        assert loaded.model_dump(mode="json") == build_inventory().model_dump(
-            mode="json"
-        )
+        assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
     def test_extra_fields_contents_survive(self):
         """User values inside extra_fields are kept verbatim, even empty."""
