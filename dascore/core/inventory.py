@@ -21,7 +21,13 @@ from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
 
 import numpy as np
-from pydantic import AfterValidator, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
@@ -79,6 +85,9 @@ def _check_code(value: str, allow_blank: bool = False) -> str:
 CodeStr = Annotated[str, AfterValidator(_check_code)]
 # A float which must be finite; nan/inf silently poison downstream math.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+# Sensor orientation, in the ranges seismology already uses.
+Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
+Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
 LocationCodeStr = Annotated[
     str, AfterValidator(lambda value: _check_code(value, allow_blank=True))
 ]
@@ -89,6 +98,27 @@ ResourceIdStr = Annotated[
         default_factory=lambda: str(uuid4()),
         description="Stable identifier for this shareable inventory resource.",
     ),
+]
+
+
+def _annotation_value(value):
+    """
+    Normalize an annotation value so its Python type survives validation.
+
+    Numpy scalars are unwrapped: pydantic's smart union resolves every numpy
+    scalar to float, which would turn a mask element into a numeric group.
+    """
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        msg = f"Annotation value must be finite; got {value}."
+        raise InvalidInventoryError(msg)
+    return value
+
+
+# The value kind decides an annotation group's shape, so it must be exact.
+AnnotationValue = Annotated[
+    str | bool | int | float, BeforeValidator(_annotation_value)
 ]
 
 
@@ -164,6 +194,18 @@ class CoordinateReferenceSystem(InventoryModel):
         """Labels are unique; the vocabulary itself is enforced by the type."""
         if len(set(value)) != len(value):
             msg = f"coordinate_labels must be unique; got {value}."
+            raise InvalidInventoryError(msg)
+        return value
+
+    @field_validator("coordinate_labels")
+    @classmethod
+    def _check_label_count(cls, value):
+        """Coordinates are stored on the canonical (x, y, z) axes."""
+        if not 1 <= len(value) <= 3:
+            msg = (
+                "A CRS declares one to three axes, matching the canonical "
+                f"(x, y, z) storage; got {value}."
+            )
             raise InvalidInventoryError(msg)
         return value
 
@@ -500,6 +542,9 @@ class Geometry(InventoryModel):
         if len(dims) > 1 or 0 in dims:
             msg = "Geometry coordinate points must share one nonzero dimensionality."
             raise InvalidInventoryError(msg)
+        if not np.all(np.isfinite(np.asarray(self.coordinates, dtype=float))):
+            msg = "Geometry coordinate values must be finite."
+            raise InvalidInventoryError(msg)
         return self
 
     @property
@@ -583,7 +628,7 @@ class CouplingCondition(_IntervalModel):
     coupling_type: CouplingType = Field(description="Controlled coupling category.")
     medium: str = Field(default="", description="Surrounding medium.")
     attachment: str = Field(default="", description="Attachment method.")
-    depth: float | None = Field(
+    depth: FiniteFloat | None = Field(
         default=None,
         description=(
             "Depth in meters, positive down, relative to the local surface, "
@@ -599,11 +644,12 @@ class OpticalPathAnnotation(_IntervalModel):
     ``group`` names the variable and ``value`` is its state over the
     interval, so a bare flag is simply a boolean value. String and numeric
     groups are single valued and their intervals may not overlap; boolean
-    groups state membership and may overlap freely.
+    groups state membership and may overlap freely. Point markers (equal
+    start and end) cover nothing, so they are exempt from that rule.
     """
 
     group: str = Field(default="", description="Name of the annotated variable.")
-    value: str | bool | int | float = Field(
+    value: AnnotationValue = Field(
         default=True, description="Value of the variable over this interval."
     )
 
@@ -870,8 +916,9 @@ class OpticalPath(TimeRangedModel):
 
     Optical components tile ``[start_distance, start_distance + optical
     length)``. Geometry and coupling are function tracks (partial coverage,
-    no overlap); annotations overlap freely. No more than one path per
-    ``(FiberArray, location_code)`` is valid at a time.
+    no overlap); annotations overlap as their group's value kind allows. No
+    more than one path per ``(FiberArray, location_code)`` is valid at a
+    time.
     """
 
     name: str = Field(default="", description="Human-readable optical path name.")
@@ -1067,8 +1114,9 @@ class OpticalPath(TimeRangedModel):
                     }
                 )
             )
-        coupling = _clip_intervals(self.coupling, lo, hi)
-        annotations = _clip_intervals(self.annotations, lo, hi)
+        outer = self.end_distance
+        coupling = _clip_intervals(self.coupling, lo, hi, outer)
+        annotations = _clip_intervals(self.annotations, lo, hi, outer)
         return self.model_copy(
             update={
                 "start_distance": lo,
@@ -1188,11 +1236,20 @@ class OpticalPath(TimeRangedModel):
         )
 
 
-def _clip_intervals(items, lo: float, hi: float) -> list:
-    """Clip start+optical_length interval items to [lo, hi), dropping empties."""
+def _clip_intervals(items, lo: float, hi: float, outer: float | None = None) -> list:
+    """
+    Clip interval items to [lo, hi), dropping those left with no coverage.
+
+    Point markers cover nothing but are not nothing: they survive when they
+    fall inside the clip, or on its outermost included endpoint.
+    """
     out = []
     for item in items:
         start, end = item.interval
+        if start == end:
+            if lo <= start < hi or (outer is not None and start == hi == outer):
+                out.append(item)
+            continue
         new_lo, new_hi = max(start, lo), min(end, hi)
         if new_hi <= new_lo:
             continue
@@ -1216,6 +1273,20 @@ class Response(InventoryModel):
     )
 
 
+def _check_finite_coordinates(value):
+    """Coordinates name a position; nan and inf name nothing."""
+    if value is not None and not np.all(np.isfinite(np.asarray(value, dtype=float))):
+        msg = f"Coordinate values must be finite; got {value}."
+        raise InvalidInventoryError(msg)
+    return value
+
+
+# Coordinates on the canonical axes, as declared by the inventory CRS.
+Coordinates = Annotated[
+    tuple[float, ...] | None, AfterValidator(_check_finite_coordinates)
+]
+
+
 class Channel(TimeRangedModel):
     """Station-level time-series stream identity."""
 
@@ -1223,7 +1294,7 @@ class Channel(TimeRangedModel):
     location_code: LocationCodeStr = Field(
         default="", description="FDSN-style location code; may be blank."
     )
-    coordinates: tuple[float, ...] | None = Field(
+    coordinates: Coordinates = Field(
         default=None,
         description=(
             "Coordinates on the canonical (x, y, z) axes; the inventory CRS "
@@ -1231,19 +1302,19 @@ class Channel(TimeRangedModel):
         ),
     )
     sample_rate: float | None = Field(default=None, description="Sample rate in Hz.")
-    azimuth: float | None = Field(
+    azimuth: Azimuth | None = Field(
         default=None,
         description=(
             "Sensor component azimuth in degrees clockwise from north, [0, 360)."
         ),
     )
-    dip: float | None = Field(
+    dip: Dip | None = Field(
         default=None,
         description=(
             "Sensor component dip in degrees down from horizontal, [-90, 90]."
         ),
     )
-    depth: float | None = Field(
+    depth: FiniteFloat | None = Field(
         default=None,
         description="Sensor depth in meters below the local surface; positive down.",
     )
@@ -1270,7 +1341,7 @@ class Station(TimeRangedModel):
             "'doi:10.7914/SN/XX'."
         ),
     )
-    coordinates: tuple[float, ...] | None = Field(
+    coordinates: Coordinates = Field(
         default=None,
         description=(
             "Coordinates on the canonical (x, y, z) axes; the inventory CRS "
@@ -1404,12 +1475,19 @@ class Network(TimeRangedModel):
         return self
 
 
+# Fields whose default is not the empty value; dropping them would reload as
+# something else. An annotation value defaults to True, so a pruned empty
+# string would come back as a boolean and change its group's kind.
+_UNPRUNED_KEYS = frozenset({"value"})
+
+
 def _drop_empty(value, _in_extras=False):
     """
     Recursively drop empty strings, mappings, and sequences from a dump.
 
-    All model fields default to empty values, so pruning them is lossless on
-    reload. User-supplied ``extra_fields`` contents are kept verbatim.
+    Pruned fields default to the empty value they held, so reload is
+    lossless; fields in ``_UNPRUNED_KEYS`` and user-supplied ``extra_fields``
+    contents are kept verbatim.
     """
     if isinstance(value, dict):
         out = {}
@@ -1419,7 +1497,8 @@ def _drop_empty(value, _in_extras=False):
                 if _in_extras
                 else _drop_empty(item, _in_extras=key == "extra_fields")
             )
-            if pruned in ("", {}, []) and not _in_extras:
+            empty = pruned in ("", {}, []) and key not in _UNPRUNED_KEYS
+            if empty and not _in_extras:
                 continue
             out[key] = pruned
         return out
@@ -1622,11 +1701,11 @@ class Inventory(InventoryModel):
 
     def check(self) -> Self:
         """Check the whole inventory tree against the model rules."""
-        codes = [net.code for net in self.networks]
-        if len(codes) != len(set(codes)):
-            msg = f"Network codes must be unique; got {codes}."
-            raise InvalidInventoryError(msg)
-        errors = self._check_coordinate_widths()
+        errors = [
+            f"Duplicate network code {code!r} for overlapping time ranges."
+            for code, *_ in _overlapping_epochs(self.networks, lambda x: x.code)
+        ]
+        errors.extend(self._check_coordinate_widths())
         if errors:
             msg = "Inventory validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
@@ -1691,7 +1770,12 @@ class Inventory(InventoryModel):
             return matches[0]
 
         network = exactly_one(
-            [x for x in self.networks if x.code == net_code], "networks"
+            [
+                x
+                for x in self.networks
+                if x.code == net_code and x.is_effective_at(time)
+            ],
+            "networks",
         )
         array = exactly_one(
             [

@@ -502,9 +502,9 @@ class TestInventory:
         assert build_inventory().check() is not None
 
     def test_duplicate_network_codes_raise(self):
-        """Duplicate network codes raise."""
+        """Two networks sharing a code and a time cannot be told apart."""
         net = inv.Network(code="DAS")
-        with pytest.raises(InvalidInventoryError, match="unique"):
+        with pytest.raises(InvalidInventoryError, match="Duplicate network code"):
             inv.Inventory(networks=(net, net)).check()
 
     def test_yaml_roundtrip(self, tmp_path):
@@ -1144,6 +1144,21 @@ class TestUniformAttachments:
 class TestStationXmlAlignment:
     """Fields added for FDSN StationXML import fidelity."""
 
+    def test_successive_network_epochs_resolve(self):
+        """A network code may be reused once its earlier epoch has ended."""
+        acquisition = inv.Acquisition(code="RAW", start_distance=0.0)
+        array = inv.FiberArray(code="L001", acquisitions=(acquisition,))
+        first = inv.Network(
+            code="XX",
+            start_time="2020-01-01",
+            end_time="2021-01-01",
+            fiber_arrays=(array,),
+        )
+        second = first.new(start_time="2021-01-01", end_time="")
+        inventory = inv.Inventory(networks=(first, second)).check()
+        context = inventory.resolve("XX.L001..RAW", time="2022-06-01")
+        assert context.network.start_time == np.datetime64("2021-01-01")
+
     def test_network_epochs(self):
         """Networks carry validity epochs like every other container."""
         net = inv.Network(code="XX", start_time="2020-01-01", end_time="2022-01-01")
@@ -1198,6 +1213,50 @@ class TestPointMarkers:
             start_distance=350.0, end_distance=350.0, group="wellhead"
         )
         assert anno.interval == (350.0, 350.0)
+
+    def test_point_markers_survive_select(self):
+        """A clamp inside the clip is not coverage, but it is not nothing."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=50.0, end_distance=50.0, group="clamp"
+                ),
+            ),
+            coupling=(
+                inv.CouplingCondition(
+                    start_distance=25.0, end_distance=25.0, coupling_type="other"
+                ),
+            ),
+        )
+        kept = path.select(distance=(10.0, 90.0))
+        assert [x.interval for x in kept.annotations] == [(50.0, 50.0)]
+        assert [x.interval for x in kept.coupling] == [(25.0, 25.0)]
+
+    def test_point_markers_outside_the_clip_are_dropped(self):
+        """A marker beyond the requested window does not belong to the piece."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=95.0, end_distance=95.0, group="clamp"
+                ),
+            ),
+        )
+        assert path.select(distance=(10.0, 90.0)).annotations == ()
+
+    def test_point_marker_at_the_outer_endpoint_is_kept(self):
+        """The outermost endpoint of the path is included, as everywhere."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=100.0, end_distance=100.0, group="end_cap"
+                ),
+            ),
+        )
+        kept = path.select(distance=(10.0, 100.0))
+        assert [x.interval for x in kept.annotations] == [(100.0, 100.0)]
 
     def test_reversed_interval_rejected(self):
         """An end before the start is rejected."""
@@ -1416,14 +1475,22 @@ class TestPrReviewFindings:
         with pytest.raises(InvalidInventoryError, match="matches 2 items"):
             inventory.replace(connector, connector.new(name="first"))
 
-    def test_replace_resource_leaves_equal_twin_alone(self):
-        """Resources are addressed by resource_id, not by equal content."""
+    def test_replace_resource_addresses_one_id(self):
+        """Resources are addressed by resource_id; look-alikes are untouched."""
         first = inv.Enclosure(resource_id="e1", name="box")
         twin = inv.Enclosure(resource_id="e2", name="box")
         inventory = inv.Inventory(resources={"e1": first, "e2": twin})
         out = inventory.replace(first, first.new(material="steel"))
         assert out.get_resource("e1").material == "steel"
         assert out.get_resource("e2").material == ""
+
+    def test_replace_resource_rejects_stale_content(self):
+        """An old which is not what the pool holds is not a correction."""
+        stored = inv.Enclosure(resource_id="e1", name="box")
+        inventory = inv.Inventory(resources={"e1": stored})
+        stale = stored.new(name="crate")
+        with pytest.raises(InvalidInventoryError, match="was not found"):
+            inventory.replace(stale, stale.new(material="steel"))
 
     def test_replace_reaches_optical_measurements(self):
         """Measurements are pooled resources like any other."""
@@ -1488,6 +1555,92 @@ class TestPrReviewFindings:
             ),
         )
         assert inventory.check() is inventory
+
+
+class TestConstraintsMatchDescriptions:
+    """Fields which promise a range or a real value must enforce it."""
+
+    def test_azimuth_range(self):
+        """Azimuth is a compass bearing."""
+        assert inv.Channel(code="BHN", azimuth=359.9).azimuth == 359.9
+        with pytest.raises(ValidationError):
+            inv.Channel(code="BHN", azimuth=360.0)
+
+    def test_dip_range(self):
+        """Dip runs from straight down to straight up."""
+        assert inv.Channel(code="BHZ", dip=-90.0).dip == -90.0
+        with pytest.raises(ValidationError):
+            inv.Channel(code="BHZ", dip=-91.0)
+
+    def test_geometry_coordinates_must_be_finite(self):
+        """A nan control point would read as uncovered distance."""
+        with pytest.raises(ValidationError, match="must be finite"):
+            inv.Geometry(distance=(0.0, 1.0), coordinates=((np.nan, 0.0), (1.0, 1.0)))
+
+    def test_point_coordinates_must_be_finite(self):
+        """Stations and channels name real positions."""
+        with pytest.raises(ValidationError, match="must be finite"):
+            inv.Station(code="VA01", coordinates=(1.0, np.inf))
+        with pytest.raises(ValidationError, match="must be finite"):
+            inv.Channel(code="BHZ", coordinates=(np.nan, 1.0))
+
+    def test_crs_axis_count(self):
+        """Canonical storage is (x, y, z), so a CRS declares one to three."""
+        with pytest.raises(ValidationError, match="one to three axes"):
+            inv.CoordinateReferenceSystem(coordinate_labels=(), units=())
+        with pytest.raises(ValidationError, match="one to three axes"):
+            inv.CoordinateReferenceSystem(
+                coordinate_labels=("x", "y", "z", "depth"),
+                units=("meter",) * 4,
+            )
+
+    def test_annotation_value_keeps_numpy_type(self):
+        """A mask element is a flag, not the number one."""
+        annotation = inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=1.0, group="noisy", value=np.bool_(True)
+        )
+        assert annotation.value is True
+        counted = inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=1.0, group="shots", value=np.int64(5)
+        )
+        assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
+
+    def test_annotation_value_must_be_finite(self):
+        """A non-finite value cannot survive a JSON round trip."""
+        with pytest.raises(ValidationError, match="must be finite"):
+            inv.OpticalPathAnnotation(
+                start_distance=0.0, end_distance=1.0, group="g", value=np.inf
+            )
+
+
+class TestSerializationIsLossless:
+    """Pruning empty values must not change what reloads."""
+
+    def test_empty_annotation_value_survives(self):
+        """A pruned empty value would reload as a boolean flag."""
+        pytest.importorskip("yaml")
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0, end_distance=50.0, group="rock", value=""
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=50.0, end_distance=100.0, group="rock", value="shale"
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        ).check()
+        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        values = [
+            x.value
+            for x in loaded.networks[0].fiber_arrays[0].optical_paths[0].annotations
+        ]
+        assert values == ["", "shale"]
+        assert loaded.check() is loaded
 
 
 class TestFiberSegmentFields:
