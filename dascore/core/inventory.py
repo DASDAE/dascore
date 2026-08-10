@@ -210,6 +210,44 @@ class ExternalResource(InventoryModel):
     description: str = Field(default="", description="Free-form description.")
 
 
+class OpticalMeasurement(InventoryModel):
+    """
+    A characterization of the optical path or its components.
+
+    One record captures the conditions a loss or reflectance number was
+    obtained under — the conditions live here, stated once, and every
+    number derived from the same run references the same record. A
+    datasheet claim is a legitimate record (method="datasheet").
+    """
+
+    type: Literal["OpticalMeasurement"] = _type_tag("OpticalMeasurement")
+    resource_id: ResourceIdStr
+    name: str = Field(default="", description="Human-readable measurement name.")
+    method: str = Field(
+        default="",
+        description=(
+            "How the values were obtained: otdr, power_meter, "
+            "splicer_estimate, datasheet, or other."
+        ),
+    )
+    time: DateTime64 = Field(
+        default=np.datetime64("NaT", "ns"),
+        description="Time of the measurement (UTC).",
+    )
+    wavelength: float | None = Field(
+        default=None, description="Measurement wavelength in nm."
+    )
+    pulse_width: float | None = Field(
+        default=None, description="OTDR pulse width in seconds."
+    )
+    direction: str = Field(
+        default="", description="Measurement direction: forward or reverse."
+    )
+    data: ExternalResource | str | None = Field(
+        default=None, description="The trace or report file, as a resource."
+    )
+
+
 class Interrogator(InventoryModel):
     """DAS interrogator unit used for data collection."""
 
@@ -272,13 +310,21 @@ class Cable(InventoryModel):
 
 
 _Resource: TypeAlias = Annotated[
-    Interrogator | Cable | Enclosure | ExternalResource,
+    Interrogator | Cable | Enclosure | ExternalResource | OpticalMeasurement,
     Field(discriminator="type"),
 ]
 
 
 class _OpticalComponentBase(InventoryModel):
-    """Base class for physical optical components in an optical path."""
+    """
+    Base class for physical optical components in an optical path.
+
+    Every component carries a unified one-way transmission ``loss_db`` and
+    return ``reflectance_db`` (the two quantities an OTDR trace shows per
+    event), each paired with the measurement record that produced it.
+    Multi-wavelength values are equal-length tuples paired elementwise
+    with their measurements, which carry the wavelengths.
+    """
 
     optical_length: float = Field(
         default=0.0,
@@ -287,6 +333,49 @@ class _OpticalComponentBase(InventoryModel):
         description="Optical component length along the optical path in meters.",
     )
     name: str = Field(default="", description="Human-readable component name.")
+    loss_db: float | tuple[float, ...] | None = Field(
+        default=None,
+        description="One-way transmission loss across this component in dB.",
+    )
+    loss_measurement: (
+        OpticalMeasurement | str | tuple[OpticalMeasurement | str, ...] | None
+    ) = Field(
+        default=None,
+        description="Measurement record(s) the loss value(s) came from.",
+    )
+    reflectance_db: float | tuple[float, ...] | None = Field(
+        default=None,
+        description="Return loss (reflectance) of this component in dB.",
+    )
+    reflectance_measurement: (
+        OpticalMeasurement | str | tuple[OpticalMeasurement | str, ...] | None
+    ) = Field(
+        default=None,
+        description="Measurement record(s) the reflectance value(s) came from.",
+    )
+
+    @model_validator(mode="after")
+    def _check_measurement_pairing(self) -> Self:
+        """Tuple values pair elementwise with tuple measurement records."""
+        for quantity in ("loss", "reflectance"):
+            value = getattr(self, f"{quantity}_db")
+            meas = getattr(self, f"{quantity}_measurement")
+            value_seq = isinstance(value, tuple)
+            meas_seq = isinstance(meas, tuple)
+            if value_seq != meas_seq:
+                msg = (
+                    f"Multi-valued {quantity}_db requires an equal-length "
+                    f"{quantity}_measurement tuple (each value needs the "
+                    "record carrying its wavelength), and vice versa."
+                )
+                raise InvalidInventoryError(msg)
+            if value_seq and len(value) != len(meas):
+                msg = (
+                    f"{quantity}_db has {len(value)} values but "
+                    f"{quantity}_measurement has {len(meas)}."
+                )
+                raise InvalidInventoryError(msg)
+        return self
 
 
 class FiberSegment(_OpticalComponentBase):
@@ -309,18 +398,16 @@ class FiberSegment(_OpticalComponentBase):
     buffer_type: str = Field(
         default="", description="Buffer construction, such as tight_buffered."
     )
-    attenuation_db_per_km: float | None = Field(
-        default=None, description="Optical attenuation in dB/km."
-    )
-    attenuation_wavelength: float | None = Field(
-        default=None, description="Wavelength of the attenuation value in nm."
-    )
-    rayleigh_backscatter_window: tuple[float, float] | None = Field(
-        default=None, description="Rayleigh backscatter window in nm."
-    )
-    center_wavelength: float | None = Field(
-        default=None, description="Center wavelength in nm."
-    )
+
+    @property
+    def attenuation_db_per_km(self) -> float | tuple[float, ...] | None:
+        """The familiar per-length loss rate, derived from loss_db."""
+        if self.loss_db is None or not self.optical_length:
+            return None
+        km = self.optical_length / 1000.0
+        if isinstance(self.loss_db, tuple):
+            return tuple(x / km for x in self.loss_db)
+        return self.loss_db / km
 
 
 class Connector(_OpticalComponentBase):
@@ -331,9 +418,6 @@ class Connector(_OpticalComponentBase):
         default=None, description="Enclosure housing this connector."
     )
     connector_type: str = Field(default="", description="Connector type.")
-    insertion_loss: float | None = Field(
-        default=None, description="Insertion loss in dB, if known."
-    )
 
 
 class Splice(_OpticalComponentBase):
@@ -344,9 +428,6 @@ class Splice(_OpticalComponentBase):
         default=None, description="Enclosure housing this splice."
     )
     splice_type: str = Field(default="", description="Splice type, such as fusion.")
-    insertion_loss: float | None = Field(
-        default=None, description="Insertion loss in dB, if known."
-    )
 
 
 class Terminator(_OpticalComponentBase):
@@ -358,9 +439,6 @@ class Terminator(_OpticalComponentBase):
     )
     termination_type: str = Field(
         default="", description="Termination type, such as open, capped, or angled."
-    )
-    reflectance: float | None = Field(
-        default=None, description="Return loss or reflectance, if known."
     )
 
 
@@ -786,8 +864,9 @@ class OpticalPath(TimeRangedModel):
     annotations: tuple[OpticalPathAnnotation, ...] = Field(
         default=(), description="Annotations on this path."
     )
-    otdr_traces: tuple[ExternalResource | str, ...] = Field(
-        default=(), description="References to OTDR traces of this path."
+    measurements: tuple[OpticalMeasurement | str, ...] = Field(
+        default=(),
+        description="OTDR and other optical measurements of this whole path.",
     )
 
     @property
@@ -1023,7 +1102,7 @@ class OpticalPath(TimeRangedModel):
                 "geometry": (*self.geometry, *geometry),
                 "coupling": (*self.coupling, *coupling),
                 "annotations": (*self.annotations, *annotations),
-                "otdr_traces": (*self.otdr_traces, *other.otdr_traces),
+                "measurements": (*self.measurements, *other.measurements),
             }
         )
 
@@ -1295,17 +1374,22 @@ class Inventory(InventoryModel):
         """
         pool: dict[str, Any] = {}
         string_refs: list[tuple[str, str, tuple]] = []
+        measurement_refs = {
+            "loss_measurement": (OpticalMeasurement,),
+            "reflectance_measurement": (OpticalMeasurement,),
+        }
         ref_fields = {
-            FiberSegment: {"container": (Cable,)},
-            Connector: {"container": (Enclosure,)},
-            Splice: {"container": (Enclosure,)},
-            Terminator: {"container": (Enclosure,)},
+            FiberSegment: {"container": (Cable,), **measurement_refs},
+            Connector: {"container": (Enclosure,), **measurement_refs},
+            Splice: {"container": (Enclosure,), **measurement_refs},
+            Terminator: {"container": (Enclosure,), **measurement_refs},
             Cable: {
                 "container": (Enclosure, Cable),
                 "specification": (ExternalResource,),
             },
             Enclosure: {"specification": (ExternalResource,)},
             Acquisition: {"interrogator": (Interrogator,)},
+            OpticalMeasurement: {"data": (ExternalResource,)},
         }
 
         def pool_add(rid, resource):
@@ -1331,9 +1415,15 @@ class Inventory(InventoryModel):
             updates = {}
             for field, allowed in fields.items():
                 value = getattr(obj, field)
-                new_value = register(value, field, allowed)
-                if new_value is not value:
-                    updates[field] = new_value
+                if isinstance(value, tuple):
+                    new_value = tuple(register(x, field, allowed) for x in value)
+                    if new_value == value:
+                        continue
+                else:
+                    new_value = register(value, field, allowed)
+                    if new_value is value:
+                        continue
+                updates[field] = new_value
             return obj.model_copy(update=updates) if updates else obj
 
         for rid, resource in self.resources.items():
@@ -1345,9 +1435,9 @@ class Inventory(InventoryModel):
                     "optical_components": tuple(
                         normalize(c) for c in path.optical_components
                     ),
-                    "otdr_traces": tuple(
-                        register(x, "otdr_traces", (ExternalResource,))
-                        for x in path.otdr_traces
+                    "measurements": tuple(
+                        register(x, "measurements", (OpticalMeasurement,))
+                        for x in path.measurements
                     ),
                 }
             )

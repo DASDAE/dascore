@@ -1085,3 +1085,103 @@ class TestPointMarkers:
             inv.CouplingCondition(
                 start_distance=10.0, end_distance=5.0, coupling_type="trench"
             )
+
+
+class TestOpticalLoss:
+    """Unified loss/reflectance with measurement provenance."""
+
+    def test_scalar_loss_no_provenance(self):
+        """Plain numbers with no measurement records are legal."""
+        splice = inv.Splice(loss_db=0.08, reflectance_db=-55.0)
+        assert splice.loss_db == 0.08
+
+    def test_shared_measurement_pooled_once(self):
+        """One OTDR run backs many components through one pool entry."""
+        run = inv.OpticalMeasurement(
+            resource_id="otdr-1",
+            method="otdr",
+            wavelength=1550.0,
+            pulse_width=1e-8,
+            direction="forward",
+        )
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(
+                    optical_length=1000.0, loss_db=0.3, loss_measurement=run
+                ),
+                inv.Splice(
+                    loss_db=0.05,
+                    loss_measurement=run,
+                    reflectance_db=-60.0,
+                    reflectance_measurement=run,
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        assert list(inventory.resources) == ["otdr-1"]
+        comps = (
+            inventory.networks[0].fiber_arrays[0].optical_paths[0].optical_components
+        )
+        assert comps[0].loss_measurement == "otdr-1"
+        assert comps[1].reflectance_measurement == "otdr-1"
+
+    def test_multi_wavelength_pairs(self):
+        """Tuple losses pair elementwise with their measurements."""
+        sheet_1550 = inv.OpticalMeasurement(
+            resource_id="ds-1550", method="datasheet", wavelength=1550.0
+        )
+        sheet_1310 = inv.OpticalMeasurement(
+            resource_id="ds-1310", method="datasheet", wavelength=1310.0
+        )
+        seg = inv.FiberSegment(
+            optical_length=2000.0,
+            loss_db=(0.6, 0.7),
+            loss_measurement=(sheet_1550, sheet_1310),
+        )
+        assert seg.attenuation_db_per_km == (0.3, 0.35)
+
+    def test_tuple_loss_requires_tuple_measurements(self):
+        """Tuple loss requires tuple measurements."""
+        with pytest.raises(ValidationError, match="equal-length"):
+            inv.FiberSegment(optical_length=10.0, loss_db=(0.1, 0.2))
+
+    def test_length_mismatch_raises(self):
+        """Length mismatch raises."""
+        with pytest.raises(ValidationError, match="has 2 values"):
+            inv.FiberSegment(
+                optical_length=10.0,
+                loss_db=(0.1, 0.2),
+                loss_measurement=("m1", "m2", "m3"),
+            )
+
+    def test_dangling_measurement_ref_raises(self):
+        """Dangling measurement ref raises."""
+        seg = inv.FiberSegment(
+            optical_length=10.0, loss_db=0.1, loss_measurement="no-such-run"
+        )
+        path = inv.OpticalPath(optical_components=(seg,))
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        with pytest.raises(ValidationError, match="Dangling"):
+            inv.Inventory(networks=(inv.Network(code="DAS", fiber_arrays=(array,)),))
+
+    def test_measurement_data_file_normalizes(self):
+        """A measurement's trace-file resource lands in the pool."""
+        trace = inv.ExternalResource(resource_id="trace-1", uri="file://x.sor")
+        run = inv.OpticalMeasurement(resource_id="otdr-1", data=trace)
+        inventory = inv.Inventory(resources=[run])
+        assert inventory.get_resource("otdr-1").data == "trace-1"
+        assert inventory.get_resource("trace-1").uri == "file://x.sor"
+
+    def test_path_measurements_normalize(self):
+        """Path-level measurement refs land in the pool."""
+        run = inv.OpticalMeasurement(resource_id="otdr-1", method="otdr")
+        path = inv.OpticalPath(measurements=(run,))
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        got = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        assert got.measurements == ("otdr-1",)
