@@ -278,9 +278,9 @@ class TestSintelaProtobuf:
         patch = fiber_io.read(path)[0]
         assert patch.dims == ("time", "distance")
         assert patch.attrs.recorder_namespace == "manualRecord/recorder"
-        assert patch.attrs.instrument_id == "SN123"
-        assert patch.attrs.instrument_manufacturer == "Sintela"
-        assert patch.attrs.instrument_model == "Onyx"
+        assert patch.attrs.get("interrogator.serial_number") == "SN123"
+        assert patch.attrs.get("interrogator.manufacturer") == "Sintela"
+        assert patch.attrs.get("interrogator.model") == "Onyx"
         assert patch.attrs.fiber_id == 2
         assert patch.attrs.data_type == "strain"
 
