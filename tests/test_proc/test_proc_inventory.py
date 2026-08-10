@@ -779,7 +779,7 @@ class TestSecondReviewFindings:
         )
         channels = np.arange(len(patch.get_coord("distance")))
         both = patch.update_coords(channel=("distance", channels))
-        with pytest.raises(PatchError, match="place its channels differently"):
+        with pytest.raises(PatchError, match="m apart on the path"):
             both.enrich(stretched, attrs=False, coords=("zone",))
 
     def test_agreeing_axes_are_fine(self, patch, inventory):
@@ -810,5 +810,31 @@ class TestSecondReviewFindings:
         mislabeled = patch.update_coords(
             channel=("time", np.arange(len(patch.get_coord("time"))))
         )
-        with pytest.raises(PatchError, match="place its channels differently"):
+        with pytest.raises(PatchError, match="different lengths"):
             mislabeled.enrich(both_axes, attrs=False, coords=("zone",))
+
+    def test_unreadable_axis_leaves_the_others(self, patch, inventory):
+        """A channel axis with no spacing does not veto the other axis."""
+        no_slope = _replace_acquisition(
+            inventory,
+            spatial_interval=None,
+            distance_map=DistanceMap(
+                channel=(0.0,), instrument_distance=(0.0,), distance=(100.0,)
+            ),
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        both = patch.update_coords(channel=("distance", channels))
+        out = both.enrich(no_slope, attrs=False, coords=("zone",))
+        assert out.get_coord("zone").values[0] == "north"
+
+    def test_no_readable_axis_raises(self, patch, inventory):
+        """When no axis can be read, the reasons are reported together."""
+        no_slope = _replace_acquisition(
+            inventory,
+            spatial_interval=None,
+            distance_map=DistanceMap(channel=(0.0,), distance=(100.0,)),
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        with_channel = patch.update_coords(channel=("distance", channels))
+        with pytest.raises(PatchError, match="None of the patch's coordinates"):
+            with_channel.enrich(no_slope, attrs=False, coords=("zone",))

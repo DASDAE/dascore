@@ -642,6 +642,10 @@ class OpticalPathAnnotation(_IntervalModel):
     )
 
 
+# The coordinates a DistanceMap may be written in, in preference order.
+_DISTANCE_MAP_AXES = ("channel", "instrument_distance")
+
+
 class DistanceMap(InventoryModel):
     """
     Measured control-point map from a channel-like coordinate onto optical
@@ -669,7 +673,9 @@ class DistanceMap(InventoryModel):
         description="Interrogator-reported nominal distances; strictly increasing.",
     )
     distance: tuple[float, ...] = Field(
-        description="Optical path distances at the control points; increasing.",
+        description=(
+            "Optical path distances at the control points; strictly increasing."
+        ),
     )
 
     @model_validator(mode="after")
@@ -704,18 +710,47 @@ class DistanceMap(InventoryModel):
             if not is_strictly_monotonic(source, increasing=True):
                 msg = f"DistanceMap {axis} values must be strictly increasing."
                 raise InvalidInventoryError(msg)
+        self._check_axes_agree()
         return self
+
+    def _check_axes_agree(self) -> None:
+        """
+        Check that two input axes describe one interrogator.
+
+        An interrogator samples at a fixed spacing, so its channel numbers
+        and its own meters are related by a constant. Axes which imply a
+        varying spacing describe no instrument, and reading the map on one
+        axis would then contradict reading it on the other.
+        """
+        if len(self.axes) < 2 or len(self.distance) < 3:
+            return
+        channel = np.asarray(self.channel, dtype=float)
+        instrument = np.asarray(self.instrument_distance, dtype=float)
+        ratios = np.diff(instrument) / np.diff(channel)
+        if not np.allclose(ratios, ratios[0], rtol=1e-6, atol=0):
+            msg = (
+                "DistanceMap channel and instrument_distance imply a channel "
+                f"spacing which varies along the fiber ({ratios.min()} to "
+                f"{ratios.max()} interrogator meters per channel); one "
+                "interrogator samples at a fixed spacing."
+            )
+            raise InvalidInventoryError(msg)
 
     @property
     def axes(self) -> tuple[str, ...]:
         """The input axes this map is written in, in preference order."""
-        names = ("channel", "instrument_distance")
-        return tuple(x for x in names if getattr(self, x) is not None)
+        return tuple(x for x in _DISTANCE_MAP_AXES if getattr(self, x) is not None)
 
     def source_values(self, axis: str | None = None) -> tuple[float, ...]:
         """Return the control points on one input axis."""
         axis = self.axes[0] if axis is None else axis
-        out = getattr(self, axis, None)
+        if axis not in _DISTANCE_MAP_AXES:
+            msg = (
+                f"{axis!r} is not a DistanceMap input axis; the axes are "
+                f"{_DISTANCE_MAP_AXES}."
+            )
+            raise InvalidInventoryError(msg)
+        out = getattr(self, axis)
         if out is None:
             msg = f"This DistanceMap is not written in {axis!r}; it has {self.axes}."
             raise InvalidInventoryError(msg)

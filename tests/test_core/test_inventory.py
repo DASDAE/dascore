@@ -1738,3 +1738,31 @@ class TestDepthLabel:
             units=("meter", "meter", "meter"),
         )
         assert crs.axis_index("depth") == 2
+
+
+class TestDistanceMapAxisAgreement:
+    """Two input axes describe one interrogator."""
+
+    def test_varying_spacing_raises(self):
+        """No interrogator samples at two different spacings."""
+        with pytest.raises(ValidationError, match="varies along the fiber"):
+            inv.DistanceMap(
+                channel=(0.0, 100.0, 200.0),
+                instrument_distance=(0.0, 150.0, 200.0),
+                distance=(0.0, 100.0, 200.0),
+            )
+
+    def test_constant_spacing_is_fine(self):
+        """A fixed spacing between the axes is the normal case."""
+        dmap = inv.DistanceMap(
+            channel=(0.0, 100.0, 200.0),
+            instrument_distance=(0.0, 50.0, 100.0),
+            distance=(0.0, 100.0, 200.0),
+        )
+        assert dmap.axes == ("channel", "instrument_distance")
+
+    def test_bad_axis_name_raises(self):
+        """A map is read on an input axis, not on any of its fields."""
+        dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
+        with pytest.raises(InvalidInventoryError, match="not a DistanceMap input"):
+            dmap.map_to_distance([0.5], axis="distance")

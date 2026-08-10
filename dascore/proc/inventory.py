@@ -16,7 +16,7 @@ from dascore.core.inventory import (
     ResolvedContext,
     _annotation_kind,
 )
-from dascore.exceptions import ParameterError, PatchError
+from dascore.exceptions import InvalidInventoryError, ParameterError, PatchError
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
@@ -307,35 +307,61 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
     consistent with the map about all of them. Picking one and moving on
     would answer a question the patch itself contradicts.
     """
-    resolved = []
+    resolved, failures = [], []
     for axis, name in _get_channel_axes(patch, acquisition):
         dims = patch.coords.dim_map[name]
         if len(dims) != 1:
             msg = f"The {name!r} coordinate must belong to exactly one dimension."
             raise PatchError(msg)
         values = patch.coords.coord_map[name].values
-        distances = acquisition.channel_to_distance(values, axis=axis)
+        try:
+            distances = acquisition.channel_to_distance(values, axis=axis)
+        except InvalidInventoryError as error:
+            # An axis the map cannot be read on (a channel axis with no
+            # spacing, say) leaves the others to answer.
+            failures.append(f"{name!r}: {error}")
+            continue
         resolved.append((name, dims[0], distances))
+    if not resolved:
+        joined = "; ".join(failures)
+        msg = (
+            "None of the patch's coordinates could be placed on the path by "
+            f"{acquisition.code!r}: {joined}"
+        )
+        raise PatchError(msg)
     first = resolved[0]
-    for name, _, distances in resolved[1:]:
+    for name, dim, distances in resolved[1:]:
+        if distances.shape != first[2].shape:
+            msg = (
+                f"The patch's {first[0]!r} and {name!r} coordinates have "
+                f"different lengths ({first[2].size} on {first[1]!r} and "
+                f"{distances.size} on {dim!r}), so at least one of them is "
+                f"not the channel axis of {acquisition.code!r}."
+            )
+            raise PatchError(msg)
         if not _distances_agree(first[2], distances):
+            offset = np.nanmax(np.abs(first[2] - distances))
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates place its "
-                f"channels differently on the path ({first[2][0]} vs "
-                f"{distances[0]} for the first channel). The patch and the "
-                f"map of {acquisition.code!r} disagree; drop the coordinate "
-                "which does not belong to this acquisition."
+                f"channels up to {offset} m apart on the path. The patch and "
+                f"the map of {acquisition.code!r} disagree; drop the "
+                "coordinate which does not belong to this acquisition."
             )
             raise PatchError(msg)
     return first
 
 
+# Two resolutions of the same channel should differ only by float noise,
+# which is absolute: a relative tolerance would widen to a whole channel
+# tens of kilometers down the fiber, where a disagreement matters most.
+_DISTANCE_TOLERANCE = 1e-6
+
+
 def _distances_agree(first, second) -> bool:
     """Return True when two resolutions place every channel together."""
-    if first.shape != second.shape:
-        return False
-    both_nan = np.isnan(first) & np.isnan(second)
-    return bool(np.all(np.isclose(first, second, equal_nan=True) | both_nan))
+    return bool(
+        np.allclose(first, second, rtol=0, atol=_DISTANCE_TOLERANCE, equal_nan=True)
+    )
 
 
 def _fill_from_intervals(distances, intervals, values, kind):
