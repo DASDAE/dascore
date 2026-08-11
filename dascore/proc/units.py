@@ -80,6 +80,8 @@ def convert_units(
 
     Parameters
     ----------
+    patch
+        The patch whose units should be converted.
     data_units
         If provided, new units for the patch data.
     **kwargs

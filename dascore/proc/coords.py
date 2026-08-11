@@ -37,6 +37,8 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
 
     Parameters
     ----------
+    patch
+        The patch whose coordinates should be snapped.
     *coords
         Used to specify the dimension names to convert to CoordRanges. If not
         specified convert all dimensional coordinates.
@@ -74,6 +76,8 @@ def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
 
     Parameters
     ----------
+    patch
+        The patch whose coordinates should be sorted.
     *coords
         Used to specify the coordinates to sort.
     reverse
@@ -671,6 +675,8 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
 
     Parameters
     ----------
+    patch
+        The patch to add dimensions to.
     empty_dims
         Used to pass the name of empty dimensions.
     dim_kwargs

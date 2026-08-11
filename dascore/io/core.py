@@ -1184,6 +1184,13 @@ def scan_to_df(
         Format of the file. If not provided DASCore will try to determine it.
     file_version
         The version string of the file.
+    ext
+        The extensions to map.
+    timestamp
+        Time stamp indicating the minimum mtime.
+    progress
+        The type of progress bar to use. None disables progress bar and
+        "basic" is best for low latency scenarios.
     exclude
         A sequence of column names to exclude in the final dataframe.
 
@@ -1725,6 +1732,8 @@ def write(
 
     Parameters
     ----------
+    patch_or_spool
+        The [`Patch`](`dascore.Patch`) or spool to write to disk.
     path
         The path to the file.
     file_format

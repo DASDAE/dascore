@@ -109,6 +109,8 @@ def pass_filter(
 
     Parameters
     ----------
+    patch
+        The patch to filter
     corners
         The number of corners for the filter. Default is 4.
     zerophase
@@ -164,6 +166,8 @@ def sobel_filter(
 
     Parameters
     ----------
+    patch
+        The patch to filter
     dim
         The dimension along which to apply
     mode

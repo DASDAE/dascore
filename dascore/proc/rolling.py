@@ -265,6 +265,8 @@ def rolling(
 
     Parameters
     ----------
+    patch
+        The patch to apply the rolling function to.
     step
         The window is evaluated at every step result, equivalent to slicing
         at every step. If the step argument is not None, the result will
