@@ -486,6 +486,7 @@ class TestOptionalImport:
         assert str(error) in msg
         assert "pip install" not in msg
         assert exc_info.value.install_name is None
+        assert exc_info.value.__cause__ is error
 
 
 class TestGetInstallName:
