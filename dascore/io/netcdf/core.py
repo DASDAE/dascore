@@ -48,10 +48,26 @@ def _open_xarray_dataset(resource: H5Reader):
 
 
 def _int_for_bool(attrs: dict) -> dict:
-    """Return attrs with booleans as the integer flags netCDF can store."""
-    return {
-        i: int(v) if isinstance(v, bool | np.bool_) else v for i, v in attrs.items()
-    }
+    """Return attrs with booleans as the integer flags netCDF can store.
+
+    Sequences and arrays of booleans hit the same netCDF limit as scalars,
+    so they are converted whole rather than left to abort the write.
+    """
+
+    def convert(value):
+        if isinstance(value, bool | np.bool_):
+            return int(value)
+        if isinstance(value, np.ndarray) and value.dtype == bool:
+            return value.astype(int)
+        if isinstance(value, list | tuple) and any(
+            isinstance(x, bool | np.bool_) for x in value
+        ):
+            return type(value)(
+                int(x) if isinstance(x, bool | np.bool_) else x for x in value
+            )
+        return value
+
+    return {i: convert(v) for i, v in attrs.items()}
 
 
 class NetCDFCFV18(FiberIO):
@@ -124,11 +140,11 @@ class NetCDFCFV18(FiberIO):
         # netCDF has no boolean attribute type, so a bool attr aborts the
         # write. Inventory enrichment routinely sets one
         # (closed_fiber_loop), and CF's own convention for a flag is an
-        # integer, so they are stored as 0/1 rather than dropped. Patch
-        # attrs land on the variable, the file-level ones on the dataset.
+        # integer, so they are stored as 0/1 rather than dropped. Every
+        # patch attr lands on the data variable; the dataset carries only
+        # what is set below.
         array.attrs = _int_for_bool(array.attrs)
         dataset = array.to_dataset()
-        dataset.attrs = _int_for_bool(dataset.attrs)
         dataset.attrs["Conventions"] = f"CF-{self.version}"
         encoding = self._get_write_encoding(**kwargs)
         dataset.to_netcdf(

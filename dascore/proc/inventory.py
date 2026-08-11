@@ -439,11 +439,13 @@ def _get_track_coord(path, track, field, distances):
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]
-    if all(x is None for x in values):
-        # Either the field is misspelled or no interval states it; both
-        # mean the inventory defines nothing here.
+    if all(_is_unset(x) for x in values):
+        # The field is misspelled, or no interval states it, or every
+        # interval leaves it at its empty default. All three mean the
+        # inventory defines nothing here, and on_missing then rules --
+        # rather than handing back a coordinate that is blank throughout.
         return None
-    kinds = {_annotation_kind(x) for x in values if x is not None}
+    kinds = {_annotation_kind(x) for x in values if not _is_unset(x)}
     kind = kinds.pop() if len(kinds) == 1 else "string"
     filled = _fill_from_intervals(distances, intervals, values, kind)
     if units := _TRACK_FIELD_UNITS.get(f"{track}.{field}"):
@@ -454,7 +456,13 @@ def _get_track_coord(path, track, field, distances):
 def _get_geometry_coord(inventory, path, label, distances):
     """Return one coordinate axis of the path geometry, with its units."""
     crs = inventory.coordinate_reference_system
-    index = crs.axis_index(label)
+    # A label this CRS does not define is a name the inventory has no answer
+    # for, which is on_missing's business rather than an error of its own --
+    # a named annotation group the inventory lacks already behaves that way.
+    try:
+        index = crs.axis_index(label)
+    except InvalidInventoryError:
+        return None
     if not path.geometry:
         return None
     coords = path.coordinates_at(distances)
@@ -497,7 +505,12 @@ def _coords_equal(existing, values) -> bool:
     if existing.units != other.units or existing.shape != other.shape:
         return False
     first, second = existing.values, other.values
-    if first.dtype != second.dtype:
+    # Kind, not the exact dtype: a string array's width is fixed by the
+    # longest value it happens to hold, so a patch sliced down to the short
+    # values keeps the wider dtype and would otherwise never match a fresh
+    # projection of itself -- re-enriching a selection would stop being a
+    # refresh and start raising.
+    if first.dtype.kind != second.dtype.kind:
         return False
     equal = first == second
     if np.issubdtype(first.dtype, np.floating):

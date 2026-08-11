@@ -25,7 +25,7 @@ from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
 from dascore.config import config_context, get_config
-from dascore.constants import WARN_LEVELS, WARNING_ACTIONS
+from dascore.constants import WARN_LEVELS, WARNING_ACTIONS, max_lens
 from dascore.exceptions import (
     FilterValueError,
     InvalidInventoryError,
@@ -1377,4 +1377,12 @@ def validate_acquisition_key(value: str) -> str:
         raise InvalidInventoryError(msg)
     for part, name in zip(parts, ACQUISITION_KEY_PARTS, strict=True):
         check_code(part, allow_blank=name == "location")
+    # PatchAttrs bounds the field, so a key too long to store must not read
+    # as merely unknown to the inventory; the two have to agree on legality.
+    if len(value) > max_lens["acquisition_key"]:
+        msg = (
+            f"Invalid acquisition_key {value!r}; it is {len(value)} characters "
+            f"and the limit is {max_lens['acquisition_key']}."
+        )
+        raise InvalidInventoryError(msg)
     return value

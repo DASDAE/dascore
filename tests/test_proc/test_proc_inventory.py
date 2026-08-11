@@ -7,6 +7,7 @@ import warnings
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.inventory import (
@@ -361,10 +362,18 @@ class TestCoords:
         out = patch.enrich(inventory, attrs=False, coords=("latitude", "longitude"))
         assert out.get_coord("longitude").values[0] == -117.0
 
-    def test_unknown_alias_raises(self, patch, inventory):
-        """A label this CRS does not define has no axis to resolve to."""
-        with pytest.raises(InvalidInventoryError, match="not defined by this CRS"):
+    def test_unknown_alias_is_missing(self, patch, inventory):
+        """A label this CRS does not define is a name with no answer.
+
+        It goes through on_missing like any other, rather than raising an
+        inventory error the policy cannot intercept.
+        """
+        with pytest.raises(PatchError, match="defines no 'northing'"):
             patch.enrich(inventory, attrs=False, coords=("northing",))
+        out = patch.enrich(
+            inventory, attrs=False, coords=("northing",), on_missing="skip"
+        )
+        assert "northing" not in set(out.coords.coord_map)
 
     def test_depth_alias(self, patch, inventory):
         """A depth-labeled CRS resolves depth like any other label."""
@@ -1163,3 +1172,72 @@ class TestPartialStringCoverage:
             back.get_coord("coupling.medium").values,
             out.get_coord("coupling.medium").values,
         )
+
+
+class TestEmptyIsUnambiguous:
+    """Absence has one spelling, so nothing legitimate can wear it."""
+
+    def test_empty_annotation_value_rejected(self):
+        """A group saying nothing would read as an uncovered channel."""
+        with pytest.raises(ValidationError, match="may not be the empty string"):
+            OpticalPathAnnotation(
+                start_distance=0.0, end_distance=10.0, group="zone", value=""
+            )
+
+    def test_empty_key_is_not_resolvable(self, inventory):
+        """The empty key is legal on a patch and names no entry."""
+        with pytest.raises(InvalidInventoryError, match="empty acquisition_key"):
+            inventory.resolve("")
+
+
+class TestThirdReviewFindings:
+    """Defects found reviewing the post-merge fixes."""
+
+    def test_re_enriching_a_selection_is_still_a_refresh(self, patch, inventory):
+        """A string coordinate's width is fixed by the longest value present.
+
+        A patch sliced down to the short values keeps the wider dtype, so
+        comparing dtypes exactly made a fresh projection of the same values
+        look like a disagreement.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        coupling = path.coupling[0]
+        inv = _replace_path(
+            inventory,
+            coupling=(
+                coupling.new(end_distance=200.0),
+                coupling.new(
+                    start_distance=200.0,
+                    end_distance=300.0,
+                    medium="clay_and_gravel_backfill",
+                ),
+            ),
+        )
+        full = patch.enrich(inv, attrs=False, coords=("coupling.medium",))
+        narrow = full.select(distance=(0, 40), samples=True)
+        out = narrow.enrich(inv, attrs=False, coords=("coupling.medium",))
+        assert set(out.get_coord("coupling.medium").values) == {"soil"}
+
+    def test_a_field_no_interval_records_is_missing(self, patch, inventory):
+        """Every interval leaving a field at its empty default defines nothing.
+
+        Handing back a blank coordinate would say the inventory had an
+        answer, and would slip past on_missing entirely.
+        """
+        with pytest.raises(PatchError, match=r"defines no 'coupling\.attachment'"):
+            patch.enrich(inventory, attrs=False, coords=("coupling.attachment",))
+
+    def test_overlong_key_is_malformed_not_unknown(self, patch, inventory):
+        """PatchAttrs bounds the field, so the validator must bound it too.
+
+        Otherwise a key too long to store reads as merely unknown to the
+        inventory, which on_unresolved is allowed to wave through.
+        """
+        long_key = "DAS." + "A" * 70 + "..RAW"
+        with pytest.raises(InvalidInventoryError, match="characters"):
+            inventory.resolve(long_key)
+        spool = dc.spool(patch.update_attrs(acquisition_key="")).enrich(
+            inventory, acquisition_key=long_key, on_unresolved="ignore"
+        )
+        with pytest.raises(InvalidInventoryError, match="characters"):
+            spool[0]

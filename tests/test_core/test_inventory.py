@@ -1657,31 +1657,18 @@ class TestConstraintsMatchDescriptions:
 class TestSerializationIsLossless:
     """Pruning empty values must not change what reloads."""
 
-    def test_empty_annotation_value_survives(self):
-        """A pruned empty value would reload as a boolean flag."""
-        pytest.importorskip("yaml")
-        path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=50.0, group="rock", value=""
-                ),
-                inv.OpticalPathAnnotation(
-                    start_distance=50.0, end_distance=100.0, group="rock", value="shale"
-                ),
-            ),
-        )
-        array = inv.FiberArray(code="L001", optical_paths=(path,))
-        inventory = inv.Inventory(
-            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
-        ).check()
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
-        values = [
-            x.value
-            for x in loaded.networks[0].fiber_arrays[0].optical_paths[0].annotations
-        ]
-        assert values == ["", "shale"]
-        assert loaded.check() is loaded
+    def test_empty_annotation_value_is_rejected(self):
+        """An empty value would have to survive serialization to mean anything.
+
+        It used to be legal, and this guarded it against being pruned and
+        reloading as a boolean flag. It is now rejected outright: it states
+        nothing, and a string coordinate spells an uncovered channel with
+        the empty string, so a covered one could not be told apart.
+        """
+        with pytest.raises(ValidationError, match="may not be the empty string"):
+            inv.OpticalPathAnnotation(
+                start_distance=0.0, end_distance=50.0, group="rock", value=""
+            )
 
 
 class TestLoadingValidates:

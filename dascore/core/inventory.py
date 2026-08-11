@@ -663,6 +663,22 @@ class OpticalPathAnnotation(_IntervalModel):
         default=True, description="Value of the variable over this interval."
     )
 
+    @field_validator("value")
+    @classmethod
+    def _reject_empty_string(cls, value):
+        """An annotation whose value is empty states nothing.
+
+        It would also be indistinguishable from an uncovered channel, since
+        a string coordinate spells absence as the empty string.
+        """
+        if isinstance(value, str) and not value:
+            msg = (
+                "An annotation value may not be the empty string; it would "
+                "state nothing and would read as an uncovered channel."
+            )
+            raise ValueError(msg)
+        return value
+
 
 # The coordinates a DistanceMap may be written in, in preference order.
 DISTANCE_MAP_AXES = ("channel", "instrument_distance")
@@ -1852,10 +1868,15 @@ class Inventory(InventoryModel):
         """
         # The same validator PatchAttrs uses, so a key legal in one is legal
         # in the other and a malformed one is told apart from an unknown one.
+        # It accepts the empty string, which is how a patch spells "no
+        # identity" -- legal to carry, but nothing to resolve.
         try:
             acquisition_key = validate_acquisition_key(acquisition_key)
         except ValueError as error:
             raise InvalidInventoryError(str(error)) from error
+        if not acquisition_key:
+            msg = "Cannot resolve an empty acquisition_key; it names no entry."
+            raise InvalidInventoryError(msg)
         net_code, array_code, location, acq_code = acquisition_key.split(".")
 
         def exactly_one(matches, kind):
