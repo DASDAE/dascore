@@ -100,7 +100,7 @@ class TestScan:
         "distance_max",
         "distance_step",
         "tag",
-        "data_source_id",
+        "acquisition_key",
     )
 
     @staticmethod

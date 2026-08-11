@@ -31,7 +31,7 @@ from dascore.io.index.schema import (
     SourceRow,
 )
 from dascore.units import get_quantity
-from dascore.utils.misc import validate_data_source_id
+from dascore.utils.misc import validate_acquisition_key
 from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.pd import iter_rows
 from dascore.utils.time import to_datetime64, to_int, to_timedelta64
@@ -295,12 +295,12 @@ def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
             warnings.warn(msg, UserWarning, stacklevel=2)
         if status != "ok":
             continue
-        if name == "data_source_id":
+        if name == "acquisition_key":
             # The patch validates this on the way in, so a path which
             # cannot produce a legal id would index and then fail at every
             # load; refuse it here, where the fix is to rename a directory.
             try:
-                validate_data_source_id(value)
+                validate_acquisition_key(value)
             except InvalidInventoryError as error:
                 if warn:
                     msg = (

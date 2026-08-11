@@ -566,7 +566,7 @@ def get_patch_names(
     # breaks get_type_hints and the API doc renderer.
     patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool | Iterable[dc.Patch],
     prefix="DAS",
-    attrs=("data_source_id", "tag"),
+    attrs=("acquisition_key", "tag"),
     coords=("time",),
     sep="__",
     strip_extension=True,
@@ -643,7 +643,7 @@ def get_patch_names(
         ser = path_ser.astype(str)
         split_ser = ser.str.split("/")
         if strip_extension:
-            # Only the extension: a data_source_id puts dots in the name
+            # Only the extension: a acquisition_key puts dots in the name
             # itself, and splitting on the first one would collide every
             # patch of one source onto a single truncated name.
             file_names = [x[-1].rsplit(".", 1)[0] for x in split_ser]

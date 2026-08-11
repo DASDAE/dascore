@@ -115,7 +115,7 @@ max_lens = {
     "file_format": 15,
     "tag": 100,
     # Four codes of at most 12 characters plus separators, with headroom.
-    "data_source_id": 64,
+    "acquisition_key": 64,
     "dims": 40,
     "file_version": 9,
     "data_type": 32,
@@ -158,7 +158,7 @@ SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
-PATCH_MERGE_ATTRS = ("data_source_id", "dims", "data_type", "data_category")
+PATCH_MERGE_ATTRS = ("acquisition_key", "dims", "data_type", "data_category")
 
 # Storage provenance: where a patch's bytes live rather than where its
 # signal came from. The spool owns these and no reader may put them in
@@ -218,7 +218,7 @@ same units as the specified dimension, or have units attached.
 
 attr_conflict_description = """
 Indicates how to handle conflicts in attributes other than those
-indicated by dim (eg tag, history, data_source_id, etc). If "drop" simply
+indicated by dim (eg tag, history, acquisition_key, etc). If "drop" simply
 drop conflicting attributes, or attributes not shared by all models.
 If "raise" raise an
 [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when

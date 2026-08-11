@@ -44,7 +44,7 @@ p1 = dc.get_example_patch(time_min=t0)
 time = p1.get_coord("time")
 p2 = dc.get_example_patch(time_min=time.max() + time.step)
 source = "XX2.R2D1..RAW"
-p3, p4 = p1.update_attrs(data_source_id=source), p2.update_attrs(data_source_id=source)
+p3, p4 = p1.update_attrs(acquisition_key=source), p2.update_attrs(acquisition_key=source)
 
 # Two data sources, each with two contiguous patches: two outputs, no error.
 merged = dc.spool([p1, p2, p3, p4]).chunk(time=None)

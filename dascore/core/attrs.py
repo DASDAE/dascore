@@ -21,7 +21,7 @@ from dascore.constants import (
 )
 from dascore.utils.misc import (
     to_str,
-    validate_data_source_id,
+    validate_acquisition_key,
 )
 from dascore.utils.models import DascoreBaseModel, UnitQuantity
 
@@ -69,9 +69,9 @@ class PatchAttrs(DascoreBaseModel):
     data_units: UnitQuantity | None = Field(
         default=None, description="The units of the data measurements"
     )
-    data_source_id: Annotated[str, AfterValidator(validate_data_source_id)] = Field(
+    acquisition_key: Annotated[str, AfterValidator(validate_acquisition_key)] = Field(
         default="",
-        max_length=max_lens["data_source_id"],
+        max_length=max_lens["acquisition_key"],
         description=(
             "Inventory identity of the data source, spelled "
             "network.fiber_array.location.acquisition."

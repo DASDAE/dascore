@@ -72,30 +72,30 @@ class TestResolution:
 
     def test_explicit_id(self, patch, inventory):
         """A patch without an id can be told which entry it is."""
-        bare = patch.update_attrs(data_source_id="")
-        out = bare.enrich(inventory, data_source_id="DAS.R2D1..RAW", coords=False)
+        bare = patch.update_attrs(acquisition_key="")
+        out = bare.enrich(inventory, acquisition_key="DAS.R2D1..RAW", coords=False)
         assert out.attrs.gauge_length == 10.0
 
     def test_no_id_raises(self, patch, inventory):
         """A patch naming no entry cannot be resolved."""
-        bare = patch.update_attrs(data_source_id="")
-        with pytest.raises(PatchError, match="no data_source_id"):
+        bare = patch.update_attrs(acquisition_key="")
+        with pytest.raises(PatchError, match="no acquisition_key"):
             bare.enrich(inventory)
 
     def test_disagreeing_id_raises(self, patch, inventory):
         """Two different ids are two different data sources."""
         with pytest.raises(PatchError, match="disagree"):
-            patch.enrich(inventory, data_source_id="DAS.R2D1..OTHER")
+            patch.enrich(inventory, acquisition_key="DAS.R2D1..OTHER")
 
     def test_agreeing_id_is_allowed(self, patch, inventory):
         """Repeating the patch's own id is not a disagreement."""
-        out = patch.enrich(inventory, data_source_id="DAS.R2D1..RAW", coords=False)
+        out = patch.enrich(inventory, acquisition_key="DAS.R2D1..RAW", coords=False)
         assert out.attrs.gauge_length == 10.0
 
     def test_unknown_id_raises(self, patch, inventory):
         """An id the inventory does not contain resolves to nothing."""
         with pytest.raises(UnresolvedPatchError, match="resolves to 0"):
-            patch.update_attrs(data_source_id="XX.R2D1..RAW").enrich(inventory)
+            patch.update_attrs(acquisition_key="XX.R2D1..RAW").enrich(inventory)
 
     def test_time_with_time_axis_raises(self, patch, inventory):
         """A patch with a real time axis already says when it was recorded."""
@@ -193,9 +193,9 @@ class TestAttrs:
         assert dict(out.attrs.drop("history")) == dict(patch.attrs.drop("history"))
 
     def test_identity_and_native_untouched(self, patch, inventory):
-        """data_source_id and tag belong to the patch, not the inventory."""
+        """acquisition_key and tag belong to the patch, not the inventory."""
         out = patch.enrich(inventory, coords=False)
-        assert out.attrs.data_source_id == patch.attrs.data_source_id
+        assert out.attrs.acquisition_key == patch.attrs.acquisition_key
         assert out.attrs.tag == patch.attrs.tag
 
 
@@ -462,7 +462,7 @@ class TestExampleIsUsable:
         """It is checked, and its patch resolves against it."""
         patch, inventory = inventory_patch_pair()
         assert isinstance(inventory, Inventory)
-        context = inventory.resolve(patch.attrs.data_source_id, time=None)
+        context = inventory.resolve(patch.attrs.acquisition_key, time=None)
         assert isinstance(context.acquisition, Acquisition)
         assert isinstance(context.optical_path, OpticalPath)
         assert isinstance(context.fiber_array, FiberArray)
@@ -600,11 +600,23 @@ class TestOnUnresolved:
 
     def test_warns_and_leaves_the_patch(self, mixed, inventory):
         """Enriching decides metadata, so the patch itself still comes out."""
-        with pytest.warns(UserWarning, match="does not describe the patch"):
+        with pytest.warns(UserWarning, match="does not describe every patch"):
             out = list(mixed.enrich(inventory))
         assert len(out) == len(mixed)
         assert out[0].attrs.gauge_length == 10.0
         assert "gauge_length" not in dict(out[1].attrs)
+
+    def test_warning_does_not_scale_with_the_spool(self, patch, inventory):
+        """The default exists for partly-covered archives, so it must not
+        emit one warning per distinct key on exactly those.
+        """
+        strangers = [
+            patch.update_attrs(acquisition_key=f"XX.A{i}..RAW") for i in range(25)
+        ]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            list(dc.spool(strangers).enrich(inventory))
+        assert len(caught) == 1
 
     def test_ignore_is_silent(self, mixed, inventory):
         """The same, without saying so."""
@@ -615,13 +627,13 @@ class TestOnUnresolved:
 
     def test_raise_fails(self, mixed, inventory):
         """A spool which must be fully described can say so."""
-        with pytest.raises(UnresolvedPatchError, match="no data_source_id"):
+        with pytest.raises(UnresolvedPatchError, match="no acquisition_key"):
             list(mixed.enrich(inventory, on_unresolved="raise"))
 
     def test_unknown_id_is_unresolved(self, patch, inventory):
         """Naming an entry the inventory lacks is not being described either."""
-        stranger = patch.update_attrs(data_source_id="XX.R2D1..RAW")
-        with pytest.warns(UserWarning, match="does not describe the patch"):
+        stranger = patch.update_attrs(acquisition_key="XX.R2D1..RAW")
+        with pytest.warns(UserWarning, match="does not describe every patch"):
             out = dc.spool(stranger).enrich(inventory)[0]
         assert "gauge_length" not in dict(out.attrs)
 
@@ -646,9 +658,9 @@ class TestOnUnresolved:
 
     def test_malformed_explicit_id_is_not_swallowed(self, patch, inventory):
         """A caller getting the argument wrong is not the inventory's silence."""
-        bare = dc.spool(patch.update_attrs(data_source_id=""))
-        spool = bare.enrich(inventory, data_source_id="broken", on_unresolved="ignore")
-        with pytest.raises(ValueError, match="Invalid data_source_id"):
+        bare = dc.spool(patch.update_attrs(acquisition_key=""))
+        spool = bare.enrich(inventory, acquisition_key="broken", on_unresolved="ignore")
+        with pytest.raises(ValueError, match="Invalid acquisition_key"):
             spool[0]
 
     def test_bad_policy_raises(self, patch, inventory):
@@ -1046,6 +1058,28 @@ class TestSecondReviewFindings:
         """A spool and its pickle are the same spool, inventory and all."""
         spool = dc.spool(patch).enrich(inventory)
         assert pickle.loads(pickle.dumps(spool)) == spool
+
+    def test_update_coords_stays_safe_to_bypass(self):
+        """Enrich calls update_coords.raw_function to skip its history entry.
+
+        That is only legal while the wrapper does nothing else: any
+        requirement or data_type added to update_coords would be silently
+        skipped for enriched patches.
+        """
+        from dascore.proc.coords import update_coords  # noqa: PLC0415
+
+        cells = dict(
+            zip(
+                update_coords.__code__.co_freevars,
+                [x.cell_contents for x in update_coords.__closure__],
+                strict=True,
+            )
+        )
+        for name in ("required_dims", "required_coords", "required_attrs", "data_type"):
+            assert cells[name] is None, (
+                f"update_coords now sets {name!r}, which Patch.enrich would "
+                "silently skip by calling raw_function."
+            )
 
     def test_enrich_writes_one_history_entry(self, patch, inventory):
         """The operation is enrich; how it updates coords is its own business."""

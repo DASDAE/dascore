@@ -44,7 +44,7 @@ _ROOT_ATTRS = {
     "GaugeLengthUnit": "gauge_length_units",
     "GaugeLengthUnits": "gauge_length_units",
     "GaugeLength.uom": "gauge_length_units",
-    "AcquisitionId": "experiment_id",
+    "AcquisitionId": "acquisition_id",
     "FacilityId": "facility_id",
     "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
@@ -348,7 +348,7 @@ def _get_measure(attrs, name):
 def _get_write_metadata(attrs):
     """Return normalized and validated metadata strings for writing."""
     out = {
-        "AcquisitionId": str(attrs.get("experiment_id") or uuid4()),
+        "AcquisitionId": str(attrs.get("acquisition_id") or uuid4()),
         "FacilityId": attrs.get("facility_id") or "UNKNOWN",
         "ServiceCompanyName": attrs.get("service_company_name") or "UNKNOWN",
         "RawDataUnit": get_quantity_str(attrs.data_units) or "UNKNOWN",

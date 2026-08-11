@@ -55,7 +55,7 @@ def random_patch(
     distance_min=0,
     distance_step=1,
     dist_array=None,
-    data_source_id="",
+    acquisition_key="",
     tag="random",
     shape=(300, 2_000),
 ):
@@ -78,7 +78,7 @@ def random_patch(
     dist_array
         If not None, an array of distance values and `distance_min` and
         `distance_step` will not be used.
-    data_source_id
+    acquisition_key
         The inventory identity of the data source
         (network.fiber_array.location.acquisition).
     tag
@@ -95,7 +95,7 @@ def random_patch(
     time_step = to_timedelta64(time_step)
     attrs = dict(
         category="DAS",
-        data_source_id=data_source_id,
+        acquisition_key=acquisition_key,
         tag=tag,
     )
     if time_array is None:
@@ -519,7 +519,7 @@ def delta_patch(
         coords = {"distance": dist_coord, "time": time_coord}
         attrs = dict(
             category="DAS",
-            data_source_id="",
+            acquisition_key="",
             tag="delta",
         )
 
@@ -614,7 +614,7 @@ def diverse_spool():
     There are various gaps, tags, data source ids, etc.
     """
     spool_no_gaps = random_spool()
-    spool_no_gaps_different_source = random_spool(data_source_id="DAS2.R2D1..RAW")
+    spool_no_gaps_different_source = random_spool(acquisition_key="DAS2.R2D1..RAW")
     spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), tag="big_gaps")
     spool_overlaps = random_spool(time_gap=-np.timedelta64(10, "ms"), tag="overlaps")
     time_step = spool_big_gaps[0].coords.step("time")
@@ -774,7 +774,7 @@ def inventory_patch_pair():
     geometry, coupling, and annotations project onto the patch. Used by the
     enrich documentation and tests.
     """
-    patch = random_patch(data_source_id="DAS.R2D1..RAW")
+    patch = random_patch(acquisition_key="DAS.R2D1..RAW")
     distance = patch.get_coord("distance")
     # The interrogator's own axis starts at its channel 0; the path axis
     # starts 100 m later, at the far end of the lead-in cable.

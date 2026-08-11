@@ -157,7 +157,8 @@ VENDOR_ATTRS = frozenset(
         "event_latitude",
         "event_longitude",
         "event_time",
-        "experiment_id",
+        "acquisition_id",
+        "experiment",
         "facility_id",
         "fiber_break",
         "fiber_from",
@@ -735,7 +736,7 @@ class TestIntegration:
             "data_type",
             "data_units",
             "tag",
-            "data_source_id",
+            "acquisition_key",
         )
         with skip_missing():
             scan_summary_list = [_scan_summary(x) for x in dc.scan(data_file_path)]

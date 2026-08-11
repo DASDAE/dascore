@@ -73,10 +73,10 @@ class TestMemoryUnion:
         sp1 = dc.get_example_spool("random_das")
         sp2 = dc.get_example_spool("diverse_das")
         combined = sp1 + sp2
-        selected = combined.select(data_source_id="DAS2.*")
+        selected = combined.select(acquisition_key="DAS2.*")
         assert len(selected)
         for patch in selected:
-            assert patch.attrs.data_source_id == "DAS2.R2D1..RAW"
+            assert patch.attrs.acquisition_key == "DAS2.R2D1..RAW"
 
     def test_non_spool_add(self):
         """Adding a non-spool returns NotImplemented semantics."""
@@ -99,7 +99,7 @@ class TestMemoryUnion:
     def test_selection_carries_by_membership(self):
         """A selected input contributes only its selected rows."""
         sp2 = dc.get_example_spool("diverse_das")
-        sub = sp2.select(data_source_id="DAS2.*")
+        sub = sp2.select(acquisition_key="DAS2.*")
         combined = dc.get_example_spool("random_das") + sub
         assert len(combined) == len(dc.get_example_spool("random_das")) + len(sub)
 

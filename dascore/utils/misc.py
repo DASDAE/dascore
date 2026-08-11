@@ -1331,8 +1331,8 @@ def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
 
 _CODE_RE = re.compile(r"[A-Za-z0-9-]+")
 _LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
-# The tokens of a data_source_id, in order. Only location may be blank.
-DATA_SOURCE_ID_PARTS = ("network", "fiber_array", "location", "acquisition")
+# The tokens of a acquisition_key, in order. Only location may be blank.
+ACQUISITION_KEY_PARTS = ("network", "fiber_array", "location", "acquisition")
 
 
 def check_code(value: str, allow_blank: bool = False) -> str:
@@ -1354,7 +1354,7 @@ def check_code(value: str, allow_blank: bool = False) -> str:
     return value
 
 
-def validate_data_source_id(value: str) -> str:
+def validate_acquisition_key(value: str) -> str:
     """
     Validate a composite data source id.
 
@@ -1368,13 +1368,13 @@ def validate_data_source_id(value: str) -> str:
     if not value:
         return value
     parts = value.split(".")
-    if len(parts) != len(DATA_SOURCE_ID_PARTS):
-        expected = ".".join(DATA_SOURCE_ID_PARTS)
+    if len(parts) != len(ACQUISITION_KEY_PARTS):
+        expected = ".".join(ACQUISITION_KEY_PARTS)
         msg = (
-            f"Invalid data_source_id {value!r}; got {len(parts)} dot separated "
-            f"codes but expected {len(DATA_SOURCE_ID_PARTS)} ({expected})."
+            f"Invalid acquisition_key {value!r}; got {len(parts)} dot separated "
+            f"codes but expected {len(ACQUISITION_KEY_PARTS)} ({expected})."
         )
         raise InvalidInventoryError(msg)
-    for part, name in zip(parts, DATA_SOURCE_ID_PARTS, strict=True):
+    for part, name in zip(parts, ACQUISITION_KEY_PARTS, strict=True):
         check_code(part, allow_blank=name == "location")
     return value

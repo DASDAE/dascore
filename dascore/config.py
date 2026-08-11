@@ -68,12 +68,12 @@ class DascoreConfig(BaseModel):
     )
     groupby_attrs: tuple[str, ...] = Field(
         default=(
-            "data_source_id",
+            "acquisition_key",
             "data_type",
             "data_category",
             "tag",
             # Legacy: these are not patch attrs any more, but archives
-            # predating data_source_id partition by them and a name
+            # predating acquisition_key partition by them and a name
             # missing from a spool is ignored. Grouping too finely only
             # leaves patches unmerged; too coarsely merges patches which
             # describe different places.
@@ -86,7 +86,7 @@ class DascoreConfig(BaseModel):
             "these are never combined (no error); the per-call `group` "
             "argument overrides this default. Names missing from a spool "
             "are ignored, which is why the legacy `network` and `station` "
-            "can stay: archives which predate `data_source_id` partition "
+            "can stay: archives which predate `acquisition_key` partition "
             "by them."
         ),
     )

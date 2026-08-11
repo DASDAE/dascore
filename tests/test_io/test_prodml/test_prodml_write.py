@@ -27,7 +27,7 @@ def prodml_patch():
     )
     data = np.arange(np.prod(patch.shape), dtype=np.int16).reshape(patch.shape)
     return patch.new(data=data).update_attrs(
-        experiment_id="27addb2c-e435-4cd5-81f1-080ed7cc5fd1",
+        acquisition_id="27addb2c-e435-4cd5-81f1-080ed7cc5fd1",
         facility_id="facility-a",
         service_company_name="service-a",
         data_type="strain_rate",
@@ -143,7 +143,7 @@ class TestProdMLWriteLayout:
             assert facility.dtype.kind == "S"
             assert unbyte(facility[0]) == prodml_patch.attrs.facility_id
             assert unbyte(acquisition.attrs["AcquisitionId"]) == (
-                prodml_patch.attrs.experiment_id
+                prodml_patch.attrs.acquisition_id
             )
             assert unbyte(raw.attrs["RawDataUnit"]) == get_quantity_str(
                 prodml_patch.attrs.data_units
@@ -231,7 +231,7 @@ class TestProdMLWriteRoundTrip:
     def test_missing_metadata_uses_defaults(self, prodml_patch, tmp_path):
         """Required metadata should receive deterministic compatibility defaults."""
         attrs = prodml_patch.attrs.drop("facility_id", "service_company_name").update(
-            experiment_id="", data_units=None
+            acquisition_id="", data_units=None
         )
         patch = prodml_patch.new(attrs=attrs)
         path = dc.write(patch, tmp_path / "defaults.h5", "PRODML")
@@ -243,14 +243,14 @@ class TestProdMLWriteRoundTrip:
             assert str(UUID(unbyte(acquisition.attrs["AcquisitionId"])))
         assert dc.read(path)[0].attrs.data_units is None
 
-    def test_experiment_id_is_preserved(self, prodml_patch, tmp_path):
+    def test_acquisition_id_is_preserved(self, prodml_patch, tmp_path):
         """Arbitrary experiment identifiers should be stored unchanged."""
-        patch = prodml_patch.update_attrs(experiment_id="run-001")
-        path = dc.write(patch, tmp_path / "experiment_id.h5", "PRODML")
+        patch = prodml_patch.update_attrs(acquisition_id="run-001")
+        path = dc.write(patch, tmp_path / "acquisition_id.h5", "PRODML")
         with h5py.File(path, "r") as file:
             value = file["Acquisition"].attrs["AcquisitionId"]
             assert unbyte(value) == "run-001"
-        assert dc.read(path)[0].attrs.experiment_id == "run-001"
+        assert dc.read(path)[0].attrs.acquisition_id == "run-001"
 
     def test_single_distance_sample(self, prodml_patch, tmp_path):
         """A one-locus Patch remains representable when its step is defined."""

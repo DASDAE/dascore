@@ -419,7 +419,7 @@ class TestEpochs:
 
 
 class TestResolution:
-    """data_source_id + time resolution."""
+    """acquisition_key + time resolution."""
 
     def test_happy_path(self):
         """Happy path."""

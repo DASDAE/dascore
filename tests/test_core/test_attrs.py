@@ -13,7 +13,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Interrogator
 from dascore.exceptions import InvalidInventoryError
-from dascore.utils.misc import validate_data_source_id
+from dascore.utils.misc import validate_acquisition_key
 
 
 @pytest.fixture(scope="class")
@@ -274,17 +274,17 @@ class TestDataSourceId:
     @pytest.mark.parametrize("value", valid)
     def test_valid(self, value):
         """Four code tokens, of which only the location may be blank."""
-        assert PatchAttrs(data_source_id=value).data_source_id == value
+        assert PatchAttrs(acquisition_key=value).acquisition_key == value
 
     @pytest.mark.parametrize("value", invalid)
     def test_invalid(self, value):
         """Wrong token count or illegal characters are rejected."""
         with pytest.raises(ValidationError):
-            PatchAttrs(data_source_id=value)
+            PatchAttrs(acquisition_key=value)
 
     def test_unset_is_empty(self):
         """An empty id means the patch has no inventory identity."""
-        assert PatchAttrs().data_source_id == ""
+        assert PatchAttrs().acquisition_key == ""
 
     @pytest.mark.parametrize("value", invalid)
     def test_inventory_agrees(self, value):
@@ -295,16 +295,16 @@ class TestDataSourceId:
         header cannot be illegal in the inventory naming the same source.
         """
         with pytest.raises(InvalidInventoryError):
-            validate_data_source_id(value)
+            validate_acquisition_key(value)
 
     @pytest.mark.parametrize("value", valid)
     def test_inventory_agrees_valid(self, value):
         """The shared validator accepts what the attr accepts."""
-        assert validate_data_source_id(value) == value
+        assert validate_acquisition_key(value) == value
 
     def test_removed_names_become_extras(self):
         """
-        The names data_source_id replaced are ordinary extras now.
+        The names acquisition_key replaced are ordinary extras now.
 
         They are no longer part of the model, so nothing in DASCore reads
         them, but a patch which sets one keeps it like any other extra.

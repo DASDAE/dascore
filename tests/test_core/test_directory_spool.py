@@ -429,7 +429,7 @@ class TestSelect:
         duration = contents["time_max"] - contents["time_min"]
         new_max = (contents["time_min"] + duration.mean() / 2).median()
         out = (
-            spool.select(data_source_id="DAS2.*")
+            spool.select(acquisition_key="DAS2.*")
             .select(tag="ran*")
             .select(time=(None, new_max))
         )
@@ -437,12 +437,12 @@ class TestSelect:
         # first check content dataframe
         new_content = out.get_contents()
         assert len(new_content) == len(out)
-        assert (new_content["data_source_id"] == "DAS2.R2D1..RAW").all()
+        assert (new_content["acquisition_key"] == "DAS2.R2D1..RAW").all()
         assert (new_content["tag"].str.startswith("ran")).all()
         assert (new_content["time_max"] <= new_max).all()
         # then check patches
         for patch in out:
-            assert patch.attrs["data_source_id"] == "DAS2.R2D1..RAW"
+            assert patch.attrs["acquisition_key"] == "DAS2.R2D1..RAW"
             assert patch.attrs["tag"].startswith("ran")
             assert patch.get_coord("time").max() <= new_max
         # ensure raises when selecting off the end of the spool
@@ -572,7 +572,7 @@ class TestGetContents:
             "source_format",
             "source_version",
             "dims",
-            "data_source_id",
+            "acquisition_key",
         }
         assert set(df.columns).issuperset(expected)
 
@@ -642,18 +642,18 @@ class TestFileBackedSpoolIntegrations:
 
     def test_one(self, diverse_spool_directory):
         """Small integration test with diverse spool."""
-        data_source_id = "DAS2.R2D1..RAW"
+        acquisition_key = "DAS2.R2D1..RAW"
         endtime = np.datetime64("2022-01-01")
         duration = 3
         spool = (
             dc.spool(diverse_spool_directory)
-            .select(data_source_id=data_source_id)  # sub-select one data source
+            .select(acquisition_key=acquisition_key)  # sub-select one data source
             .select(time=(None, endtime))  # unselect anything after 2022
             .chunk(time=duration, overlap=0.5)  # change the chunking of the patches
         )
         for patch in spool:
             assert isinstance(patch, dc.Patch)
-            assert patch.attrs["data_source_id"] == data_source_id
+            assert patch.attrs["acquisition_key"] == acquisition_key
             time_coord = patch.get_coord("time")
             assert time_coord.max() <= endtime
             patch_duration = (time_coord.max() - time_coord.min()) / ONE_SECOND

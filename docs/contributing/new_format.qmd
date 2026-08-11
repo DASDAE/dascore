@@ -169,7 +169,7 @@ For some formats, a numeric patch index is enough if patch ordering is stable. F
 Every attr a reader emits is one of four kinds, and the kind decides both its
 name and who may change it later.
 
-1. **`data_source_id`** — the inventory identity of the data source, spelled
+1. **`acquisition_key`** — the inventory identity of the data source, spelled
    `network.fiber_array.location.acquisition`. Set it only if the file really
    carries those codes; most archives supply it through the directory layout
    instead.
@@ -191,6 +191,21 @@ name and who may change it later.
    listed in the `VENDOR_ATTRS` set in `tests/test_io/test_common_io.py`,
    which is where a reviewer checks that the value is not one of the facts
    above wearing a vendor's name.
+
+Stay as close to the file's own spelling as the rules above allow. A value
+that is one of the facts in (2) has to take the canonical name, because two
+spellings of one fact cannot be reconciled downstream; everything else keeps
+the name the format gave it, lightly normalized to `snake_case`. Renaming a
+vendor key to something that merely sounds more standard is how a value ends
+up filed under a name that means something else — ProdML's `AcquisitionId`
+spent a release as `acquisition_id` meaning the DASDAE identity, and
+OptoDAS's `experiment` spent one as `experiment_id`.
+
+Two suffixes carry meaning, informally but consistently. A name ending in
+`_id` should be free to hold an opaque token — usually a UUID — so nothing
+which is structurally *not* a UUID should take one. A name ending in `_key`
+is a structured lookup key, resolved against something else: `acquisition_key`
+is the only one so far.
 
 Storage provenance (`source_path`, `source_format`, `source_version`) is the
 spool's, not the patch's: it says where the bytes live rather than where the

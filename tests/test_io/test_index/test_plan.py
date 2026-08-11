@@ -118,14 +118,14 @@ class TestMergePlan:
         assert len(plan.outputs) > 1
         # every output's members share that output's group attr values
         merged = plan.members.merge(
-            diverse_flat[["_patch_id", "data_source_id", "tag"]],
+            diverse_flat[["_patch_id", "acquisition_key", "tag"]],
             on="_patch_id",
         ).merge(
-            plan.outputs[["output_id", "data_source_id", "tag"]],
+            plan.outputs[["output_id", "acquisition_key", "tag"]],
             on="output_id",
             suffixes=("_src", "_out"),
         )
-        for col in ("data_source_id", "tag"):
+        for col in ("acquisition_key", "tag"):
             src, out = merged[f"{col}_src"], merged[f"{col}_out"]
             equal = (src == out) | (src.isnull() & out.isnull())
             assert equal.all()
@@ -273,26 +273,26 @@ class TestGroupParameter:
         p1 = dc.get_example_patch(time_min=t0)
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
-        p3 = p1.update_attrs(data_source_id="XX2.R2D1..RAW")
-        p4 = p2.update_attrs(data_source_id="XX2.R2D1..RAW")
+        p3 = p1.update_attrs(acquisition_key="XX2.R2D1..RAW")
+        p4 = p2.update_attrs(acquisition_key="XX2.R2D1..RAW")
         return _flat([p1, p2, p3, p4])
 
     def test_source_partitions(self, two_source_flat):
         """Different data sources produce separate outputs, no error."""
         plan = build_chunk_plan(two_source_flat, time=None)
         assert len(plan.outputs) == 2
-        expected = set(two_source_flat["data_source_id"])
-        assert set(plan.outputs["data_source_id"]) == expected
+        expected = set(two_source_flat["acquisition_key"])
+        assert set(plan.outputs["acquisition_key"]) == expected
 
     def test_group_override(self, two_source_flat):
-        """An explicit empty group means data_source_id conflicts raise."""
-        with pytest.raises(CoordMergeError, match="data_source_id"):
+        """An explicit empty group means acquisition_key conflicts raise."""
+        with pytest.raises(CoordMergeError, match="acquisition_key"):
             build_chunk_plan(two_source_flat, time=None, group=())
 
     def test_config_group(self, two_source_flat):
         """Config groupby_attrs drives the default partitioning."""
         with dc.config_context(groupby_attrs=("tag",)):
-            with pytest.raises(CoordMergeError, match="data_source_id"):
+            with pytest.raises(CoordMergeError, match="acquisition_key"):
                 build_chunk_plan(two_source_flat, time=None)
 
 

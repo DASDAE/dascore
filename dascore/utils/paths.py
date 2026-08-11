@@ -99,7 +99,7 @@ def parse_hive_path_attrs(rel_posix: str) -> dict[str, str]:
 
     Every path segment participates, including the file name, whose
     extension is first stripped. A segment holds one pair (Hive layout,
-    ``data_source_id=XX.R2D1..RAW/``) or several separated by ``__`` —
+    ``acquisition_key=XX.R2D1..RAW/``) or several separated by ``__`` —
     the same separator DASCore's default patch names use — as in
     ``cable=n__tag=raw.h5``.
     Keys and values are percent-decoded after splitting, so encoded
@@ -112,13 +112,13 @@ def parse_hive_path_attrs(rel_posix: str) -> dict[str, str]:
     ----------
     rel_posix
         A POSIX-style path relative to the spool root (as stored in the
-        index), e.g. ``"data_source_id=XX.R2D1..RAW/file.h5"``.
+        index), e.g. ``"acquisition_key=XX.R2D1..RAW/file.h5"``.
 
     Examples
     --------
     >>> from dascore.utils.paths import parse_hive_path_attrs
-    >>> parse_hive_path_attrs("data_source_id=XX.R2D1..RAW/cable=n__tag=raw.h5")
-    {'data_source_id': 'XX.R2D1..RAW', 'cable': 'n', 'tag': 'raw'}
+    >>> parse_hive_path_attrs("acquisition_key=XX.R2D1..RAW/cable=n__tag=raw.h5")
+    {'acquisition_key': 'XX.R2D1..RAW', 'cable': 'n', 'tag': 'raw'}
     """
     out: dict[str, str] = {}
     segments = rel_posix.split("/")

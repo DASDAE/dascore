@@ -341,9 +341,9 @@ class TestHiveDataSourceId:
 
     def test_valid_id_is_stamped(self, tmp_path):
         """A complete id reaches the index and the patch."""
-        spool = self._write(tmp_path, "data_source_id=XX.R2D1..RAW").update()
-        assert spool.get_contents()["data_source_id"].iloc[0] == "XX.R2D1..RAW"
-        assert spool[0].attrs.data_source_id == "XX.R2D1..RAW"
+        spool = self._write(tmp_path, "acquisition_key=XX.R2D1..RAW").update()
+        assert spool.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert spool[0].attrs.acquisition_key == "XX.R2D1..RAW"
 
     @pytest.mark.parametrize("value", ["XX", "XX.R2D1.RAW", "XX.R2D1..RA_W"])
     def test_invalid_id_warns_and_is_skipped(self, tmp_path, value):
@@ -353,7 +353,7 @@ class TestHiveDataSourceId:
         Stamping it anyway would index cleanly and then fail at every
         load, where the fix (renaming a directory) is far from the error.
         """
-        with pytest.warns(UserWarning, match="data_source_id"):
-            spool = self._write(tmp_path, f"data_source_id={value}").update()
-        assert "data_source_id" not in spool.get_contents().columns
-        assert spool[0].attrs.data_source_id == ""
+        with pytest.warns(UserWarning, match="acquisition_key"):
+            spool = self._write(tmp_path, f"acquisition_key={value}").update()
+        assert "acquisition_key" not in spool.get_contents().columns
+        assert spool[0].attrs.acquisition_key == ""

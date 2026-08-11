@@ -532,7 +532,7 @@ class TestMergeCompatibleCoordsAttrs:
 
     def test_incompatible_attrs(self, random_patch):
         """Ensure if attrs are off an Error is raised."""
-        new = random_patch.update_attrs(data_source_id="TA.R2D1..RAW")
+        new = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
         match = "attributes are not equal"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
@@ -1162,11 +1162,11 @@ class TestForcePatchMergeOverlap:
 
 
 class TestDottedPatchNames:
-    """A data_source_id puts dots in the name it generates."""
+    """A acquisition_key puts dots in the name it generates."""
 
     def test_name_round_trips_through_a_file(self, tmp_path, random_patch):
         """Writing a patch under its own name and re-reading keeps the name."""
-        patch = random_patch.update_attrs(data_source_id="DAS.R2D1..RAW")
+        patch = random_patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
         name = patch.get_patch_name()
         assert "DAS.R2D1..RAW" in name
         patch.io.write(tmp_path / f"{name}.h5", "dasdae")

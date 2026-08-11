@@ -5,7 +5,7 @@ The inventory extends the StationXML concept with first-class support for
 fiber-optic arrays. It describes the physical optical path (fiber, connectors,
 splices), the geometry, coupling, and annotation tracks along optical
 distance, and the interrogator configurations (acquisitions) that produced
-patches. Patches carry a ``data_source_id``
+patches. Patches carry a ``acquisition_key``
 (``network.fiber_array.location.acquisition``) which, together with time,
 resolves against an inventory.
 
@@ -67,8 +67,8 @@ CoordinateLabel = Literal[
 ]
 VALID_COORDINATE_LABELS = get_args(CoordinateLabel)
 
-# Code tokens used in data_source_id; location codes alone may be blank.
-# The token rule is shared with PatchAttrs.data_source_id so a code legal
+# Code tokens used in acquisition_key; location codes alone may be blank.
+# The token rule is shared with PatchAttrs.acquisition_key so a code legal
 # in one is legal in the other.
 CodeStr = Annotated[str, AfterValidator(check_code)]
 # A float which must be finite; nan/inf silently poison downstream math.
@@ -1599,7 +1599,7 @@ def _drop_empty(value, _in_extras=False):
 
 
 class ResolvedContext(NamedTuple):
-    """The inventory objects a data_source_id + time resolve to."""
+    """The inventory objects a acquisition_key + time resolve to."""
 
     network: Network
     fiber_array: FiberArray
@@ -1833,22 +1833,22 @@ class Inventory(InventoryModel):
                     check_width(len(channel.coordinates), what)
         return errors
 
-    def resolve(self, data_source_id: str, time=None) -> ResolvedContext:
+    def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
         """
-        Resolve a data_source_id (and time) to its inventory context.
+        Resolve a acquisition_key (and time) to its inventory context.
 
         Parameters
         ----------
-        data_source_id
+        acquisition_key
             A dotted ``network.fiber_array.location.acquisition`` identifier.
         time
             The instant to resolve at; required whenever any epoch level has
             more than one candidate.
         """
-        parts = data_source_id.split(".")
+        parts = acquisition_key.split(".")
         if len(parts) != 4:
             msg = (
-                f"data_source_id {data_source_id!r} must have exactly four "
+                f"acquisition_key {acquisition_key!r} must have exactly four "
                 "dot-separated parts."
             )
             raise InvalidInventoryError(msg)
@@ -1856,7 +1856,7 @@ class Inventory(InventoryModel):
 
         def exactly_one(matches, kind):
             if len(matches) != 1:
-                msg = f"{data_source_id!r} resolves to {len(matches)} {kind}."
+                msg = f"{acquisition_key!r} resolves to {len(matches)} {kind}."
                 raise InvalidInventoryError(msg)
             return matches[0]
 
@@ -1894,7 +1894,7 @@ class Inventory(InventoryModel):
             if x.location_code == location and x.is_effective_at(time)
         ]
         if len(paths) > 1:
-            msg = f"{data_source_id!r} resolves to {len(paths)} optical paths."
+            msg = f"{acquisition_key!r} resolves to {len(paths)} optical paths."
             raise InvalidInventoryError(msg)
         path = paths[0] if paths else None
         return ResolvedContext(network, array, acqs[0], path)

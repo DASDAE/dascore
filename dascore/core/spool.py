@@ -865,11 +865,16 @@ class Spool(BaseSpool):
             if on_unresolved == "raise":
                 raise
             if on_unresolved == "warn":
+                # No patch is named here on purpose. Warnings dedupe on
+                # their text, so naming one would emit a fresh warning per
+                # distinct key -- thousands of them on exactly the archive
+                # this default exists to serve.
                 msg = (
-                    f"The attached inventory does not describe the patch "
-                    f"with data_source_id {patch.attrs.data_source_id!r}, so "
-                    "it was not enriched. Pass on_unresolved='ignore' to "
-                    "silence this, or prune the spool to the inventory."
+                    "The attached inventory does not describe every patch in "
+                    "this spool, and those it does not describe were not "
+                    "enriched. Use on_unresolved='raise' to see which, "
+                    "'ignore' to silence this, or remove them from the spool "
+                    "once Spool.prune_to_inventory exists."
                 )
                 warnings.warn(msg, UserWarning, stacklevel=2)
             return patch

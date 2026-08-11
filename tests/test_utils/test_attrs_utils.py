@@ -45,12 +45,12 @@ class TestMergeAttrs:
     def test_drop_conflicts(self, random_patch):
         """Ensure unequal non-coordinate attrs can be dropped."""
         attrs = PatchAttrs.from_dict(random_patch.attrs)
-        pa1 = attrs.update(tag="bill", data_source_id="UU.R2D1..RAW")
-        pa2 = attrs.update(tag="bob", data_source_id="TA.R2D1..RAW")
+        pa1 = attrs.update(tag="bill", acquisition_key="UU.R2D1..RAW")
+        pa2 = attrs.update(tag="bob", acquisition_key="TA.R2D1..RAW")
         out = combine_patch_attrs([pa1, pa2], conflicts="drop")
         defaults = PatchAttrs()
         assert out.tag == defaults.tag
-        assert out.data_source_id == defaults.data_source_id
+        assert out.acquisition_key == defaults.acquisition_key
 
     def test_keep_disjoint_values(self, random_patch):
         """Ensure disjoint values can be kept."""

@@ -28,7 +28,7 @@ from dascore.exceptions import (
 from dascore.proc.coords import update_coords
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import iterate, validate_data_source_id
+from dascore.utils.misc import iterate, validate_acquisition_key
 from dascore.utils.models import values_equal
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
@@ -67,27 +67,27 @@ on_missing
 """.strip()
 
 
-def _get_data_source_id(patch, data_source_id) -> str:
+def _get_acquisition_key(patch, acquisition_key) -> str:
     """Return the id to resolve, requiring the patch and caller to agree."""
-    patch_id = patch.attrs.data_source_id
-    if data_source_id and patch_id and data_source_id != patch_id:
+    patch_id = patch.attrs.acquisition_key
+    if acquisition_key and patch_id and acquisition_key != patch_id:
         msg = (
-            f"The patch's data_source_id {patch_id!r} and the requested "
-            f"{data_source_id!r} disagree; enrich resolves one data source."
+            f"The patch's acquisition_key {patch_id!r} and the requested "
+            f"{acquisition_key!r} disagree; enrich resolves one data source."
         )
         raise PatchError(msg)
-    out = data_source_id or patch_id
+    out = acquisition_key or patch_id
     if not out:
         msg = (
-            "The patch has no data_source_id, so it names no inventory entry. "
-            "Set one on the patch or pass data_source_id to enrich."
+            "The patch has no acquisition_key, so it names no inventory entry. "
+            "Set one on the patch or pass acquisition_key to enrich."
         )
         raise UnresolvedPatchError(msg)
     # A patch's own id is validated when its attrs are built, so only the
     # explicit argument can be malformed. That is the caller getting it
     # wrong rather than the inventory not describing the patch, and must
     # not be something on_unresolved can wave through.
-    return validate_data_source_id(out)
+    return validate_acquisition_key(out)
 
 
 def _get_resolution_times(patch, time):
@@ -255,7 +255,7 @@ def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
             msg = (
                 f"The patch's {name!r} is {old!r} but the inventory says "
                 f"{value!r}. A disagreement here usually means the "
-                "data_source_id resolved to the wrong place."
+                "acquisition_key resolved to the wrong place."
             )
             raise PatchError(msg)
         elif conflicts == "drop":
@@ -563,7 +563,7 @@ def enrich(
     inventory: Inventory,
     attrs: bool | tuple[str, ...] = True,
     coords: bool | tuple[str, ...] = True,
-    data_source_id: str | None = None,
+    acquisition_key: str | None = None,
     time=None,
     on_missing: OnMissing = "raise",
     conflicts: Literal["drop", "raise", "keep_first"] = "keep_first",
@@ -571,7 +571,7 @@ def enrich(
     """
     Copy inventory metadata onto a patch.
 
-    The patch resolves its inventory context from its ``data_source_id`` and
+    The patch resolves its inventory context from its ``acquisition_key`` and
     its time, then the acquisition's channel map places each channel on the
     optical path so the path's tracks can be projected onto it. The patch
     keeps no reference to the inventory afterwards.
@@ -596,7 +596,7 @@ def enrich(
         False to add none. Names may be `distance` for optical distance, a
         coordinate label the inventory's CRS defines, an annotation group, or
         a qualified track field such as `coupling.medium`.
-    data_source_id
+    acquisition_key
         The inventory identity to resolve, for a patch which does not carry
         one. Given both, the patch and this argument must agree.
     time
@@ -609,7 +609,7 @@ def enrich(
         Enrichment combines the inventory's values with the patch's own, so
         the default `keep_first` lets the inventory win and re-enriching is
         a refresh. `raise` is the misresolution guard: a header disagreeing
-        with the resolved acquisition usually means the `data_source_id`
+        with the resolved acquisition usually means the `acquisition_key`
         resolved to the wrong place.
 
     Examples
@@ -629,7 +629,7 @@ def enrich(
     if on_missing not in _VALID_ON_MISSING:
         msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
-    source_id = _get_data_source_id(patch, data_source_id)
+    source_id = _get_acquisition_key(patch, acquisition_key)
     times = _get_resolution_times(patch, time)
     context = _resolve_context(inventory, source_id, times)
     new_attrs = _get_attr_values(inventory, context, attrs, on_missing)

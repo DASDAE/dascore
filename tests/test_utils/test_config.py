@@ -198,7 +198,7 @@ class TestConfigDefaults:
     def test_groupby_attrs_default(self):
         """The default group attrs are the conventional identity set."""
         expected = (
-            "data_source_id",
+            "acquisition_key",
             "data_type",
             "data_category",
             "tag",

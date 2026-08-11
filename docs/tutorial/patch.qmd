@@ -548,13 +548,13 @@ new_attrs_patch = pa.update(attrs=dict(tag="TMU"))
 import dascore as dc
 pa = dc.get_example_patch()
 
-# Update existing attribute 'data_source_id' and create new attr 'new_attr'
-pa1 = pa.update_attrs(data_source_id='EXP1.R2D1..RAW', new_attr=42)
+# Update existing attribute 'acquisition_key' and create new attr 'new_attr'
+pa1 = pa.update_attrs(acquisition_key='EXP1.R2D1..RAW', new_attr=42)
 ```
 
 ```{python}
 #| echo: false
-assert pa1.attrs.data_source_id == "EXP1.R2D1..RAW"
+assert pa1.attrs.acquisition_key == "EXP1.R2D1..RAW"
 assert pa1.attrs.new_attr == 42
 ```
 
