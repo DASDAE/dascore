@@ -83,39 +83,47 @@ class NetCDFCFV18(FiberIO):
             return dc.spool([])
         return dc.spool([patch])
 
-    def _get_write_encoding(self, **kwargs):
+    def _get_write_encoding(self, compression=None, compression_opts=None, chunks=None):
         """Translate explicit write options into xarray encoding hints."""
-        compression = kwargs.get("compression")
         if compression not in ("gzip", None, False):
             msg = "xarray netcdf4 writing currently supports only gzip compression."
             raise ValueError(msg)
-        chunks = kwargs.get("chunks")
         encoding: dict[str, object] = {}
         if chunks not in (None, False, True):
             encoding["chunksizes"] = tuple(chunks)
         if compression == "gzip":
             encoding["zlib"] = True
-            encoding["complevel"] = kwargs.get("compression_opts", 4)
+            encoding["complevel"] = 4 if compression_opts is None else compression_opts
             encoding["shuffle"] = True
         return encoding
 
-    def write(self, spool: dc.Patch | dc.BaseSpool, resource: Path, **kwargs) -> None:
+    def write(
+        self,
+        spool: dc.Patch | dc.BaseSpool,
+        resource: Path,
+        compression=None,
+        compression_opts=None,
+        chunks=None,
+        **kwargs,
+    ) -> None:
         """
         Write a Spool to NetCDF-4 through xarray.
 
         Parameters
         ----------
-        kwargs
-            compression: 'gzip', None, or False
-            compression_opts: gzip level 1-9 (default 4)
-            chunks: True to defer chunking to xarray/backend defaults, or an
-                explicit tuple of chunk sizes
+        compression
+            'gzip', None, or False.
+        compression_opts
+            gzip level 1-9 (default 4).
+        chunks
+            True to defer chunking to xarray/backend defaults, or an
+            explicit tuple of chunk sizes.
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
         dataset = patch_to_xarray(patch).rename("data").to_dataset()
         dataset.attrs["Conventions"] = f"CF-{self.version}"
-        encoding = self._get_write_encoding(**kwargs)
+        encoding = self._get_write_encoding(compression, compression_opts, chunks)
         dataset.to_netcdf(
             resource,
             encoding={"data": encoding} if encoding else None,
