@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
 from dascore.io.utils import get_exact_coord
 from dascore.utils.array import (
@@ -359,7 +359,7 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     data_node = group.get("data")
     dtype = str(data_node.dtype) if data_node is not None else ""
     shape = tuple(data_node.shape) if data_node is not None else ()
-    return _make_scan_payload(
+    return make_scan_payload(
         attrs=PatchAttrs.from_dict(attr_info),
         coords=coords,
         dims=dims,

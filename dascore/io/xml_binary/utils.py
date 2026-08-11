@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.utils.misc import iterate
 from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.pd import adjust_segments, filter_df
@@ -96,7 +96,7 @@ def _make_time_coord(file_start_times, metadata: XMLBinaryInfo):
     dt = dc.to_timedelta64(1.0 / metadata.output_temporal_sampling_rate)
     nt = metadata.number_of_frames
     for start in file_start_times:
-        yield get_coord(start=start, stop=start + dt * nt, step=dt, units="s")
+        yield get_coord(start=start, step=dt, shape=(nt,), units="s")
 
 
 def _make_base_attrs_dict(metadata: XMLBinaryInfo):
@@ -258,12 +258,6 @@ def _paths_to_scan_patches(
         )
         attrs = attr_cls(**base_attrs, **extra_attrs)
         out.append(
-            _make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dims=coords.dims,
-                shape=coords.shape,
-                dtype=metadata.data_type,
-            )
+            make_scan_payload(attrs=attrs, coords=coords, dtype=metadata.data_type)
         )
     return out

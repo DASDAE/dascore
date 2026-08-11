@@ -8,8 +8,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.core import Patch
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_all_attrs, _get_data, _get_default_attrs, _get_version_str
@@ -51,13 +51,11 @@ class TDMSFormatterV4713(FiberIO):
         coords = dc.core.get_coord_manager(coords=out.pop("coords"))
         out = dc.PatchAttrs.from_dict(out)
         return [
-            {
-                "attrs": out,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(np.dtype(fileinfo["data_type"])),
-            }
+            make_scan_payload(
+                attrs=out,
+                coords=coords,
+                dtype=str(np.dtype(fileinfo["data_type"])),
+            )
         ]
 
     def read(
@@ -72,10 +70,7 @@ class TDMSFormatterV4713(FiberIO):
         data, _channel_length, attrs_full = _get_data(resource, lead_in_length=28)
         attrs = _get_default_attrs(resource, attrs_full)
         coords = dc.core.get_coord_manager(coords=attrs_full["coords"])
-        # trim data if required
-        if time is not None or distance is not None:
-            coords, data = coords.select(data, time=time, distance=distance)
-        if not data.size:
-            return dc.spool([])
-        patch = Patch(data=data, coords=coords, attrs=attrs)
-        return dc.spool(patch)
+        patches = build_patches(
+            coords, data, attrs, selection={"time": time, "distance": distance}
+        )
+        return dc.spool(patches)

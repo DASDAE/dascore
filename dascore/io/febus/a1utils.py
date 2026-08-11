@@ -275,14 +275,12 @@ def _get_distance_coord(feb):
     # Create distance coord
     # Need to account for removing overlap times.
     start = dist_ids[0] * distance_step + distance_origin
-    stop = start + total_distance_inds * distance_step
-    dist_coord = get_coord(
+    return get_coord(
         start=start,
-        stop=stop,
         step=distance_step,
+        shape=(total_distance_inds,),
         units="m",
     )
-    return dist_coord.change_length(total_distance_inds)
 
 
 def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 import dascore as dc
-from dascore.io.core import FiberIO, ScanPayload
+from dascore.io.core import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
@@ -71,15 +71,7 @@ class SegyV1_0(FiberIO):  # noqa
             coords = _get_coords(fi)
             attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
-        return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": dtype,
-            }
-        ]
+        return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
 
     def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
         """

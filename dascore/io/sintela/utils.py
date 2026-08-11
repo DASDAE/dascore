@@ -153,10 +153,7 @@ def _get_time_coord(header):
     starttime = np.asarray(header["start_time_ns"]).astype("datetime64[ns]")[()]
     timestep = dc.to_timedelta64(1 / header["sample_rate"])
     total_len = header["num_packets"] * header["num_samples"]
-    end_time = starttime + timestep * total_len
-    time = get_coord(start=starttime, step=timestep, stop=end_time)
-    assert len(time) == total_len
-    return time
+    return get_coord(start=starttime, step=timestep, shape=(total_len,))
 
 
 def _get_dist_coord(header):

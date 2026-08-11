@@ -7,6 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import build_patches
 from dascore.utils.misc import unbyte
 
 # 0-based positions in the 200-value HDAS header, per the vendor reader
@@ -124,10 +125,9 @@ def _get_v2_coords_and_attrs(resource):
 
 def _get_patches(resource, data_name, coords, attrs_dict, time=None, distance=None):
     """Read patches from an HDAS file, optionally trimming coords."""
-    data = resource[data_name]
-    attrs = dc.PatchAttrs.model_validate(attrs_dict)
-    if time is not None or distance is not None:
-        coords, data = coords.select(array=data, time=time, distance=distance)
-        if not data.size:
-            return []
-    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
+    return build_patches(
+        coords,
+        resource[data_name],
+        attrs_dict,
+        selection={"time": time, "distance": distance},
+    )

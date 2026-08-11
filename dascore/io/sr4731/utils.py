@@ -29,12 +29,12 @@ from typing import Any, Literal
 
 import numpy as np
 
-import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.core import ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
@@ -277,7 +277,7 @@ def _get_coords(parsed: dict[str, Any]) -> CoordManager:
     return get_coord_manager(coords=coords, dims=DIMS)
 
 
-def _get_attr_dict(parsed: dict[str, Any]) -> dict:
+def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
     """Create DASCore patch attrs from parsed SR-4731 metadata."""
     supplier = parsed["supplier"]
     manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
@@ -295,42 +295,41 @@ def _get_attr_dict(parsed: dict[str, Any]) -> dict:
         "interrogator.model": model,
         "interrogator.serial_number": serial_number,
     }
+    out.update(extras or {})
     return out
 
 
 def _get_patch_attrs(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
+    extras: dict | None = None,
 ) -> ScanPayload:
     """Return patch attrs for an SR-4731 SOR file."""
     parsed = _parse_sor(resource, load_samples=False)
     coords = _get_coords(parsed)
-    attrs = _get_attr_dict(parsed)
-    return _make_scan_payload(
-        attrs=attr_class(**attrs),
-        coords=coords,
-        dims=coords.dims,
-        shape=coords.shape,
-        dtype="float64",
-    )
+    attrs = _get_attr_dict(parsed, extras)
+    return make_scan_payload(attrs=attr_class(**attrs), coords=coords, dtype="float64")
 
 
 def _get_patches(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
+    extras: dict | None = None,
     time=None,
     distance=None,
 ):
     """Read an SR-4731 SOR file and return patches."""
     parsed = _parse_sor(resource, load_samples=True)
     cm = _get_coords(parsed)
-    attrs = _get_attr_dict(parsed)
+    attrs = _get_attr_dict(parsed, extras)
     data = parsed["data_points"]["samples"][np.newaxis, :]
-    cm, data = cm.select(data, time=time, distance=distance)
-    if not data.size:
-        return []
-    patch = dc.Patch(data=data, coords=cm, attrs=attr_class(**attrs))
-    return [patch]
+    return build_patches(
+        cm,
+        data,
+        attrs,
+        attr_cls=attr_class,
+        selection={"time": time, "distance": distance},
+    )
 
 
 def _get_format(resource, name: str, version: str) -> tuple[str, str] | Literal[False]:

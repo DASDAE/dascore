@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
@@ -47,7 +47,7 @@ class SintelaBinaryV3(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            An open binary reader which may contain Sintela data.
         """
         resource.seek(0)
         base = _read_base_header(resource)
@@ -63,13 +63,11 @@ class SintelaBinaryV3(FiberIO):
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(np.dtype(header["dtype"])),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(np.dtype(header["dtype"])),
+            )
         ]
 
     def read(

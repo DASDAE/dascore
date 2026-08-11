@@ -1,26 +1,16 @@
-"""IO module for reading prodML data."""
+"""IO module for reading DASHDF5 (CF convention) data."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UTF8Str
 
 from .utils import _get_cf_attrs, _get_cf_coords, _get_cf_version_str
-
-
-class ProdMLPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for ProdML."""
-
-    pulse_width: float = np.nan
-    gauge_length: float = np.nan
-    schema_version: UTF8Str = ""
 
 
 class DASHDF5(FiberIO):
@@ -36,12 +26,12 @@ class DASHDF5(FiberIO):
         **kwargs,
     ) -> tuple[str, str] | Literal[False]:
         """
-        Return True if file contains terra15 version 2 data else False.
+        Return the name and version if the file is DASHDF5, else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            An open h5 file which may contain DASHDF5 data.
         """
         version_str = _get_cf_version_str(resource)
         if version_str:
@@ -55,13 +45,9 @@ class DASHDF5(FiberIO):
         coords = _get_cf_coords(resource, snap=snap)
         attrs = _get_cf_attrs(resource, coords)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource["das"].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs, coords=coords, dtype=str(resource["das"].dtype)
+            )
         ]
 
     def read(
@@ -72,16 +58,10 @@ class DASHDF5(FiberIO):
         **kwargs,
     ):
         """Read a CF file and return a Patch."""
-        coords = _get_cf_coords(resource)
-        coords_new, data = coords.select(
-            array=resource["das"],
-            time=time,
-            channel=channel,
+        patches = build_patches(
+            _get_cf_coords(resource),
+            resource["das"],
+            _get_cf_attrs(resource),
+            selection={"time": time, "channel": channel},
         )
-        if not data.size:
-            return dc.spool([])
-        attrs = _get_cf_attrs(resource, coords_new)
-        patch = dc.Patch(
-            data=data, attrs=attrs, coords=coords_new, dims=coords_new.dims
-        )
-        return dc.spool(patch)
+        return dc.spool(patches)

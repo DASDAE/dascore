@@ -82,10 +82,7 @@ def _get_coord_manager(resource, snap=True):
         group = resource["DasMetadata/Interrogator/Acquisition"]
         dx = float(unbyte(group.attrs["SpatialSamplingInterval"]))
         units = unbyte(group.attrs["SpatialSamplingIntervalUnit"])
-        start = 0
-        stop = length * dx
-        coord = get_coord(start=start, stop=stop, step=dx, units=units)
-        return coord.change_length(length)
+        return get_coord(start=0, step=dx, shape=(length,), units=units)
 
     def get_dims(dataset):
         """Get the dimension names."""
@@ -113,10 +110,3 @@ def _get_coord_manager(resource, snap=True):
     }
 
     return dc.get_coord_manager(coords=coords, dims=dims)
-
-
-def _maybe_trim_data(cm, data, time=None, distance=None, **kwargs):
-    """Maybe trim the data."""
-    if time is not None or distance is not None:
-        cm, data = cm.select(time=time, distance=distance, array=data)
-    return cm, data
