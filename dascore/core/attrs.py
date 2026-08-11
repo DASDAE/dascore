@@ -5,7 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, cast
 
-from pydantic import ConfigDict, Field, PlainValidator, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    PlainValidator,
+    model_validator,
+)
 from typing_extensions import Self
 
 from dascore.constants import (
@@ -15,6 +21,7 @@ from dascore.constants import (
 )
 from dascore.utils.misc import (
     to_str,
+    validate_acquisition_key,
 )
 from dascore.utils.models import DascoreBaseModel, UnitQuantity
 
@@ -62,24 +69,16 @@ class PatchAttrs(DascoreBaseModel):
     data_units: UnitQuantity | None = Field(
         default=None, description="The units of the data measurements"
     )
-    instrument_id: str = Field(
-        description="A unique id for the instrument which generated the data.",
+    acquisition_key: Annotated[str, AfterValidator(validate_acquisition_key)] = Field(
         default="",
-        max_length=max_lens["instrument_id"],
-    )
-    acquisition_id: str = Field(
-        description="A unique identifier linking this data to an experiment.",
-        default="",
-        max_length=max_lens["experiment_id"],
+        max_length=max_lens["acquisition_key"],
+        description=(
+            "Inventory identity of the data source, spelled "
+            "network.fiber_array.location.acquisition."
+        ),
     )
     tag: str = Field(
         default="", max_length=max_lens["tag"], description="A custom string field."
-    )
-    station: str = Field(
-        default="", max_length=max_lens["station"], description="A station code."
-    )
-    network: str = Field(
-        default="", max_length=max_lens["network"], description="A network code."
     )
     history: str | tuple[str, ...] = Field(
         default_factory=tuple,

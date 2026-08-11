@@ -27,7 +27,6 @@ class SintelaPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for Sintela binary format."""
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
 
 
 class SintelaBinaryV3(FiberIO):

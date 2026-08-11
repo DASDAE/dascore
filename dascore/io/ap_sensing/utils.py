@@ -74,14 +74,20 @@ def _get_coords(resource):
 
 def _get_attrs_dict(resource):
     """Get attributes."""
-    daq = resource["DAQ"]
+    # The file has both an Interrogator group and a DAQ group describing the
+    # digitizer card inside it. Only the former identifies the instrument the
+    # inventory knows; DAQ/SerialNumber is the card's, and a uint32 at that.
+    interrogator = resource["Interrogator"]
     pserver = resource["ProcessingServer"]
-    out = dict(
-        data_category="DAS",
-        instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
-        gauge_length=_maybe_unpack(pserver["GaugeLength"]),
-        radians_to_nano_strain=_maybe_unpack(pserver["RadiansToNanoStrain"]),
-    )
+    out = {
+        "data_category": "DAS",
+        "interrogator.serial_number": unbyte(
+            _maybe_unpack(interrogator["SerialNumber"])
+        ),
+        "interrogator.model": unbyte(_maybe_unpack(interrogator["Model"])),
+        "gauge_length": _maybe_unpack(pserver["GaugeLength"]),
+        "radians_to_nano_strain": _maybe_unpack(pserver["RadiansToNanoStrain"]),
+    }
     return out
 
 

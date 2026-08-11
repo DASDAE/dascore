@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import abc
+import inspect
+import warnings
 from collections.abc import Callable, Generator, Iterator, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -26,10 +28,13 @@ from dascore.constants import (
     path_types,
     timeable_types,
 )
+from dascore.core.inventory import Inventory
 from dascore.exceptions import (
     InvalidSpoolError,
+    InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
+    UnresolvedPatchError,
 )
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
@@ -75,6 +80,80 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     """
     copy_on_write = _COPY_ON_WRITE_ALWAYS or pd.options.mode.copy_on_write is True
     return frame.copy(deep=not copy_on_write)
+
+
+_VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
+
+_UNRESOLVED_WARNING = (
+    "The attached inventory does not describe every patch in this spool, and "
+    "those it does not describe were not enriched. Use on_unresolved='raise' "
+    "to see which, 'ignore' to silence this, or remove them from the spool "
+    "once Spool.prune_to_inventory exists."
+)
+
+
+def _normalize_enrich_kwargs(kwargs) -> dict:
+    """
+    Canonicalize enrich arguments, rejecting any Patch.enrich would.
+
+    Two spools which enrich identically have to compare equal, so an
+    argument stated explicitly at its own default, or given as a list
+    where a tuple would do, must reach the same stored form.
+    """
+    signature = inspect.signature(dc.Patch.enrich)
+    valid = set(signature.parameters) - {"patch", "inventory"}
+    if bad := sorted(set(kwargs) - valid):
+        msg = (
+            f"Spool.enrich got unknown argument(s) {bad}; it passes "
+            f"{sorted(valid)} through to Patch.enrich."
+        )
+        raise ParameterError(msg)
+    bound = signature.bind_partial(**kwargs)
+    bound.apply_defaults()
+    # A collection of names means what it holds, not which container holds it.
+    return {
+        name: tuple(value) if isinstance(value, list) else value
+        for name, value in bound.arguments.items()
+        if name in valid
+    }
+
+
+def _combine_state(values, label):
+    """Return the one value two spools agree on, or None if neither has one."""
+    present = [x for x in values if x is not None]
+    if not present:
+        return None
+    if len(present) == 2 and present[0] != present[1]:
+        msg = (
+            f"The spools carry different {label}, which have no combined "
+            "meaning. Attach one inventory to the combined spool instead."
+        )
+        raise InvalidSpoolError(msg)
+    return present[0]
+
+
+def _combine_inventories(first, second) -> tuple:
+    """
+    Return the (inventory, enrich kwargs) a union of two spools carries.
+
+    The two halves carry over independently: an inventory attached to one
+    operand still describes the patches it came with, and so does the
+    enrichment set up from it — which is why attaching the same inventory
+    to the other operand cannot turn a working union into an error. Two
+    operands answering either question differently have no single answer.
+    """
+    inventory = _combine_state(
+        [getattr(x, "_inventory", None) for x in (first, second)], "inventories"
+    )
+    enrichment = _combine_state(
+        [x._enrichment() if isinstance(x, Spool) else None for x in (first, second)],
+        "enrich arguments",
+    )
+    # Enrichment is only reachable through an inventory, so it cannot
+    # outlive one; a union carrying arguments and nothing to apply them
+    # from would enrich nothing while claiming to.
+    assert inventory is not None or enrichment is None
+    return inventory, enrichment
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -165,6 +244,11 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         union = PatchCatalog.union(members)
         new = Spool()
         new._catalog = union
+        # An attached inventory is part of what a spool yields, so it must
+        # survive the union; two different ones have no combined answer.
+        new._inventory, enrichment = _combine_inventories(self, other)
+        if enrichment is not None:
+            new._enrich_kwargs, new._on_unresolved = enrichment
         return new
 
     def _as_catalog_member(self):
@@ -499,9 +583,24 @@ class Spool(BaseSpool):
 
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
-    _drop_columns = ("patch", "path", "file_format", "file_version", "source_patch_id")
+    _drop_columns = (
+        "patch",
+        "source_path",
+        "source_format",
+        "source_version",
+        "source_patch_id",
+    )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
+    # An attached inventory, the enrich kwargs to apply on extraction
+    # (None means attached without automatic enrichment), and what to do
+    # with a patch the inventory does not describe.
+    _inventory = None
+    _enrich_kwargs: dict | None = None
+    _on_unresolved: str = "warn"
+    # Whether this spool has already said its inventory covers only part of
+    # it; the warning is worth making once, not once per patch.
+    _warned_unresolved: bool = False
     # single-file provenance (set by from_file; drives update())
     _file_path = None
     _file_format = None
@@ -572,7 +671,7 @@ class Spool(BaseSpool):
                 raise ValueError(msg)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
-            return self._catalog.get_patch(int(item))
+            return self._maybe_enrich(self._catalog.get_patch(int(item)))
         except MissingPatchError:
             # MissingPatchError subclasses IndexError for backwards
             # compatibility; it must never masquerade as out-of-bounds
@@ -584,7 +683,8 @@ class Spool(BaseSpool):
     def __iter__(self):
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
-        yield from self._catalog
+        for patch in self._catalog:
+            yield self._maybe_enrich(patch)
 
     # --- selection and presentation specs -------------------------------
 
@@ -599,14 +699,203 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        catalog = self._catalog.select(
-            _attrs=_attrs,
-            _coords=_coords,
-            samples=samples,
-            relative=relative,
-            **kwargs,
-        )
+        try:
+            catalog = self._catalog.select(
+                _attrs=_attrs,
+                _coords=_coords,
+                samples=samples,
+                relative=relative,
+                **kwargs,
+            )
+        except InvalidSpoolQueryError as error:
+            # A name the index does not know may still be one the attached
+            # inventory defines, and the index's message would deny it exists.
+            if self._inventory is None:
+                raise
+            msg = (
+                f"{error} If this names a field the attached inventory "
+                "defines, selecting on it is not supported yet: enrich the "
+                "patches and select on each one instead."
+            )
+            raise InvalidSpoolQueryError(msg) from error
         return self._new_from_catalog(catalog)
+
+    def attach_inventory(self, inventory) -> Self:
+        """
+        Attach a DASDAE inventory to this spool.
+
+        The spool carries the reference and nothing else: attaching costs
+        no work per patch and adds nothing to the patches it yields. Call
+        [`Spool.enrich`](`dascore.core.spool.Spool.enrich`) to copy the
+        inventory's metadata onto the patches as they are extracted.
+
+        Attaching replaces whatever the spool carried before, and clears
+        enrichment set up from it — swapping the inventory silently under
+        a configured enrichment would change every patch's metadata, so
+        the new one has to be asked for. `enrich()` resumes with defaults.
+
+        Parameters
+        ----------
+        inventory
+            The inventory to carry.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).attach_inventory(inventory)
+        >>> assert "gauge_length" not in dict(spool[0].attrs)
+        >>> assert spool.enrich()[0].attrs.gauge_length == 10.0
+
+        Notes
+        -----
+        This is the metadata half of the workflow: resolving the index
+        against the inventory, subdividing it at epoch boundaries, and
+        selecting on inventory tracks are not implemented yet.
+        """
+        if not isinstance(inventory, Inventory):
+            msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
+            raise ParameterError(msg)
+        new = self.__class__(self)
+        new._inventory = inventory
+        new._enrich_kwargs = None
+        return new
+
+    def remove_inventory(self) -> Self:
+        """
+        Return a spool carrying no inventory.
+
+        Any enrichment set up by [`Spool.enrich`](`dascore.core.spool.Spool.enrich`)
+        goes with it, since there is nothing left to enrich from. A spool
+        with no inventory is returned unchanged in substance; as everywhere
+        else, the original spool is left alone.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> plain = spool.remove_inventory()
+        >>> assert "gauge_length" not in dict(plain[0].attrs)
+        >>> assert spool[0].attrs.gauge_length == 10.0  # the original stands
+        """
+        new = self.__class__(self)
+        new._inventory = None
+        new._enrich_kwargs = None
+        return new
+
+    def enrich(
+        self,
+        inventory=None,
+        *,
+        on_unresolved: Literal["warn", "raise", "ignore"] = "warn",
+        **kwargs,
+    ) -> Self:
+        """
+        Enrich each patch this spool yields from an inventory.
+
+        The work happens as each patch is extracted, not now, so this is
+        cheap on a large spool and costs one
+        [`Patch.enrich`](`dascore.proc.inventory.enrich`) per patch which
+        actually comes out. Enrichment survives `select`, `sort`, `chunk`
+        and friends; `Spool.remove_inventory` undoes it.
+
+        Enriching never removes a patch: one the inventory does not
+        describe comes out unchanged rather than missing, so an inventory
+        covering part of an archive needs no pruning first. Deciding
+        membership will be `prune_to_inventory`'s job, and leaving it there is
+        what keeps this lazy — nothing resolves until a patch is pulled.
+
+        Parameters
+        ----------
+        inventory
+            The inventory to enrich from. Defaults to the spool's attached
+            inventory; given one, it is attached as well.
+        on_unresolved
+            What to do with a patch the inventory does not describe — one
+            naming no entry, or naming one the inventory does not resolve
+            to exactly one of. "warn" (the default) leaves it un-enriched
+            and says so, "ignore" leaves it silently, and "raise" fails.
+            A patch which *straddles* two epochs is described twice rather
+            than not at all, and raises regardless: it needs subdividing.
+        **kwargs
+            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
+            each extracted patch, which documents them; the names accepted
+            here are read from its signature, so the two cannot disagree.
+            Only the names are checked at this point — the values each
+            patch's own enrichment checks as it is extracted. Calling
+            `enrich` again replaces these rather than adding to them.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> assert spool[0].attrs.gauge_length == 10.0
+        >>>
+        >>> # Or name what is wanted, as with Patch.enrich.
+        >>> spool = dc.spool(patch).enrich(inventory, coords=False)
+        """
+        # Settled now rather than on extraction: a misspelled argument
+        # should be an error here, not on some patch pulled much later.
+        enrich_kwargs = _normalize_enrich_kwargs(kwargs)
+        if on_unresolved not in _VALID_ON_UNRESOLVED:
+            msg = (
+                f"on_unresolved must be one of {_VALID_ON_UNRESOLVED}, "
+                f"got {on_unresolved!r}."
+            )
+            raise ParameterError(msg)
+        if inventory is None and self._inventory is None:
+            msg = (
+                "Spool.enrich needs an inventory: pass one, or attach one "
+                "first with Spool.attach_inventory."
+            )
+            raise ParameterError(msg)
+        new = (
+            self.__class__(self)
+            if inventory is None
+            else self.attach_inventory(inventory)
+        )
+        new._enrich_kwargs = enrich_kwargs
+        new._on_unresolved = on_unresolved
+        return new
+
+    def _enrichment(self):
+        """Return how this spool enriches, or None if it does not."""
+        if self._inventory is None or self._enrich_kwargs is None:
+            return None
+        return self._enrich_kwargs, self._on_unresolved
+
+    def _maybe_enrich(self, patch):
+        """Enrich an extracted patch when enrichment is set up."""
+        if (enrichment := self._enrichment()) is None:
+            return patch
+        kwargs, on_unresolved = enrichment
+        try:
+            return patch.enrich(self._inventory, **kwargs)
+        except UnresolvedPatchError:
+            # The inventory does not describe this patch. Dropping it is
+            # prune_to_inventory's job, so it comes out as it went in.
+            if on_unresolved == "raise":
+                raise
+            if on_unresolved == "warn" and not self._warned_unresolved:
+                self._warned_unresolved = True
+                # Deduped per spool, which is the granularity that means
+                # something. Naming the patch would warn once per distinct
+                # key -- thousands of them on exactly the partly-covered
+                # archive this default exists to serve -- while leaving a
+                # constant message to Python's registry would silence every
+                # spool after the first in a session.
+                warnings.warn_explicit(
+                    _UNRESOLVED_WARNING, UserWarning, __file__, 0, registry=None
+                )
+            return patch
 
     @compose_docstring(doc=get_docstring(BaseSpool.sort))
     def sort(self, attribute) -> Self:
@@ -1014,9 +1303,16 @@ class Spool(BaseSpool):
                 format=self._file_format, version=self._file_version
             )
             getattr(formatter, "index", lambda _: None)(self._file_path)
-            return self.from_file(
+            refreshed = self.from_file(
                 self._file_path, self._file_format, self._file_version
             )
+            # from_file builds a spool from the file alone, but an attached
+            # inventory is the caller's state rather than the file's, and
+            # re-reading the file is no reason to stop enriching.
+            refreshed._inventory = self._inventory
+            refreshed._enrich_kwargs = self._enrich_kwargs
+            refreshed._on_unresolved = self._on_unresolved
+            return refreshed
         if isinstance(catalog.resolver, LiveResolver):
             return self  # in-memory contents are trivially current
         # composite/plan roots are computed spools (unions, chunks)
@@ -1035,6 +1331,13 @@ class Spool(BaseSpool):
             return True
         if not isinstance(other, Spool):
             return super().__eq__(other)
+        # Models compare with ==; deep_equality_check walks their fields,
+        # where an unset (NaT) time never equals itself.
+        if (self._inventory, self._enrichment()) != (
+            other._inventory,
+            other._enrichment(),
+        ):
+            return False
         # views over the same catalog state are equal without realizing
         # the relations (a 200k-row archive must not materialize for ==)
         mine, theirs = self._catalog, other._catalog
@@ -1079,11 +1382,11 @@ class Spool(BaseSpool):
             # view cannot know its trimmed fingerprint without loading,
             # and data values are never compared here anyway.
             drop = [
-                "path",
+                "source_path",
                 "_patch_id",
                 "source_patch_id",
-                "file_format",
-                "file_version",
+                "source_format",
+                "source_version",
                 "_modified",
                 *[c for c in df.columns if str(c).endswith("_def_key")],
             ]

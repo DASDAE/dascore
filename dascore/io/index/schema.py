@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 6
+INDEX_VERSION = 7
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -282,7 +282,13 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "distance_min",
         "distance_max",
         "distance_step",
-        # flat-relation (spool-facing) names
+        # flat-relation (spool-facing) names; source_path and source_format
+        # keep their storage-table spelling out in the flat relation, so the
+        # entries above already reserve them.
+        "source_version",
+        # the keyword names the row is loaded with: an attr called one of
+        # these would be splatted into dc.read alongside the row's own
+        # value and collide with it.
         "path",
         "file_format",
         "file_version",

@@ -209,7 +209,7 @@ class TestMoveDetection:
         assert not scan_calls
         df = updated.indexer.get_contents()
         assert df["station"].iloc[0] == "Q"
-        assert df["path"].iloc[0].startswith("network=XX/station=Q/")
+        assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
         assert list(df["_patch_id"]) == list(df_before["_patch_id"])
         assert updated[0].attrs.station == "Q"
@@ -265,7 +265,7 @@ class TestMoveDetection:
             (tmp_path / "plain_a.h5").rename(tmp_path / "plain_b.h5")
             updated = spool.update(progress=None)
             assert not scan_calls
-            assert updated.get_contents()["path"].iloc[0] == "plain_b.h5"
+            assert updated.get_contents()["source_path"].iloc[0] == "plain_b.h5"
         finally:
             spool.indexer.close()
 
@@ -327,3 +327,33 @@ class TestEdgeCases:
             assert reopened.get_contents()["station"].iloc[0] == "A"
         finally:
             reopened.indexer.close()
+
+
+class TestHiveAcquisitionKey:
+    """A path may only stamp an id a patch can carry."""
+
+    def _write(self, path, segment):
+        """Write one patch under a hive segment."""
+        sub = path / segment
+        sub.mkdir(parents=True)
+        dc.get_example_patch().io.write(sub / "patch.h5", "DASDAE")
+        return dc.spool(path)
+
+    def test_valid_id_is_stamped(self, tmp_path):
+        """A complete id reaches the index and the patch."""
+        spool = self._write(tmp_path, "acquisition_key=XX.R2D1..RAW").update()
+        assert spool.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert spool[0].attrs.acquisition_key == "XX.R2D1..RAW"
+
+    @pytest.mark.parametrize("value", ["XX", "XX.R2D1.RAW", "XX.R2D1..RA_W"])
+    def test_invalid_id_warns_and_is_skipped(self, tmp_path, value):
+        """
+        An id the patch would reject is refused at indexing.
+
+        Stamping it anyway would index cleanly and then fail at every
+        load, where the fix (renaming a directory) is far from the error.
+        """
+        with pytest.warns(UserWarning, match="acquisition_key"):
+            spool = self._write(tmp_path, f"acquisition_key={value}").update()
+        assert "acquisition_key" not in spool.get_contents().columns
+        assert spool[0].attrs.acquisition_key == ""

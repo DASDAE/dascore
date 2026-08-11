@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
-from dascore.utils.models import _values_equal
+from dascore.utils.models import values_equal
 
 
 def build_inventory() -> inv.Inventory:
@@ -24,7 +24,7 @@ def build_inventory() -> inv.Inventory:
         sample_rate=500.0,
         gauge_length=10.0,
         spatial_interval=1.0,
-        start_distance=0.0,
+        distance_map=inv.DistanceMap(channel=(0.0,), distance=(0.0,)),
     )
     geometry = inv.Geometry(
         name="survey",
@@ -63,7 +63,7 @@ class TestGeometry:
 
     def test_requires_two_points(self):
         """Requires two points."""
-        with pytest.raises(ValidationError, match="at least two"):
+        with pytest.raises(ValidationError, match="at least 2 control points"):
             inv.Geometry(distance=(1.0,), coordinates=((0.0, 0.0),))
 
     def test_strictly_increasing(self):
@@ -234,12 +234,45 @@ class TestPathTracks:
 class TestDistanceMap:
     """DistanceMap rules and mapping behavior."""
 
-    def test_exactly_one_input_axis(self):
-        """Exactly one input axis."""
-        with pytest.raises(ValidationError, match="exactly one input axis"):
-            inv.DistanceMap(channel=(1.0,), instrument_distance=(1.0,), distance=(5.0,))
-        with pytest.raises(ValidationError, match="exactly one input axis"):
+    def test_at_least_one_input_axis(self):
+        """A map with no input axis maps nothing."""
+        with pytest.raises(ValidationError, match="at least one input axis"):
             inv.DistanceMap(distance=(5.0,))
+
+    def test_two_input_axes(self):
+        """
+        One set of control points may be stated in both coordinates.
+
+        The same calibration then serves patches whose axes differ, without
+        the two descriptions being able to disagree.
+        """
+        dmap = inv.DistanceMap(
+            channel=(0.0, 100.0),
+            instrument_distance=(10.0, 112.0),
+            distance=(500.0, 600.0),
+        )
+        assert dmap.axes == ("channel", "instrument_distance")
+        assert np.isclose(dmap.map_to_distance([50], axis="channel")[0], 550.0)
+        out = dmap.map_to_distance([61], axis="instrument_distance")
+        assert np.isclose(out[0], 550.0)
+
+    def test_axis_lengths_must_match(self):
+        """Every axis states the same control points."""
+        with pytest.raises(ValidationError, match="same"):
+            inv.DistanceMap(
+                channel=(0.0, 1.0), instrument_distance=(0.0,), distance=(5.0, 6.0)
+            )
+
+    def test_nonfinite_distance_raises(self):
+        """A control point at NaN places nothing."""
+        with pytest.raises(ValidationError, match="must be finite"):
+            inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, np.inf))
+
+    def test_unwritten_axis_raises(self):
+        """A map cannot be read on an axis it was not written in."""
+        dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
+        with pytest.raises(InvalidInventoryError, match="not written in"):
+            dmap.map_to_distance([0.5], axis="instrument_distance")
 
     def test_two_point_map(self):
         """Two point map."""
@@ -273,16 +306,17 @@ class TestDistanceMap:
 class TestAcquisition:
     """Acquisition resolution mechanisms and code rules."""
 
-    def test_mechanisms_mutually_exclusive(self):
-        """Mechanisms mutually exclusive."""
-        dmap = inv.DistanceMap(channel=(1.0, 2.0), distance=(5.0, 6.0))
-        with pytest.raises(ValidationError, match="mutually exclusive"):
-            inv.Acquisition(code="RAW", start_distance=0.0, distance_map=dmap)
-
-    def test_affine_mapping(self):
-        """Affine mapping."""
-        acq = inv.Acquisition(code="RAW", start_distance=10.0, spatial_interval=2.0)
+    def test_single_point_channel_map_is_affine(self):
+        """One point states an origin; spatial_interval is the slope."""
+        dmap = inv.DistanceMap(channel=(0.0,), distance=(10.0,))
+        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([0, 5]), [10.0, 20.0])
+
+    def test_single_point_instrument_map_is_an_offset(self):
+        """Interrogator meters map onto path meters one for one."""
+        dmap = inv.DistanceMap(instrument_distance=(-120.5,), distance=(0.0,))
+        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
+        assert np.allclose(acq.channel_to_distance([-120.5, -20.5]), [0.0, 100.0])
 
     def test_map_mapping_used_when_present(self):
         """Map mapping used when present."""
@@ -290,10 +324,10 @@ class TestAcquisition:
         acq = inv.Acquisition(code="RAW", distance_map=dmap)
         assert np.isclose(acq.channel_to_distance([5])[0], 110.0)
 
-    def test_no_mechanism_raises(self):
-        """No mechanism raises."""
+    def test_no_map_raises(self):
+        """An acquisition with no map places no channels."""
         acq = inv.Acquisition(code="RAW")
-        with pytest.raises(InvalidInventoryError, match="no channel-resolution"):
+        with pytest.raises(InvalidInventoryError, match="no distance_map"):
             acq.channel_to_distance([0])
 
     def test_code_charset(self):
@@ -385,7 +419,7 @@ class TestEpochs:
 
 
 class TestResolution:
-    """data_source_id + time resolution."""
+    """acquisition_key + time resolution."""
 
     def test_happy_path(self):
         """Happy path."""
@@ -435,7 +469,7 @@ class TestResolution:
 
     def test_wrong_shape_raises(self):
         """Wrong shape raises."""
-        with pytest.raises(InvalidInventoryError, match="four"):
+        with pytest.raises(InvalidInventoryError, match="dot separated codes"):
             build_inventory().resolve("DAS.L001.RAW")
 
 
@@ -975,12 +1009,12 @@ class TestCoverageCompleteness:
 
     def test_distance_map_empty_raises(self):
         """Distance map empty raises."""
-        with pytest.raises(ValidationError, match="at least one"):
+        with pytest.raises(ValidationError, match="at least 1 control point"):
             inv.DistanceMap(channel=(), distance=())
 
     def test_distance_map_non_increasing_raises(self):
         """Distance map non increasing raises."""
-        with pytest.raises(ValidationError, match="input values"):
+        with pytest.raises(ValidationError, match="values must be strictly"):
             inv.DistanceMap(channel=(2.0, 1.0), distance=(5.0, 6.0))
         with pytest.raises(ValidationError, match="distance values"):
             inv.DistanceMap(channel=(1.0, 2.0), distance=(6.0, 5.0))
@@ -1085,10 +1119,10 @@ class TestCoverageCompleteness:
 
     def test_values_equal_branches(self):
         """Null-pattern and key mismatches compare unequal."""
-        assert not _values_equal(np.array([np.nan]), np.array([1.0]))
-        assert _values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
-        assert not _values_equal({"a": 1}, {"b": 1})
-        assert _values_equal((1.0, np.nan), (1.0, np.nan))
+        assert not values_equal(np.array([np.nan]), np.array([1.0]))
+        assert values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
+        assert not values_equal({"a": 1}, {"b": 1})
+        assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
 class TestTypeTag:
@@ -1146,7 +1180,7 @@ class TestStationXmlAlignment:
 
     def test_successive_network_epochs_resolve(self):
         """A network code may be reused once its earlier epoch has ended."""
-        acquisition = inv.Acquisition(code="RAW", start_distance=0.0)
+        acquisition = inv.Acquisition(code="RAW")
         array = inv.FiberArray(code="L001", acquisitions=(acquisition,))
         first = inv.Network(
             code="XX",
@@ -1399,10 +1433,10 @@ class TestPrReviewFindings:
         with pytest.raises(ValidationError):
             inv.Acquisition(code="RAW", spatial_interval=np.nan)
 
-    def test_non_finite_start_distance_rejected(self):
-        """The affine origin must be a real distance."""
-        with pytest.raises(ValidationError):
-            inv.Acquisition(code="RAW", start_distance=np.inf)
+    def test_start_distance_explains_its_removal(self):
+        """An inventory written against the affine form says what to do."""
+        with pytest.raises(ValidationError, match="no longer takes start_distance"):
+            inv.Acquisition(code="RAW", start_distance=100.0)
 
     def test_duplicate_channel_identity_raises(self):
         """Channel (location_code, code) names a stream; it must be unique."""
@@ -1623,31 +1657,18 @@ class TestConstraintsMatchDescriptions:
 class TestSerializationIsLossless:
     """Pruning empty values must not change what reloads."""
 
-    def test_empty_annotation_value_survives(self):
-        """A pruned empty value would reload as a boolean flag."""
-        pytest.importorskip("yaml")
-        path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=50.0, group="rock", value=""
-                ),
-                inv.OpticalPathAnnotation(
-                    start_distance=50.0, end_distance=100.0, group="rock", value="shale"
-                ),
-            ),
-        )
-        array = inv.FiberArray(code="L001", optical_paths=(path,))
-        inventory = inv.Inventory(
-            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
-        ).check()
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
-        values = [
-            x.value
-            for x in loaded.networks[0].fiber_arrays[0].optical_paths[0].annotations
-        ]
-        assert values == ["", "shale"]
-        assert loaded.check() is loaded
+    def test_empty_annotation_value_is_rejected(self):
+        """An empty value would have to survive serialization to mean anything.
+
+        It used to be legal, and this guarded it against being pruned and
+        reloading as a boolean flag. It is now rejected outright: it states
+        nothing, and a string coordinate spells an uncovered channel with
+        the empty string, so a covered one could not be told apart.
+        """
+        with pytest.raises(ValidationError, match="may not be the empty string"):
+            inv.OpticalPathAnnotation(
+                start_distance=0.0, end_distance=50.0, group="rock", value=""
+            )
 
 
 class TestLoadingValidates:
@@ -1704,3 +1725,31 @@ class TestDepthLabel:
             units=("meter", "meter", "meter"),
         )
         assert crs.axis_index("depth") == 2
+
+
+class TestDistanceMapAxisAgreement:
+    """Two input axes describe one interrogator."""
+
+    def test_varying_spacing_raises(self):
+        """No interrogator samples at two different spacings."""
+        with pytest.raises(ValidationError, match="varies along the fiber"):
+            inv.DistanceMap(
+                channel=(0.0, 100.0, 200.0),
+                instrument_distance=(0.0, 150.0, 200.0),
+                distance=(0.0, 100.0, 200.0),
+            )
+
+    def test_constant_spacing_is_fine(self):
+        """A fixed spacing between the axes is the normal case."""
+        dmap = inv.DistanceMap(
+            channel=(0.0, 100.0, 200.0),
+            instrument_distance=(0.0, 50.0, 100.0),
+            distance=(0.0, 100.0, 200.0),
+        )
+        assert dmap.axes == ("channel", "instrument_distance")
+
+    def test_bad_axis_name_raises(self):
+        """A map is read on an input axis, not on any of its fields."""
+        dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
+        with pytest.raises(InvalidInventoryError, match="not a DistanceMap input"):
+            dmap.map_to_distance([0.5], axis="distance")

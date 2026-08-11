@@ -116,18 +116,37 @@ DataCategory = Literal["", "DAS", "DTS", "DSS"]
 VALID_DATA_CATEGORIES = get_args(DataCategory)
 
 max_lens = {
-    "path": 120,
-    "file_format": 15,
     "tag": 100,
-    "network": 12,
-    "station": 12,
+    # Four codes of at most 12 characters plus separators, with headroom.
+    "acquisition_key": 64,
     "dims": 40,
-    "file_version": 9,
-    "experiment_id": 50,
-    "instrument_id": 50,
     "data_type": 32,
     "data_category": 4,
 }
+
+# Observing-system facts a reader may put in patch attrs. Every name is a
+# field of the inventory's Acquisition, or of its Interrogator when dotted,
+# so a value read from a file header and the same value enriched from an
+# inventory are one attr rather than two spellings of one. The units are the
+# inventory's: seconds, hertz, and meters. Readers convert at the parse
+# boundary instead of shipping a companion units attr.
+# Tested against the models in tests/test_core/test_attrs.py.
+INVENTORY_ATTRS = (
+    "closed_fiber_loop",
+    "firmware_version",
+    "gauge_length",
+    "interrogator.instrument_type",
+    "interrogator.manufacturer",
+    "interrogator.model",
+    "interrogator.name",
+    "interrogator.serial_number",
+    "interrogator_port",
+    "pulse_rate",
+    "pulse_width",
+    "sample_rate",
+    "software_version",
+    "spatial_interval",
+)
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
@@ -141,7 +160,21 @@ SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
-PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
+PATCH_MERGE_ATTRS = ("acquisition_key", "dims", "data_type", "data_category")
+
+# Storage provenance: where a patch's bytes live rather than where its
+# signal came from. The spool owns these and no reader may put them in
+# patch attrs, since a patch merged from three files has no single answer.
+# The pre-rename spellings are listed too: a patch carrying one of those is
+# making the same claim under the old name.
+STORAGE_PROVENANCE_ATTRS = (
+    "source_path",
+    "source_format",
+    "source_version",
+    "path",
+    "file_format",
+    "file_version",
+)
 
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]
@@ -187,7 +220,7 @@ same units as the specified dimension, or have units attached.
 
 attr_conflict_description = """
 Indicates how to handle conflicts in attributes other than those
-indicated by dim (eg tag, history, station, etc). If "drop" simply
+indicated by dim (eg tag, history, acquisition_key, etc). If "drop" simply
 drop conflicting attributes, or attributes not shared by all models.
 If "raise" raise an
 [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when

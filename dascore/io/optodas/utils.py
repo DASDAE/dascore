@@ -62,8 +62,8 @@ def _get_attr_dict(header):
     attr_map = {
         "gaugeLength": "gauge_length",
         "unit": "data_units",
-        "instrument": "instrument_id",
-        "experiment": "acquisition_id",
+        "instrument": "interrogator.name",
+        "experiment": "experiment",
     }
     out = {"data_category": "DAS"}
     for head_name, attr_name in attr_map.items():

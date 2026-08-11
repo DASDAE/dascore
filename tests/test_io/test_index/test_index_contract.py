@@ -159,7 +159,7 @@ class TestFlatRelation:
     def test_structural_columns(self, backend):
         """Structural columns."""
         df = backend.query()
-        for col in ("path", "file_format", "file_version", "dims", "shape"):
+        for col in ("source_path", "source_format", "source_version", "dims", "shape"):
             assert col in df.columns
         assert pd.api.types.is_datetime64_dtype(df["time_min"])
         assert pd.api.types.is_timedelta64_dtype(df["time_step"])
@@ -204,7 +204,7 @@ class TestElementDtype:
             return str(path).replace("\\", "/")
 
         expected = {_key(x.source_path): x.dtype for x in make_summaries()}
-        got = {_key(k): v for k, v in zip(df["path"], df["dtype"], strict=True)}
+        got = {_key(k): v for k, v in zip(df["source_path"], df["dtype"], strict=True)}
         assert got == expected
 
     def test_dtype_is_private_in_flat_relation(self):
@@ -411,7 +411,9 @@ class TestNoFalseNegatives:
         for _ in range(25):
             lo = base + np.timedelta64(int(rng.integers(-60, 180)), "s")
             hi = lo + np.timedelta64(int(rng.integers(1, 120)), "s")
-            result_paths = set(backend.query(Query(coords={"time": (lo, hi)}))["path"])
+            result_paths = set(
+                backend.query(Query(coords={"time": (lo, hi)}))["source_path"]
+            )
             for summary in summaries:
                 tcoord = summary.coords.get("time")
                 if tcoord is None or "datetime" not in str(tcoord.dtype):
@@ -429,7 +431,7 @@ class TestNoFalseNegatives:
             lo = float(rng.uniform(-100, 1000))
             hi = lo + float(rng.uniform(1, 500))
             result_paths = set(
-                backend.query(Query(coords={"distance": (lo, hi)}))["path"]
+                backend.query(Query(coords={"distance": (lo, hi)}))["source_path"]
             )
             for summary in summaries:
                 dcoord = summary.coords.get("distance")
@@ -466,7 +468,7 @@ class TestSourceLifecycle:
         backend.delete_sources(["das/file_1.h5"])
         df = backend.query()
         assert len(df) == 3
-        assert "das/file_1.h5" not in set(df["path"])
+        assert "das/file_1.h5" not in set(df["source_path"])
         # the deleted source's patches (and their dependents) are gone,
         # not merely filtered out of the query.
         remaining = set(backend._fetch_df("SELECT patch_id FROM patches")["patch_id"])

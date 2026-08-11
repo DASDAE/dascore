@@ -532,7 +532,7 @@ class TestMergeCompatibleCoordsAttrs:
 
     def test_incompatible_attrs(self, random_patch):
         """Ensure if attrs are off an Error is raised."""
-        new = random_patch.update_attrs(network="TA")
+        new = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
         match = "attributes are not equal"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
@@ -857,7 +857,8 @@ class TestGetPatchName:
         """Ensure the path column works."""
         names = get_patch_names(random_directory_spool)
         df = random_directory_spool.get_contents()
-        expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
+        paths = df["source_path"].str.split("/")
+        expected = pd.Series([x[-1].split(".")[0] for x in paths])
         assert np.all(names == expected)
 
     def test_path_column_leave_extension(self, random_directory_spool):
@@ -868,7 +869,7 @@ class TestGetPatchName:
     def test_mixed_path_sources_use_metadata(self, random_spool):
         """Mixed real and memory paths consistently use metadata names."""
         df = random_spool.get_contents().iloc[:2].copy()
-        df["path"] = ["/tmp/real_file.h5", "memory://registry/patch"]
+        df["source_path"] = ["/data/real_file.h5", "memory://registry/patch"]
         names = get_patch_names(df)
         assert names.iloc[0] != "real_file"
         assert names.iloc[1] != "patch"
@@ -876,7 +877,7 @@ class TestGetPatchName:
     def test_multiple_coord_fields(self, random_spool):
         """Naming on more than one coordinate flattens the min/max fields."""
         # drop path so the coordinate-based naming branch is exercised
-        df = random_spool.get_contents().drop(columns=["path"], errors="ignore")
+        df = random_spool.get_contents().drop(columns=["source_path"], errors="ignore")
         names = get_patch_names(df, coords=("time", "distance"))
         assert len(names) == len(df)
         assert names.str.len().gt(0).all()
@@ -1158,3 +1159,15 @@ class TestForcePatchMergeOverlap:
         out = _force_patch_merge(infos, merge_kwargs={})
         assert len(out) == 1
         assert out[0]["patch"] is random_patch
+
+
+class TestDottedPatchNames:
+    """A acquisition_key puts dots in the name it generates."""
+
+    def test_name_round_trips_through_a_file(self, tmp_path, random_patch):
+        """Writing a patch under its own name and re-reading keeps the name."""
+        patch = random_patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
+        name = patch.get_patch_name()
+        assert "DAS.R2D1..RAW" in name
+        patch.io.write(tmp_path / f"{name}.h5", "dasdae")
+        assert get_patch_names(dc.spool(tmp_path).update()).iloc[0] == name

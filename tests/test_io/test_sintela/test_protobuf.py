@@ -364,9 +364,9 @@ class TestSintelaProtobuf:
         patch = fiber_io.read(path)[0]
         assert patch.dims == ("time", "distance")
         assert patch.attrs.recorder_namespace == "manualRecord/recorder"
-        assert patch.attrs.instrument_id == "SN123"
-        assert patch.attrs.instrument_manufacturer == "Sintela"
-        assert patch.attrs.instrument_model == "Onyx"
+        assert patch.attrs.get("interrogator.serial_number") == "SN123"
+        assert patch.attrs.get("interrogator.manufacturer") == "Sintela"
+        assert patch.attrs.get("interrogator.model") == "Onyx"
         assert patch.attrs.fiber_id == 2
         assert patch.attrs.data_type == "strain"
 
@@ -818,8 +818,8 @@ class TestSintelaProtobuf:
         records = [ts_records[0], ("META", _build_meta_payload()), ts_records[1]]
         path = write_sintela_file("ts_trailing_meta.pb", records)
         patch = fiber_io.read(path)[0]
-        assert patch.attrs.instrument_manufacturer == "Sintela"
-        assert patch.attrs.serial_number == "SN123"
+        assert patch.attrs.get("interrogator.manufacturer") == "Sintela"
+        assert patch.attrs.get("interrogator.serial_number") == "SN123"
 
     def test_timeseries_read_rejects_dropped_samples(
         self, fiber_io, write_sintela_file, ts_records
