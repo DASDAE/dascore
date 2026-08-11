@@ -576,6 +576,20 @@ class TestRemoveInventory:
         assert spool.remove_inventory()[0].equals(patch)
 
 
+class TestMultiValuedTrackFields:
+    """A coordinate holds one value per channel, so containers cannot go in."""
+
+    def test_mapping_field_raises_patch_error(self, patch, inventory):
+        """`extra_fields` is a real field of every track, and holds a mapping."""
+        old = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        coupling = old.coupling[0]
+        inv = inventory.replace(
+            old, old.new(coupling=(coupling.new(extra_fields={"a": 1}),))
+        )
+        with pytest.raises(PatchError, match="multi-valued"):
+            patch.enrich(inv, attrs=False, coords=("coupling.extra_fields",))
+
+
 class TestOnUnresolved:
     """What a spool does with a patch its inventory does not describe."""
 
