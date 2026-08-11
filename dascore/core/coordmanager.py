@@ -470,6 +470,10 @@ class CoordManager(DascoreBaseModel):
         ----------
         *coords
             The name of the coordinate or dimension, or a sequence of them.
+        array
+            An array to reduce along with the coordinates; the dimensions
+            belonging to dropped coordinates are collapsed. If None, the
+            returned array is also None.
         """
         dim_drop_list = []
         # iterate is applied per argument; the varargs tuple is already

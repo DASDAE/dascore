@@ -647,6 +647,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
         The path to the directory, if None, create tempdir.
     file_format
         The file format for the saved files.
+    extension
+        The file extension given to each saved file.
     """
     if path is None:
         path = Path(tempfile.mkdtemp())

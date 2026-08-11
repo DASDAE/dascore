@@ -265,7 +265,15 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         """
 
     @abc.abstractmethod
-    def select(self, **kwargs) -> Self:
+    def select(
+        self,
+        *,
+        _attrs: dict | None = None,
+        _coords: dict | None = None,
+        samples: bool = False,
+        relative: bool = False,
+        **kwargs,
+    ) -> Self:
         """
         Sub-select parts of the spool.
 

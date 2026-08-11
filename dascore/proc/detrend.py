@@ -21,6 +21,8 @@ def detrend(
 
     Parameters
     ----------
+    patch
+        The patch to detrend.
     dim
         The dimension ("distance" or "time") along where detrending is applied.
     type

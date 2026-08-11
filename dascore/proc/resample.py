@@ -50,6 +50,8 @@ def decimate(
 
     Parameters
     ----------
+    patch
+        The patch to decimate.
     filter_type
         filter type to use to avoid aliasing. Options are:
             iir - infinite impulse response
