@@ -48,8 +48,15 @@ def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
     ``distance_min`` of 65.6 is self-explaining only with
     ``distance_units`` of ``ft`` in view. The private spellings exist
     for the planners (public columns are conflict-policed on merge), so
-    only the presented frame renames them — and never onto a column
-    that already exists, since a stored attr may own the public name.
+    only the presented frame renames them.
+
+    An existing public column is never overwritten. For frames the index
+    builds this cannot happen: an attr whose name would claim a
+    coordinate's public units column is omitted from the flat view with
+    a warning, the same rule that protects envelope columns. A frame
+    assembled some other way keeps whatever it already had, and its
+    private column simply stays private rather than silently replacing
+    a value this function cannot vouch for.
     """
     renames = {}
     for col in df.columns:

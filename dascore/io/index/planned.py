@@ -41,6 +41,7 @@ from dascore.io.index.ingest import (
     _coord_record,
     typed_value,
 )
+from dascore.units import get_quantity
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_patches
@@ -54,6 +55,17 @@ _READ_KWARGS = ("path", "file_format", "file_version")
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
+
+
+def _source_units_column(name: str) -> str:
+    """Return the private column recording a member's own unit spelling.
+
+    Deliberately not ``_{name}_source_units``: a coordinate may be named
+    ``{name}_source``, whose own unit column has exactly that spelling.
+    Every coordinate unit column ends in ``_units``, so a name ending in
+    ``_source`` instead can never be one.
+    """
+    return f"_{name}_units_source"
 
 
 def _def_key_fingerprint(key) -> str | None:
@@ -393,12 +405,38 @@ class PlanResolver(PatchResolver):
             # are optional — slower, never wrong) and the exact trim is
             # applied above in plan units.
             plan_units = kwargs.get(f"_{self.dim}_units")
-            source_units = kwargs.get(f"_{self.dim}_source_units", plan_units)
+            source_units = kwargs.get(_source_units_column(self.dim), plan_units)
             if plan_units is not None and source_units != plan_units:
                 for suffix in ("_min", "_max", "_step"):
                     trim.pop(f"{self.dim}{suffix}", None)
         patch = self.loader.resolve(kwargs, **trim)
-        return apply_exact_residuals(patch, self.parent_residuals)
+        patch = apply_exact_residuals(patch, self.parent_residuals)
+        return self._in_plan_units(patch, kwargs)
+
+    def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
+        """
+        Re-express the chunked dimension in the unit the plan advertises.
+
+        A partition mixing compatible spellings is planned in one of
+        them, and the output rows say so, so a member kept in its own
+        spelling would make the catalog describe an envelope no patch it
+        yields actually has. Merging already converted its members; this
+        covers the single-member outputs merging never visits.
+        Identity mode is exempt: it promises the untouched patch.
+        """
+        if self.mode == "identity":
+            return patch
+        plan_units = kwargs.get(f"_{self.dim}_units")
+        if plan_units is None or pd.isnull(plan_units) or plan_units == "":
+            return patch
+        coord = patch.coords.coord_map.get(self.dim)
+        current = getattr(coord, "units", None) if coord is not None else None
+        if current is None or get_quantity(current) == get_quantity(plan_units):
+            return patch
+        # raw_function: the conversion serves the plan's own bookkeeping,
+        # and a history entry on some members but not others would make
+        # otherwise-mergeable members conflict on attrs.
+        return dc.proc.units.convert_units.raw_function(patch, **{self.dim: plan_units})
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
@@ -475,8 +513,17 @@ def derived_catalog(
     # source's own spelling survives under a renamed column so member
     # loading can tell when a bare read hint would mean the wrong unit.
     unit_col = f"_{name}_units"
+    source_unit_col = _source_units_column(name)
     if unit_col in trim_cols and unit_col in sources.columns:
-        sources = sources.rename(columns={unit_col: f"_{name}_source_units"})
+        if source_unit_col in sources.columns:
+            # Re-chunking a derived view: these rows already record the
+            # file's own spelling, and that — not the previous plan's
+            # unit — is what the loader will meet. Renaming again would
+            # also duplicate the column, which silently drops one of the
+            # two when the rows become load kwargs.
+            sources = sources.drop(columns=[unit_col])
+        else:
+            sources = sources.rename(columns={unit_col: source_unit_col})
     member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_id",

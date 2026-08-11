@@ -892,6 +892,78 @@ class TestMixedUnitChunk:
         assert sum(p.shape[p.get_axis("distance")] for p in out) == 2 * n
         assert all(p.shape[p.get_axis("distance")] for p in out)  # none empty
 
+    @staticmethod
+    def _continuous_mixed_spool():
+        """Metre and feet patches covering one continuous 600 m span."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        return dc.spool([pm, pf.set_units(distance="ft")])
+
+    def test_single_member_output_speaks_plan_units(self):
+        """An output the merge never visits still matches its plan row.
+
+        Merging converts its members to one unit, but an output drawing
+        on a single member skips that path — so a feet member could be
+        published under a row claiming metres, making `get_contents`
+        describe an envelope no patch it yields actually has.
+        """
+        spool = self._continuous_mixed_spool().chunk(
+            distance=200, keep_partial=True, conflict="keep_first"
+        )
+        df = spool.get_contents()
+        assert set(df["distance_units"]) == {"m"}
+        for patch, (_, row) in zip(spool, df.iterrows(), strict=True):
+            coord = patch.get_coord("distance")
+            assert str(coord.units) == "1 m"
+            assert float(coord.min()) == pytest.approx(row["distance_min"])
+            assert float(coord.max()) == pytest.approx(row["distance_max"])
+        # the envelope the last row advertises is selectable
+        assert len(spool.select(distance=(400, 599))) == 1
+
+    def test_provenance_column_survives_a_like_named_coord(self):
+        """A coordinate named ``{dim}_source`` is not mistaken for units.
+
+        Its own unit column is ``_distance_source_units``, which the
+        provenance column must not collide with.
+        """
+        spool = self._continuous_mixed_spool()
+        patches = []
+        for patch in spool:
+            size = patch.coord_shapes["distance"][0]
+            values = np.arange(size, dtype=float)
+            new = patch.update_coords(distance_source=("distance", values))
+            patches.append(new.set_units(distance_source="s"))
+        chunked = dc.spool(patches).chunk(
+            distance=200, keep_partial=True, conflict="keep_first"
+        )
+        rows = chunked._catalog.resolver.member_rows
+        assert set(rows["_distance_units_source"]) == {"m", "ft"}
+        assert set(rows["_distance_units"]) == {"m"}
+        n = sum(p.shape[p.get_axis("distance")] for p in chunked)
+        assert n == 600
+
+    def test_rechunk_keeps_one_source_units_column(self):
+        """Re-chunking a derived view must not duplicate the unit column.
+
+        The plan records the file's own spelling beside its normalized
+        unit; renaming again on the second pass produced two columns of
+        one name, and one of them silently vanished when the rows became
+        load kwargs — so a member could be trimmed in the wrong unit.
+        """
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        pf = pf.set_units(distance="ft")
+        first = dc.spool([pm, pf]).chunk(distance=200, keep_partial=True)
+        second = first.chunk(distance=None, conflict="keep_first")
+        rows = second._catalog.resolver.member_rows
+        assert not rows.columns.duplicated().any()
+        # the file's own spelling survives, not the plan's normalized unit
+        assert set(rows["_distance_units_source"]) == {"m", "ft"}
+
     def test_affine_quantity_length_is_a_delta(self):
         """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
         degf = dc.get_example_patch().set_units(distance="degF")
@@ -1057,7 +1129,12 @@ class TestChainedChunk:
 
 
 class TestMatchMergeUnits:
-    """The member unit normalizer's defensive paths."""
+    """The member unit normalizer's defensive paths.
+
+    Plan-driven assembly re-expresses each member in the plan's unit
+    before this runs, so these branches are exercised directly rather
+    than through a chunk.
+    """
 
     def test_incompatible_units_pass_through(self):
         """Dimensionality mismatches pass through for the merge to police."""
@@ -1066,6 +1143,17 @@ class TestMatchMergeUnits:
         out, kept = _match_merge_units(patch, "distance", target)
         assert out is patch  # unconverted
         assert kept == target
+
+    def test_compatible_units_convert(self):
+        """A member spelled differently converts to the target."""
+        patch = dc.get_example_patch().set_units(distance="ft")
+        target = get_quantity("m").units
+        out, kept = _match_merge_units(patch, "distance", target)
+        assert kept == target
+        coord = out.get_coord("distance")
+        assert get_quantity(coord.units) == get_quantity("m")
+        original = patch.get_coord("distance")
+        assert float(coord.max()) == pytest.approx(float(original.max()) * 0.3048)
 
 
 class TestUnitChunkValue:

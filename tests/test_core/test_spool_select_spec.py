@@ -403,6 +403,16 @@ class TestUnitCanonicalSelection:
         )
         got = dc.spool([plain, ft_patch]).select(distance=(20 * m, 60 * m))
         assert len(got.get_contents()) == 2  # no UnitError on the unitless row
+        # materializing applies the residual: the unitless coordinate reads
+        # the canonical SI magnitudes bare (documented policy), the feet
+        # coordinate converts.
+        by_units = {str(p.get_coord("distance").units): p for p in got}
+        plain_coord = by_units["None"].get_coord("distance")
+        assert float(plain_coord.min()) >= 20
+        assert float(plain_coord.max()) <= 60
+        ft_coord = by_units["1 ft"].get_coord("distance")
+        assert float(ft_coord.min()) >= 65  # 20 m == 65.6 ft
+        assert float(ft_coord.max()) <= 197
 
     def test_scalar_coord_rejected(self, ft_patch):
         """A scalar coordinate selector is rejected eagerly, clearly."""
