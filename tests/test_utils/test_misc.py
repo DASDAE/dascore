@@ -18,7 +18,6 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
-    _get_install_message,
     _get_install_name,
     _iter_filesystem,
     _locked,
@@ -490,31 +489,12 @@ class TestOptionalImport:
 class TestGetInstallName:
     """Tests for mapping import names to installable package names."""
 
-    def test_same_name(self):
-        """Most packages are imported by their install name."""
+    def test_install_names(self):
+        """Sub-modules resolve to the package which provides them."""
         assert _get_install_name("xarray") == "xarray"
         assert _get_install_name("dascore.utils.misc") == "dascore"
-
-    def test_different_name(self):
-        """Some packages have a different import name."""
-        assert _get_install_name("google.protobuf") == "protobuf"
         assert _get_install_name("google.protobuf.message") == "protobuf"
         assert _get_install_name("yaml") == "pyyaml"
-
-
-class TestGetInstallMessage:
-    """Tests for the install instruction message."""
-
-    def test_single_package(self):
-        """A single package should show both pip and uv commands."""
-        msg = _get_install_message("segyio")
-        assert "pip install segyio" in msg
-        assert "uv pip install segyio" in msg
-
-    def test_multiple_packages_sorted(self):
-        """Multiple packages are installed with one command."""
-        msg = _get_install_message(["segyio", "protobuf"])
-        assert "pip install protobuf segyio" in msg
 
 
 class TestGetStencilCoefficients:

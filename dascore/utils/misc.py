@@ -549,7 +549,7 @@ def optional_import(
         # Raise here (rather than with warn_or_raise) so the install name is
         # attached to the exception for callers which aggregate them.
         if on_missing == "raise":
-            raise MissingOptionalDependencyError(msg, install_name=install_name)
+            raise MissingOptionalDependencyError(msg, install_name=install_name) from ex
         warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
         mod = None
     return mod

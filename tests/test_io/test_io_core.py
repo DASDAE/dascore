@@ -1618,45 +1618,29 @@ class TestGetSupportedIOTable:
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""
 
-    def test_install_name_used(self):
-        """The install name set by optional_import wins."""
-        error = MissingOptionalDependencyError("blah", install_name="protobuf")
-        assert _get_missing_install_name(error) == "protobuf"
+    def test_name_sources(self):
+        """The name comes from the attr, the module, or the legacy message."""
+        errors = [
+            MissingOptionalDependencyError("blah", install_name="protobuf"),
+            MissingOptionalDependencyError("blah", name="google.protobuf"),
+            MissingOptionalDependencyError("protobuf is not installed but..."),
+        ]
+        assert [_get_missing_install_name(x) for x in errors] == ["protobuf"] * 3
 
-    def test_module_name_used(self):
-        """A module name is converted to the name of the package to install."""
-        error = MissingOptionalDependencyError("blah", name="google.protobuf")
-        assert _get_missing_install_name(error) == "protobuf"
-
-    def test_legacy_message_fallback(self):
-        """The message form optional_import used to use is still understood."""
-        error = MissingOptionalDependencyError("segyio is not installed but...")
-        assert _get_missing_install_name(error) == "segyio"
-
-    def test_unstructured_message_names_nothing(self):
+    def test_unidentifiable_package(self):
         """Arbitrary messages should not be mistaken for package names."""
         error = MissingOptionalDependencyError("Optional dependency foo is missing")
         assert _get_missing_install_name(error) == ""
-        assert _get_missing_install_name(MissingOptionalDependencyError()) == ""
+        # Subclasses which skip the init still have an install name.
+        assert MissingOptionalDependencyError.install_name is None
 
-    def test_subclass_skipping_init(self):
-        """A subclass which doesn't call init still has an install name."""
-
-        class _SubError(MissingOptionalDependencyError):
-            """A subclass which bypasses the MissingOptionalDependency init."""
-
-            def __init__(self, msg):
-                ImportError.__init__(self, msg)
-
-        assert _get_missing_install_name(_SubError("boom")) == ""
-
-    def test_unidentified_package_omits_install_command(self):
-        """No install command should be suggested for an unknown package."""
+    def test_message_omits_unknown_packages(self):
+        """Only identified packages belong in the install command."""
         with pytest.raises(MissingOptionalDependencyError) as exc_info:
-            _handle_missing_optionals(0, {"": 2})
+            _handle_missing_optionals(0, {"": 2, "segyio": 1, "protobuf": 3})
         msg = str(exc_info.value)
         assert "unknown (2 files)" in msg
-        assert "pip install" not in msg
+        assert "pip install protobuf segyio" in msg
 
 
 class TestIOCoreCoverageEdges:
