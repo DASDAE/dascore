@@ -131,6 +131,7 @@ reference:
       - read
       - scan
       - scan_to_df
+      - scan_payloads
       - write
       - get_format
 
@@ -138,17 +139,25 @@ reference:
     desc: The central data structures of DASCore
     contents:
       - name: Patch
-        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, get_patch_name, T]
+        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, get_coord, get_patch_name, T]
       - name: BaseSpool
         members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, stack, update]
       - name: Spool
         members: [from_directory, from_file, chunk_plan, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
         members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, update]
+      - name: PatchSummary
+        members: [dim_tuple, dump_structured, flat_dump, from_patch, get_coord_summary, get_summary_df]
       - name: CoordManager
         members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, validate_data]
       - name: proc.BaseCoord
-        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
+        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_discontinuities, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
+      - name: proc.CoordSegmented
+        members: [from_array, get_discontinuities, simplify]
+      - core.coords.CoordRange
+      - core.coords.CoordMonotonicArray
+      - core.coords.CoordSummary
+      - core.coords.concat_coords
       - get_coord
       - get_coord_manager
 
@@ -159,6 +168,17 @@ reference:
     contents:
       - proc.abs
       - proc.add_distance_to
+      - proc.aggregate.aggregate
+      - proc.aggregate.all
+      - proc.aggregate.any
+      - proc.aggregate.first
+      - proc.aggregate.last
+      - proc.aggregate.max
+      - proc.aggregate.mean
+      - proc.aggregate.median
+      - proc.aggregate.min
+      - proc.aggregate.std
+      - proc.aggregate.sum
       - proc.align_patch_coords
       - proc.align_to_coord
       - proc.angle
@@ -303,6 +323,7 @@ reference:
     contents:
       - io.FiberIO
       - io.PatchIO
+      - io.ScanPayload
       - io.dataframe_to_patch
       - io.patch_to_dataframe
       - io.obspy_to_patch
@@ -326,7 +347,9 @@ reference:
     contents:
       - utils.array.apply_ufunc
       - utils.array.apply_array_func
+      - utils.chunk_plan.ChunkPlan
       - utils.patch.merge_compatible_coords_attrs
+      - utils.remote_io.clear_remote_file_cache
 
   - title: Exceptions
     desc: Exception classes raised by DASCore
@@ -338,6 +361,7 @@ reference:
       - exceptions.CoordDataError
       - exceptions.CoordMergeError
       - exceptions.CoordSortError
+      - exceptions.DASCorePluginError
       - exceptions.DASVaderCompatibilityError
       - exceptions.DependencyError
       - exceptions.FilterValueError
@@ -345,16 +369,21 @@ reference:
       - exceptions.InvalidFiberFileError
       - exceptions.InvalidFiberIOError
       - exceptions.InvalidFileHandlerError
+      - exceptions.InvalidIndexError
       - exceptions.InvalidIndexVersionError
+      - exceptions.InvalidInventoryError
       - exceptions.InvalidSpoolError
+      - exceptions.InvalidSpoolQueryError
       - exceptions.InvalidTimeRangeError
       - exceptions.MissingOptionalDependencyError
+      - exceptions.MissingPatchError
       - exceptions.ParameterError
       - exceptions.PatchAttributeError
       - exceptions.PatchBroadcastError
       - exceptions.PatchConversionError
       - exceptions.PatchCoordinateError
       - exceptions.PatchError
+      - exceptions.RemoteCacheError
       - exceptions.TimeError
       - exceptions.UnitError
       - exceptions.UnknownExampleError

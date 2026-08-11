@@ -35,6 +35,7 @@ MODULE_SECTIONS = {
     "dascore.exceptions": "reference/index.html#exceptions",
     "dascore.io": "reference/index.html#io-interfaces",
     "dascore.proc": "reference/index.html#patch-processing",
+    "dascore.proc.aggregate": "reference/index.html#patch-processing",
     "dascore.transform": "reference/index.html#transforms",
     "dascore.units": "reference/index.html#units-and-time",
     "dascore.utils": "reference/index.html#utilities",

@@ -115,3 +115,5 @@ prof/
 #JetBrains
 .idea/
 great-docs/
+# Quarto freeze cache written by great-docs builds.
+_freeze/

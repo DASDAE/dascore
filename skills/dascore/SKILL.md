@@ -48,7 +48,7 @@ for patch in spool:
 | Read data files | `dc.spool(path)[0]` or iterate | `dc.read` (low-level) |
 | Discover file metadata cheaply | `dc.scan(path)` / `dc.scan_to_df(path)` | reading whole files |
 | Subset by time/distance values | `patch.select(time=(t1, t2))` | index math |
-| Subset by sample index | `patch.select(time=(0, 100), samples=True)` | `iselect` shorthand also exists |
+| Subset by sample index | `patch.select(time=(0, 100), samples=True)` | index math on `patch.data` |
 | Merge contiguous patches | `spool.chunk(time=None)` | manual `np.concatenate` |
 | Fixed-length windows | `spool.chunk(time=30, overlap=5)` | manual slicing |
 | Parallel processing | `spool.map(func, client=executor)` | multiprocessing on patches directly |
@@ -83,7 +83,7 @@ for patch in spool:
 - DASCore handles single-experiment array data, not seismic network
   workflows — use ObsPy for station/inventory-based seismology.
 - Supported formats and their read/scan/write capabilities are listed at
-  https://dascore.org/supported_formats.html — writing is only supported
+  https://dascore.org/about/supported_formats.html — writing is only supported
   for a few formats (DASDAE, and converters via ObsPy/xarray).
 - For very large datasets, prefer `spool.select(...).chunk(...)` before
   loading; patches load lazily from directory spools.
