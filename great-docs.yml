@@ -87,7 +87,6 @@ exclude:
   - warnings
   - compat.MATERIALIZE_NOW
   - compat.random_state
-  - examples.compose_docstring
   - examples.fetch
   - examples.iterate
   - examples.get_patch_names
@@ -117,9 +116,7 @@ exclude:
   - units.is_timedelta64
   - units.iterate
   - units.maybe_convert_percent_to_fraction
-  - units.numeric
   - units.quant_sequence_to_quant_array
-  - units.str_or_none
   - units.unbyte
   - units.UnitError
   - viz.PatchNameSpace
@@ -143,9 +140,9 @@ reference:
       - name: Patch
         members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, get_patch_name, T]
       - name: BaseSpool
-        members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, update, viz]
+        members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, stack, update]
       - name: Spool
-        members: [from_directory, from_file, chunk_plan, stack, spool_path, indexer, has_live_patches]
+        members: [from_directory, from_file, chunk_plan, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
         members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, update]
       - name: CoordManager
@@ -306,7 +303,6 @@ reference:
     contents:
       - io.FiberIO
       - io.PatchIO
-      - io.PatchFileSummary
       - io.dataframe_to_patch
       - io.patch_to_dataframe
       - io.obspy_to_patch

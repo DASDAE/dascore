@@ -1,6 +1,6 @@
 """Summary models for patch workflows.
 
-See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+See [Coordinate Internals](/notes/coordinate_internals.qmd) for the
 relationship between full coords, exact coord summaries, and flattened index metadata.
 """
 
