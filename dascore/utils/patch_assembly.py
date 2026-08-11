@@ -20,8 +20,9 @@ import pandas as pd
 
 import dascore as dc
 from dascore.exceptions import CoordMergeError, UnitError
+from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
-from dascore.utils.misc import broadcast_for_index, express_range_for_coord
+from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
     _get_merge_dim,
@@ -109,25 +110,31 @@ def _coord_only_kwargs(patch, kwargs) -> dict:
     }
 
 
-def _as_native_units(patch, kwargs) -> dict:
+def _as_plan_units(patch, kwargs, row) -> dict:
     """
     Re-express plan trims in the units each patch coordinate needs.
 
-    A plan hands down canonical SI magnitudes; applied raw they trim the
-    wrong physical interval on a coordinate in any other unit — 20 to 60
-    metres becomes 20 to 60 feet. This is the same deferral the exact
-    residual of `Spool.select` performs, through the same helper, so the
-    two paths cannot drift apart.
+    A plan hands down magnitudes in the partition's unit (the row's
+    ``_{name}_units``, one unit per partition after normalization).
+    The loaded member may keep a different compatible spelling — a feet
+    patch in a metre-normalized partition — so unit-bearing trims become
+    quantities and `Patch.select` converts them to the coordinate's own
+    units. Unitless rows pass bare magnitudes, which the coordinate
+    reads natively.
     """
     coord_map = patch.coords.coord_map
-    return {
-        name: (
-            express_range_for_coord(value, coord_map[name], bare_is_si=True)
-            if name in coord_map
-            else value
+    out = {}
+    for name, value in kwargs.items():
+        plan_units = row.get(f"_{name}_units")
+        no_units = plan_units is None or pd.isnull(plan_units) or plan_units == ""
+        if name not in coord_map or no_units or not is_range(value):
+            out[name] = value
+            continue
+        quantity = get_quantity(str(plan_units))
+        out[name] = tuple(
+            None if v is None or v is Ellipsis else v * quantity for v in value
         )
-        for name, value in kwargs.items()
-    }
+    return out
 
 
 @dataclass
@@ -187,7 +194,7 @@ class PatchAssembler:
         # attr-style entries filter rows above; only coordinate entries
         # are valid patch selections.
         if select_kwargs := _coord_only_kwargs(patch, source_kwargs):
-            patch = patch.select(**_as_native_units(patch, select_kwargs))
+            patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         return patch
 
     def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):

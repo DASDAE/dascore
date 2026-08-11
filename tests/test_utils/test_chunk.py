@@ -368,13 +368,19 @@ class TestQuantityChunkValues:
         assert quant.outputs.equals(bare.outputs)
 
     def test_numeric_dim_unit(self, contiguous_df):
-        """Numeric envelopes are canonical SI, so mm converts to m."""
+        """A quantity length converts to the frame's stated coord units."""
         # one row, so chunking distance has no time envelopes to merge
-        single = contiguous_df.iloc[[0]]
+        single = contiguous_df.iloc[[0]].assign(_distance_units="m")
         quant = build_chunk_plan(single, distance=2000 * dc.units.mm)
         # a quantity's magnitude is a float, so compare to the float value
         bare = build_chunk_plan(single, distance=2.0)
         assert quant.outputs.equals(bare.outputs)
+
+    def test_quantity_without_stated_units_raises(self, contiguous_df):
+        """A frame recording no units cannot interpret a quantity length."""
+        single = contiguous_df.iloc[[0]]
+        with pytest.raises(UnitError, match="records no units"):
+            build_chunk_plan(single, distance=2000 * dc.units.mm)
 
     def test_overlap_quantity(self, contiguous_df):
         """Overlap accepts the same forms as the chunk length."""

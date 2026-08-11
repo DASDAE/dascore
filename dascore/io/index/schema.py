@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 7
+INDEX_VERSION = 8
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -147,7 +147,11 @@ class CoordDefRow(NamedTuple):
     value_kind: str  # num | time | str
     dtype: str
     length: int | None
-    units: str | None  # original unit string; numeric values stored SI
+    # The ORIGINAL unit string as ingested, never converted — and the
+    # numeric envelope below is stored in these same original units, so
+    # the index shows what the patch shows. Unit-bearing queries convert
+    # themselves per stored unit at query time.
+    units: str | None
     min_num: float | None
     max_num: float | None
     step_num: float | None

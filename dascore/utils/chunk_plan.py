@@ -32,7 +32,14 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.units import DimensionalityError, Quantity, get_byte_count, is_data_size
+from dascore.units import (
+    DimensionalityError,
+    Quantity,
+    convert_units,
+    get_byte_count,
+    get_quantity,
+    is_data_size,
+)
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
@@ -241,6 +248,70 @@ def _continuity_group(start, stop, step, tolerance) -> pd.Series:
     return group[start.index]
 
 
+def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    Re-express the chunk dim's envelopes in one unit per dimensionality.
+
+    Envelope columns are stored in each coordinate's original units, so
+    compatible spellings (metres beside feet) are not directly
+    comparable. Rows sharing a dimensionality convert to the unit of
+    their first row — ordered by (envelope min in base units, patch id),
+    the same deterministic order partitions present in — so continuity
+    and instruction math stay valid and the plan speaks one unit per
+    partition. The rewritten ``_{name}_units`` column tells assembly
+    (and quantity-valued sizes) which unit that is. Unitless rows are
+    untouched and never grouped with unitful ones.
+
+    Steps convert as deltas (an affine unit's offset must not shift a
+    difference), which the min+step round trip provides.
+    """
+    unit_col = f"_{name}_units"
+    if unit_col not in df.columns:
+        return df
+    units = df[unit_col]
+    present = units.notna() & (units != "")
+    distinct = set(units[present])
+    if len(distinct) < 2:
+        return df
+    buckets: dict[str, list[str]] = {}
+    for unit in distinct:
+        base = str(get_quantity(unit).to_base_units().units)
+        buckets.setdefault(base, []).append(unit)
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    df = df.copy()
+    for base, spellings in buckets.items():
+        if len(spellings) < 2:
+            continue
+        rows = present & units.isin(spellings)
+        sub = df.loc[rows]
+        base_min = pd.Series(np.nan, index=sub.index)
+        for unit in spellings:
+            idx = sub.index[sub[unit_col] == unit]
+            values = sub.loc[idx, min_name].to_numpy(dtype=float)
+            base_min.loc[idx] = convert_units(values, to_units=base, from_units=unit)
+        order = pd.DataFrame({"_min": base_min, "_pid": sub["_patch_id"]}).sort_values(
+            ["_min", "_pid"], kind="stable"
+        )
+        target = str(df.at[order.index[0], unit_col])
+        for unit in spellings:
+            if unit == target:
+                continue
+            idx = sub.index[sub[unit_col] == unit]
+            mins = df.loc[idx, min_name].to_numpy(dtype=float)
+            maxs = df.loc[idx, max_name].to_numpy(dtype=float)
+            new_min = convert_units(mins, to_units=target, from_units=unit)
+            df.loc[idx, min_name] = new_min
+            df.loc[idx, max_name] = convert_units(
+                maxs, to_units=target, from_units=unit
+            )
+            if step_name in df.columns:
+                steps = df.loc[idx, step_name].to_numpy(dtype=float)
+                stepped = convert_units(mins + steps, to_units=target, from_units=unit)
+                df.loc[idx, step_name] = stepped - new_min
+        df.loc[rows, unit_col] = target
+    return df
+
+
 def _partition(
     df, name, group_attrs, tolerance, sampling_tolerance
 ) -> tuple[pd.Series, bool]:
@@ -263,11 +334,13 @@ def _partition(
     # (spec 2.2). Non-dimensional coordinate conflicts are policed at
     # assembly per the `conflict` argument, never partitioned on.
     cols += [x for x in _dim_def_key_columns(df, name) if x in df.columns]
-    # The chunked dim's canonical (base) units partition too: envelopes
-    # are SI magnitudes, so without this a metre patch and a second
-    # patch with contiguous magnitudes would plan into one unmergeable
-    # output. Unitless (NULL) stays its own group — assembly cannot
-    # merge unitless with unitful coordinates either.
+    # The chunked dim's units partition too. Envelopes are native, but
+    # _normalize_chunk_units has already re-spelled every compatible
+    # unit family to one unit, so partitioning on the string is exactly
+    # partitioning on dimensionality — a metre patch and a seconds
+    # patch with contiguous magnitudes stay apart. Unitless (NULL)
+    # stays its own group — assembly cannot merge unitless with unitful
+    # coordinates either.
     if (unit_col := f"_{name}_units") in df.columns:
         cols.append(unit_col)
     base = (
@@ -520,8 +593,13 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype):
                 f"coordinate's units of {units}."
             )
             raise UnitError(msg) from None
-    # bare frames carry no units column; envelopes are canonical SI.
-    return quant.to_base_units().magnitude
+    # A frame with no units column states no units at all; envelopes are
+    # native magnitudes, so there is nothing to convert the quantity to.
+    msg = (
+        f"Cannot chunk {name!r} by {quant}: the frame records no units "
+        "for the coordinate, so a unit-bearing length is ambiguous."
+    )
+    raise UnitError(msg)
 
 
 def _resolve_partition_length(value, overlap, sub, name, size_step, start_dtype):
@@ -795,6 +873,7 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
     df = _ensure_patch_id(df)
+    df = _normalize_chunk_units(df, name)
     # Missing chunk-dim envelopes, and patches carrying the name only as
     # a non-dimensional coordinate (spec 7 / D2): chunking is defined on
     # dimensions, so both fall under missing_dim. Envelope presence is

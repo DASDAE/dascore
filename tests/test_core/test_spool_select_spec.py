@@ -288,12 +288,12 @@ class TestExistingBehaviorKept:
 
 
 class TestUnitCanonicalSelection:
-    """Coordinate selection on non-SI patches (review P1).
+    """Coordinate selection on non-SI patches (#863).
 
-    The index stores numeric coordinate summaries in canonical SI, so
-    range bounds are interpreted as SI end to end: bare numbers mean
-    canonical SI, quantities convert, and the exact per-patch residual
-    converts back to each patch's native units.
+    The index stores numeric coordinate envelopes in each coordinate's
+    original units, so a bare range means native units — exactly what
+    `Patch.select` means by it — while quantities convert themselves to
+    whatever units each stored definition uses.
     """
 
     @pytest.fixture(scope="class")
@@ -301,11 +301,14 @@ class TestUnitCanonicalSelection:
         """An example patch with distance in feet (0..~984 ft)."""
         return dc.get_example_patch().convert_units(distance="ft")
 
-    def test_bare_numbers_are_canonical_si(self, ft_patch):
-        """(20, 60) means 20-60 m even on a feet-coordinate patch."""
-        coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
-        assert float(coord.min()) >= 65  # 20 m == 65.6 ft
-        assert float(coord.max()) <= 197  # 60 m == 196.9 ft
+    def test_bare_numbers_are_native_units(self, ft_patch):
+        """(20, 60) means 20-60 ft on a feet patch, as Patch.select does."""
+        spooled = dc.spool([ft_patch]).select(distance=(20, 60))[0]
+        direct = ft_patch.select(distance=(20, 60))
+        assert spooled.get_coord("distance") == direct.get_coord("distance")
+        coord = spooled.get_coord("distance")
+        assert float(coord.min()) >= 20
+        assert float(coord.max()) <= 60
 
     def test_quantity_selector(self, ft_patch):
         """Quantity bounds select the same physical interval."""
@@ -341,21 +344,21 @@ class TestUnitCanonicalSelection:
         assert float(coord.max()) <= 197
 
     def test_mixed_unitless_and_feet_bare(self, ft_patch):
-        """A bare range trims each patch in its own units (SI meaning)."""
+        """A bare range trims each patch in its own native units."""
         plain = dc.get_example_patch()  # unitless distance 0..~300
         plain = plain.update_coords(
             distance=plain.get_coord("distance").set_units(None)
         )
         got = dc.spool([plain, ft_patch]).select(distance=(20, 60))
         materialized = [p.get_coord("distance") for p in got]
-        assert len(materialized) == 2  # both overlap 20..60 m
+        assert len(materialized) == 2  # both overlap their own 20..60
         by_units = {str(c.units): c for c in materialized}
         # unitless patch: bare magnitudes applied directly
         assert float(by_units["None"].min()) >= 20
         assert float(by_units["None"].max()) <= 60
-        # feet patch: 20..60 m == 65.6..196.9 ft
-        assert float(by_units["1 ft"].min()) >= 65
-        assert float(by_units["1 ft"].max()) <= 197
+        # feet patch: 20..60 means 20..60 ft
+        assert float(by_units["1 ft"].min()) >= 20
+        assert float(by_units["1 ft"].max()) <= 60
 
     def test_mixed_unitless_and_feet_quantity(self, ft_patch):
         """A metre quantity range works across a mixed population."""
@@ -377,15 +380,16 @@ class TestUnitCanonicalSelection:
             dc.spool([ft_patch]).select(distance=[10, 20, 50])
 
     def test_chained_views(self, ft_patch):
-        """Canonicalization holds across chained selections."""
+        """Native reading holds across chained selections."""
         coord = (
             dc.spool([ft_patch])
             .select(distance=(0 * m, 90 * m))
             .select(distance=(20, 60))[0]
             .get_coord("distance")
         )
-        assert float(coord.min()) >= 65
-        assert float(coord.max()) <= 197
+        # the quantity view keeps 0..295 ft; the bare view means feet
+        assert float(coord.min()) >= 20
+        assert float(coord.max()) <= 60
 
     def test_boolean_mask_selectors_rejected(self, ft_patch):
         """Sample masks are patch-level only; the spool points at map()."""

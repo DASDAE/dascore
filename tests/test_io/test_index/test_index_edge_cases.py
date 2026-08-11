@@ -804,10 +804,13 @@ class TestIngestEdges:
         )
         out = _coord_record("temperature", summary.coords["temperature"])
         assert out is not None
-        assert out.min_num == pytest.approx(273.15)
-        assert out.max_num == pytest.approx(373.15)
+        # Envelopes store the coordinate's original units, never converted,
+        # which sidesteps the degC/K affine-offset hazard entirely: nothing
+        # here needs to know that 0 degC is not 0 K.
+        assert out.min_num == pytest.approx(0.0)
+        assert out.max_num == pytest.approx(100.0)
         assert out.step_num == pytest.approx(1.0)
-        assert out.units == "K"
+        assert out.units == "°C"
 
     def test_relative_root_requires_path_boundary(self):
         """A similarly prefixed path is not made relative to the root."""

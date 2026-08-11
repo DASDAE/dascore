@@ -58,11 +58,15 @@ _DIRECTORY_ORDER = ("coord", "time", True)
 def _envelope_range(value):
     """Return a range with quantity bounds as SI magnitudes.
 
-    Stored envelope columns are canonical SI, so the presented-envelope
-    adjustment needs bare magnitudes; non-numeric ranges pass through.
+    Bare ranges pass through untouched: they mean native units, and the
+    stored envelope columns are native, so the presented-envelope
+    adjustment is a direct comparison. Quantity ranges reduce to their
+    SI magnitudes; `to_df` decides per row how to apply them.
     """
     canonical = _canonical_range(value)
-    return value if canonical is None else canonical.magnitudes
+    if canonical is None or canonical.units is None:
+        return value
+    return canonical.magnitudes
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
@@ -73,10 +77,13 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     quantities itself and needs their units to constrain candidacy to
     dimensionally compatible coordinate definitions (a metre query must
     exclude — or raise on — a seconds coordinate, never trim it).
-    The residual keeps the range as a `_CanonicalRange` (canonical SI
-    magnitudes plus the query's base unit) so each patch decides its
-    own representation at load time, which keeps mixed unitful/unitless
-    populations correct.
+
+    A bare numeric range means each coordinate's native units, so it is
+    its own residual: `Patch.select` reads it natively at load, exactly
+    matching the index candidacy. A unit-bearing range becomes a
+    `_CanonicalRange` (canonical SI magnitudes plus the query's base
+    unit) so each patch decides its own representation at load time,
+    which keeps mixed unitful/unitless populations correct.
 
     Selectors on non-numeric coordinates (time ranges, string ranges)
     pass through unchanged.
@@ -86,6 +93,8 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
         canonical = _canonical_range(value) if name in numeric else None
+        if canonical is not None and canonical.units is None:
+            canonical = None  # bare range: native semantics, no rewrap
         query_coords[name] = value
         residual_coords[name] = value if canonical is None else canonical
     return query_coords, residual_coords
@@ -800,8 +809,9 @@ class PatchCatalog:
                 coords=self._relative_to_absolute(query.coords),
             )
         # coord range predicates are re-applied exactly at patch load;
-        # the residual carries canonical quantities so per-patch native
-        # units are respected while the query side stays SI.
+        # bare ranges are their own residual (native units on both
+        # sides), unit-bearing ones carry canonical quantities so each
+        # patch converts them to its own units.
         residuals = self._residuals
         if query.coords:
             si_coords, residual_coords = _canonical_coord_selectors(

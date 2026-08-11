@@ -884,7 +884,7 @@ class TestMixedUnitChunk:
 
 
 class TestNonSIUnitTrim:
-    """Plan trims are canonical SI; a patch coordinate may not be."""
+    """Plan trims speak the coordinate's own units."""
 
     @pytest.fixture()
     def foot_spool(self):
@@ -896,28 +896,40 @@ class TestNonSIUnitTrim:
         patch = foot_spool[0]
         axis = patch.get_axis("distance")
         expected = patch.shape[axis]
-        # keep_partial so the chunks cover the coordinate exactly; without
-        # it the dropped remainder would mask the samples a bad trim loses
-        out = foot_spool.chunk(distance=100, keep_partial=True)
+        # A quantity length of 100 m is an exact multiple of the 1 m
+        # sample step, so every sample belongs to some chunk; a length
+        # that is not a step multiple loses boundary samples on any
+        # coordinate, units aside (#870). keep_partial so the chunks
+        # cover the coordinate exactly.
+        length = 100 * dc.get_quantity("m")
+        out = foot_spool.chunk(distance=length, keep_partial=True)
         assert sum(x.shape[x.get_axis("distance")] for x in out) == expected
 
     def test_chunk_pieces_match_the_plan(self, foot_spool):
         """Each assembled piece spans the interval the plan advertised."""
-        plan = foot_spool.chunk_plan(distance=100)
-        out = foot_spool.chunk(distance=100)
+        length = 100 * dc.get_quantity("m")
+        plan = foot_spool.chunk_plan(distance=length)
+        out = foot_spool.chunk(distance=length)
         assert len(out) == len(plan.outputs)
         for patch, (_, row) in zip(out, plan.outputs.iterrows(), strict=True):
             coord = patch.get_coord("distance")
-            # the plan speaks SI, the coordinate speaks feet
-            in_si = coord.convert_units("m")
-            assert float(in_si.min()) == pytest.approx(row["distance_min"])
-            assert float(in_si.max()) == pytest.approx(row["distance_max"])
+            # the plan speaks the coordinate's own feet
+            assert float(coord.min()) == pytest.approx(row["distance_min"])
+            assert float(coord.max()) == pytest.approx(row["distance_max"])
 
     def test_trim_is_the_same_physical_interval(self, foot_spool):
         """A 100 m chunk covers 100 m of a coordinate stored in feet."""
-        out = foot_spool.chunk(distance=100)
+        out = foot_spool.chunk(distance=100 * dc.get_quantity("m"))
         span = out[0].get_coord("distance").convert_units("m")
         assert float(span.max() - span.min()) == pytest.approx(99, abs=1.0)
+
+    def test_bare_length_means_native_units(self, foot_spool):
+        """A bare 100 means 100 of the coordinate's own feet."""
+        out = foot_spool.chunk(distance=100, keep_partial=True)
+        coords = [x.get_coord("distance") for x in out]
+        assert all(float(c.max() - c.min()) <= 100 for c in coords)
+        # ~981 ft of coordinate cut into 100 ft pieces
+        assert len(out) == 10
 
     def test_si_coord_unchanged(self):
         """The ordinary SI case keeps its behavior."""

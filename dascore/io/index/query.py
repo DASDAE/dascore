@@ -357,24 +357,47 @@ def build_coord_clause(
             kind_match = kind
         conditions.append("cd.value_kind = ?")
         params.append(kind_match)
-        if compatible_units is not None:
-            # NULL-unit defs stay candidates: IN () never matches NULL and
-            # unitless values cannot be proven dimensionally incompatible.
-            if compatible_units:
-                marks = ", ".join("?" for _ in compatible_units)
-                conditions.append(f"(cd.units IN ({marks}) OR cd.units IS NULL)")
-                params.extend(sorted(compatible_units))
-            else:
-                conditions.append("cd.units IS NULL")
         # lo bounds the coord max (overlap), hi bounds the coord min.
+        # typed_values holds the coerced non-open bounds in (lo, hi) order,
+        # so each side pairs with its TypedValue (which knows the bound's
+        # own units) here.
+        sides = []
         for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
             if bound is None:
                 continue
-            clause = f"cd.{bound_col} {op} ?"
-            if compatible_units is not None:
-                clause = f"(cd.units IS NULL OR {clause})"
-            conditions.append(clause)
-            params.append(bound)
+            sides.append((bound, typed_values[len(sides)], bound_col, op))
+        if compatible_units is None:
+            # A bare range means each definition's native units: one plain
+            # predicate against the envelopes, which are stored in the
+            # coordinate's original units.
+            for bound, _typed, bound_col, op in sides:
+                conditions.append(f"cd.{bound_col} {op} ?")
+                params.append(bound)
+        elif not compatible_units:
+            conditions.append("cd.units IS NULL")
+        else:
+            # A unit-bearing range converts itself once per distinct
+            # compatible stored unit into an OR branch; a bare bound in a
+            # mixed range stays native per branch (Patch.select raises on
+            # mixed bounds at load, so candidacy only needs superset).
+            # NULL-unit defs stay unconstrained candidates: unitless
+            # values cannot be proven dimensionally incompatible.
+            branches = ["cd.units IS NULL"]
+            for unit in sorted(compatible_units):
+                sub_clauses = ["cd.units = ?"]
+                sub_params: list = [unit]
+                for bound, typed, bound_col, op in sides:
+                    if typed.units is None:
+                        val = bound
+                    else:
+                        val = convert_units(
+                            bound, to_units=unit, from_units=typed.units
+                        )
+                    sub_clauses.append(f"cd.{bound_col} {op} ?")
+                    sub_params.append(val)
+                branches.append("(" + " AND ".join(sub_clauses) + ")")
+                params.extend(sub_params)
+            conditions.append("(" + " OR ".join(branches) + ")")
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(
