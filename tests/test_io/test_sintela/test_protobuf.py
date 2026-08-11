@@ -4,6 +4,7 @@ Tests for Sintela protobuf format.
 
 from __future__ import annotations
 
+import gc
 import struct
 import warnings
 from functools import cache
@@ -106,15 +107,27 @@ def _get_num_samples(payload: bytes) -> int:
     return int(msg.header.num_samples)
 
 
-def _build_ts_payloads():
-    """Create two contiguous timeseries packets."""
+def _build_ts_payloads(n_packets: int = 2):
+    """
+    Create a run of contiguous timeseries packets.
+
+    Packet stamps advance by the packet's own duration (3 samples at 2 Hz =
+    1.5 s), so the timestamps and the sample counters tell the same story --
+    which is what a real recording does, and what the scan shortcut checks.
+    """
     packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
     packets = []
-    for offset, sample_count in enumerate((0, 3)):
+    for offset in range(n_packets):
+        sample_count = offset * 3
+        elapsed_ns = offset * 3 * 1_000_000_000 // 2
         msg = packet_cls()
         hdr = msg.header
         common = hdr.common_header
-        _set_timestamp(common.time, 1_700_000_000 + offset)
+        _set_timestamp(
+            common.time,
+            1_700_000_000 + elapsed_ns // 1_000_000_000,
+            elapsed_ns % 1_000_000_000,
+        )
         common.num_channels = 2
         common.sample_rate = 2.0
         common.channel_spacing = 10.0
@@ -161,6 +174,11 @@ def _build_band_payloads():
         )
         packets.append(("BAND", msg.SerializeToString()))
     return packets
+
+
+def _build_real_fft_payloads():
+    """Create two real-valued FFT packets."""
+    return _build_fft_payloads(complex_data=False)
 
 
 def _build_fft_payloads(*, complex_data: bool):
@@ -214,6 +232,74 @@ def _mutate_all(records, message_type: str, mutator):
     for index in range(len(records)):
         out = _mutate_record(out, index, message_type, mutator)
     return out
+
+
+class _BytesReader:
+    """A minimal seekable binary reader over a bytes object."""
+
+    def __init__(self, data):
+        self._data = data
+        self._pos = 0
+
+    def seek(self, pos, whence=0):
+        """Seek from the start, or from the end when whence is 2."""
+        self._pos = len(self._data) + pos if whence == 2 else pos
+
+    def tell(self):
+        """Return the current position."""
+        return self._pos
+
+    def read(self, size=-1):
+        """Read up to size bytes, or the remainder when size is negative."""
+        end = len(self._data) if size < 0 else self._pos + size
+        out = self._data[self._pos : end]
+        self._pos = min(end, len(self._data))
+        return out
+
+
+class _CountingReader:
+    """
+    A binary handle that records how many bytes were actually read.
+
+    Wrapping the handle (rather than sampling process memory) makes the cost
+    of a scan directly observable: protobuf holds sample data in C++ memory
+    that Python's allocation tracing never sees, but every byte still has to
+    come through a ``read`` call first.
+    """
+
+    def __init__(self, handle):
+        self._handle = handle
+        self.bytes_read = 0
+
+    def read(self, size=-1):
+        """Read from the wrapped handle, accumulating the byte count."""
+        out = self._handle.read(size)
+        self.bytes_read += len(out)
+        return out
+
+    def __getattr__(self, name):
+        """Delegate seek/tell and friends to the wrapped handle."""
+        return getattr(self._handle, name)
+
+
+def _bytes_read_by(func, path) -> int:
+    """Return how many bytes ``func`` pulls off disk for ``path``."""
+    with path.open("rb") as handle:
+        reader = _CountingReader(handle)
+        func(reader)
+        return reader.bytes_read
+
+
+def del_samples_beyond(msg, keep: int):
+    """Trim a packet's sample array down to ``keep`` values."""
+    del msg.samples[keep:]
+
+
+def _pad_samples(records, message_type: str, pad: int):
+    """Return records whose packets each carry ``pad`` extra samples."""
+    return _mutate_all(
+        records, message_type, lambda msg: msg.samples.extend([0.0] * pad)
+    )
 
 
 @pytest.fixture()
@@ -363,28 +449,6 @@ class TestSintelaProtobuf:
         # real packets keep the power-spectral-density label
         assert fiber_io.read(real_path)[0].attrs.data_type == "power_spectral_density"
 
-    def test_scan_memory_independent_of_sample_count(self, ts_records):
-        """
-        Metadata-only scans must not hold the sample bytes in memory.
-
-        Protobuf keeps undeclared wire fields as unknown fields, so omitting
-        the sample declarations is not by itself enough. The invariant is
-        that scan-retained size does not grow with the sample payload.
-        """
-
-        def _retained(pad_samples: int) -> int:
-            packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
-            records = []
-            for tag, payload in ts_records:
-                msg = packet_cls()
-                msg.ParseFromString(payload)
-                msg.samples.extend([0.0] * pad_samples)
-                records.append(_envelope((tag, msg.SerializeToString())))
-            parsed, _ = sintela_utils._parse_records(records, scan_mode=True)
-            return sum(msg.ByteSize() for _tag, msg in parsed)
-
-        assert _retained(0) == _retained(5_000)
-
     def test_raw_frame_only_tags_are_not_detected(
         self, fiber_io, write_sintela_file, ts_records
     ):
@@ -493,19 +557,33 @@ class TestSintelaProtobuf:
         with pytest.raises(InvalidFiberFileError, match="Mixed Sintela protobuf"):
             fiber_io.scan(path)
 
-    def test_non_contiguous_timeseries_raises(
+    def test_non_contiguous_timeseries_caught_on_read_not_scan(
         self, fiber_io, write_sintela_file, ts_records
     ):
-        """Timeseries packets with gaps or reordering should fail."""
+        """
+        A self-consistent gap is reported by read, not by scan.
+
+        A paused and resumed acquisition looks, from the endpoints alone, like
+        a longer continuous one: the timestamps corroborate the counters. The
+        summary spans the gap and read raises. A gap whose timestamps do *not*
+        corroborate is caught earlier; see the concatenation test.
+        """
         records = _mutate_record(
             ts_records,
             1,
             "TimeseriesPacket",
-            lambda msg: setattr(msg.header, "sample_count", 10),
+            # 10 samples precede this packet rather than 3, and its stamp moves
+            # out to match: 10 samples at 2 Hz is 5 s after the first.
+            lambda msg: (
+                setattr(msg.header, "sample_count", 10),
+                _set_timestamp(msg.header.common_header.time, 1_700_000_005),
+            ),
         )
         path = write_sintela_file("non_contiguous.pb", records)
+        # The last packet reports 10 samples before it and adds 3 of its own.
+        assert _payload_to_summary(fiber_io.scan(path)[0]).shape[0] == 13
         with pytest.raises(InvalidFiberFileError, match="Non-contiguous"):
-            fiber_io.scan(path)
+            fiber_io.read(path)
 
     def test_bad_magic_returns_false(self, fiber_io, tmp_path):
         """Invalid magic bytes should not identify as the format."""
@@ -607,6 +685,9 @@ class TestSintelaProtobuf:
         assert not fiber_io.get_format(path)
         with pytest.raises(InvalidFiberFileError, match="Truncated"):
             fiber_io.scan(path)
+        # read takes the full-payload path, which detects the short tail too
+        with pytest.raises(InvalidFiberFileError, match="Truncated"):
+            fiber_io.read(path)
 
     def test_bad_protobuf_payloads_raise_invalid_fiber_file_error(
         self, fiber_io, write_sintela_file
@@ -626,6 +707,119 @@ class TestSintelaProtobuf:
             InvalidFiberFileError, match="Failed to parse Sintela protobuf TS05 payload"
         ):
             fiber_io.scan(data_path)
+
+    def test_read_rejects_family_change_between_endpoints(
+        self, fiber_io, write_sintela_file, ts_records, band_records
+    ):
+        """
+        A foreign packet between matching endpoints is caught on read.
+
+        Both endpoints are timeseries, so the scan shortcut accepts the file;
+        the streaming read visits every packet and rejects the BAND one.
+        """
+        records = [ts_records[0], band_records[0], ts_records[1]]
+        path = write_sintela_file("ts_band_ts.pb", records)
+        with pytest.raises(InvalidFiberFileError, match="Mixed Sintela protobuf"):
+            fiber_io.read(path)
+
+    def test_read_rejects_more_samples_than_endpoints_imply(
+        self, fiber_io, write_sintela_file
+    ):
+        """
+        Extra samples between the endpoints are caught before they overrun.
+
+        The output array is sized from the endpoints, so a middle packet that
+        pushes past that total has to fail rather than write out of bounds.
+        """
+        records = _build_ts_payloads(3)
+        # Renumber the last packet so the endpoints imply two packets' worth
+        # of samples while three packets are actually present.
+        records = _mutate_record(
+            records,
+            2,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "sample_count", 3),
+        )
+        path = write_sintela_file("ts_overrun.pb", records)
+        with pytest.raises(InvalidFiberFileError, match="Non-contiguous"):
+            fiber_io.read(path)
+
+    def test_short_final_packet_is_measured_from_the_last_endpoint(
+        self, fiber_io, write_sintela_file
+    ):
+        """
+        A recording ending in a partial packet reports its true length.
+
+        Recorders close a file whenever the acquisition stops, so the final
+        packet is routinely shorter than the rest. The endpoint total has to
+        add *that* packet's length to the counter difference; adding the first
+        packet's length instead happens to give the same answer for a uniform
+        file, which is what every other fixture here is.
+        """
+        records = _build_ts_payloads(3)
+        # 3 + 3 + 1 samples: counts stay 0, 3, 6 and the tail is short.
+        records = _mutate_record(
+            records,
+            2,
+            "TimeseriesPacket",
+            lambda msg: (
+                setattr(msg.header, "num_samples", 1),
+                del_samples_beyond(msg, msg.header.common_header.num_channels),
+            ),
+        )
+        path = write_sintela_file("ts_short_tail.pb", records)
+        # Asserted on the shortcut itself, not just the final answer: adding
+        # the wrong packet's length makes the endpoint total disagree with the
+        # timestamps, and the fallback then returns the right shape anyway.
+        with path.open("rb") as handle:
+            endpoints = sintela_utils._get_endpoint_metadata(handle)
+        assert endpoints is not None
+        assert endpoints[0].shape[0] == 7
+        assert _payload_to_summary(fiber_io.scan(path)[0]).shape[0] == 7
+        assert fiber_io.read(path)[0].shape[0] == 7
+
+    def test_reset_sample_counter_falls_back_instead_of_trusting_endpoints(
+        self, fiber_io, write_sintela_file
+    ):
+        """
+        A counter that restarts mid-file must not be read as billions of samples.
+
+        `sample_count` is a uint32, so the endpoint difference is taken modulo
+        2**32 to survive a wrap. A counter that *resets* instead looks like an
+        enormous backwards jump, which would size the patch from a number the
+        file cannot possibly hold. The shortcut declines and the full path
+        reports the gap.
+        """
+        records = _build_ts_payloads(3)
+        # Start high so the counter appears to restart: the last packet's
+        # count is far below the first, and the modular difference is enormous.
+        records = _mutate_record(
+            records,
+            0,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "sample_count", 1000),
+        )
+        path = write_sintela_file("ts_counter_reset.pb", records)
+        with pytest.raises(InvalidFiberFileError, match="Non-contiguous"):
+            fiber_io.scan(path)
+        with pytest.raises(InvalidFiberFileError, match="Non-contiguous"):
+            fiber_io.read(path)
+
+    def test_read_picks_up_meta_after_the_first_data_packet(
+        self, fiber_io, write_sintela_file, ts_records
+    ):
+        """
+        Read honours a META record wherever it appears, as it always has.
+
+        The endpoint scan only walks as far as the first data packet, so a
+        trailing META is invisible to it; the streaming read visits every
+        record and must not lose metadata the old full-decode path collected.
+        """
+        records = [ts_records[0], ("META", _build_meta_payload()), ts_records[1]]
+        path = write_sintela_file("ts_trailing_meta.pb", records)
+        patch = fiber_io.read(path)[0]
+        assert patch.attrs.instrument_manufacturer == "Sintela"
+        assert patch.attrs.serial_number == "SN123"
 
     def test_timeseries_read_rejects_dropped_samples(
         self, fiber_io, write_sintela_file, ts_records
@@ -947,6 +1141,562 @@ class TestSintelaProtobuf:
             fiber_io.scan(path)
         with pytest.raises(MissingOptionalDependencyError, match="protobuf missing"):
             fiber_io.read(path)
+
+
+_FAMILY_BUILDERS = [
+    (_build_ts_payloads, "TimeseriesPacket"),
+    (_build_band_payloads, "BandPacket"),
+    (_build_real_fft_payloads, "FFTPacket"),
+]
+
+
+class TestSintelaProtobufScanCost:
+    """Scanning must not pay for the sample data it does not report."""
+
+    def test_scan_reads_do_not_grow_with_recording_length(self, write_sintela_file):
+        """
+        A longer timeseries recording must not cost a longer scan.
+
+        This is what makes indexing a directory of large recordings tractable:
+        the summary is derived from the first and last packets, so a file with
+        sixteen times as many packets is read no more than a short one. The
+        packets are padded past the header prefix so the reads being compared
+        are the bounded ones, not an artifact of tiny fixtures.
+        """
+
+        def _write(name, n_packets):
+            records = _pad_samples(
+                _build_ts_payloads(n_packets), "TimeseriesPacket", 20_000
+            )
+            return write_sintela_file(name, records)
+
+        short = _write("ts_short.pb", 4)
+        long = _write("ts_long.pb", 64)
+        assert long.stat().st_size > 8 * short.stat().st_size
+
+        short_bytes = _bytes_read_by(sintela_utils.scan_payload, short)
+        long_bytes = _bytes_read_by(sintela_utils.scan_payload, long)
+        assert short_bytes == long_bytes
+        assert long_bytes < long.stat().st_size / 4
+
+    def test_read_and_scan_take_the_endpoint_shortcut(
+        self, monkeypatch, write_sintela_file, ts_records, sintela_protobuf_path
+    ):
+        """
+        Both entry points reach the fast path, for synthetic and real files.
+
+        Every behavioural test here passes whether or not the shortcut engages,
+        because the full path reports the same errors and returns the same
+        data. Only the cost differs, so the call sites are checked directly:
+        without this, `read` could quietly revert to decoding every packet up
+        front and nothing would notice.
+        """
+        path = write_sintela_file("ts_shortcut.pb", ts_records)
+        for target in (path, Path(sintela_protobuf_path)):
+            with target.open("rb") as handle:
+                assert sintela_utils._get_endpoint_metadata(handle) is not None
+
+        used = []
+        original = sintela_utils.TimeseriesMetadata.decode_stream
+
+        def _spy(self, resource, meta):
+            used.append(True)
+            return original(self, resource, meta)
+
+        monkeypatch.setattr(
+            sintela_utils.TimeseriesMetadata, "decode_stream", _spy, raising=True
+        )
+        with path.open("rb") as handle:
+            sintela_utils.read_payload(handle)
+        assert used, "read_payload did not take the streaming endpoint path"
+
+    def test_sample_counter_rollover_keeps_the_shortcut(
+        self, write_sintela_file, ts_records
+    ):
+        """
+        A counter that wraps mid-file is still summarized from its endpoints.
+
+        Dropping the modulus would make the difference negative, which the
+        file-size bound rejects: the answer stays right but arrives by the slow
+        route, so only a cost assertion catches it.
+        """
+        packet_cls = _get_test_proto_messages()["TimeseriesPacket"]
+        modulus = sintela_utils._SAMPLE_COUNT_MODULUS
+        records = []
+        for index, (tag, payload) in enumerate(ts_records):
+            msg = packet_cls()
+            msg.ParseFromString(payload)
+            msg.header.sample_count = (
+                modulus - msg.header.num_samples if index == 0 else 0
+            )
+            records.append((tag, msg.SerializeToString()))
+        path = write_sintela_file("ts_rollover_shortcut.pb", records)
+        with path.open("rb") as handle:
+            endpoints = sintela_utils._get_endpoint_metadata(handle)
+        assert endpoints is not None
+        assert endpoints[0].shape[0] == 6
+
+    def test_find_last_record_ignores_a_decoy_frame_inside_the_payload(self):
+        """
+        Only the frame whose extent ends on EOF is the final record.
+
+        Sample bytes can spell out a magic word and a tag; anchoring on EOF is
+        what distinguishes the real framing from that noise, and the backwards
+        search reaches the decoy first.
+        """
+        magic = struct.pack("<I", sintela_utils.PBUF_MAGIC)
+        # A last record whose 20-byte payload embeds a plausible-looking frame.
+        decoy = magic + b"TS05" + struct.pack("<I", 99)
+        payload = b"AAAA" + decoy + b"BBBB"
+        buf = magic + b"TS05" + struct.pack("<I", len(payload)) + payload
+
+        found = sintela_utils._find_last_record(_BytesReader(buf), len(buf), len(buf))
+        assert found is not None
+        assert found[0] == "TS05"
+        # The real record's size, not the decoy's 99.
+        assert found[1] == len(payload)
+
+    def test_scan_hands_the_parser_headers_not_payloads(
+        self, monkeypatch, write_sintela_file, band_records
+    ):
+        """
+        The non-timeseries scan path asks the iterator for header-only records.
+
+        Testing the iterator directly leaves the call site untested, and bytes
+        read cannot tell the difference: a payload streamed past and dropped
+        costs the same I/O as one that is kept. What changes is what reaches
+        the parser, so that is what this measures.
+        """
+        records = _pad_samples(band_records, "BandPacket", 200_000)
+        path = write_sintela_file("band_wiring.pb", records)
+        payload_sizes = []
+        original = sintela_utils._parse_records
+
+        def _spy(records, **kwargs):
+            records = list(records)
+            payload_sizes.extend(len(record.payload) for record in records)
+            return original(records, **kwargs)
+
+        monkeypatch.setattr(sintela_utils, "_parse_records", _spy)
+        with path.open("rb") as handle:
+            sintela_utils.scan_payload(handle)
+        assert payload_sizes
+        # A padded BAND payload is ~1 MB; a header is a few hundred bytes.
+        assert max(payload_sizes) < 4096
+
+    def test_detection_does_not_pull_whole_payloads(
+        self, write_sintela_file, band_records
+    ):
+        """
+        Format detection reads tags, and stops at the first one it recognizes.
+
+        It needs 12 bytes of framing per record and nothing behind them, so it
+        must not stream a payload it will never look at -- over a directory of
+        large recordings that is the difference between megabytes and
+        gigabytes of pointless I/O.
+        """
+        records = _pad_samples(band_records, "BandPacket", 200_000)
+        path = write_sintela_file("band_detect.pb", records)
+        one_payload = path.stat().st_size / len(records)
+        detect_bytes = _bytes_read_by(sintela_utils.get_supported_family_tag, path)
+        assert detect_bytes < one_payload
+
+    def test_records_after_a_large_data_packet_stay_aligned(
+        self, write_sintela_file, band_records
+    ):
+        """
+        A non-data record following a truncated payload is still read correctly.
+
+        Header-only reads leave the rest of a data payload to be stepped over
+        on the next iteration. Every record here is a data record in the other
+        fixtures, so the deferred amount is always overwritten before it can
+        matter; a META record behind a large packet is what would expose a
+        stream left in the wrong place.
+        """
+        big = _pad_samples(band_records, "BandPacket", 200_000)
+        records = [big[0], ("META", _build_meta_payload()), big[1]]
+        path = write_sintela_file("band_then_meta.pb", records)
+        with path.open("rb") as handle:
+            seen = [
+                (record.tag, len(record.payload))
+                for record in sintela_utils._iter_envelope_records(
+                    handle, strict=True, headers_only=True
+                )
+            ]
+        assert [tag for tag, _size in seen] == ["BAND", "META", "BAND"]
+        # The META payload is whole; the BAND payloads are trimmed to headers.
+        assert seen[1][1] == len(_build_meta_payload())
+        assert seen[0][1] < 4096 and seen[2][1] < 4096
+
+    def test_short_first_packet_still_finds_the_final_record(self, write_sintela_file):
+        """
+        A recording opening with a small packet is still summarized cheaply.
+
+        The tail-search window is sized from the first packet on the assumption
+        that the last one is about as big. A recorder that ramps up breaks
+        that: one file in the 10,308-recording archive this was written for
+        opens with a 204 KB warm-up packet and ends with a 526 KB one. Without
+        the wider second attempt such a file silently costs a full read.
+        """
+        records = _build_ts_payloads(3)
+        for index in (1, 2):
+            records = _mutate_record(
+                records,
+                index,
+                "TimeseriesPacket",
+                lambda msg: msg.samples.extend([0.0] * 20_000),
+            )
+        path = write_sintela_file("ts_warmup_first.pb", records)
+        # The first packet is a few dozen bytes; the last is ~80 KB.
+        with path.open("rb") as handle:
+            endpoints = sintela_utils._get_endpoint_metadata(handle)
+        assert endpoints is not None
+        assert endpoints[0].shape[0] == 9
+
+    def test_endpoint_packet_length_must_fit_its_own_record(self, write_sintela_file):
+        """
+        A packet cannot claim more samples than its record has room for.
+
+        The last packet's length cancels out of the timestamp comparison, so
+        it is the one field the time check cannot see. The file is built so
+        this is the *only* check that can reject it: a padded middle packet
+        keeps the whole-file bound satisfied and the counters are untouched,
+        so the timestamps agree.
+        """
+        records = _build_ts_payloads(3)
+        # Pad the middle packet so the file is comfortably larger than the
+        # claimed sample count needs; the whole-file bound then cannot object.
+        records = _mutate_record(
+            records,
+            1,
+            "TimeseriesPacket",
+            lambda msg: msg.samples.extend([0.0] * 50_000),
+        )
+        claimed = 10_000
+        for index in (0, 2):
+            bad = _mutate_record(
+                records,
+                index,
+                "TimeseriesPacket",
+                lambda msg: setattr(msg.header, "num_samples", claimed),
+            )
+            path = write_sintela_file(f"ts_impossible_{index}.pb", bad)
+            with path.open("rb") as handle:
+                assert sintela_utils._get_endpoint_metadata(handle) is None, (
+                    f"endpoint {index} claimed {claimed} samples its record "
+                    "cannot hold and was believed"
+                )
+
+    def test_streaming_read_keeps_only_one_decoded_packet(
+        self, monkeypatch, write_sintela_file
+    ):
+        """
+        Only one decoded packet may be alive at a time during a streaming read.
+
+        Protobuf releases a packet's arena only when the whole message dies, so
+        one that outlives its turn keeps owning its samples whatever is done to
+        its fields. Process memory is too noisy to assert on at fixture size;
+        the object graph is exact.
+        """
+        sample_cls = sintela_utils._get_proto_messages(include_sample_fields=True)[
+            "TimeseriesPacket"
+        ]
+        path = write_sintela_file("ts_stream_mem.pb", _build_ts_payloads(6))
+        live, kept = [], []
+        # Whatever the rest of the session holds is not this test's business;
+        # only the growth across the read is.
+        baseline = sum(1 for obj in gc.get_objects() if type(obj) is sample_cls)
+        original_parse = sintela_utils._parse_packet
+        original_from_parsed = sintela_utils.TimeseriesMetadata.from_parsed.__func__
+
+        def _spy_parse(tag, payload, messages, decode_error):
+            live.append(sum(1 for obj in gc.get_objects() if type(obj) is sample_cls))
+            return original_parse(tag, payload, messages, decode_error)
+
+        def _spy_from_parsed(cls, parsed, meta, total_samples=None):
+            kept.append([type(msg) for _tag, msg in parsed])
+            return original_from_parsed(cls, parsed, meta, total_samples=total_samples)
+
+        monkeypatch.setattr(sintela_utils, "_parse_packet", _spy_parse)
+        monkeypatch.setattr(
+            sintela_utils.TimeseriesMetadata,
+            "from_parsed",
+            classmethod(_spy_from_parsed),
+        )
+        with path.open("rb") as handle:
+            sintela_utils.read_payload(handle)
+
+        assert len(live) >= 6, "the streaming path did not decode packet by packet"
+        assert max(live) == baseline, (
+            "a previously decoded packet was still alive when the next was "
+            f"decoded (live counts: {live}, baseline: {baseline})"
+        )
+        held = [cls for group in kept for cls in group]
+        assert held, "nothing was handed to from_parsed"
+        assert not any(
+            any(field.name == "samples" for field in cls.DESCRIPTOR.fields)
+            for cls in held
+        ), "the read retains messages that are able to hold samples"
+
+    @pytest.mark.parametrize(("builder", "message_type"), _FAMILY_BUILDERS)
+    def test_header_only_records_exclude_samples(
+        self, write_sintela_file, builder, message_type
+    ):
+        """
+        Every family's scan path is handed headers, never sample payloads.
+
+        The families that cannot use the endpoint shortcut still have to visit
+        each packet; they must do it without pulling the samples along, so the
+        payload handed to the parser stays the same size as the recording's
+        samples grow.
+        """
+
+        def _payload_bytes(pad: int) -> int:
+            records = _pad_samples(builder(), message_type, pad)
+            path = write_sintela_file(f"headers_{message_type}_{pad}.pb", records)
+            with path.open("rb") as handle:
+                return sum(
+                    len(record.payload)
+                    for record in sintela_utils._iter_envelope_records(
+                        handle, strict=True, headers_only=True
+                    )
+                )
+
+        assert _payload_bytes(0) == _payload_bytes(50_000)
+
+    def test_large_payloads_are_skipped_not_streamed(self, write_sintela_file):
+        """
+        A payload large enough to be worth a seek is stepped over, not read.
+
+        Small remainders are streamed and discarded because a seek costs a
+        platter rotation on spinning media, which buys back more than the
+        transfer it saves. Past the threshold the seek wins, and this pins that
+        the large-payload branch really does skip the bytes.
+        """
+        # Fixed size, not derived from the threshold: a fixture that scales
+        # with the constant would keep passing however the constant is retuned.
+        n_floats = 1_000_000
+        records = _pad_samples(_build_band_payloads(), "BandPacket", n_floats)
+        path = write_sintela_file("band_large.pb", records)
+        size = path.stat().st_size
+        # Guard on the payload bytes the fixture actually produces, so this
+        # cannot silently turn into a permanent skip.
+        payload_bytes = size / len(records)
+        if payload_bytes <= sintela_utils._SEEK_SKIP_THRESHOLD:
+            pytest.skip("seek threshold retuned above this fixture's payload size")
+
+        def _walk(handle):
+            for _record in sintela_utils._iter_envelope_records(
+                handle, strict=True, headers_only=True
+            ):
+                pass
+
+        assert _bytes_read_by(_walk, path) < size / 4
+
+    @pytest.mark.parametrize(("builder", "message_type"), _FAMILY_BUILDERS)
+    def test_scan_memory_independent_of_sample_count(self, builder, message_type):
+        """
+        Metadata-only scans must not retain the sample bytes.
+
+        Protobuf keeps undeclared wire fields as unknown fields, so omitting
+        the sample declarations is not by itself enough. The invariant is that
+        scan-retained size does not grow with the sample payload.
+        """
+
+        def _retained(pad: int) -> int:
+            records = [
+                _envelope(record)
+                for record in _pad_samples(builder(), message_type, pad)
+            ]
+            parsed, _ = sintela_utils._parse_records(records, scan_mode=True)
+            return sum(msg.ByteSize() for _tag, msg in parsed)
+
+        assert _retained(0) == _retained(5_000)
+
+
+class TestSintelaProtobufWireHelpers:
+    """
+    Tests for the hand-rolled wire-format helpers.
+
+    These read protobuf framing directly so a packet's header can be taken
+    from a short prefix. Each returns None rather than raising when a payload
+    does not fit that shape, which sends the caller to the read-everything
+    path; the fallbacks are exercised here since a well-formed file never
+    reaches them.
+    """
+
+    def test_read_varint_spans_multiple_bytes(self):
+        """Varints longer than one byte decode, and a truncated one is None."""
+        # 300 encodes as two bytes; the continuation bit drives the loop.
+        assert sintela_utils._read_varint(b"\xac\x02", 0) == (300, 2)
+        assert sintela_utils._read_varint(b"\x05", 0) == (5, 1)
+        # A varint whose continuation bit never terminates is unusable.
+        assert sintela_utils._read_varint(b"\xac", 0) == (None, 1)
+
+    def test_leading_header_bytes_rejects_unusable_prefixes(self):
+        """Only a complete field-1 submessage at the front is usable."""
+        header = b"\x0a\x03abc"
+        assert sintela_utils._leading_header_bytes(header) == header
+        # Empty, or not starting with field 1 (here field 2).
+        assert sintela_utils._leading_header_bytes(b"") is None
+        assert sintela_utils._leading_header_bytes(b"\x12\x03abc") is None
+        # Field 1 declared longer than the prefix actually holds.
+        assert sintela_utils._leading_header_bytes(b"\x0a\x7fab") is None
+
+    def test_parse_frame_rejects_short_and_wrong_magic(self):
+        """Framing needs twelve bytes opening with the magic word."""
+        frame = (
+            struct.pack("<I", sintela_utils.PBUF_MAGIC) + b"TS05" + struct.pack("<I", 7)
+        )
+        assert sintela_utils._parse_frame(frame) == ("TS05", 7)
+        assert sintela_utils._parse_frame(b"short") is None
+        assert sintela_utils._parse_frame(b"NOPE" + b"TS05" + b"\x00" * 4) is None
+
+    def test_parse_packet_header_returns_none_for_undecodable_header(self):
+        """A header submessage that will not decode defers to the slow path."""
+        # Field 1 holding two bytes that are not a valid submessage.
+        assert sintela_utils._parse_packet_header("TS05", b"\x0a\x02\xff\xff") is None
+
+    def test_decode_stream_refuses_to_return_an_underfilled_array(
+        self, write_sintela_file, ts_records
+    ):
+        """
+        A stream that does not fill the expected shape raises, never returns.
+
+        A real file cannot reach this: the packets that fill the array are the
+        same ones whose contiguity is validated, so a short fill implies a gap
+        that is reported first. The check is unconditional (not an assertion)
+        because the alternative to raising is handing back the uninitialized
+        tail of the output array, so it is driven directly here.
+        """
+        path = write_sintela_file("ts_underfill.pb", ts_records)
+        parsed, meta = sintela_utils._parse_records(
+            [_envelope(record) for record in ts_records], scan_mode=True
+        )
+        # Claim far more samples than the two packets actually carry.
+        metadata = sintela_utils.TimeseriesMetadata.from_parsed(
+            parsed, meta, total_samples=999
+        )
+        with path.open("rb") as handle:
+            with pytest.raises(InvalidFiberFileError, match="expected sample count"):
+                metadata.decode_stream(handle, meta)
+
+    def test_endpoint_time_disagreement_rejects_the_shortcut(
+        self, fiber_io, write_sintela_file
+    ):
+        """
+        Two recordings concatenated are not summarized as one.
+
+        Both halves restart their sample counter, so the endpoints alone look
+        like a short contiguous file and the file-size bound passes -- the
+        derived length is too *small*, not too large. The timestamps are the
+        only witness that disagrees, and without them the index would advertise
+        half the real duration with no error anywhere.
+        """
+        first = _build_ts_payloads(4)
+        second = _build_ts_payloads(4)
+        # Second half continues in time but restarts its counter at zero.
+        second = _mutate_all(
+            second,
+            "TimeseriesPacket",
+            lambda msg: _set_timestamp(
+                msg.header.common_header.time,
+                1_700_000_100 + int(msg.header.sample_count),
+            ),
+        )
+        path = write_sintela_file("ts_concat.pb", [*first, *second])
+        with path.open("rb") as handle:
+            assert sintela_utils._get_endpoint_metadata(handle) is None
+        # The full path still reports the real problem rather than a summary.
+        with pytest.raises(InvalidFiberFileError, match="Non-contiguous"):
+            fiber_io.scan(path)
+
+    def test_endpoint_validation_failure_falls_back(self, write_sintela_file):
+        """
+        Endpoints that fail validation defer to the full read, never raise here.
+
+        A disagreement between the two endpoint headers may be a genuinely bad
+        file or a bogus tail match. The shortcut cannot tell them apart, so it
+        declines and lets the path that sees every packet decide.
+        """
+        records = _mutate_record(
+            _build_ts_payloads(3),
+            2,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header.common_header, "num_channels", 7),
+        )
+        path = write_sintela_file("ts_endpoint_disagree.pb", records)
+        with path.open("rb") as handle:
+            assert sintela_utils._get_endpoint_metadata(handle) is None
+
+    def test_record_head_rejects_a_length_the_file_cannot_hold(
+        self, write_sintela_file, tmp_path
+    ):
+        """
+        A corrupt size field must not be trusted to size a read.
+
+        Every later step -- the tail-search window, the META payload read --
+        is sized from this number, so one bad field would otherwise be enough
+        to pull an entire file into a single buffer.
+        """
+        path = tmp_path / "bad_size.pb"
+        with path.open("wb") as handle:
+            handle.write(struct.pack("<I", sintela_utils.PBUF_MAGIC))
+            handle.write(b"TS05")
+            handle.write(struct.pack("<I", 2**31))  # far beyond the file
+            handle.write(b"\x00" * 32)
+        with path.open("rb") as handle:
+            size = sintela_utils._stream_size(handle)
+            assert sintela_utils._read_record_head(handle, 0, size) is None
+            assert sintela_utils._find_first_data_record(handle, size) is None
+
+    def test_read_varint_is_bounded(self):
+        """
+        An unterminated varint gives up instead of building a huge integer.
+
+        Bounds are literals, not the constant under test: comparing the result
+        against ``_MAX_VARINT_BYTES`` would keep passing however far that is
+        raised, which is exactly the failure being guarded against.
+        """
+        # Far more continuation bytes than any real varint carries.
+        value, pos = sintela_utils._read_varint(b"\xff" * 4096, 0)
+        assert value is None
+        # A base-128 varint encodes at most 64 bits, so it never reads past 10.
+        assert pos <= 10
+
+    def test_record_head_boundary_is_exact(self, tmp_path):
+        """A record filling the file exactly is valid; one byte more is not."""
+        path = tmp_path / "exact.pb"
+        payload = b"\x00" * 16
+        with path.open("wb") as handle:
+            handle.write(struct.pack("<I", sintela_utils.PBUF_MAGIC))
+            handle.write(b"TS05")
+            handle.write(struct.pack("<I", len(payload)))
+            handle.write(payload)
+        with path.open("rb") as handle:
+            size = sintela_utils._stream_size(handle)
+            assert sintela_utils._read_record_head(handle, 0, size) is not None
+            # The same file judged one byte shorter must reject that record.
+            assert sintela_utils._read_record_head(handle, 0, size - 1) is None
+
+    def test_find_last_record_returns_none_without_framing(self):
+        """A tail holding no valid framing yields no candidate."""
+        buf = b"\x01\x02\x03\x04" * 32
+        assert (
+            sintela_utils._find_last_record(_BytesReader(buf), len(buf), len(buf))
+            is None
+        )
+
+    def test_fits_in_file_bounds_the_endpoint_length(self):
+        """A derived length larger than the bytes could encode is rejected."""
+        fits = sintela_utils._fits_in_file
+        # 10 samples over 2 channels needs at least 80 wire bytes.
+        assert fits(10, 2, 80)
+        assert not fits(10, 2, 79)
+        # A counter reset yields a nonsensical length; so do empty dimensions.
+        assert not fits(2**32 - 5, 1052, 505_115_555)
+        assert not fits(0, 2, 1000)
+        assert not fits(10, 0, 1000)
 
 
 class TestSintelaProtobufUtils:
