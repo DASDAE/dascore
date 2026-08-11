@@ -27,7 +27,7 @@ from dascore.exceptions import (
 from dascore.proc.coords import update_coords
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, validate_data_source_id
 from dascore.utils.models import values_equal
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
@@ -82,7 +82,11 @@ def _get_data_source_id(patch, data_source_id) -> str:
             "Set one on the patch or pass data_source_id to enrich."
         )
         raise UnresolvedPatchError(msg)
-    return out
+    # A patch's own id is validated when its attrs are built, so only the
+    # explicit argument can be malformed. That is the caller getting it
+    # wrong rather than the inventory not describing the patch, and must
+    # not be something on_unresolved can wave through.
+    return validate_data_source_id(out)
 
 
 def _get_resolution_times(patch, time):

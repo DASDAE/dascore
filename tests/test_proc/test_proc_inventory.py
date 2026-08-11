@@ -630,6 +630,13 @@ class TestOnUnresolved:
         with pytest.raises(PatchError, match="spans a change of acquisition"):
             spool[0]
 
+    def test_malformed_explicit_id_is_not_swallowed(self, patch, inventory):
+        """A caller getting the argument wrong is not the inventory's silence."""
+        bare = dc.spool(patch.update_attrs(data_source_id=""))
+        spool = bare.enrich(inventory, data_source_id="broken", on_unresolved="ignore")
+        with pytest.raises(ValueError, match="Invalid data_source_id"):
+            spool[0]
+
     def test_bad_policy_raises(self, patch, inventory):
         """An unknown policy names no behavior."""
         with pytest.raises(ParameterError, match="on_unresolved must be one of"):
