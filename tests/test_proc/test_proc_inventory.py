@@ -24,6 +24,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
     InvalidInventoryError,
     InvalidSpoolError,
+    InvalidSpoolQueryError,
     ParameterError,
     PatchError,
 )
@@ -514,49 +515,148 @@ class TestEdgeCases:
 
 
 class TestAttachInventory:
-    """The spool carries the inventory so extraction enriches."""
+    """Attaching carries the inventory and changes nothing else."""
 
-    def test_getitem_is_enriched(self, patch, inventory):
-        """A patch pulled by index arrives with its metadata."""
+    def test_attaching_does_not_enrich(self, patch, inventory):
+        """Carrying an inventory is not the same as using it."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        assert spool[0].attrs.gauge_length == 10.0
-
-    def test_iteration_is_enriched(self, patch, inventory):
-        """So does one pulled by iteration."""
-        spool = dc.spool(patch).attach_inventory(inventory)
-        assert all(x.attrs.gauge_length == 10.0 for x in spool)
-
-    def test_kwargs_pass_through(self, patch, inventory):
-        """Enrich's arguments are the spool's arguments."""
-        spool = dc.spool(patch).attach_inventory(
-            inventory, attrs=("gauge_length",), coords=False
-        )
-        out = spool[0]
-        assert out.attrs.gauge_length == 10.0
-        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
-
-    def test_enrich_false_holds_only(self, patch, inventory):
-        """Attaching without enriching just carries the inventory."""
-        spool = dc.spool(patch).attach_inventory(inventory, enrich=False)
+        assert spool._inventory is inventory
         assert "gauge_length" not in dict(spool[0].attrs)
+
+    def test_original_is_unchanged(self, patch, inventory):
+        """Attaching returns a new spool, as every spool method does."""
+        plain = dc.spool(patch)
+        plain.attach_inventory(inventory)
+        assert plain._inventory is None
 
     def test_derived_spool_keeps_inventory(self, patch, inventory):
         """A selection is still the spool it came from."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        assert spool.select(tag="random")[0].attrs.gauge_length == 10.0
+        assert spool.select(tag="random")._inventory is inventory
 
     def test_equality_includes_inventory(self, patch, inventory):
-        """An attached inventory changes what the spool yields."""
+        """A carried inventory is part of what the spool is."""
         plain = dc.spool(patch)
         attached = plain.attach_inventory(inventory)
         assert attached != plain
         assert attached == plain.attach_inventory(inventory)
-        assert attached != plain.attach_inventory(inventory, coords=False)
 
     def test_requires_an_inventory(self, patch):
         """Anything else names no metadata to attach."""
         with pytest.raises(ParameterError, match="needs an Inventory"):
             dc.spool(patch).attach_inventory("inventory.yaml")
+
+
+class TestRemoveInventory:
+    """Removing an inventory takes its enrichment with it."""
+
+    def test_removes_inventory_and_enrichment(self, patch, inventory):
+        """Nothing is left to enrich from, so nothing is enriched."""
+        spool = dc.spool(patch).enrich(inventory).remove_inventory()
+        assert spool._inventory is None
+        assert spool._enrich_kwargs is None
+        assert "gauge_length" not in dict(spool[0].attrs)
+
+    def test_original_is_unchanged(self, patch, inventory):
+        """Removal is a new spool; the one it came from still enriches."""
+        spool = dc.spool(patch).enrich(inventory)
+        spool.remove_inventory()
+        assert spool[0].attrs.gauge_length == 10.0
+
+    def test_no_inventory_is_a_no_op(self, patch):
+        """A spool with nothing to remove is returned as it stands."""
+        plain = dc.spool(patch)
+        assert plain.remove_inventory() == plain
+
+    def test_keeps_the_patches(self, patch, inventory):
+        """Only the metadata goes; the spool's contents do not."""
+        spool = dc.spool(patch).enrich(inventory)
+        assert spool.remove_inventory()[0].equals(patch)
+
+
+class TestInventoryQueryError:
+    """An attached inventory changes what an unknown query name means."""
+
+    def test_inventory_field_names_the_inventory(self, patch, inventory):
+        """The index's 'no such attribute' would deny a field which exists."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="not supported yet"):
+            spool.select(coupling="cement")
+
+    def test_plain_spool_keeps_its_message(self, patch):
+        """With no inventory there is nothing to add."""
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute") as ex:
+            dc.spool(patch).select(nope=1)
+        assert "inventory" not in str(ex.value)
+
+    def test_valid_query_still_works(self, patch, inventory):
+        """Naming an indexed attr is unaffected by the inventory."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert len(spool.select(tag="random")) == 1
+
+
+class TestSpoolEnrich:
+    """The spool enriches each patch as it is extracted."""
+
+    def test_getitem_is_enriched(self, patch, inventory):
+        """A patch pulled by index arrives with its metadata."""
+        spool = dc.spool(patch).enrich(inventory)
+        assert spool[0].attrs.gauge_length == 10.0
+
+    def test_iteration_is_enriched(self, patch, inventory):
+        """So does one pulled by iteration."""
+        spool = dc.spool(patch).enrich(inventory)
+        assert all(x.attrs.gauge_length == 10.0 for x in spool)
+
+    def test_uses_attached_inventory(self, patch, inventory):
+        """With one already carried, enrich needs no argument."""
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
+        assert spool[0].attrs.gauge_length == 10.0
+
+    def test_enrich_attaches_its_inventory(self, patch, inventory):
+        """The spool carries what it enriches from."""
+        spool = dc.spool(patch).enrich(inventory)
+        assert spool._inventory is inventory
+
+    def test_kwargs_pass_through(self, patch, inventory):
+        """Enrich's arguments are the spool's arguments."""
+        spool = dc.spool(patch).enrich(inventory, attrs=("gauge_length",), coords=False)
+        out = spool[0]
+        assert out.attrs.gauge_length == 10.0
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
+
+    def test_derived_spool_stays_enriched(self, patch, inventory):
+        """A selection is still the spool it came from."""
+        spool = dc.spool(patch).enrich(inventory)
+        assert spool.select(tag="random")[0].attrs.gauge_length == 10.0
+
+    def test_original_is_unchanged(self, patch, inventory):
+        """Setting up enrichment leaves the spool it came from alone."""
+        plain = dc.spool(patch)
+        plain.enrich(inventory)
+        assert "gauge_length" not in dict(plain[0].attrs)
+
+    def test_equality_includes_arguments(self, patch, inventory):
+        """Different arguments mean different patches come out."""
+        plain = dc.spool(patch)
+        assert plain.enrich(inventory) != plain.attach_inventory(inventory)
+        assert plain.enrich(inventory) == plain.enrich(inventory)
+        assert plain.enrich(inventory) != plain.enrich(inventory, coords=False)
+
+    def test_requires_an_inventory(self, patch):
+        """With none attached and none given there is nothing to copy."""
+        with pytest.raises(ParameterError, match="needs an inventory"):
+            dc.spool(patch).enrich()
+
+    def test_unknown_kwarg_raises_now(self, patch, inventory):
+        """A misspelled argument fails here, not on a patch pulled later."""
+        with pytest.raises(ParameterError, match="unknown argument"):
+            dc.spool(patch).enrich(inventory, attr=True)
+
+    def test_re_enriching_replaces_arguments(self, patch, inventory):
+        """The last call says what enrichment means."""
+        spool = dc.spool(patch).enrich(inventory, coords=False).enrich(inventory)
+        assert "zone" in set(spool[0].coords.coord_map)
 
 
 class TestReviewFindings:
@@ -629,17 +729,24 @@ class TestReviewFindings:
 
     def test_union_carries_the_inventory(self, patch, inventory):
         """Combining spools keeps metadata the operands already had."""
-        attached = dc.spool(patch).attach_inventory(inventory)
-        combined = attached + dc.spool(patch)
+        enriched = dc.spool(patch).enrich(inventory)
+        combined = enriched + dc.spool(patch)
         assert combined[0].attrs.gauge_length == 10.0
-        assert (dc.spool(patch) + attached)[0].attrs.gauge_length == 10.0
+        assert (dc.spool(patch) + enriched)[0].attrs.gauge_length == 10.0
+
+    def test_union_of_different_enrichment_raises(self, patch, inventory):
+        """Two ways of enriching have no combined meaning."""
+        first = dc.spool(patch).enrich(inventory)
+        second = dc.spool(patch).enrich(inventory, coords=False)
+        with pytest.raises(InvalidSpoolError, match="different enrich arguments"):
+            first + second
 
     def test_union_of_different_inventories_raises(self, patch, inventory):
-        """Two attachments have no combined meaning."""
+        """Neither do two different inventories."""
+        other = _replace_acquisition(inventory, gauge_length=20.0)
         first = dc.spool(patch).attach_inventory(inventory)
-        second = dc.spool(patch).attach_inventory(inventory, coords=False)
         with pytest.raises(InvalidSpoolError, match="different inventories"):
-            first + second
+            first + dc.spool(patch).attach_inventory(other)
 
 
 class TestSecondReviewFindings:
@@ -843,5 +950,51 @@ class TestSecondReviewFindings:
 
     def test_attached_spool_survives_pickle(self, patch, inventory):
         """A spool and its pickle are the same spool, inventory and all."""
-        spool = dc.spool(patch).attach_inventory(inventory)
+        spool = dc.spool(patch).enrich(inventory)
         assert pickle.loads(pickle.dumps(spool)) == spool
+
+    def test_enrich_writes_one_history_entry(self, patch, inventory):
+        """The operation is enrich; how it updates coords is its own business."""
+        history = patch.enrich(inventory).attrs.history
+        assert len(history) == 1
+        assert history[0].startswith("enrich(")
+
+
+class TestSplitReviewFindings:
+    """Defects found reviewing the attach/enrich/remove split."""
+
+    def test_attaching_clears_enrichment(self, patch, inventory):
+        """Swapping the source under a configured enrichment would rewrite
+        every patch's metadata without being asked.
+        """
+        spool = dc.spool(patch).enrich(inventory).attach_inventory(inventory)
+        assert spool._enrich_kwargs is None
+        assert "gauge_length" not in dict(spool[0].attrs)
+
+    def test_attaching_the_same_inventory_keeps_a_union_working(self, patch, inventory):
+        """Supplying more information must not break what already worked."""
+        enriched = dc.spool(patch).enrich(inventory)
+        attached = dc.spool(patch).attach_inventory(inventory)
+        assert (enriched + attached)[0].attrs.gauge_length == 10.0
+
+    def test_stating_a_default_does_not_change_the_spool(self, patch, inventory):
+        """Spools which enrich identically are the same spool."""
+        plain = dc.spool(patch)
+        assert plain.enrich(inventory) == plain.enrich(
+            inventory, attrs=True, coords=True, conflicts="keep_first"
+        )
+
+    def test_name_collections_compare_by_content(self, patch, inventory):
+        """A list of names asks for what a tuple of them asks for."""
+        plain = dc.spool(patch)
+        tupled = plain.enrich(inventory, attrs=("gauge_length",))
+        assert tupled == plain.enrich(inventory, attrs=["gauge_length"])
+
+    def test_update_keeps_the_inventory(self, patch, inventory, tmp_path):
+        """Re-reading the file is no reason to stop enriching."""
+        path = tmp_path / "patch.h5"
+        dc.write(patch, path, "dasdae")
+        spool = dc.spool(path).enrich(inventory)
+        updated = spool.update()
+        assert updated._inventory is inventory
+        assert updated[0].attrs.gauge_length == 10.0

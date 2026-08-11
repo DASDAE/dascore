@@ -19,6 +19,7 @@ from dascore.core.inventory import (
     interval_masks,
 )
 from dascore.exceptions import InvalidInventoryError, ParameterError, PatchError
+from dascore.proc.coords import update_coords
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
@@ -617,5 +618,8 @@ def enrich(
     if updates:
         out = out.update_attrs(**updates)
     if new_coords:
-        out = out.update_coords(**new_coords)
+        # The raw function: enrich is the operation worth recording, and the
+        # nested entry would paste a rendered repr of every added coordinate
+        # into the history of every patch enriched.
+        out = update_coords.raw_function(out, **new_coords)
     return out

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import inspect
 from collections.abc import Callable, Generator, Iterator, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -28,6 +29,7 @@ from dascore.constants import (
 from dascore.core.inventory import Inventory
 from dascore.exceptions import (
     InvalidSpoolError,
+    InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
 )
@@ -77,29 +79,68 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.copy(deep=not copy_on_write)
 
 
+def _normalize_enrich_kwargs(kwargs) -> dict:
+    """
+    Canonicalize enrich arguments, rejecting any Patch.enrich would.
+
+    Two spools which enrich identically have to compare equal, so an
+    argument stated explicitly at its own default, or given as a list
+    where a tuple would do, must reach the same stored form.
+    """
+    signature = inspect.signature(dc.Patch.enrich)
+    valid = set(signature.parameters) - {"patch", "inventory"}
+    if bad := sorted(set(kwargs) - valid):
+        msg = (
+            f"Spool.enrich got unknown argument(s) {bad}; it passes "
+            f"{sorted(valid)} through to Patch.enrich."
+        )
+        raise ParameterError(msg)
+    bound = signature.bind_partial(**kwargs)
+    bound.apply_defaults()
+    # A collection of names means what it holds, not which container holds it.
+    return {
+        name: tuple(value) if isinstance(value, list) else value
+        for name, value in bound.arguments.items()
+        if name in valid
+    }
+
+
+def _combine_state(values, label):
+    """Return the one value two spools agree on, or None if neither has one."""
+    present = [x for x in values if x is not None]
+    if not present:
+        return None
+    if len(present) == 2 and present[0] != present[1]:
+        msg = (
+            f"The spools carry different {label}, which have no combined "
+            "meaning. Attach one inventory to the combined spool instead."
+        )
+        raise InvalidSpoolError(msg)
+    return present[0]
+
+
 def _combine_inventories(first, second) -> tuple:
     """
     Return the (inventory, enrich kwargs) a union of two spools carries.
 
-    An inventory attached to only one operand still describes the patches
-    it came with, so it carries over; two different attachments have no
-    single answer and say so.
+    The two halves carry over independently: an inventory attached to one
+    operand still describes the patches it came with, and so does the
+    enrichment set up from it — which is why attaching the same inventory
+    to the other operand cannot turn a working union into an error. Two
+    operands answering either question differently have no single answer.
     """
-    pairs = [
-        (getattr(x, "_inventory", None), getattr(x, "_enrich_kwargs", None))
-        for x in (first, second)
-    ]
-    attached = [x for x in pairs if x[0] is not None]
-    if not attached:
-        return None, None
-    if len(attached) == 2 and attached[0] != attached[1]:
-        msg = (
-            "The spools carry different inventories (or different enrich "
-            "arguments), which have no combined meaning. Attach one "
-            "inventory to the combined spool instead."
-        )
-        raise InvalidSpoolError(msg)
-    return attached[0]
+    inventory = _combine_state(
+        [getattr(x, "_inventory", None) for x in (first, second)], "inventories"
+    )
+    enrich_kwargs = _combine_state(
+        [getattr(x, "_enrich_kwargs", None) for x in (first, second)],
+        "enrich arguments",
+    )
+    # Enrichment is only reachable through an inventory, so it cannot
+    # outlive one; a union carrying arguments and nothing to apply them
+    # from would enrich nothing while claiming to.
+    assert inventory is not None or enrich_kwargs is None
+    return inventory, enrich_kwargs
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -630,35 +671,45 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        catalog = self._catalog.select(
-            _attrs=_attrs,
-            _coords=_coords,
-            samples=samples,
-            relative=relative,
-            **kwargs,
-        )
+        try:
+            catalog = self._catalog.select(
+                _attrs=_attrs,
+                _coords=_coords,
+                samples=samples,
+                relative=relative,
+                **kwargs,
+            )
+        except InvalidSpoolQueryError as error:
+            # A name the index does not know may still be one the attached
+            # inventory defines, and the index's message would deny it exists.
+            if self._inventory is None:
+                raise
+            msg = (
+                f"{error} If this names a field the attached inventory "
+                "defines, selecting on it is not supported yet: enrich the "
+                "patches and select on each one instead."
+            )
+            raise InvalidSpoolQueryError(msg) from error
         return self._new_from_catalog(catalog)
 
-    def attach_inventory(self, inventory, *, enrich: bool = True, **kwargs) -> Self:
+    def attach_inventory(self, inventory) -> Self:
         """
         Attach a DASDAE inventory to this spool.
 
-        Each patch the spool yields is enriched from the inventory as it is
-        extracted, so the metadata arrives with the data rather than in a
-        second step the caller must remember. The spool holds the reference;
-        the patches do not.
+        The spool carries the reference and nothing else: attaching costs
+        no work per patch and adds nothing to the patches it yields. Call
+        [`Spool.enrich`](`dascore.core.spool.Spool.enrich`) to copy the
+        inventory's metadata onto the patches as they are extracted.
+
+        Attaching replaces whatever the spool carried before, and clears
+        enrichment set up from it — swapping the inventory silently under
+        a configured enrichment would change every patch's metadata, so
+        the new one has to be asked for. `enrich()` resumes with defaults.
 
         Parameters
         ----------
         inventory
-            The inventory to resolve the spool's patches against.
-        enrich
-            If False, hold the inventory without enriching extracted
-            patches. Attaching is then only a way to carry the inventory
-            with the spool.
-        **kwargs
-            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
-            each extracted patch (`attrs`, `coords`, `conflicts`, ...).
+            The inventory to carry.
 
         Examples
         --------
@@ -667,7 +718,8 @@ class Spool(BaseSpool):
         >>>
         >>> patch, inventory = inventory_patch_pair()
         >>> spool = dc.spool(patch).attach_inventory(inventory)
-        >>> assert spool[0].attrs.gauge_length == 10.0
+        >>> assert "gauge_length" not in dict(spool[0].attrs)
+        >>> assert spool.enrich()[0].attrs.gauge_length == 10.0
 
         Notes
         -----
@@ -680,11 +732,87 @@ class Spool(BaseSpool):
             raise ParameterError(msg)
         new = self.__class__(self)
         new._inventory = inventory
-        new._enrich_kwargs = dict(kwargs) if enrich else None
+        new._enrich_kwargs = None
+        return new
+
+    def remove_inventory(self) -> Self:
+        """
+        Return a spool carrying no inventory.
+
+        Any enrichment set up by [`Spool.enrich`](`dascore.core.spool.Spool.enrich`)
+        goes with it, since there is nothing left to enrich from. A spool
+        with no inventory is returned unchanged in substance; as everywhere
+        else, the original spool is left alone.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> plain = spool.remove_inventory()
+        >>> assert "gauge_length" not in dict(plain[0].attrs)
+        >>> assert spool[0].attrs.gauge_length == 10.0  # the original stands
+        """
+        new = self.__class__(self)
+        new._inventory = None
+        new._enrich_kwargs = None
+        return new
+
+    def enrich(self, inventory=None, **kwargs) -> Self:
+        """
+        Enrich each patch this spool yields from an inventory.
+
+        The work happens as each patch is extracted, not now, so this is
+        cheap on a large spool and costs one
+        [`Patch.enrich`](`dascore.proc.inventory.enrich`) per patch which
+        actually comes out. Enrichment survives `select`, `sort`, `chunk`
+        and friends; `Spool.remove_inventory` undoes it.
+
+        Parameters
+        ----------
+        inventory
+            The inventory to enrich from. Defaults to the spool's attached
+            inventory; given one, it is attached as well.
+        **kwargs
+            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
+            each extracted patch (`attrs`, `coords`, `conflicts`, ...). The
+            names are checked here; the values each patch's own enrichment
+            checks as it is extracted. Calling `enrich` again replaces
+            these rather than adding to them.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> assert spool[0].attrs.gauge_length == 10.0
+        >>>
+        >>> # Or name what is wanted, as with Patch.enrich.
+        >>> spool = dc.spool(patch).enrich(inventory, coords=False)
+        """
+        # Settled now rather than on extraction: a misspelled argument
+        # should be an error here, not on some patch pulled much later.
+        enrich_kwargs = _normalize_enrich_kwargs(kwargs)
+        if inventory is None and self._inventory is None:
+            msg = (
+                "Spool.enrich needs an inventory: pass one, or attach one "
+                "first with Spool.attach_inventory."
+            )
+            raise ParameterError(msg)
+        new = (
+            self.__class__(self)
+            if inventory is None
+            else self.attach_inventory(inventory)
+        )
+        new._enrich_kwargs = enrich_kwargs
         return new
 
     def _maybe_enrich(self, patch):
-        """Enrich an extracted patch when an inventory is attached."""
+        """Enrich an extracted patch when enrichment is set up."""
         if self._inventory is None or self._enrich_kwargs is None:
             return patch
         return patch.enrich(self._inventory, **self._enrich_kwargs)
@@ -1095,9 +1223,15 @@ class Spool(BaseSpool):
                 format=self._file_format, version=self._file_version
             )
             getattr(formatter, "index", lambda _: None)(self._file_path)
-            return self.from_file(
+            refreshed = self.from_file(
                 self._file_path, self._file_format, self._file_version
             )
+            # from_file builds a spool from the file alone, but an attached
+            # inventory is the caller's state rather than the file's, and
+            # re-reading the file is no reason to stop enriching.
+            refreshed._inventory = self._inventory
+            refreshed._enrich_kwargs = self._enrich_kwargs
+            return refreshed
         if isinstance(catalog.resolver, LiveResolver):
             return self  # in-memory contents are trivially current
         # composite/plan roots are computed spools (unions, chunks)
