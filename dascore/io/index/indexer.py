@@ -39,6 +39,7 @@ from dascore.utils.paths import (
     directory_writable,
     requires_local_directory,
 )
+from dascore.utils.pd import present_units_columns
 
 
 def _path_digest(path) -> str:
@@ -460,7 +461,8 @@ class DBDirectoryIndexer:
         query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
         df = self._backend.query(query)
         df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
-        return df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
+        df = df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
+        return present_units_columns(df)
 
     __call__ = get_contents
 

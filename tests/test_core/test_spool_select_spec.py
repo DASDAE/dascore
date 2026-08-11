@@ -287,6 +287,41 @@ class TestExistingBehaviorKept:
         assert len(out) == 1
 
 
+class TestOriginalUnitsPresentation:
+    """The index stores and presents envelopes in original units (#863)."""
+
+    def test_get_contents_shows_units_beside_native_values(self):
+        """Envelope columns are native and carry their unit column."""
+        spool = dc.spool([dc.get_example_patch().convert_units(distance="ft")])
+        df = spool.get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+        coord = spool[0].get_coord("distance")
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(float(coord.min()))
+        assert float(df["distance_max"].iloc[0]) == pytest.approx(float(coord.max()))
+
+    def test_quantity_select_presents_converted_envelopes(self):
+        """A metre range shows as the feet interval it selects."""
+        spool = dc.spool([dc.get_example_patch().convert_units(distance="ft")])
+        df = spool.select(distance=(20 * m, 60 * m)).get_contents()
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(65.6, abs=0.1)
+        assert float(df["distance_max"].iloc[0]) == pytest.approx(196.9, abs=0.1)
+
+    def test_degree_coordinate_stays_degrees(self):
+        """The motivating case: geographic degrees never show as radians."""
+        patch = dc.get_example_patch()
+        values = np.linspace(-117.05, -116.9, patch.coord_shapes["distance"][0])
+        patch = patch.update_coords(distance=values).set_units(distance="degrees")
+        spool = dc.spool([patch])
+        df = spool.get_contents()
+        assert str(df["distance_units"].iloc[0]) == "deg"
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(-117.05)
+        # a bare geographic range selects, matching Patch.select
+        got = spool.select(distance=(-117.0, -116.95))
+        assert len(got) == 1
+        direct = patch.select(distance=(-117.0, -116.95))
+        assert got[0].get_coord("distance") == direct.get_coord("distance")
+
+
 class TestUnitCanonicalSelection:
     """Coordinate selection on non-SI patches (#863).
 
@@ -390,6 +425,20 @@ class TestUnitCanonicalSelection:
         # the quantity view keeps 0..295 ft; the bare view means feet
         assert float(coord.min()) >= 20
         assert float(coord.max()) <= 60
+
+    def test_mixed_unit_archive(self):
+        """Bare selects per-file native intervals; a quantity selects one."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        pf = pm.convert_units(distance="ft")
+        sp = dc.spool([pm, pf])
+        for patch in sp.select(distance=(20, 60)):
+            coord = patch.get_coord("distance")
+            assert float(coord.min()) >= 20
+            assert float(coord.max()) <= 60
+        for patch in sp.select(distance=(20 * m, 60 * m)):
+            coord = patch.get_coord("distance").convert_units("m")
+            assert float(coord.min()) >= 19.9
+            assert float(coord.max()) <= 60.1
 
     def test_boolean_mask_selectors_rejected(self, ft_patch):
         """Sample masks are patch-level only; the spool points at map()."""

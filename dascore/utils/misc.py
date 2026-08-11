@@ -948,14 +948,11 @@ class _CanonicalRange:
         if coord_units is None:
             # unitless coords: bare canonical magnitudes (documented policy)
             return self.magnitudes
-        # a unit-bearing query keeps its own dimensionality; a bare
-        # numeric query means canonical SI in the coord's dimension
-        if self.units is not None:
-            base = get_quantity(self.units)
-        else:
-            coord_quant = get_quantity(str(coord_units))
-            assert coord_quant is not None  # the coord has units in this branch
-            base = coord_quant.to_base_units().units
+        # only unit-bearing queries canonicalize (bare ranges mean native
+        # units and never become a _CanonicalRange), so the query keeps
+        # its own dimensionality here
+        assert self.units is not None
+        base = get_quantity(self.units)
         return tuple(None if mag is None else mag * base for mag in self.magnitudes)
 
 
@@ -988,31 +985,18 @@ def _canonical_range(value) -> _CanonicalRange | None:
     return _CanonicalRange(tuple(magnitudes), units)
 
 
-def express_range_for_coord(value, coord, bare_is_si: bool = False):
+def express_range_for_coord(value, coord):
     """
     Re-express one index-side range in what a patch coordinate needs.
 
-    Index-side numeric ranges are canonical SI, but the patch they trim
-    keeps its own units, so the representation can only be chosen here,
-    where the coordinate is finally known.
-
-    ``bare_is_si`` says how to read a plain numeric range. Plan trims are
-    SI magnitudes and must convert; a residual selection's plain ranges
-    are *sample indices*, which are positions rather than values and must
-    be left alone. Anything with no unit to resolve — times, strings,
-    unitless coordinates — passes through either way.
+    Only unit-bearing queries carry a `_CanonicalRange`, whose
+    representation can be chosen only here, where the coordinate is
+    finally known. Everything else — bare value ranges (native units),
+    sample-index ranges, times, strings — passes through untouched.
     """
     if isinstance(value, _CanonicalRange):
         return value.for_patch_coord(coord)
-    if not bare_is_si or getattr(coord, "units", None) is None:
-        return value
-    # plan trims arrive as a raw 2-list; only a tuple reads as a range
-    ranged = tuple(value) if isinstance(value, list | tuple) else value
-    canonical = _canonical_range(ranged)
-    if canonical is None:
-        return value
-    # the bounds are already SI, so the query carries no unit of its own
-    return _CanonicalRange(canonical.magnitudes).for_patch_coord(coord)
+    return value
 
 
 def order_range_tuple(range_tuple):
