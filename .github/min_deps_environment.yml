@@ -1,8 +1,0 @@
-name: dascore
-channels:
-  - conda-forge
-dependencies:
-  - pytables
-  - h5py
-  - pooch
-  - tk  # needed for plotting

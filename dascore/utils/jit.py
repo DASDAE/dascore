@@ -7,6 +7,8 @@ from __future__ import annotations
 import warnings
 from functools import wraps
 
+from dascore.utils.misc import _get_install_message
+
 
 class _DummyNumba:
     """A simple class for acting like numba when numba is not installed."""
@@ -89,6 +91,7 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
                     msg = (
                         f"{func.__name__} requires python module "
                         f"numba but it is not installed. "
+                        f"{_get_install_message('numba')}"
                     )
                     raise ImportError(msg)
                 else:

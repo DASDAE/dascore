@@ -41,18 +41,24 @@ jobs:
       - uses: ./.github/actions/load-shared-vars
         id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
-          install-group-str: "[profile]"
+          # extras, not just [profile]: the IO benchmarks suppress
+          # DependencyError, so a format whose optional dependency is absent
+          # is silently not benchmarked rather than failing. environment.yml
+          # used to supply some of these (xarray, findiff); installing the
+          # extras keeps that coverage and matches what [dev] gives the
+          # test jobs.
+          install-group-str: "[profile,extras]"
           prepare-test-data: "true"
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924  # v5.0.1
         with:
           mode: simulation
-          # CodSpeed does not inherit the shell activation done by the
-          # micromamba setup step, so run benchmarks explicitly inside the
-          # dascore environment to ensure pytest and pytest-codspeed resolve.
-          run: micromamba run -n dascore ./.github/test_code.sh profile
+          # dascore now installs into the interpreter on PATH, so this no
+          # longer needs a `micromamba run -n dascore` wrapper to resolve
+          # pytest and pytest-codspeed.
+          run: ./.github/test_code.sh profile

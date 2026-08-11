@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from pathlib import Path
 from types import EllipsisType, MappingProxyType
-from typing import Literal, Protocol, TypeVar, get_args, runtime_checkable
+from typing import Any, Literal, Protocol, TypeVar, get_args, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -48,6 +48,11 @@ time_select_type = tuple[
     opt_timeable_types | EllipsisType,
 ]
 float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | None]
+
+# The `_attrs`/`_coords` namespace selectors accepted by select. Either a
+# mapping of name -> selector (the general form) or a name/collection of
+# names tagging which bare kwargs belong to that namespace.
+namespace_select_type = Mapping[str, Any] | str | Iterable[str] | None
 
 # Number types
 numeric_types = int | float

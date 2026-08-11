@@ -1455,6 +1455,8 @@ def stack_patches(
 
     Parameters
     ----------
+    patches
+        The patches to stack together.
     dim_vary
         The name of the dimension which can be different in values
         (but not shape) and patches still added together.

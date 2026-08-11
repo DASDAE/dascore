@@ -442,6 +442,40 @@ def iterate(obj):
     return obj if isinstance(obj, Iterable) else (obj,)
 
 
+# Import names whose installable package name differs from the import name.
+_INSTALL_NAMES = {
+    "google.protobuf": "protobuf",
+    "yaml": "pyyaml",
+}
+
+
+def _get_install_name(import_name: str) -> str:
+    """Get the package to install which provides the module import_name."""
+    parts = import_name.split(".")
+    # Search most to least specific so sub-modules resolve to their parent.
+    for stop in range(len(parts), 0, -1):
+        if (name := _INSTALL_NAMES.get(".".join(parts[:stop]))) is not None:
+            return name
+    return parts[0]
+
+
+def _get_install_message(packages: str | Iterable[str]) -> str:
+    """Get a message telling the user how to install one or more packages."""
+    names = " ".join(sorted(iterate(packages)))
+    return f"Install with `pip install {names}` or `uv pip install {names}`."
+
+
+def _is_missing_module(import_name: str, error: ImportError) -> bool:
+    """Determine if an ImportError means import_name itself is not installed."""
+    # Only the import machinery proves a module is absent, and it names the
+    # module it failed to find. Any other error (eg an installed package
+    # raising from its __init__) means the failure happened inside code which
+    # is installed, as does one naming a different module.
+    if not isinstance(error, ModuleNotFoundError) or not (failed := error.name or ""):
+        return False
+    return import_name == failed or import_name.startswith(f"{failed}.")
+
+
 @overload
 def optional_import(
     package_name: str,
@@ -499,8 +533,25 @@ def optional_import(
     """
     try:
         mod = importlib.import_module(package_name)
-    except ImportError:
-        msg = f"{package_name} is not installed but is required for {required_for}"
+    except ImportError as ex:
+        install_name = _get_install_name(package_name)
+        if _is_missing_module(package_name, ex):
+            msg = (
+                f"{package_name} is not installed but is required for "
+                f"{required_for}. {_get_install_message(install_name)}"
+            )
+        else:
+            # The package is installed; something it imports is not, so
+            # installing it again wouldn't help.
+            install_name = None
+            msg = (
+                f"{package_name} could not be imported ({ex}) but is "
+                f"required for {required_for}."
+            )
+        # Raise here (rather than with warn_or_raise) so the install name is
+        # attached to the exception for callers which aggregate them.
+        if on_missing == "raise":
+            raise MissingOptionalDependencyError(msg, install_name=install_name) from ex
         warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
         mod = None
     return mod

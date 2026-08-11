@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import PROGRESS_LEVELS
+from dascore.constants import PROGRESS_LEVELS, namespace_select_type
 from dascore.core.summary import normalize_source_patch_id
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
@@ -771,8 +771,8 @@ class PatchCatalog:
     def select(
         self,
         *,
-        _attrs: dict | None = None,
-        _coords: dict | None = None,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
         samples: bool = False,
         relative: bool = False,
         **kwargs,

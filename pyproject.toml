@@ -76,6 +76,15 @@ docs = [
     "jinja2",
     "ipywidgets",
     "tabulate",
+    # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
+    # a doc build needs a kernel and the notebook plumbing around it. These
+    # used to be supplied by a conda environment file rather than declared.
+    "ipykernel",
+    "jupyter-client",
+    "nbclient",
+    "nbformat",
+    # quarto's own notebook driver does `from yaml import safe_load`.
+    "pyyaml",
 ]
 
 test = [

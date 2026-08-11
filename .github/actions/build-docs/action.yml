@@ -8,6 +8,6 @@ runs:
     - uses: ./.github/actions/prep_doc_build
 
     - name: build quarto project
-      shell: bash -l {0}
+      shell: bash
       run: |
         quarto render docs

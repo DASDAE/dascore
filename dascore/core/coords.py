@@ -917,6 +917,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         select
             An object for determining select range.
+        relative
+            If True, the select values are relative to the minimum
+            (positive values) or maximum (negative values) of the
+            coordinate.
         """
         select_tuple = sanitize_range_param(select)
         p1, p2 = (
@@ -2904,6 +2908,8 @@ def get_coord(
         The minimum value, same as start.
     stop
         The stopping value of an array, exclusive.
+    max
+        Alias for stop; exclusive, like stop.
     step
         The sampling spacing of an array.
     units

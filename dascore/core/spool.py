@@ -23,6 +23,7 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    namespace_select_type,
     numeric_types,
     path_types,
     timeable_types,
@@ -349,7 +350,15 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         """
 
     @abc.abstractmethod
-    def select(self, **kwargs) -> Self:
+    def select(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        samples: bool = False,
+        relative: bool = False,
+        **kwargs,
+    ) -> Self:
         """
         Sub-select parts of the spool.
 
@@ -683,8 +692,8 @@ class Spool(BaseSpool):
     def select(
         self,
         *,
-        _attrs: dict | None = None,
-        _coords: dict | None = None,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
         samples: bool = False,
         relative: bool = False,
         **kwargs,

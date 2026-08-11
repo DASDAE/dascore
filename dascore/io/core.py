@@ -6,6 +6,7 @@ Das Data.
 from __future__ import annotations
 
 import inspect
+import re
 import warnings
 from collections import defaultdict
 from collections.abc import (
@@ -61,6 +62,8 @@ from dascore.exceptions import (
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
+    _get_install_message,
+    _get_install_name,
     _iter_filesystem,
     _locked,
     _reinit_after_fork,
@@ -1184,6 +1187,13 @@ def scan_to_df(
         Format of the file. If not provided DASCore will try to determine it.
     file_version
         The version string of the file.
+    ext
+        The extensions to map.
+    timestamp
+        Time stamp indicating the minimum mtime.
+    progress
+        The type of progress bar to use. None disables progress bar and
+        "basic" is best for low latency scenarios.
     exclude
         A sequence of column names to exclude in the final dataframe.
 
@@ -1291,6 +1301,23 @@ def _count_generator(generator):
     return entity_count
 
 
+_MISSING_MODULE_PATTERN = re.compile(r"^(\S+) is not installed")
+
+
+def _get_missing_install_name(exception: MissingOptionalDependencyError) -> str:
+    """Get the installable package name from a missing dependency error."""
+    if exception.install_name:
+        return exception.install_name
+    # Errors raised outside of optional_import (eg by a third party FiberIO)
+    # identify the module, if at all, with the module name or the message form
+    # optional_import used to use. Any other message could say anything, so
+    # nothing is recommended for installation.
+    if not (name := exception.name or ""):
+        match = _MISSING_MODULE_PATTERN.match(exception.msg or "")
+        name = match.group(1) if match else ""
+    return _get_install_name(name)
+
+
 def _handle_missing_optionals(output_count, optional_dep_dict):
     """
     Inform the user there are files that can be read but the proper
@@ -1299,10 +1326,17 @@ def _handle_missing_optionals(output_count, optional_dep_dict):
     If there are other readable files that were found, raise a warning.
     Otherwise, raise a MissingOptionalDependencyError.
     """
+    counts = ", ".join(
+        f"{name or 'unknown'} ({count} files)"
+        for name, count in sorted(optional_dep_dict.items())
+    )
+    # Unidentifiable packages can't be included in an install command.
+    packages = [x for x in optional_dep_dict if x]
+    install = f" {_get_install_message(packages)}" if packages else ""
     msg = (
         f"DASCore found files that can be read if additional packages are "
         f"installed. The needed packages and the found number of files are: "
-        f"{dict(optional_dep_dict)}"
+        f"{counts}.{install}"
     )
     warn_or_raise(
         msg,
@@ -1409,7 +1443,7 @@ def _iter_scan_results(
                                 scan_kwargs["snap"] = snap
                             source = fiber_io.scan(resource, **scan_kwargs)
                         except MissingOptionalDependencyError as ex:
-                            missing_optional_deps[ex.msg.split(" ")[0]] += 1
+                            missing_optional_deps[_get_missing_install_name(ex)] += 1
                             continue
                         # scan() is best-effort across many resources, so surface
                         # dependency/compatibility problems as warnings and keep
@@ -1725,6 +1759,8 @@ def write(
 
     Parameters
     ----------
+    patch_or_spool
+        The [`Patch`](`dascore.Patch`) or spool to write to disk.
     path
         The path to the file.
     file_format

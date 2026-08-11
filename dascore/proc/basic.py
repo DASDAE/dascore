@@ -543,6 +543,8 @@ def pad(
 
     Parameters
     ----------
+    patch
+        The patch to pad.
     mode : str, optional
         The mode of padding, by default 'constant'.
     constant_values : scalar , optional
@@ -555,6 +557,10 @@ def pad(
         based on the coordinate's step size. If set to False, or coordinate
         is not evenly sampled, the new coordinates introduced by padding
         will be padded with NaN values.
+    samples : bool, optional
+        If True, the values in kwargs represent samples along a dimension
+        and must be integers. Otherwise, they are assumed to have the same
+        units as the specified dimension, or have units attached.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
