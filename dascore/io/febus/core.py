@@ -183,13 +183,7 @@ class FebusG1CSV1(FiberIO):
             return []
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype="float64",
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=coords, dtype="float64")]
 
     def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:
         """Read a G1 file, return a Patch object."""

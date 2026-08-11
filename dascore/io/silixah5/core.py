@@ -67,9 +67,7 @@ class SilixaH5V1(FiberIO):
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource[self._data_name].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
             )
         ]
 

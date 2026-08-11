@@ -46,9 +46,7 @@ class DASHDF5(FiberIO):
         attrs = _get_cf_attrs(resource, coords)
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["das"].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource["das"].dtype)
             )
         ]
 

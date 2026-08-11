@@ -313,11 +313,7 @@ def _get_patch_attrs(
     parsed = _parse_sor(resource, load_samples=False)
     coords = _get_coords(parsed)
     attrs = _get_attr_dict(parsed, extras)
-    return make_scan_payload(
-        attrs=attr_class(**attrs),
-        coords=coords,
-        dtype="float64",
-    )
+    return make_scan_payload(attrs=attr_class(**attrs), coords=coords, dtype="float64")
 
 
 def _get_patches(

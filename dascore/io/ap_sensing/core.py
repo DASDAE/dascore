@@ -54,9 +54,7 @@ class APSensingV10(FiberIO):
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["DAS"].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype)
             )
         ]
 

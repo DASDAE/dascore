@@ -56,9 +56,7 @@ class OptoDASV8(FiberIO):
         attrs = OptoDASPatchAttrs.from_dict(attrs)
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["data"].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource["data"].dtype)
             )
         ]
 

@@ -71,9 +71,7 @@ class HDASV1(FiberIO):
         attrs = dc.PatchAttrs.model_validate(attrs_dict)
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource[self._data_name].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
             )
         ]
 

@@ -51,10 +51,4 @@ class H5Simple(FiberIO):
         attrs.pop("file_format", None)
         attrs.pop("file_version", None)
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=cm,
-                dtype=str(data.dtype),
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(data.dtype))]

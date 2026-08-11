@@ -72,13 +72,7 @@ class SegyV1_0(FiberIO):  # noqa
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path_str, self)
             dtype = str(fi.dtype)
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=dtype,
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
 
     def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
         """

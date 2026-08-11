@@ -71,13 +71,7 @@ class DASVaderV1(FiberIO):
             else ""
         )
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=cm,
-                dtype=dtype,
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=dtype)]
 
     def read(
         self,

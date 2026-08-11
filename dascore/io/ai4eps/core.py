@@ -65,13 +65,7 @@ class AI4EPSV1(FiberIO):
         dataset = resource["data"]
         coords = _get_coords(dataset)
         attrs = AI4EPSPatchAttrs.model_validate(_get_attrs_dict(dataset))
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(dataset.dtype),
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=coords, dtype=str(dataset.dtype))]
 
     def read(
         self,

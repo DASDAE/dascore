@@ -1055,11 +1055,4 @@ def scan_payload(resource) -> list[ScanPayload]:
     parsed, meta = _parse_records(records, scan_mode=True)
     family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
     shape, coords, attrs, dtype = family_cls.from_parsed(parsed, meta).scan()
-    return [
-        make_scan_payload(
-            attrs=attrs,
-            coords=coords,
-            shape=shape,
-            dtype=dtype,
-        )
-    ]
+    return [make_scan_payload(attrs=attrs, coords=coords, shape=shape, dtype=dtype)]

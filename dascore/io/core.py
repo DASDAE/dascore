@@ -128,17 +128,6 @@ def make_scan_payload(
         The string representation of the data's dtype.
     source_patch_id
         Identifies which logical patch of a multi-patch resource this is.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> from dascore.io import make_scan_payload
-    >>>
-    >>> patch = dc.get_example_patch()
-    >>> payload = make_scan_payload(
-    ...     attrs=patch.attrs, coords=patch.coords, dtype=str(patch.data.dtype)
-    ... )
-    >>> assert payload["dims"] == patch.dims
     """
     return {
         "attrs": PatchAttrs.from_dict(attrs),

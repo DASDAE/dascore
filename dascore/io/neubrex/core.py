@@ -93,11 +93,7 @@ class NeubrexRFSV1(FiberIO):
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
         return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=cm,
-                dtype=str(resource["data"].dtype),
-            )
+            make_scan_payload(attrs=attrs, coords=cm, dtype=str(resource["data"].dtype))
         ]
 
 
@@ -150,10 +146,4 @@ class NeubrexDASV1(FiberIO):
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=cm,
-                dtype=str(acoustic.dtype),
-            )
-        ]
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(acoustic.dtype))]

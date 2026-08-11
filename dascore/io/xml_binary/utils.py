@@ -257,10 +257,6 @@ def _paths_to_scan_patches(
         )
         attrs = attr_cls(**base_attrs, **extra_attrs)
         out.append(
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=metadata.data_type,
-            )
+            make_scan_payload(attrs=attrs, coords=coords, dtype=metadata.data_type)
         )
     return out

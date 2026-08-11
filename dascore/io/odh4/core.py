@@ -60,9 +60,7 @@ class ODH4V1(FiberIO):
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
         return [
             make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["raw_data"].dtype),
+                attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype)
             )
         ]
 

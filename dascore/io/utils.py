@@ -34,9 +34,8 @@ def build_patches(
     """
     Trim a data source to a selection and build the resulting patch list.
 
-    Most single-patch readers share this tail: apply the caller's
-    dimension selections, drop the patch if nothing is left, then attach
-    attrs.
+    This is the tail most single-patch readers share. It returns one
+    patch, or nothing if the selection left no data.
 
     Parameters
     ----------
@@ -47,26 +46,12 @@ def build_patches(
     attrs
         The patch attributes, or anything convertible to them.
     attr_cls
-        The PatchAttrs subclass used by the format. Defaults to PatchAttrs.
+        The format's PatchAttrs subclass. Defaults to PatchAttrs.
     selection
         A mapping of {dimension_name: selection}, eg {"time": (t1, t2)}.
-        Entries whose value is None are dropped, so a read with nothing
-        to trim never touches the data source. Selections are passed to
-        `CoordManager.select`, which ignores names it doesn't know.
-
-    Returns
-    -------
-    A list with one patch, or an empty list if the selection removed
-    all the data.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> from dascore.io.utils import build_patches
-    >>>
-    >>> patch = dc.get_example_patch()
-    >>> patches = build_patches(patch.coords, patch.data, patch.attrs)
-    >>> assert len(patches) == 1
+        None values are dropped, so a read with nothing to trim never
+        touches the data source. Passed to `CoordManager.select`, which
+        ignores names it doesn't know.
     """
     # A def-time default would need dc.PatchAttrs while dascore is still
     # importing this module, so the sentinel is resolved here instead.

@@ -74,8 +74,6 @@ class GDR_V1(FiberIO):  # noqa
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [
             make_scan_payload(
-                attrs=GDRPatchAttrs.from_dict(attrs),
-                coords=cm,
-                dtype=str(data.dtype),
+                attrs=GDRPatchAttrs.from_dict(attrs), coords=cm, dtype=str(data.dtype)
             )
         ]
