@@ -1,18 +1,5 @@
-# Run full test suite with all optional deps.
-#
-# Dependency caching is deliberately off. The mamba environment caches this
-# workflow used to mint (one per os x python x env-file x week, ~250-590 MB
-# each) filled 7 GB of the repo's 10 GB budget on their own and kept evicting
-# the test-data cache. A uv install of [dev] is ~15s cold, so nothing is
-# cached now beyond the test data itself.
-#
-# Turning caching back on later: use setup-uv with enable-cache: true AND
-# prune-cache: false (the default prune drops downloaded wheels, which is
-# both the useful part and the part that would survive a PyPI outage), and
-# give it a stable key. Do not use setup-uv's default cache-dependency-glob:
-# it hashes pyproject.toml, which changes on nearly every reader PR because
-# each new format adds an entry point, and caches are ref-scoped, so every
-# such PR would mint its own ~240 MB copy of every matrix entry.
+# Run full test suite with all optional deps. Dependency caching is off: the
+# mamba caches it replaced ate 7 of the repo's 10 GB. See #860 to re-enable.
 name: TestCode
 on:
   push:
