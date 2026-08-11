@@ -275,8 +275,11 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
         return df
     buckets: dict[str, list[str]] = {}
     for unit in distinct:
-        base = str(get_quantity(unit).to_base_units().units)
-        buckets.setdefault(base, []).append(unit)
+        quantity = get_quantity(unit)
+        # null and empty spellings were filtered out above, so every
+        # remaining one names a real unit
+        assert quantity is not None
+        buckets.setdefault(str(quantity.to_base_units().units), []).append(unit)
     min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
     df = df.copy()
     for base, spellings in buckets.items():
