@@ -27,14 +27,14 @@ jobs:
       - uses: ./.github/actions/load-shared-vars
         id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
           prepare-test-data: "true"
 
       - name: run test suite
-        shell: bash -l {0}
+        shell: bash
         run: |
           pytest -s --cov dascore --cov-report=xml
 

@@ -24,6 +24,13 @@ git pull origin master --tags
 
 Create and activate a virtual environment so DASCore will not mess with the base (or system) python installation.
 
+If you are using [uv](https://docs.astral.sh/uv/), which is what most of DASCore's CI uses:
+
+```bash
+uv venv
+source .venv/bin/activate
+```
+
 If you are using [Anaconda](https://www.anaconda.com/), simply use the environment provided:
 
 ```bash
@@ -35,6 +42,12 @@ conda activate dascore
 
 ```bash
 pip install -e ".[dev]"
+```
+
+If you created the environment with `uv venv`, use `uv pip` instead. A uv virtual environment has no `pip` of its own, so a bare `pip install` would fall through to whichever `pip` is next on your `PATH` and install DASCore somewhere else entirely:
+
+```bash
+uv pip install -e ".[dev]"
 ```
 
 ## 5. Setup pre-commit hooks
@@ -65,3 +78,5 @@ pip install -e ".[dev]"
 The first line ensures you are on the master branch, the second line will pull the latest changes and tags, and the last line
 will install again in developer mode. This is only required if DASCore's entry points or requirements have changed, but
 won't hurt anything if not.
+
+For a uv environment, activate it with `source .venv/bin/activate` rather than `conda activate dascore`, and finish with `uv pip install -e ".[dev]"`.

@@ -38,11 +38,10 @@ jobs:
       - uses: ./.github/actions/load-shared-vars
         id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
-          environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 
       - uses: ./.github/actions/build-docs
