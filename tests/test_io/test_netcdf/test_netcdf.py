@@ -450,6 +450,8 @@ class TestNetCDFCoreHelpers:
             "optional_import",
             _optional_import,
         )
+        # the backend guard probes installed packages; this test fakes them
+        monkeypatch.setattr(netcdf_core, "_require_hdf5_netcdf_backend", lambda: None)
         monkeypatch.setattr(
             netcdf_core,
             "patch_to_xarray",
