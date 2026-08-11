@@ -6,12 +6,14 @@ from __future__ import annotations
 from dascore.io.core import (
     FiberIO,
     ScanPayload,
+    make_scan_payload,
     read,
     scan,
     scan_payloads,
     scan_to_df,
     write,
 )
+from dascore.io.utils import build_patches
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.hdf5 import (
     H5Reader,

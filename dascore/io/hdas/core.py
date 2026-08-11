@@ -6,7 +6,7 @@ from typing import Literal
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -70,13 +70,11 @@ class HDASV1(FiberIO):
         coords, attrs_dict = self._get_coords_and_attrs(resource)
         attrs = dc.PatchAttrs.model_validate(attrs_dict)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource[self._data_name].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource[self._data_name].dtype),
+            )
         ]
 
     def read(

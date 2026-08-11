@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 import dascore as dc
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
+from .utils import _get_attrs_coords_and_data, _is_h5simple
 
 
 class H5Simple(FiberIO):
@@ -42,11 +43,7 @@ class H5Simple(FiberIO):
             Passed to filtering coordinates.
         """
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
-        new_cm, new_data = _maybe_trim_data(cm, data, kwargs)
-        if not new_cm.size:
-            return dc.spool([])
-        patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
-        return dc.spool([patch])
+        return dc.spool(build_patches(cm, data, attrs, **kwargs))
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""
@@ -55,11 +52,9 @@ class H5Simple(FiberIO):
         attrs.pop("file_version", None)
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [
-            {
-                "attrs": attrs,
-                "coords": cm,
-                "dims": cm.dims,
-                "shape": cm.shape,
-                "dtype": str(data.dtype),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=cm,
+                dtype=str(data.dtype),
+            )
         ]

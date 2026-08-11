@@ -7,6 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import build_patches
 from dascore.units import get_quantity
 from dascore.utils.misc import maybe_get_items
 
@@ -131,10 +132,11 @@ def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     """Read patches from an ODH4 file, optionally trimming coords."""
     file_attrs = _read_attrs(resource)
     data = resource["raw_data"]
-    coords = _get_coords(file_attrs, data.shape)
-    attrs = attr_cls.model_validate(_get_attrs_dict(file_attrs))
-    if time is not None or distance is not None:
-        coords, data = coords.select(array=data, time=time, distance=distance)
-    if not data.size:
-        return []
-    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
+    return build_patches(
+        _get_coords(file_attrs, data.shape),
+        data,
+        _get_attrs_dict(file_attrs),
+        attr_cls=attr_cls,
+        time=time,
+        distance=distance,
+    )

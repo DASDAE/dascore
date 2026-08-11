@@ -1,4 +1,4 @@
-"""Utilities for terra15."""
+"""Utilities for DASHDF5."""
 
 from __future__ import annotations
 

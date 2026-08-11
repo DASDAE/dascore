@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore import get_coord_manager
 from dascore.constants import timeable_types
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader
 
@@ -72,11 +72,9 @@ def _scan_t1(fi: H5Reader, snap=True):
     attrs = _get_attrs(path="", format="", version="")
     for name in ("path", "file_format", "file_version"):
         attrs.pop(name)
-    return _make_scan_payload(
+    return make_scan_payload(
         attrs=attrs,
         coords=coords,
-        dims=coords.dims,
-        shape=coords.shape,
         dtype=str(_get_h5_attr(fi, "Temperature").dtype),
     )
 

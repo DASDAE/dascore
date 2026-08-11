@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_odh4, _read_attrs
@@ -59,13 +59,11 @@ class ODH4V1(FiberIO):
         coords = _get_coords(file_attrs, resource["raw_data"].shape)
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource["raw_data"].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["raw_data"].dtype),
+            )
         ]
 
     def read(

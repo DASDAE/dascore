@@ -6,7 +6,7 @@ from typing import Literal
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -72,13 +72,11 @@ class DASVaderV1(FiberIO):
         )
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [
-            {
-                "attrs": attrs,
-                "coords": cm,
-                "dims": cm.dims,
-                "shape": cm.shape,
-                "dtype": dtype,
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=cm,
+                dtype=dtype,
+            )
         ]
 
     def read(

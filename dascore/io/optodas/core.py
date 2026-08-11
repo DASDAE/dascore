@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UnitQuantity, UTF8Str
 
@@ -41,7 +41,7 @@ class OptoDASV8(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A path to the file which may contain OptoDAS data.
         """
         version_str = _get_opto_das_version_str(resource)
         if version_str:
@@ -55,13 +55,11 @@ class OptoDASV8(FiberIO):
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource["data"].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["data"].dtype),
+            )
         ]
 
     def read(

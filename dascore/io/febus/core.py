@@ -17,7 +17,7 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.io import FiberIO, ScanPayload
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
 from dascore.utils.models import UTF8Str
@@ -102,7 +102,7 @@ class Febus2(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A path to the file which may contain febus data.
         """
         version_str = _get_febus_version_str(resource)
         if version_str:
@@ -117,11 +117,9 @@ class Febus2(FiberIO):
                 _source_patch_id=_get_source_patch_id(feb)
             )
             out.append(
-                _make_scan_payload(
+                make_scan_payload(
                     attrs=attrs,
                     coords=cm,
-                    dims=cm.dims,
-                    shape=cm.shape,
                     dtype=str(feb.zone[feb.data_name].dtype),
                     source_patch_id=attrs["_source_patch_id"],
                 )
@@ -186,11 +184,9 @@ class FebusG1CSV1(FiberIO):
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=attrs,
                 coords=coords,
-                dims=coords.dims,
-                shape=coords.shape,
                 dtype="float64",
             )
         ]
@@ -224,11 +220,9 @@ class FebusMTXH5V1(FiberIO):
         attrs = _get_mtx_attrs(resource)
         coords = _get_mtx_coords(resource, snap=snap)
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=FebusMTXAttrs(**attrs),
                 coords=coords,
-                dims=coords.dims,
-                shape=coords.shape,
                 dtype=str(resource["mtx"].dtype),
             )
         ]
@@ -286,11 +280,9 @@ class FebusBSLH5V1(FiberIO):
         attrs = _get_bsl_attrs(resource)
         coords = _get_bsl_coords(resource, snap=snap)
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=FebusBOTDRStrainAttrs(**attrs),
                 coords=coords,
-                dims=coords.dims,
-                shape=coords.shape,
                 dtype=str(resource["bsl_data"].dtype),
             )
         ]

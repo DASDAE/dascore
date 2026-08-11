@@ -143,9 +143,8 @@ def _get_distance_coord(acq):
     step = float(attrs["SpatialSamplingInterval"])
     num_dist_channels = int(attrs["NumberOfLoci"])
     start = int(attrs["StartLocusIndex"]) * step
-    stop = start + num_dist_channels * step
     units = get_distance_units(attrs)
-    return get_coord(start=start, stop=stop, units=units, step=step)
+    return get_coord(start=start, step=step, shape=(num_dist_channels,), units=units)
 
 
 def _get_time_coord(node, snap=True):

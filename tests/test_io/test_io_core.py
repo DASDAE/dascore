@@ -31,13 +31,13 @@ from dascore.io.core import (
     FiberIO,
     _FiberIOManager,
     _get_reloadable_source_path,
-    _make_scan_payload,
     _reinit_manager_lock,
     _resolve_read_spool,
     _scan_result_to_summary,
     _select_patch_from_spool,
     _validate_scan_payload,
     is_directory_format,
+    make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import get_exact_coord
@@ -149,7 +149,7 @@ class _FiberDirectory(FiberIO):
         """Return a payload that records the forwarded snap mode."""
         patch = dc.get_example_patch().update_attrs(tag=str(snap))
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=patch.attrs,
                 coords=patch.coords,
                 dims=patch.dims,
@@ -318,7 +318,7 @@ class TestScanResultToSummary:
     def test_make_scan_payload_uses_dtype_key(self):
         """The helper should emit the normalized dtype field."""
         patch = dc.get_example_patch()
-        out = _make_scan_payload(
+        out = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1194,7 +1194,7 @@ class TestReloadableSourcePath:
     def test_scan_payload_field_validation(self, key, value):
         """Every declared payload field should enforce its public type."""
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1210,7 +1210,7 @@ class TestReloadableSourcePath:
     def test_scan_payload_coord_metadata_must_match(self, key):
         """Strict payload metadata must agree with the full coord manager."""
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1230,7 +1230,7 @@ class TestReloadableSourcePath:
         fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
         fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,

@@ -2,6 +2,7 @@
 
 import numpy as np
 
+import dascore as dc
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.exceptions import CoordError
 
@@ -13,6 +14,42 @@ from dascore.exceptions import CoordError
 # skip segmentation for arrays large enough for the cost to matter.
 _MAX_SEGMENT_FRACTION = 0.1
 _MIN_SEGMENT_GUARD_SIZE = 1_000
+
+
+def build_patches(coords, data, attrs=None, attr_cls=None, **select_kwargs):
+    """
+    Trim a data source to a selection and build the resulting patch list.
+
+    Most single-patch readers share this tail: apply the caller's
+    dimension selections, drop the patch if nothing is left, then attach
+    attrs. Selections which are None are ignored so an untrimmed read
+    never touches the data source.
+
+    Parameters
+    ----------
+    coords
+        The coordinates of the untrimmed patch.
+    data
+        The patch data, often an unread node (eg an h5 dataset).
+    attrs
+        The patch attributes, or anything convertible to them.
+    attr_cls
+        The PatchAttrs subclass used by the format, if any.
+    **select_kwargs
+        Dimension selections, eg time=(t1, t2).
+
+    Returns
+    -------
+    A list with one patch, or an empty list if the selection removed
+    all the data.
+    """
+    selection = {i: v for i, v in select_kwargs.items() if v is not None}
+    if selection:
+        coords, data = coords.select(array=data, **selection)
+    if not data.size:
+        return []
+    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
+    return [dc.Patch(data=data[:], coords=coords, attrs=attr_cls.from_dict(attrs))]
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:

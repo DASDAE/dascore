@@ -17,7 +17,7 @@ import dascore as dc
 from dascore.constants import ONE_BILLION
 from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.utils.io import LocalPath, _normalize_source_patch_ids, _read_file_header
 from dascore.utils.time import to_datetime64, to_int
 
@@ -495,10 +495,9 @@ def _get_coords(
     )
     step = np.timedelta64(first.sample_step_ns, "ns")
     start = np.datetime64(first.start_ns, "ns")
-    stop = start + step * sample_count
     return {
         "channel": get_coord(data=np.asarray(channel_values)),
-        "time": get_coord(start=start, stop=stop, step=step),
+        "time": get_coord(start=start, step=step, shape=(sample_count,)),
         "source_id": (("channel",), source_ids),
         "network": (("channel",), tuple(x.network for x in segments)),
         "station": (("channel",), tuple(x.station for x in segments)),
@@ -571,11 +570,9 @@ def _scan_payload_from_segments(
         prepared.coords,
         dims=("channel", "time"),
     )
-    return _make_scan_payload(
+    return make_scan_payload(
         attrs=prepared.attrs,
         coords=coords,
-        dims=coords.dims,
-        shape=coords.shape,
         dtype=prepared.first.dtype,
         source_patch_id=prepared.attrs["_source_patch_id"],
     )

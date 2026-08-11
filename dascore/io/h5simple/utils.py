@@ -1,4 +1,4 @@
-"""Utilities for terra15."""
+"""Utilities for simple h5 files."""
 
 from __future__ import annotations
 
@@ -17,12 +17,6 @@ OTHER_COORD_ARRAY_NAMES = frozenset(("channels", "distance"))
 
 FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
 DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
-
-
-def _maybe_trim_data(cm, data, kwargs):
-    """Maybe use kwargs to trim data array."""
-    new_cm, new_data = cm.select(array=data, **kwargs)
-    return new_cm, new_data
 
 
 def _get_attrs_coords_and_data(h5, snap, fiber_io):

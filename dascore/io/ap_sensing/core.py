@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _get_version_string
@@ -41,7 +41,7 @@ class APSensingV10(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A path to the file which may contain AP sensing data.
         """
         version_str = _get_version_string(resource)
         if version_str:
@@ -53,13 +53,11 @@ class APSensingV10(FiberIO):
         coords = _get_coords(resource)
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource["DAS"].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["DAS"].dtype),
+            )
         ]
 
     def read(

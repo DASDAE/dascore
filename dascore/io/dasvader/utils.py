@@ -7,9 +7,9 @@ import numpy as np
 from h5py.h5r import Reference, dereference
 
 import dascore as dc
-from dascore.compat import array
 from dascore.core.coords import get_coord
 from dascore.exceptions import DASVaderCompatibilityError
+from dascore.io.utils import build_patches
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -200,16 +200,9 @@ def _read_dasvader(h5, distance=None, time=None):
     data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
     # data is a reference here; need to resolve it with h5 File.
     data = _dereference(h5, rec[data_name], data_name)
-    if distance is not None or time is not None:
-        cm, data = cm.select(data, distance=distance, time=time)
-    data = array(data)
-    if not data.size:
-        return []
     attrs = (
         _get_attr_dict(_dereference(h5, rec["atrib"], "atrib"))
         if "atrib" in ref_names
         else {}
     )
-    # attrs["coords"] = cm.to_summary_dict()
-    # attrs["dims"] = cm.dims
-    return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs.from_dict(attrs))]
+    return build_patches(cm, data, attrs, time=time, distance=distance)

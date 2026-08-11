@@ -95,21 +95,49 @@ class ScanPayload(TypedDict):
     source_version: NotRequired[str]
 
 
-def _make_scan_payload(
+def make_scan_payload(
     *,
     attrs: dc.PatchAttrs | Mapping[str, Any] | None,
     coords,
-    dims=(),
-    shape=(),
+    dims=None,
+    shape=None,
     dtype: str = "",
     source_patch_id: str = "",
 ) -> ScanPayload:
-    """Build one normalized FiberIO scan payload."""
+    """
+    Build one normalized FiberIO scan payload.
+
+    Parameters
+    ----------
+    attrs
+        The patch attributes, or anything convertible to them.
+    coords
+        The coordinates of the patch, usually a CoordManager.
+    dims
+        The dimension names. If None, use those of `coords`.
+    shape
+        The shape of the patch data. If None, use that of `coords`.
+    dtype
+        The string representation of the data's dtype.
+    source_patch_id
+        Identifies which logical patch of a multi-patch resource this is.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.io import make_scan_payload
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> payload = make_scan_payload(
+    ...     attrs=patch.attrs, coords=patch.coords, dtype=str(patch.data.dtype)
+    ... )
+    >>> assert payload["dims"] == patch.dims
+    """
     return {
         "attrs": PatchAttrs.from_dict(attrs),
         "coords": coords,
-        "dims": tuple(dims),
-        "shape": tuple(shape),
+        "dims": tuple(coords.dims if dims is None else dims),
+        "shape": tuple(coords.shape if shape is None else shape),
         "dtype": str(dtype),
         "source_patch_id": normalize_source_patch_id(source_patch_id),
     }
@@ -323,7 +351,7 @@ def _patch_to_summary(
 
 def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
     """Convert a loaded patch into one structured FiberIO scan payload."""
-    return _make_scan_payload(
+    return make_scan_payload(
         attrs=patch.attrs,
         coords=patch.coords,
         dims=patch.dims,

@@ -4,6 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
+from dascore.io.utils import build_patches
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 
@@ -32,9 +33,7 @@ def _get_time_coord(resource, shape):
     # Create coord
     start = dc.to_datetime64(start_time_str)
     step = dc.to_timedelta64(1 / sr)
-    stop = start + trace_count * step
-    coord = get_coord(start=start, stop=stop, step=step, units="s")
-    return coord
+    return get_coord(start=start, step=step, shape=(trace_count,), units="s")
 
 
 def _get_distance_coord(resource, data_shape):
@@ -55,9 +54,9 @@ def _get_distance_coord(resource, data_shape):
     # x_end_calc = x_start + step * dist_length
     x_end = _maybe_unpack(stop)
     step_calc = (x_end - x_start) / dist_length
-    coord = get_coord(start=x_start, stop=x_end, step=step_calc, units=start_unit)
-    coord = coord.change_length(dist_length)
-    return coord
+    return get_coord(
+        start=x_start, step=step_calc, shape=(dist_length,), units=start_unit
+    )
 
 
 def _get_coords(resource):
@@ -88,12 +87,11 @@ def _get_attrs_dict(resource):
 
 def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     """Get a patch from ap_sensing file."""
-    attrs = _get_attrs_dict(resource)
-    coords = _get_coords(resource)
-    data = resource["DAS"]
-    if time is not None or distance is not None:
-        coords, data = coords.select(array=data, time=time, distance=distance)
-        if not data.size:
-            return []
-    attrs = attr_cls.model_validate(attrs)
-    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
+    return build_patches(
+        _get_coords(resource),
+        resource["DAS"],
+        _get_attrs_dict(resource),
+        attr_cls=attr_cls,
+        time=time,
+        distance=distance,
+    )

@@ -85,16 +85,18 @@ class JingleV1(FiberIO):
         Used to get metadata about a file without reading the whole file.
 
         This should return a list of structured scan payloads. Each payload
-        should contain exact coord objects plus patch metadata, for example:
+        should contain exact coord objects plus patch metadata. The
+        [`make_scan_payload`](`dascore.io.make_scan_payload`) helper builds
+        one, taking `dims` and `shape` from the coords:
 
-        {
-            "attrs": patch_attrs,
-            "coords": coord_manager,
-            "dims": coord_manager.dims,
-            "shape": coord_manager.shape,
-            "dtype": "...",
-            "source_patch_id": "...",  # when needed
-        }
+        [make_scan_payload(
+            attrs=patch_attrs,
+            coords=coord_manager,
+            dtype="...",
+            source_patch_id="...",  # when needed
+        )]
+
+        A plain dict with the same keys also works.
 
         DASCore converts these payloads into
         [`PatchSummary`](`dascore.PatchSummary`) objects in the higher-level
@@ -170,7 +172,13 @@ In implementation code, the simplest pattern is usually:
 
 1. Build normal `PatchAttrs` for one logical patch.
 2. Build the exact `CoordManager` you would use for `read()`.
-3. Return one payload with those values plus `dims`, `shape`, and `dtype`.
+3. Return one payload built by [`make_scan_payload`](`dascore.io.make_scan_payload`), which fills `dims` and `shape` from the coords.
+
+Most single-patch `read()` implementations share a tail as well: apply the caller's dimension selections, drop the patch when the selection empties it, then attach attrs. [`build_patches`](`dascore.io.build_patches`) does exactly that, so a reader usually ends with:
+
+```python
+return dc.spool(build_patches(coords, data_node, attrs, attr_cls=JinglePatchAttrs, time=time, distance=distance))
+```
 
 If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
 implementation will normalize it into the same structured payload shape. Format

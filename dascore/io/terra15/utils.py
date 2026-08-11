@@ -8,7 +8,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.io import ScanPayload
-from dascore.io.core import _make_scan_payload
+from dascore.io.core import make_scan_payload
 from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -92,11 +92,9 @@ def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[ScanPayload]
     }
     coord_manager = get_coord_manager(coords=coords, dims=tuple(coords))
     return [
-        _make_scan_payload(
+        make_scan_payload(
             attrs=PatchAttrs.from_dict(out),
             coords=coord_manager,
-            dims=coord_manager.dims,
-            shape=coord_manager.shape,
             dtype=str(data_node["data"].dtype),
         )
     ]
