@@ -31,7 +31,9 @@ from dascore.exceptions import (
 from dascore.io.core import (
     FiberIO,
     _FiberIOManager,
+    _get_missing_install_name,
     _get_reloadable_source_path,
+    _handle_missing_optionals,
     _reinit_manager_lock,
     _resolve_read_spool,
     _scan_result_to_summary,
@@ -1106,8 +1108,10 @@ class TestScan:
         path.write_text("placeholder")
 
         msg = "found files that can be read if additional packages"
-        with pytest.raises(MissingOptionalDependencyError, match=msg):
+        with pytest.raises(MissingOptionalDependencyError, match=msg) as exc_info:
             dc.scan(path)
+        # The message should say how to install the missing package.
+        assert "pip install not_optional_pkg" in str(exc_info.value)
 
     def test_scan_missing_optional_dependency_warns_with_other_outputs(self, tmp_path):
         """Scan should warn if optional deps are missing but other files load."""
@@ -1609,6 +1613,39 @@ class TestGetSupportedIOTable:
 
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
+
+
+class TestMissingInstallName:
+    """Tests for guessing the package to install from a dependency error."""
+
+    def test_name_sources(self):
+        """The name comes from the attr, the module, or the legacy message."""
+        errors = [
+            MissingOptionalDependencyError("blah", install_name="protobuf"),
+            MissingOptionalDependencyError("blah", name="google.protobuf"),
+            MissingOptionalDependencyError("protobuf is not installed but..."),
+        ]
+        assert [_get_missing_install_name(x) for x in errors] == ["protobuf"] * 3
+
+    def test_unidentifiable_package(self):
+        """Arbitrary messages should not be mistaken for package names."""
+        error = MissingOptionalDependencyError("Optional dependency foo is missing")
+        assert _get_missing_install_name(error) == ""
+        assert _get_missing_install_name(MissingOptionalDependencyError()) == ""
+        # Subclasses which skip the init still have an install name.
+        assert MissingOptionalDependencyError.install_name is None
+
+    def test_message_omits_unknown_packages(self):
+        """Only identified packages belong in the install command."""
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            _handle_missing_optionals(0, {"": 2, "segyio": 1, "protobuf": 3})
+        msg = str(exc_info.value)
+        assert "unknown (2 files)" in msg
+        assert "pip install protobuf segyio" in msg
+        # Nothing should be recommended when no package was identified.
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            _handle_missing_optionals(0, {"": 2})
+        assert "pip install" not in str(exc_info.value)
 
 
 class TestIOCoreCoverageEdges:

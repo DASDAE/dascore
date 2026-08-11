@@ -118,7 +118,20 @@ class InvalidIndexVersionError(InvalidIndexError):
 
 
 class MissingOptionalDependencyError(ImportError, DependencyError):
-    """Raised when an optional package needed for some functionality is missing."""
+    """
+    Raised when an optional package needed for some functionality is missing.
+
+    The install_name attribute, when set, gives the name of the package to
+    install (eg protobuf) which may differ from the import name
+    (eg google.protobuf). It defaults on the class so subclasses which don't
+    call this init still have it.
+    """
+
+    install_name: str | None = None
+
+    def __init__(self, *args, install_name: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.install_name = install_name
 
 
 class DASVaderCompatibilityError(InvalidFiberFileError, DependencyError):
