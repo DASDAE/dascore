@@ -11,10 +11,9 @@ test_io_core.py
 from __future__ import annotations
 
 import inspect
-import os
 from contextlib import suppress
 from functools import cache
-from io import BytesIO, UnsupportedOperation
+from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
 
@@ -128,10 +127,21 @@ SKIP_DATA_FILES = {
 
 # A scan's cost should track a file's headers, not its samples. Only files
 # above this size are held to that: in a small file the fixed metadata cost
-# can legitimately be most of the bytes. Every format currently reads under
-# 15% of a file this large; the failure guarded against reads 100%.
+# can legitimately be most of the bytes. Every measurable format currently
+# reads under 15% of a file this large; the failure guarded against reads
+# 100%.
 _SCAN_COST_MIN_FILE_SIZE = 1_000_000
 _SCAN_COST_MAX_FRACTION = 0.25
+
+# Formats whose readers open the file themselves, from a path or a file
+# descriptor, rather than reading through the handle they are given. Their
+# scans cannot be weighed by counting bytes through that handle: segy and
+# MSEED hand it straight back to their own libraries, Sintela_Binary reads 96
+# bytes and takes the path from there, and TDMS and sentek want a descriptor
+# to memory-map. Listing them keeps the exclusion visible, which is the point
+# -- inferring it from "the count came out empty" would read a regression
+# that bypassed the handle as a pass.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "SINTELA_BINARY", "TDMS", "SENTEK"})
 
 # Formats whose scan is the FiberIO default, which builds the summary by
 # reading the whole file. The docs allow implementing only read, so this is a
@@ -142,44 +152,66 @@ _SCAN_COST_MAX_FRACTION = 0.25
 FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
 
 
-def _bytes_read_by_process() -> int:
+class _CountingHandle(BufferedIOBase):
     """
-    Return the bytes this process has pulled through read syscalls.
+    A readable file object which tallies the bytes it hands out.
 
-    Reported by the kernel, so it covers reads inside C extensions such as
-    h5py and protobuf, where format readers do most of their I/O. Page-cache
-    hits still count, so the number does not depend on how warm the file is.
-    Raises OSError where /proc is unavailable.
+    Counting here rather than at the process makes the number exact and
+    portable: no page-cache or allocator noise to leave headroom for, and no
+    dependence on /proc, so this measures on every platform DASCore tests
+    rather than only Linux. It also needs no warm-up scan, since module
+    imports never reach this counter.
 
-    Memory-mapped access is the one path this misses, since it faults pages
-    in rather than issuing read syscalls. No scan maps its file today (the
-    mappings in the TDMS and xml_binary readers are on their read paths), and
-    counting page faults instead is worse than it sounds: fault-around maps
-    16 pages per fault, so a mapped read is undercounted by that factor,
-    which leaves less signal than ordinary allocation contributes as noise.
+    fileno is left unsupported on purpose. A reader handed the descriptor can
+    map the file and read all of it without this seeing a byte, so it should
+    fail loudly here and be named in IGNORE_SCAN_CHECK.
     """
-    with open("/proc/self/io") as fi:
-        for line in fi:
-            if line.startswith("rchar:"):
-                return int(line.split()[1])
-    raise OSError("rchar missing from /proc/self/io")
 
+    def __init__(self, fileobj):
+        self._fileobj = fileobj
+        self.bytes_read = 0
 
-def _link_at_unseen_path(path, directory: Path) -> Path:
-    """
-    Return a path to the same contents that no reader has been handed yet.
+    def read(self, size=-1, /):
+        """Read from the wrapped file, counting what comes back."""
+        out = self._fileobj.read(size)
+        self.bytes_read += len(out)
+        return out
 
-    Links rather than copies, so a large file does not turn into test
-    runtime, and keeps the file name so extension-sensitive readers behave
-    the same. A hard link is preferred because it also defeats caching keyed
-    on the resolved path.
-    """
-    link = directory / Path(path).name
-    try:
-        os.link(path, link)
-    except OSError:  # e.g. the temp dir is on a different filesystem
-        link.symlink_to(path)
-    return link
+    read1 = read
+
+    def readinto(self, buffer, /):
+        """Read into a buffer, counting the bytes filled."""
+        count = self._fileobj.readinto(buffer)
+        self.bytes_read += count or 0
+        return count
+
+    readinto1 = readinto
+
+    def readline(self, size=-1, /):
+        """Read one line, counting its bytes."""
+        out = self._fileobj.readline(size)
+        self.bytes_read += len(out)
+        return out
+
+    def seek(self, offset, whence=0, /):
+        """Seek the wrapped file; seeking reads nothing."""
+        return self._fileobj.seek(offset, whence)
+
+    def tell(self):
+        """Return the wrapped file's position."""
+        return self._fileobj.tell()
+
+    def seekable(self):
+        """Report the wrapped file as seekable."""
+        return True
+
+    def readable(self):
+        """Report the wrapped file as readable."""
+        return True
+
+    def __getattr__(self, name):
+        """Defer anything not counted here to the wrapped file."""
+        return getattr(self._fileobj, name)
 
 
 def _scan_summary(scan_result):
@@ -459,7 +491,7 @@ class TestScan:
             assert isinstance(summary, dc.PatchSummary)
             assert str(summary.source_path) == str(data_file_path)
 
-    def test_scan_does_not_read_whole_file(self, io_path_tuple, tmp_path):
+    def test_scan_does_not_read_whole_file(self, io_path_tuple):
         """
         Scanning must not pull a file's sample data off disk.
 
@@ -472,29 +504,23 @@ class TestScan:
         buffers that Python's allocation tracing cannot see.
         """
         io, path = io_path_tuple
+        if io.name.upper() in IGNORE_SCAN_CHECK:
+            pytest.skip(f"{io.name} does not read through the handle it is given")
         size = Path(path).stat().st_size
         if size < _SCAN_COST_MIN_FILE_SIZE:
             pytest.skip(f"{Path(path).name} too small to hold to a scan budget")
-        # Probed on its own: a reader that raises OSError (h5py does so
-        # routinely) must fail this test, not silently turn it into a skip.
-        try:
-            _bytes_read_by_process()
-        except OSError:
-            pytest.skip("no /proc/self/io on this platform")
-        # Scan once so lazy imports and registry lookups are not counted,
-        # then measure a path this reader has not been handed. Warming and
-        # measuring the same path would excuse a reader that caches parsed
-        # metadata per path, which reads nothing the second time and
-        # everything when a directory scan hands it each file once.
-        with skip_missing():
-            io.scan(path)
-        unseen_path = _link_at_unseen_path(path, tmp_path)
-        before = _bytes_read_by_process()
-        with skip_missing():
-            io.scan(unseen_path)
-        read_bytes = _bytes_read_by_process() - before
-        assert read_bytes < size * _SCAN_COST_MAX_FRACTION, (
-            f"{type(io).__name__}.scan read {read_bytes:,} bytes of a "
+        with skip_missing(), open(path, "rb") as fi:
+            handle = _CountingHandle(fi)
+            io.scan(handle)
+        # A scan that read nothing at all went around the handle rather than
+        # being free, which would otherwise pass this test by default.
+        assert handle.bytes_read, (
+            f"{type(io).__name__}.scan read nothing through the handle it was "
+            f"given, so its cost cannot be measured; if it opens the file "
+            f"itself, add {io.name} to IGNORE_SCAN_CHECK."
+        )
+        assert handle.bytes_read < size * _SCAN_COST_MAX_FRACTION, (
+            f"{type(io).__name__}.scan read {handle.bytes_read:,} bytes of a "
             f"{size:,} byte file; a scan should read headers, not samples."
         )
 
@@ -511,7 +537,7 @@ class TestScan:
         # Other test modules register FiberIO subclasses globally on import,
         # so only DASCore's own formats are considered here.
         registered = {
-            type(fiber_io).__name__: fiber_io
+            type(fiber_io).__name__: type(fiber_io)
             for fiber_io in FiberIO.manager.yield_fiberio()
             if type(fiber_io).__module__.startswith("dascore.io.")
         }
@@ -520,8 +546,8 @@ class TestScan:
         default_scan = inspect.unwrap(FiberIO.scan)
         using_default = {
             name
-            for name, fiber_io in registered.items()
-            if inspect.unwrap(type(fiber_io).scan) is default_scan
+            for name, fiber_io_class in registered.items()
+            if inspect.unwrap(fiber_io_class.scan) is default_scan
         }
         expected = FORMATS_WITH_DEFAULT_SCAN & set(registered)
         assert using_default == expected, (
