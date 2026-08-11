@@ -133,15 +133,12 @@ SKIP_DATA_FILES = {
 _SCAN_COST_MIN_FILE_SIZE = 1_000_000
 _SCAN_COST_MAX_FRACTION = 0.25
 
-# Formats whose readers open the file themselves, from a path or a file
-# descriptor, rather than reading through the handle they are given. Their
-# scans cannot be weighed by counting bytes through that handle: segy and
-# MSEED hand it straight back to their own libraries, Sintela_Binary reads 96
-# bytes and takes the path from there, and TDMS and sentek want a descriptor
-# to memory-map. Listing them keeps the exclusion visible, which is the point
-# -- inferring it from "the count came out empty" would read a regression
-# that bypassed the handle as a pass.
-IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "SINTELA_BINARY", "TDMS", "SENTEK"})
+# Formats which hand the resource to a library that opens the file itself, so
+# no byte of their scan passes through a handle we provide. Only these two:
+# every other reader parses in Python and is measured. Listing them keeps the
+# exclusion visible, which is the point -- inferring it from "the count came
+# out empty" would read a reader that started bypassing the handle as a pass.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
 
 # Formats whose scan is the FiberIO default, which builds the summary by
 # reading the whole file. The docs allow implementing only read, so this is a
@@ -156,11 +153,15 @@ class _CountingHandle(BufferedIOBase):
     """
     A readable file object which tallies the bytes it hands out.
 
-    Counting here rather than at the process makes the number exact and
-    portable: no page-cache or allocator noise to leave headroom for, and no
-    dependence on /proc, so this measures on every platform DASCore tests
-    rather than only Linux. It also needs no warm-up scan, since module
-    imports never reach this counter.
+    Counting here rather than at the process keeps the number free of
+    page-cache and allocator noise, and drops the dependence on /proc, so this
+    measures on every platform DASCore tests rather than only Linux. It also
+    needs no warm-up scan, since module imports never reach this counter.
+
+    Counts bytes consumed, not bytes the kernel moved, so it reads lower than
+    /proc would by up to a buffer fill per reader. That gap is a few KB where
+    the budget is a quarter of a megabyte-plus file, and it cannot hide the
+    failure this guards: a scan that walks every sample consumes every sample.
 
     fileno is left unsupported on purpose. A reader handed the descriptor can
     map the file and read all of it without this seeing a byte, so it should
@@ -535,26 +536,37 @@ class TestScan:
         """
         FiberIO.manager.load_plugins()
         # Other test modules register FiberIO subclasses globally on import,
-        # so only DASCore's own formats are considered here.
+        # so only DASCore's own formats are considered here. Collected as
+        # classes rather than by name, so two formats sharing a class name
+        # cannot stand in for each other.
         registered = {
-            type(fiber_io).__name__: type(fiber_io)
+            type(fiber_io)
             for fiber_io in FiberIO.manager.yield_fiberio()
             if type(fiber_io).__module__.startswith("dascore.io.")
         }
+        # None of the expected formats has an optional dependency, so all of
+        # them load in every environment. Checking that first matters: paring
+        # the expectation down to whatever registered would turn a formatter
+        # that failed to load into a pass, which is the silent gap this test
+        # exists to close.
+        names = {fiber_io_class.__name__ for fiber_io_class in registered}
+        assert FORMATS_WITH_DEFAULT_SCAN <= names, (
+            "formats expected to be registered are missing: "
+            f"{sorted(FORMATS_WITH_DEFAULT_SCAN - names)}"
+        )
         # Every subclass gets its own type-casting wrapper around scan, so
         # the function underneath is what says whose scan this really is.
         default_scan = inspect.unwrap(FiberIO.scan)
         using_default = {
-            name
-            for name, fiber_io_class in registered.items()
+            fiber_io_class.__name__
+            for fiber_io_class in registered
             if inspect.unwrap(fiber_io_class.scan) is default_scan
         }
-        expected = FORMATS_WITH_DEFAULT_SCAN & set(registered)
-        assert using_default == expected, (
+        assert using_default == FORMATS_WITH_DEFAULT_SCAN, (
             "formats inheriting the read-everything FiberIO.scan changed; "
-            f"expected {sorted(expected)}, found {sorted(using_default)}. "
-            "Implement scan for the new format, or add it to "
-            "FORMATS_WITH_DEFAULT_SCAN with a reason."
+            f"expected {sorted(FORMATS_WITH_DEFAULT_SCAN)}, "
+            f"found {sorted(using_default)}. Implement scan for the new "
+            "format, or add it to FORMATS_WITH_DEFAULT_SCAN with a reason."
         )
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
