@@ -1,5 +1,8 @@
 name: "Mamba Install"
-description: "Sets up mamba before installing DASCore's environment.yml file."
+description: >
+  Sets up mamba before installing DASCore's environment.yml file. Only the
+  conda_env smoke job in runtests.yml uses this; everything else installs
+  from PyPI via .github/actions/install-dascore.
 inputs:
   python-version:
     description: "The python string of the version to install"
@@ -30,10 +33,11 @@ runs:
   steps:
     # Weekly, not daily. The env file's content hash is already part of the
     # key setup-micromamba builds, so this only exists to pick up upstream
-    # package updates for unpinned deps. A daily key minted ~35 fresh
-    # environment caches every day (platform x python x env file), which is
-    # more than the repo's 10 GB cache budget on its own and evicted the
-    # test-data caches.
+    # package updates for unpinned deps. A daily key minted a fresh cache per
+    # (platform, python, env file) every day; even weekly, when the whole
+    # matrix ran on mamba, these caches filled 7 GB of the repo's 10 GB
+    # budget and evicted the test-data caches. With a single caller left this
+    # is one ~530 MB cache per week.
     - name: Set up cache week for environment cache key
       id: date
       shell: bash

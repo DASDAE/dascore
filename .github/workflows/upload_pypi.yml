@@ -25,20 +25,24 @@ jobs:
       - uses: ./.github/actions/load-shared-vars
         id: shared-vars
 
-      - name: setup conda
-        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5  # v4.0.1
+      # Building the sdist and wheel only needs an interpreter and `build`;
+      # dascore's own dependencies are irrelevant here, so this no longer
+      # solves a conda environment just to reach `python -m build`.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          mamba-version: "*"
-          channels: conda-forge,defaults
-          channel-priority: true
-          environment-file: environment.yml
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
 
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: false
+
       - name: create dists
-        shell: bash -l {0}
+        shell: bash
+        env:
+          UV_HTTP_RETRIES: "5"
         run: |
-          python -m pip install build
+          uv pip install --system build
           python -m build
 
       # Authenticates via PyPI trusted publishing (OIDC); no token needed.

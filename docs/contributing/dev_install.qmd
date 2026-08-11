@@ -24,6 +24,13 @@ git pull origin master --tags
 
 Create and activate a virtual environment so DASCore will not mess with the base (or system) python installation.
 
+If you are using [uv](https://docs.astral.sh/uv/), which is what most of DASCore's CI uses:
+
+```bash
+uv venv
+source .venv/bin/activate
+```
+
 If you are using [Anaconda](https://www.anaconda.com/), simply use the environment provided:
 
 ```bash

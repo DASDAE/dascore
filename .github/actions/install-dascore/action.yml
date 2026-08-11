@@ -1,0 +1,83 @@
+name: "Install DASCore"
+description: "Sets up python and installs DASCore with uv."
+inputs:
+  python-version:
+    description: "The python string of the version to install"
+    required: true
+
+  install-group-str:
+    description: "The string to use for specifying install groups"
+    default: "[dev]"
+    required: false
+
+  install-package:
+    description: "If true, install dascore"
+    default: "true"
+    required: false
+
+  prepare-test-data:
+    description: "If true, restore, prime, and save the test-data cache after installation"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    # setup-python owns the interpreter so that plain `python` on PATH is the
+    # matrix version; uv only installs into it, via --system.
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+      with:
+        # Deliberately uncached. setup-uv's cache defaults to pruning with
+        # `uv cache prune --ci`, which drops downloaded wheels and so saves
+        # under 2s of a ~15s install while costing a restore and a save. An
+        # unpruned cache would be useful but is ~240 MB compressed per
+        # (os, python); see the note in .github/workflows/runtests.yml before
+        # turning it on.
+        enable-cache: false
+
+    - name: get tags for correct versioning
+      shell: bash
+      run: git fetch --tags --force
+
+    - name: install dascore
+      if: "${{ inputs.install-package == 'true' }}"
+      shell: bash
+      env:
+        INSTALL_GROUP_STR: ${{ inputs.install-group-str }}
+        # PyPI blips are the main transient failure now that nothing is
+        # cached; retry rather than fail the job.
+        UV_HTTP_RETRIES: "5"
+      run: |
+        uv pip install --system -e ".${INSTALL_GROUP_STR}"
+
+    # uv resolves --system from PATH, so a stale interpreter would install
+    # dascore somewhere the test steps never look. Fail loudly instead.
+    - name: confirm the requested python is in use
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.python-version }}
+      run: |
+        python -c "
+        import os, sys
+        requested = os.environ['REQUESTED']
+        actual = '.'.join(str(i) for i in sys.version_info[:2])
+        print(sys.version)
+        assert actual == requested, f'wanted python {requested}, got {actual}'
+        "
+
+    # Normally just restores the cache primed by the calling workflow's setup
+    # job, but also self-heals (prime + save) on a miss, e.g. for single-job
+    # workflows or when a re-run can't see an evicted cache.
+    - name: prepare test data cache
+      if: "${{ inputs.prepare-test-data == 'true' }}"
+      uses: ./.github/actions/prime-test-data-cache
+
+    # Print out the package info for current environment
+    - name: print package info
+      shell: bash
+      run: |
+        uv pip list --system

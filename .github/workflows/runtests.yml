@@ -1,4 +1,18 @@
-# Run full test suite using conda env and all optional deps.
+# Run full test suite with all optional deps.
+#
+# Dependency caching is deliberately off. The mamba environment caches this
+# workflow used to mint (one per os x python x env-file x week, ~250-590 MB
+# each) filled 7 GB of the repo's 10 GB budget on their own and kept evicting
+# the test-data cache. A uv install of [dev] is ~15s cold, so nothing is
+# cached now beyond the test data itself.
+#
+# Turning caching back on later: use setup-uv with enable-cache: true AND
+# prune-cache: false (the default prune drops downloaded wheels, which is
+# both the useful part and the part that would survive a PyPI outage), and
+# give it a stable key. Do not use setup-uv's default cache-dependency-glob:
+# it hashes pyproject.toml, which changes on nearly every reader PR because
+# each new format adds an entry point, and caches are ref-scoped, so every
+# such PR would mint its own ~240 MB copy of every matrix entry.
 name: TestCode
 on:
   push:
@@ -78,8 +92,6 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     env:
-      # set conda environment file with dependencies
-      env_file: 'environment.yml'
       debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
@@ -90,28 +102,29 @@ jobs:
           fetch-depth: '0'
           persist-credentials: false
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           python-version: ${{ matrix.python-version }}
           prepare-test-data: "true"
 
       - name: generate qmd docs tests
         id: generate_qmd_tests
-        shell: bash -el {0}
+        shell: bash
         run: python scripts/generate_doc_code_tests.py
 
       # Runs test suite and calculates coverage
       - name: run test suite
         id: run_test_suite
         continue-on-error: ${{ env.debug_enabled == 'true' }}
-        shell: bash -el {0}
+        # bash, not the windows default shell: test_code.sh is a bash script.
+        shell: bash
         run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         id: run_docstrings
         continue-on-error: ${{ env.debug_enabled == 'true' }}
-        shell: bash -el {0}
+        shell: bash
         run: ./.github/test_code.sh doctest
 
       - name: note SSH key requirement for debug access
@@ -156,9 +169,6 @@ jobs:
     # Keep remote-IO coverage visible without blocking unrelated changes.
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
-    env:
-      env_file: 'environment.yml'
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -166,13 +176,13 @@ jobs:
           fetch-depth: '0'
           persist-credentials: false
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           python-version: ${{ needs.setup.outputs.python-default }}
           prepare-test-data: "true"
 
       - name: run network tests
-        shell: bash -el {0}
+        shell: bash
         run: ./.github/test_code.sh network
 
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
@@ -187,3 +197,34 @@ jobs:
         if: failure()
         shell: bash
         run: echo "Network tests failed, but this report-only job does not block the workflow." >> "$GITHUB_STEP_SUMMARY"
+
+  # The only remaining conda job. DASCore ships on conda-forge, so the conda
+  # dependency stack deserves a smoke test even though every other job now
+  # installs from PyPI with uv. One (os, python) keeps this to a single
+  # environment cache per week rather than the ~15 the full matrix used to
+  # mint; see the cache note at the top of this file.
+  conda_env:
+    needs: setup
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+          persist-credentials: false
+
+      - uses: ./.github/actions/mamba-install-dascore
+        with:
+          python-version: ${{ needs.setup.outputs.python-default }}
+          prepare-test-data: "true"
+
+      # No coverage upload: the uv jobs already cover this suite, and this job
+      # exists to prove environment.yml still solves and dascore works in it.
+      - name: run test suite
+        shell: bash -el {0}
+        run: python -m pytest tests -m "not network" -q

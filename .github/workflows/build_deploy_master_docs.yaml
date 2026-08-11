@@ -43,17 +43,16 @@ jobs:
       - uses: ./.github/actions/load-shared-vars
         id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ steps.shared-vars.outputs.python-default }}
-          environment-file: './.github/doc_environment.yml'
           prepare-test-data: "true"
 
       - uses: ./.github/actions/prep_doc_build
 
       - name: publish docs to netlify
-        shell: bash -l {0}
+        shell: bash
         env:
           QUARTO_PRINT_STACK: true
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
