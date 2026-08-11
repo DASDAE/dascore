@@ -265,7 +265,7 @@ class TestSeparateConstruction:
         assert patch.summary.get_coord_summary("time").min == coord.min()
 
 
-class TestDataSourceId:
+class TestAcquisitionKey:
     """The identity key which resolves a patch against an inventory."""
 
     valid = ("XX.R2D1.01.RAW", "XX.R2D1..RAW", "X-1.A2.00.H-Z")

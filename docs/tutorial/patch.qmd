@@ -265,7 +265,7 @@ with config_context(patch_history="disabled"):
 assert out.attrs.history == old_history
 ```
 
-`Patch.attrs` only stores non-coordinate metadata. This includes things like the data source id, data units, and observing-system fields such as `gauge_length` or `pulse_width`.
+`Patch.attrs` only stores non-coordinate metadata. This includes things like the acquisition key, data units, and observing-system fields such as `gauge_length` or `pulse_width`.
 
 ## Summary
 

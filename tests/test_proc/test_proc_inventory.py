@@ -618,6 +618,18 @@ class TestOnUnresolved:
             list(dc.spool(strangers).enrich(inventory))
         assert len(caught) == 1
 
+    def test_each_spool_says_it_once(self, patch, inventory):
+        """Deduping on the message text would silence every spool after the
+        first in a session, hiding the second one's problem entirely.
+        """
+        first = dc.spool([patch.update_attrs(acquisition_key="XX.A1..RAW")])
+        second = dc.spool([patch.update_attrs(acquisition_key="XX.B2..RAW")])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            list(first.enrich(inventory))
+            list(second.enrich(inventory))
+        assert len(caught) == 2
+
     def test_ignore_is_silent(self, mixed, inventory):
         """The same, without saying so."""
         with warnings.catch_warnings():

@@ -1331,13 +1331,13 @@ def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
 
 _CODE_RE = re.compile(r"[A-Za-z0-9-]+")
 _LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
-# The tokens of a acquisition_key, in order. Only location may be blank.
+# The tokens of an acquisition_key, in order. Only location may be blank.
 ACQUISITION_KEY_PARTS = ("network", "fiber_array", "location", "acquisition")
 
 
 def check_code(value: str, allow_blank: bool = False) -> str:
     """
-    Validate a single code token of a data source id.
+    Validate a single code token of an acquisition key.
 
     Parameters
     ----------
@@ -1356,9 +1356,9 @@ def check_code(value: str, allow_blank: bool = False) -> str:
 
 def validate_acquisition_key(value: str) -> str:
     """
-    Validate a composite data source id.
+    Validate a composite acquisition key.
 
-    A data source id names an inventory acquisition as
+    An acquisition key names an inventory acquisition as
     network.fiber_array.location.acquisition. An empty string means unset,
     which is how patches with no inventory identity are spelled.
 

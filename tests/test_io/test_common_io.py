@@ -139,6 +139,7 @@ VENDOR_ATTRS = frozenset(
     {
         "acq_res",
         "acqres",
+        "acquisition_id",
         "acquisition_range_m",
         "ampli_power",
         "amppower",
@@ -157,7 +158,6 @@ VENDOR_ATTRS = frozenset(
         "event_latitude",
         "event_longitude",
         "event_time",
-        "acquisition_id",
         "experiment",
         "facility_id",
         "fiber_break",

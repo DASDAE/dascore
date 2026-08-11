@@ -329,7 +329,7 @@ class TestEdgeCases:
             reopened.indexer.close()
 
 
-class TestHiveDataSourceId:
+class TestHiveAcquisitionKey:
     """A path may only stamp an id a patch can carry."""
 
     def _write(self, path, segment):

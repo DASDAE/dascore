@@ -176,7 +176,7 @@ class TestHivePathAttrBenchmarks:
         path = tmp_path_factory.mktemp("hive_benchmark")
         patches = _make_contiguous_patches(25)
         for i, patch in enumerate(patches):
-            sub = path / f"data_source_id=XX.R2D1..S{i % 5}" / "cable=A"
+            sub = path / f"acquisition_key=XX.R2D1..S{i % 5}" / "cable=A"
             sub.mkdir(parents=True, exist_ok=True)
             patch.io.write(sub / f"tag=raw__num={i:03d}.h5", "dasdae")
         return path
@@ -187,14 +187,14 @@ class TestHivePathAttrBenchmarks:
         for index_path in hive_directory.glob(".dascore*"):
             index_path.unlink()
         spool = dc.spool(hive_directory).update(progress=None)
-        assert len(spool.select(data_source_id="XX.R2D1..S0")) == 5
+        assert len(spool.select(acquisition_key="XX.R2D1..S0")) == 5
 
     @pytest.mark.benchmark
     def test_load_patches_with_path_attrs(self, hive_directory):
         """Time loading patches that get path attrs stamped on."""
         spool = dc.spool(hive_directory).update(progress=None)
         for patch in spool:
-            assert patch.attrs.data_source_id.startswith("XX.")
+            assert patch.attrs.acquisition_key.startswith("XX.")
 
 
 class TestMemorySpoolBenchmarks:

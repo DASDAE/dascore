@@ -611,7 +611,7 @@ def diverse_spool():
     """
     A spool with a diverse set of patch metadata for testing.
 
-    There are various gaps, tags, data source ids, etc.
+    There are various gaps, tags, acquisition keys, etc.
     """
     spool_no_gaps = random_spool()
     spool_no_gaps_different_source = random_spool(acquisition_key="DAS2.R2D1..RAW")
@@ -768,7 +768,7 @@ def inventory_patch_pair():
     """
     Return a patch and an inventory which resolves it.
 
-    The patch is the random DAS example carrying the data source id of the
+    The patch is the random DAS example carrying the acquisition key of the
     inventory's one acquisition. That acquisition places its 300 channels on
     an optical path through a measured two-point distance map, so the path's
     geometry, coupling, and annotations project onto the patch. Used by the

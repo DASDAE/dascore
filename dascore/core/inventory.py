@@ -1599,7 +1599,7 @@ def _drop_empty(value, _in_extras=False):
 
 
 class ResolvedContext(NamedTuple):
-    """The inventory objects a acquisition_key + time resolve to."""
+    """The inventory objects an acquisition_key + time resolve to."""
 
     network: Network
     fiber_array: FiberArray
@@ -1835,7 +1835,7 @@ class Inventory(InventoryModel):
 
     def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
         """
-        Resolve a acquisition_key (and time) to its inventory context.
+        Resolve an acquisition_key (and time) to its inventory context.
 
         Parameters
         ----------

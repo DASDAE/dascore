@@ -83,6 +83,13 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
 
 _VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
 
+_UNRESOLVED_WARNING = (
+    "The attached inventory does not describe every patch in this spool, and "
+    "those it does not describe were not enriched. Use on_unresolved='raise' "
+    "to see which, 'ignore' to silence this, or remove them from the spool "
+    "once Spool.prune_to_inventory exists."
+)
+
 
 def _normalize_enrich_kwargs(kwargs) -> dict:
     """
@@ -582,6 +589,9 @@ class Spool(BaseSpool):
     _inventory = None
     _enrich_kwargs: dict | None = None
     _on_unresolved: str = "warn"
+    # Whether this spool has already said its inventory covers only part of
+    # it; the warning is worth making once, not once per patch.
+    _warned_unresolved: bool = False
     # single-file provenance (set by from_file; drives update())
     _file_path = None
     _file_format = None
@@ -864,19 +874,17 @@ class Spool(BaseSpool):
             # prune_to_inventory's job, so it comes out as it went in.
             if on_unresolved == "raise":
                 raise
-            if on_unresolved == "warn":
-                # No patch is named here on purpose. Warnings dedupe on
-                # their text, so naming one would emit a fresh warning per
-                # distinct key -- thousands of them on exactly the archive
-                # this default exists to serve.
-                msg = (
-                    "The attached inventory does not describe every patch in "
-                    "this spool, and those it does not describe were not "
-                    "enriched. Use on_unresolved='raise' to see which, "
-                    "'ignore' to silence this, or remove them from the spool "
-                    "once Spool.prune_to_inventory exists."
+            if on_unresolved == "warn" and not self._warned_unresolved:
+                self._warned_unresolved = True
+                # Deduped per spool, which is the granularity that means
+                # something. Naming the patch would warn once per distinct
+                # key -- thousands of them on exactly the partly-covered
+                # archive this default exists to serve -- while leaving a
+                # constant message to Python's registry would silence every
+                # spool after the first in a session.
+                warnings.warn_explicit(
+                    _UNRESOLVED_WARNING, UserWarning, __file__, 0, registry=None
                 )
-                warnings.warn(msg, UserWarning, stacklevel=2)
             return patch
 
     @compose_docstring(doc=get_docstring(BaseSpool.sort))

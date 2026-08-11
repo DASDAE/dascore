@@ -643,7 +643,7 @@ def get_patch_names(
         ser = path_ser.astype(str)
         split_ser = ser.str.split("/")
         if strip_extension:
-            # Only the extension: a acquisition_key puts dots in the name
+            # Only the extension: an acquisition_key puts dots in the name
             # itself, and splitting on the first one would collide every
             # patch of one source onto a single truncated name.
             file_names = [x[-1].rsplit(".", 1)[0] for x in split_ser]

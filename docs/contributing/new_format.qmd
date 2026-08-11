@@ -197,9 +197,7 @@ that is one of the facts in (2) has to take the canonical name, because two
 spellings of one fact cannot be reconciled downstream; everything else keeps
 the name the format gave it, lightly normalized to `snake_case`. Renaming a
 vendor key to something that merely sounds more standard is how a value ends
-up filed under a name that means something else — ProdML's `AcquisitionId`
-spent a release as `acquisition_id` meaning the DASDAE identity, and
-OptoDAS's `experiment` spent one as `experiment_id`.
+up filed under a name that means something else.
 
 Two suffixes carry meaning, informally but consistently. A name ending in
 `_id` should be free to hold an opaque token — usually a UUID — so nothing

@@ -31,7 +31,7 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 
 Patches may only combine when they agree on all of:
 
-1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: data source id, data type/category, and tag), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
+1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: acquisition key, data type/category, and tag), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's canonical units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet plan together and assembly converts them to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
