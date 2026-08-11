@@ -41,7 +41,7 @@ class OptoDASV8(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain OptoDAS data.
+            An open h5 file which may contain OptoDAS data.
         """
         version_str = _get_opto_das_version_str(resource)
         if version_str:

@@ -48,7 +48,7 @@ class SintelaBinaryV3(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain Sintela data.
+            An open binary reader which may contain Sintela data.
         """
         resource.seek(0)
         base = _read_base_header(resource)

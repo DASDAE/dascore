@@ -31,7 +31,7 @@ class DASHDF5(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain DASHDF5 data.
+            An open h5 file which may contain DASHDF5 data.
         """
         version_str = _get_cf_version_str(resource)
         if version_str:

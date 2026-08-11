@@ -8,7 +8,14 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import (
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -98,9 +105,9 @@ class ScanPayload(TypedDict):
 def make_scan_payload(
     *,
     attrs: dc.PatchAttrs | Mapping[str, Any] | None,
-    coords,
-    dims=None,
-    shape=None,
+    coords: CoordManager,
+    dims: Sequence[str] | None = None,
+    shape: Sequence[int] | None = None,
     dtype: str = "",
     source_patch_id: str = "",
 ) -> ScanPayload:

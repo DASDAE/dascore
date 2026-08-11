@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.exceptions import CoordError
+from dascore.utils.models import ArrayLike
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -24,8 +25,8 @@ _MIN_SEGMENT_GUARD_SIZE = 1_000
 
 def build_patches(
     coords: CoordManager,
-    data,
-    attrs=None,
+    data: ArrayLike,
+    attrs: dc.PatchAttrs | Mapping[str, Any] | None = None,
     *,
     attr_cls: type[dc.PatchAttrs] | None = None,
     selection: Mapping[str, Any] | None = None,

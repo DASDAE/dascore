@@ -102,7 +102,7 @@ class Febus2(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain febus data.
+            An open h5 file which may contain febus data.
         """
         version_str = _get_febus_version_str(resource)
         if version_str:

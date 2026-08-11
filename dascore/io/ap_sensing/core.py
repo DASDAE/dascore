@@ -41,7 +41,7 @@ class APSensingV10(FiberIO):
         Parameters
         ----------
         resource
-            A path to the file which may contain AP sensing data.
+            An open h5 file which may contain AP sensing data.
         """
         version_str = _get_version_string(resource)
         if version_str:
