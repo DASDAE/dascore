@@ -6,6 +6,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import build_patches
 from dascore.utils.misc import maybe_get_items
 
 _ATTR_MAP = {
@@ -66,9 +67,7 @@ def _get_distance_coord(attr_dict, data_shape):
     total_length = float(attr_dict["measured_length"]) * multiplier
     start = float(attr_dict["start_position"]) + total_length
     step = float(attr_dict["spatial_resolution"]) * multiplier
-    stop = start + data_shape[1] * step
-    coord = get_coord(start=start, stop=stop, step=step, units="m")
-    return coord.change_length(data_shape[1])
+    return get_coord(start=start, step=step, shape=(data_shape[1],), units="m")
 
 
 def _get_coords(attrs_dict, shape):
@@ -107,12 +106,10 @@ def _get_attr(resource, attr_cls, extras=None):
 
 def _build_patches(attrs_dict, coords, data, time, distance, attr_cls):
     """Assemble patches from attrs, coords, and a data node."""
-    if time is not None or distance is not None:
-        coords, data = coords.select(array=data, time=time, distance=distance)
-    if not data.size:
-        return []
     attrs = _validate_attrs(attrs_dict, attr_cls)
-    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
+    return build_patches(
+        coords, data, attrs, selection={"time": time, "distance": distance}
+    )
 
 
 def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):

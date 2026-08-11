@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -66,13 +66,9 @@ class SilixaH5V1(FiberIO):
         """Scan a Silixa HDF5 file, return summary information on the contents."""
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(resource[self._data_name].dtype),
-            }
+            make_scan_payload(
+                attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
+            )
         ]
 
     def read(

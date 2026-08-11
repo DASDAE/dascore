@@ -64,13 +64,6 @@ def _get_attr_dict(h5fi):
     return out
 
 
-def _maybe_trim_data(cm, data, time=None, distance=None, **kwargs):
-    """Maybe trim the data."""
-    if time is not None or distance is not None:
-        cm, data = cm.select(time=time, distance=distance, array=data)
-    return cm, data
-
-
 def _get_attrs_coords_and_data(h5fi, snap=True):
     """Return the attributes, coordinates, and data array."""
     cm = _get_coord_manager(h5fi, snap)

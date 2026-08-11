@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
-from dascore.utils.models import UnitQuantity, UTF8Str
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 
 from ...utils.hdf5 import H5Reader, H5Writer
 from .utils import (
@@ -18,16 +15,6 @@ from .utils import (
     _write_prodml,
     _yield_prodml_attrs_coords,
 )
-
-
-class ProdMLPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for ProdML."""
-
-    pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
-    gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
-    schema_version: UTF8Str = ""
 
 
 class ProdMLV2_0(FiberIO):  # noqa
@@ -65,14 +52,12 @@ class ProdMLV2_0(FiberIO):  # noqa
         ):
             attrs = attr.update(_source_patch_id=source_patch_id)
             out.append(
-                {
-                    "attrs": attrs,
-                    "coords": coords,
-                    "dims": coords.dims,
-                    "shape": coords.shape,
-                    "dtype": attrs.get("dtype", ""),
-                    "source_patch_id": source_patch_id,
-                }
+                make_scan_payload(
+                    attrs=attrs,
+                    coords=coords,
+                    dtype=attrs.get("dtype", ""),
+                    source_patch_id=source_patch_id,
+                )
             )
         return out
 

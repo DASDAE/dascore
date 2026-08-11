@@ -29,12 +29,12 @@ from typing import Any, Literal
 
 import numpy as np
 
-import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.core import ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
@@ -313,13 +313,7 @@ def _get_patch_attrs(
     parsed = _parse_sor(resource, load_samples=False)
     coords = _get_coords(parsed)
     attrs = _get_attr_dict(parsed, extras)
-    return _make_scan_payload(
-        attrs=attr_class(**attrs),
-        coords=coords,
-        dims=coords.dims,
-        shape=coords.shape,
-        dtype="float64",
-    )
+    return make_scan_payload(attrs=attr_class(**attrs), coords=coords, dtype="float64")
 
 
 def _get_patches(
@@ -334,11 +328,13 @@ def _get_patches(
     cm = _get_coords(parsed)
     attrs = _get_attr_dict(parsed, extras)
     data = parsed["data_points"]["samples"][np.newaxis, :]
-    cm, data = cm.select(data, time=time, distance=distance)
-    if not data.size:
-        return []
-    patch = dc.Patch(data=data, coords=cm, attrs=attr_class(**attrs))
-    return [patch]
+    return build_patches(
+        cm,
+        data,
+        attrs,
+        attr_cls=attr_class,
+        selection={"time": time, "distance": distance},
+    )
 
 
 def _get_format(resource, name: str, version: str) -> tuple[str, str] | Literal[False]:

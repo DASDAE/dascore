@@ -7,7 +7,7 @@ from typing import Literal
 import numpy as np
 
 import dascore as dc
-from dascore.io.core import FiberIO, ScanPayload
+from dascore.io.core import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_patch_attrs, _get_version
@@ -51,11 +51,9 @@ class SentekV5(FiberIO):
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource)
         return [
-            {
-                "attrs": attrs,
-                "coords": coords,
-                "dims": coords.dims,
-                "shape": coords.shape,
-                "dtype": str(np.dtype(np.float32)),
-            }
+            make_scan_payload(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(np.dtype(np.float32)),
+            )
         ]

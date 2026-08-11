@@ -9,7 +9,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.io import FiberIO
-from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.io import patch_to_xarray, xarray_to_patch
@@ -148,7 +148,7 @@ class NetCDFCFV18(FiberIO):
                 dataset, data_array, coords, dims, shape
             )
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=attrs | {"_source_patch_id": source_patch_id},
                 coords=coord_manager,
                 dims=dims,

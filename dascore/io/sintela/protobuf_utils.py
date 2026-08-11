@@ -55,7 +55,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import ScanPayload, _make_scan_payload
+from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.models import DascoreBaseModel, PositiveFiniteFloat, PositiveInt
 
@@ -510,7 +510,7 @@ def _get_time_coord_from_samples(start: np.datetime64, sample_rate: float, size:
         msg = f"Invalid Sintela protobuf sample_rate: {sample_rate!r}."
         raise InvalidFiberFileError(msg)
     step = dc.to_timedelta64(1 / sample_rate)
-    return get_coord(start=start, stop=start + step * size, step=step)
+    return get_coord(start=start, step=step, shape=(size,))
 
 
 def _get_distance_coord(start_channel: int, spacing: float, count: int, step: int = 1):
@@ -1055,12 +1055,4 @@ def scan_payload(resource) -> list[ScanPayload]:
     parsed, meta = _parse_records(records, scan_mode=True)
     family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
     shape, coords, attrs, dtype = family_cls.from_parsed(parsed, meta).scan()
-    return [
-        _make_scan_payload(
-            attrs=attrs,
-            coords=coords,
-            dims=coords.dims,
-            shape=shape,
-            dtype=dtype,
-        )
-    ]
+    return [make_scan_payload(attrs=attrs, coords=coords, shape=shape, dtype=dtype)]

@@ -17,7 +17,8 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.core.coords import CoordSegmented
+from dascore.core.coordmanager import get_coord_manager
+from dascore.core.coords import CoordSegmented, get_coord
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberIOError,
@@ -31,16 +32,16 @@ from dascore.io.core import (
     FiberIO,
     _FiberIOManager,
     _get_reloadable_source_path,
-    _make_scan_payload,
     _reinit_manager_lock,
     _resolve_read_spool,
     _scan_result_to_summary,
     _select_patch_from_spool,
     _validate_scan_payload,
     is_directory_format,
+    make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import build_patches, get_exact_coord
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
@@ -149,7 +150,7 @@ class _FiberDirectory(FiberIO):
         """Return a payload that records the forwarded snap mode."""
         patch = dc.get_example_patch().update_attrs(tag=str(snap))
         return [
-            _make_scan_payload(
+            make_scan_payload(
                 attrs=patch.attrs,
                 coords=patch.coords,
                 dims=patch.dims,
@@ -279,6 +280,150 @@ class TestGetExactCoord:
         assert len(coord.get_discontinuities("gaps")) == 1
 
 
+class TestMakeScanPayload:
+    """Tests for the shared scan payload constructor."""
+
+    def test_dims_shape_derived_from_coords(self):
+        """Omitted dims/shape come from the coords."""
+        patch = dc.get_example_patch()
+
+        payload = make_scan_payload(attrs=patch.attrs, coords=patch.coords, dtype="f8")
+
+        assert payload["dims"] == patch.coords.dims
+        assert payload["shape"] == patch.coords.shape
+
+    def test_explicit_values_win(self):
+        """Explicit dims/shape are not overwritten by the coords."""
+        patch = dc.get_example_patch()
+
+        payload = make_scan_payload(
+            attrs=patch.attrs, coords=patch.coords, dims=(), shape=(), dtype="f8"
+        )
+
+        assert payload["dims"] == ()
+        assert payload["shape"] == ()
+
+    def test_explicit_shape_with_derived_dims(self):
+        """Shape may be given while dims still come from the coords."""
+        patch = dc.get_example_patch()
+        shape = tuple(x - 1 for x in patch.coords.shape)
+
+        payload = make_scan_payload(
+            attrs=patch.attrs, coords=patch.coords, shape=shape, dtype="f8"
+        )
+
+        assert payload["dims"] == patch.coords.dims
+        assert payload["shape"] == shape
+
+    def test_attrs_none(self):
+        """No attrs yields default PatchAttrs rather than raising."""
+        patch = dc.get_example_patch()
+
+        payload = make_scan_payload(attrs=None, coords=patch.coords, dtype="f8")
+
+        assert isinstance(payload["attrs"], dc.PatchAttrs)
+
+
+class TestBuildPatches:
+    """Tests for the shared read tail used by format readers."""
+
+    @pytest.fixture
+    def patch(self):
+        """A patch whose pieces feed build_patches."""
+        return dc.get_example_patch()
+
+    def test_no_selection_builds_patch(self, patch):
+        """With nothing to select the whole patch comes back."""
+        out = build_patches(patch.coords, patch.data, patch.attrs)
+
+        assert len(out) == 1
+        assert out[0].shape == patch.shape
+
+    def test_none_selections_skip_select(self, patch, monkeypatch):
+        """All-None selections must not touch the data source."""
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("select should not be called")
+
+        monkeypatch.setattr(type(patch.coords), "select", _boom)
+
+        out = build_patches(
+            patch.coords,
+            patch.data,
+            patch.attrs,
+            selection={"time": None, "distance": None},
+        )
+
+        assert len(out) == 1
+
+    def test_selection_trims(self, patch):
+        """A selection trims the returned patch."""
+        time = patch.get_coord("time")
+        stop = time.min() + (time.max() - time.min()) / 2
+
+        out = build_patches(
+            patch.coords, patch.data, patch.attrs, selection={"time": (None, stop)}
+        )
+
+        assert (
+            out[0].shape[patch.dims.index("time")]
+            < patch.shape[patch.dims.index("time")]
+        )
+
+    def test_emptied_selection_returns_empty_list(self, patch):
+        """A selection which removes all data yields no patches."""
+        time = patch.get_coord("time")
+        after_end = time.max() + np.timedelta64(10, "s")
+
+        out = build_patches(
+            patch.coords,
+            patch.data,
+            patch.attrs,
+            selection={"time": (after_end, None)},
+        )
+
+        assert out == []
+
+    def test_empty_data_returns_empty_list(self, patch):
+        """An already empty source yields no patches, even untrimmed."""
+        coords = get_coord_manager(
+            {
+                "time": get_coord(
+                    start=np.datetime64("2020-01-01"),
+                    step=np.timedelta64(1, "s"),
+                    shape=(0,),
+                ),
+                "distance": get_coord(start=0.0, step=1.0, shape=(3,)),
+            },
+            dims=("time", "distance"),
+        )
+
+        out = build_patches(coords, np.empty(coords.shape), patch.attrs)
+
+        assert out == []
+
+    def test_attr_cls_used(self, patch):
+        """The format's attrs class is applied to a plain dict."""
+
+        class _MyAttrs(dc.PatchAttrs):
+            """Attrs with one format specific field."""
+
+            my_field: float = np.nan
+
+        out = build_patches(
+            patch.coords, patch.data, {"my_field": 2.0}, attr_cls=_MyAttrs
+        )
+
+        assert isinstance(out[0].attrs, _MyAttrs)
+        assert out[0].attrs.my_field == 2.0
+
+    def test_attrs_none(self, patch):
+        """No attrs yields a patch with default attrs."""
+        out = build_patches(patch.coords, patch.data)
+
+        assert isinstance(out[0].attrs, dc.PatchAttrs)
+
+
 class TestScanResultToSummary:
     """Tests for converting scan metadata into summaries."""
 
@@ -318,7 +463,7 @@ class TestScanResultToSummary:
     def test_make_scan_payload_uses_dtype_key(self):
         """The helper should emit the normalized dtype field."""
         patch = dc.get_example_patch()
-        out = _make_scan_payload(
+        out = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1194,7 +1339,7 @@ class TestReloadableSourcePath:
     def test_scan_payload_field_validation(self, key, value):
         """Every declared payload field should enforce its public type."""
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1210,7 +1355,7 @@ class TestReloadableSourcePath:
     def test_scan_payload_coord_metadata_must_match(self, key):
         """Strict payload metadata must agree with the full coord manager."""
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,
@@ -1230,7 +1375,7 @@ class TestReloadableSourcePath:
         fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
         fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
         patch = dc.get_example_patch()
-        payload = _make_scan_payload(
+        payload = make_scan_payload(
             attrs=patch.attrs,
             coords=patch.coords,
             dims=patch.dims,

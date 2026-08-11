@@ -11,12 +11,9 @@ from __future__ import annotations
 from typing import Literal
 
 import dascore as dc
-from dascore.io import FiberIO, ScanPayload
-from dascore.io.gdr.utils_das import (
-    _get_attrs_coords_and_data,
-    _get_version,
-    _maybe_trim_data,
-)
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.gdr.utils_das import _get_attrs_coords_and_data, _get_version
+from dascore.io.utils import build_patches
 from dascore.utils.hdf5 import H5Reader
 
 
@@ -45,7 +42,9 @@ class GDR_V1(FiberIO):  # noqa
         """Determine if the resource belongs to this format."""
         return _get_version(resource)
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
+    def read(
+        self, resource: H5Reader, snap=True, time=None, distance=None, **kwargs
+    ) -> dc.BaseSpool:
         """
         Read a resource belonging to this format.
 
@@ -55,27 +54,26 @@ class GDR_V1(FiberIO):  # noqa
             The open h5 object.
         snap
             If True, snap each coordinate to be evenly sampled.
-        **kwargs
-            Passed to filtering coordinates.
+        time
+            An optional tuple for filtering time.
+        distance
+            An optional tuple for filtering distance.
         """
         attr_dict, cm, data = _get_attrs_coords_and_data(resource, snap=snap)
-        if kwargs:
-            cm, data = _maybe_trim_data(cm, data, **kwargs)
-        if not data.size:  # skip empty patches.
-            return dc.spool([])
-        attrs = GDRPatchAttrs.from_dict(attr_dict)
-        patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
-        return dc.spool([patch])
+        patches = build_patches(
+            cm,
+            data,
+            attr_dict,
+            attr_cls=GDRPatchAttrs,
+            selection={"time": time, "distance": distance},
+        )
+        return dc.spool(patches)
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [
-            {
-                "attrs": GDRPatchAttrs.from_dict(attrs),
-                "coords": cm,
-                "dims": cm.dims,
-                "shape": cm.shape,
-                "dtype": str(data.dtype),
-            }
+            make_scan_payload(
+                attrs=GDRPatchAttrs.from_dict(attrs), coords=cm, dtype=str(data.dtype)
+            )
         ]

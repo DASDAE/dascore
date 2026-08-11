@@ -1,9 +1,17 @@
 """Shared utilities for IO implementations."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
 
+import dascore as dc
+from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.exceptions import CoordError
+from dascore.utils.models import ArrayLike
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -13,6 +21,51 @@ from dascore.exceptions import CoordError
 # skip segmentation for arrays large enough for the cost to matter.
 _MAX_SEGMENT_FRACTION = 0.1
 _MIN_SEGMENT_GUARD_SIZE = 1_000
+
+
+def build_patches(
+    coords: CoordManager,
+    data: ArrayLike,
+    attrs: dc.PatchAttrs | Mapping[str, Any] | None = None,
+    *,
+    attr_cls: type[dc.PatchAttrs] | None = None,
+    selection: Mapping[str, Any] | None = None,
+) -> list[dc.Patch]:
+    """
+    Trim a data source to a selection and build the resulting patch list.
+
+    This is the tail most single-patch readers share. It returns one
+    patch, or nothing if the selection left no data.
+
+    Parameters
+    ----------
+    coords
+        The coordinates of the untrimmed patch.
+    data
+        The patch data, often an unread node (eg an h5 dataset).
+    attrs
+        The patch attributes, or anything convertible to them.
+    attr_cls
+        The format's PatchAttrs subclass. Defaults to PatchAttrs.
+    selection
+        A mapping of {dimension_name: selection}, eg {"time": (t1, t2)}.
+        None values are dropped, so a read with nothing to trim never
+        touches the data source. Passed to `CoordManager.select`, which
+        ignores names it doesn't know.
+    """
+    # A def-time default would need dc.PatchAttrs while dascore is still
+    # importing this module, so the sentinel is resolved here instead.
+    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
+    # Validate attrs before the selection can short-circuit, so bad metadata
+    # still raises on a read which happens to select nothing.
+    patch_attrs = attr_cls.from_dict(attrs)
+    trim = {i: v for i, v in (selection or {}).items() if v is not None}
+    if trim:
+        coords, data = coords.select(array=data, **trim)
+    if not data.size:
+        return []
+    # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
+    return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:

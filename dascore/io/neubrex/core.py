@@ -11,7 +11,8 @@ import numpy as np
 import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 from dascore.utils.hdf5 import H5Reader
 
 
@@ -60,7 +61,9 @@ class NeubrexRFSV1(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
+    def read(
+        self, resource: H5Reader, snap=True, time=None, distance=None, **kwargs
+    ) -> dc.BaseSpool:
         """
         Read a resource belonging to this format.
 
@@ -70,30 +73,27 @@ class NeubrexRFSV1(FiberIO):
             The open h5 object.
         snap
             If True, snap each coordinate to be evenly sampled.
-        **kwargs
-            Passed to filtering coordinates.
+        time
+            An optional tuple for filtering time.
+        distance
+            An optional tuple for filtering distance.
         """
         attr_dict, cm, data = rfs_utils._get_attrs_coords_and_data(resource, snap)
-        if kwargs:
-            cm, data = rfs_utils._maybe_trim_data(cm, data, **kwargs)
-        if not data.size:
-            return dc.spool([])
-        attrs = NeubrexRFSPatchAttrs.from_dict(attr_dict)
-        patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
-        return dc.spool([patch])
+        patches = build_patches(
+            cm,
+            data,
+            attr_dict,
+            attr_cls=NeubrexRFSPatchAttrs,
+            selection={"time": time, "distance": distance},
+        )
+        return dc.spool(patches)
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
         return [
-            {
-                "attrs": attrs,
-                "coords": cm,
-                "dims": cm.dims,
-                "shape": cm.shape,
-                "dtype": str(resource["data"].dtype),
-            }
+            make_scan_payload(attrs=attrs, coords=cm, dtype=str(resource["data"].dtype))
         ]
 
 
@@ -116,7 +116,9 @@ class NeubrexDASV1(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, **kwargs) -> dc.BaseSpool:
+    def read(
+        self, resource: H5Reader, time=None, distance=None, **kwargs
+    ) -> dc.BaseSpool:
         """
         Read a resource of this format.
 
@@ -124,31 +126,24 @@ class NeubrexDASV1(FiberIO):
         ----------
         resource
             The open h5 object.
-        snap
-            If True, snap each coordinate to be evenly sampled.
-        **kwargs
-            Passed to filtering coordinates.
+        time
+            An optional tuple for filtering time.
+        distance
+            An optional tuple for filtering distance.
         """
         attr_dict, cm, data = das_utils._get_attrs_coords_and_data(resource)
-        if kwargs:
-            cm, data = das_utils._maybe_trim_data(cm, data, **kwargs)
-        if not data.size:
-            return dc.spool([])
-        attrs = NeubrexDASPatchAttrs.from_dict(attr_dict)
-        patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
-        return dc.spool([patch])
+        patches = build_patches(
+            cm,
+            data,
+            attr_dict,
+            attr_cls=NeubrexDASPatchAttrs,
+            selection={"time": time, "distance": distance},
+        )
+        return dc.spool(patches)
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Get the attributes of this format from File."""
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
-        return [
-            {
-                "attrs": attrs,
-                "coords": cm,
-                "dims": cm.dims,
-                "shape": cm.shape,
-                "dtype": str(acoustic.dtype),
-            }
-        ]
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(acoustic.dtype))]
