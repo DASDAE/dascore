@@ -16,7 +16,7 @@ Also load .agents/agents.local.md if present.
 1. Work on a feature/fix branch, not `master`.
 2. Create task worktrees under the repository root at `worktrees/{slug}`. Do not create task worktrees under `.agents/worktrees`, even if the current shell starts there.
 3. Keep commits focused (one logical change per commit where possible).
-4. Use pull requests to merge to `master`.
+4. Open pull requests against `dev`, the integration branch, not `master`. `dev` is merged to `master` at release time. Basing a PR on `master` also serves the older pull request template, which lacks the release-note sections.
 
 ## Environment setup
 
@@ -99,6 +99,12 @@ quarto render docs
 ```
 
 Important: if changing site structure, edit `scripts/_templates/_quarto.yml` (not `docs/_quarto.yml`, which is generated/overwritten).
+
+### Changelog
+
+DASCore does not maintain a changelog in the repository. Do not create one — not `CHANGELOG.md`, not a `changelog.d/` fragment directory — and do not add "unreleased changes" sections to any page. Release notes are written at release time from the pull requests merged since the last tag (see the `draft-release` skill), so a checked-in changelog is a second copy of that information which conflicts on every PR and drifts from what shipped. `docs/changelog.qmd` still exists, but only as a stub preserving a published URL: it points at the releases page and must never accumulate entries again.
+
+Put the user-facing summary in the pull request description instead, under its `User-facing changes` and `Breaking changes` headings. Write for the person reading the release notes: what changed for them and what they should do about it, a sentence or two per item, with the reasoning and implementation detail left to the diff.
 
 ## Quality bar for agent changes
 

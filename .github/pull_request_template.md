@@ -16,7 +16,27 @@ Also link any relevant issues/discussions (this can be done using the issue/disc
 pound sign, e.g. `#12` without the backticks)
 -->
 
+## User-facing changes
+
+<!--
+DASCore keeps no changelog; release notes are drafted from merged pull requests, so this section is
+this PR's changelog entry. Summarize what changes for users, a sentence or two per item, and leave the
+implementation details to the diff. Write "None" for internal-only changes (refactors, CI, typos).
+-->
+
+## Breaking changes
+
+<!--
+List anything that can break existing user code: removed or renamed public API, changed defaults or
+return types, or stored formats (e.g. the index schema) that must be rebuilt. For each, say what users
+should do instead. Write "None" if nothing breaks.
+-->
+
 ## Checklist
+
+I have:
+
+- [ ] filled in the "User-facing changes" and "Breaking changes" sections above, writing "None" where nothing applies, since release notes are drafted from PRs.
 
 I have (if applicable):
 

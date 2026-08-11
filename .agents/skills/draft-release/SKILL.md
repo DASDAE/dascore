@@ -1,6 +1,6 @@
 ---
 name: draft-release
-description: Draft the next release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into master since last release via gh, and printing the proposed version and categorized changelog.
+description: Draft the next release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into the release branch (usually dev) since last release via gh, and printing the proposed version and categorized changelog.
 ---
 
 # draft-release
@@ -40,8 +40,13 @@ git fetch --tags origin
 
 3. Collect merged PRs since the last release:
 - Use the previous release tag identified in step 2 as the lower bound.
-- Define PR scope as changes reachable in `last_release_tag..origin/master`
-  (or `..origin/<default_branch>` if default branch is not `master`).
+- Define PR scope as changes reachable in `last_release_tag..origin/<target>`,
+  where `<target>` is the branch the release will be cut from. Ask if it was not
+  given. It is **not** always `master`: feature work lands on `dev` and
+  pre-releases are tagged there (see the release docs), so scoping to `master`
+  silently omits everything not yet merged down. Sanity-check the choice before
+  drafting — if `git rev-list --count last_release_tag..origin/<target>` is far
+  larger than the count against `origin/master`, `dev` is the branch you want.
 - Use GitHub CLI (`gh`) to read merged PRs for that scope.
 - Include at minimum PR number, title, merge date, URL, labels, and body text.
 - Look at the git diffs to extract additional info if needed.
@@ -58,10 +63,27 @@ git fetch --tags origin
    `Reverted (no net change)` note at the end, so the reader knows why those PR
    numbers are absent.
 
-6. Classify the remaining PRs. This repo does not use conventional-commit
-   markers, and its labels are topical (`proc`, `viz`, `spool`, `IO`,
-   `transform`, `bug`, ...) rather than semantic, so labels alone are not
-   enough — read each PR's title and body and use judgment:
+6. Classify the remaining PRs. The repository no longer maintains a changelog, so
+   the PR bodies are the primary record of user-facing intent. Start from the
+   `User-facing changes` and `Breaking changes` headings of the PR template.
+   Distinguish the two ways those can be uninformative: a literal "None" is the
+   author stating the PR has no user-facing effect and is trustworthy, while an
+   *empty* heading means the author skipped it — fall back to the title, body,
+   and diff there rather than dropping the PR. Older PRs predate the headings
+   entirely and always need the fallback.
+
+   One-time note for the first release drafted after the changelog was retired:
+   `docs/changelog.qmd` previously accumulated curated entries for unreleased
+   work, and that text is richer than what the PR bodies alone give you for those
+   PRs. Read it before drafting:
+
+```bash
+git show "$(git log -1 --format=%H -- docs/changelog.qmd)^:docs/changelog.qmd"
+```
+
+   This repo does not use conventional-commit markers, and its
+   labels are topical (`proc`, `viz`, `spool`, `IO`, `transform`, `bug`, ...)
+   rather than semantic, so labels alone are not enough — use judgment:
 - `Breaking Changes` if the change removes or alters existing public API,
    defaults, or behavior in a way that can break callers — regardless of whether
    any `!`, `breaking` label, or `BREAKING CHANGE` text is present. A signature
@@ -73,6 +95,16 @@ git fetch --tags origin
 - Otherwise `Bug Fixes`.
 - Prefer user-facing behavior over internal implementation when deciding and
    when summarizing.
+- A PR is not limited to one entry. Large PRs routinely carry several unrelated
+   user-facing changes spanning more than one section — split them into separate
+   entries under the sections they belong to rather than compressing the PR into
+   a single line. The `User-facing changes` and `Breaking changes` headings of
+   the PR body are usually already itemized this way.
+- Omit PRs with no user-facing effect (the author wrote "None", or the diff shows
+   the change is purely internal: refactors, CI, typing, tests, docs
+   infrastructure). They do not belong in any section — do not let them fall
+   through to `Bug Fixes`. Judge an empty heading from the diff, not from the
+   emptiness itself.
 - Sort entries within each section by PR number ascending.
 - Include a link to the PR in the changelog.
 
