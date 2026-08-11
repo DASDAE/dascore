@@ -102,7 +102,9 @@ def _coerce_scalar(value, target_kinds: set[str]):
 
 def _normalize_unit(value) -> str | None:
     """Return a nullable unit string from a dataframe value."""
-    return None if value is None or pd.isnull(value) else str(value)
+    if value is None or pd.isnull(value) or value == "":
+        return None
+    return str(value)
 
 
 def _to_target_unit(typed, target_units: str | None, name: str):
@@ -378,8 +380,8 @@ def build_coord_clause(
         else:
             # A unit-bearing range converts itself once per distinct
             # compatible stored unit into an OR branch; a bare bound in a
-            # mixed range stays native per branch (Patch.select raises on
-            # mixed bounds at load, so candidacy only needs superset).
+            # mixed range stays native per branch, exactly how the
+            # residual's per-bound _CanonicalRange reads it at load.
             # NULL-unit defs stay unconstrained candidates: unitless
             # values cannot be proven dimensionally incompatible.
             branches = ["cd.units IS NULL"]

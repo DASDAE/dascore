@@ -100,12 +100,18 @@ class CoordRecord:
         value identity), otherwise a hash of the stored summary fields
         ("sum:" prefix; lossless for the index but too weak for
         value-identity claims). Name and dims are patch-level and
-        excluded.
+        excluded. The unit spelling rides after "|" on the fp form:
+        fingerprints simplify units before hashing, so one physical
+        coordinate spelled in metres and in feet hashes identically —
+        but the stored def rows carry spelling-dependent units and
+        envelopes, so deduplicating them together would let the first
+        spelling's row lie for the second.
         """
         if self.coord_hash:
             # truncated: 128 bits is ample and key size shows up in the
             # def_key index for archives with mostly-unique time coords
-            return f"fp:{self.coord_hash[:32]}"
+            key = f"fp:{self.coord_hash[:32]}"
+            return f"{key}|{self.units}" if self.units else key
         fields = (
             self.value_kind,
             self.dtype,
@@ -173,10 +179,12 @@ def attr_column_name(name: str, kind: str) -> str:
     return f"{sanitize_attr_name(name)}__{kind}"
 
 
-def _base_unit_info(value, unit_str: str | None = None) -> tuple[float, str]:
-    """Return a value's base-unit magnitude and canonical unit string."""
-    quant = value if unit_str is None else value * get_quantity(unit_str)
-    quant = get_quantity(quant)
+def _base_unit_info(value) -> tuple[float, str]:
+    """Return an attr quantity's base-unit magnitude and unit string.
+
+    Attrs only: coordinate envelopes store original units untouched.
+    """
+    quant = get_quantity(value)
     assert quant is not None  # unit-bearing values only
     quant = quant.to_base_units()
     return float(quant.magnitude), str(quant.units)

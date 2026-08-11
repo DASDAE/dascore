@@ -586,8 +586,16 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype):
             )
             raise UnitError(msg)
         try:
-            return quant.to(units).magnitude
-        except DimensionalityError:
+            # A length is a DELTA: converting through two anchor points
+            # cancels an affine unit's offset (20 degC of extent is 36
+            # degF, never 68), and convert_units also accepts scaled
+            # unit spellings that pint's .to() rejects.
+            magnitude = float(quant.magnitude)
+            from_units = str(quant.units)
+            anchor = convert_units(0.0, to_units=units, from_units=from_units)
+            end = convert_units(magnitude, to_units=units, from_units=from_units)
+            return end - anchor
+        except (DimensionalityError, UnitError):
             msg = (
                 f"Cannot chunk {name!r} by {quant}: incompatible with the "
                 f"coordinate's units of {units}."
@@ -741,6 +749,11 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
     """
     min_name, max_name = f"{name}_min", f"{name}_max"
     step_name = f"{name}_step"
+    # The partition's unit (single-valued after normalization) rides on
+    # every member row: trim magnitudes mean THIS unit, not whatever
+    # spelling the member's source file used.
+    unit_col = f"_{name}_units"
+    plan_units = sub[unit_col].iloc[0] if unit_col in sub.columns else None
     sub = sub.sort_values([min_name, "_patch_id"], kind="stable")
     original = sub[[min_name, max_name]].reset_index(drop=True)
     sub = _remove_overlaps(sub, name)
@@ -788,16 +801,17 @@ def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFra
                 and hi == orig_max[src_num]
                 and not modified_src[src_num]
             )
-            rows.append(
-                {
-                    "output_id": out_ids[out_num],
-                    "_patch_id": patch_ids[src_num],
-                    min_name: lo,
-                    max_name: hi,
-                    step_name: steps[src_num],
-                    "_modified": not unchanged,
-                }
-            )
+            row = {
+                "output_id": out_ids[out_num],
+                "_patch_id": patch_ids[src_num],
+                min_name: lo,
+                max_name: hi,
+                step_name: steps[src_num],
+                "_modified": not unchanged,
+            }
+            if plan_units is not None:
+                row[unit_col] = plan_units
+            rows.append(row)
     return pd.DataFrame(rows)
 
 

@@ -915,9 +915,17 @@ class SQLIndexBackend(abc.ABC):
         Runs after `_pivot_coords` so every coordinate envelope column
         exists; an attr whose name equals one is a genuine collision — it is
         omitted from the flat view (still queryable via the _attrs
-        namespace) with a warning.
+        namespace) with a warning. A private `_{name}_units` column claims
+        the public `{name}_units` spelling too, since presentation renames
+        it there: the coordinate's unit must never read as attr data.
         """
-        clobbered = frozenset(name for name in new_columns if name in out.columns)
+
+        def _collides(name: str) -> bool:
+            return name in out.columns or (
+                name.endswith("_units") and f"_{name}" in out.columns
+            )
+
+        clobbered = frozenset(name for name in new_columns if _collides(name))
         # The flat frame is also materialized internally (patch naming,
         # chunking); warn once per backend per colliding name set so users
         # learn about the shadowing without a warning on every access.
@@ -931,7 +939,7 @@ class SQLIndexBackend(abc.ABC):
             )
             warnings.warn(msg, UserWarning, stacklevel=2)
         for name, series in new_columns.items():
-            if name in out.columns:
+            if _collides(name):
                 continue
             out[name] = series
         return out
@@ -1034,8 +1042,9 @@ class SQLIndexBackend(abc.ABC):
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
-            # canonical (base) units: numeric envelopes are stored SI, so
-            # this is the dimensionality marker chunk partitioning needs
+            # the ORIGINAL unit spelling, matching the native envelope
+            # values; chunk partitioning normalizes compatible spellings
+            # to one unit per dimensionality before using this
             out[f"_{name}_units"] = out["patch_id"].map(units)
             kinds = set(group["value_kind"])
             # time/distance envelopes already live on patches...

@@ -315,20 +315,25 @@ class TestCanonicalRange:
     """_canonical_range recognizes only numeric ranges."""
 
     def test_bare_and_quantity_bounds(self):
-        """Bare numbers and quantities become SI magnitudes."""
-        bare = _canonical_range((20, 60))
-        assert bare is not None
-        assert bare.magnitudes == (20.0, 60.0)
-        # 20 m .. 60 m -> SI metres
+        """Bare ranges never canonicalize; quantities carry per-bound units."""
+        # a bare range means native units, so there is nothing to defer
+        assert _canonical_range((20, 60)) is None
         quant = _canonical_range((20 * m, 60 * m))
         assert quant is not None
         assert quant.magnitudes == (20.0, 60.0)
+        assert quant.units == ("m", "m")
+        # a bare bound beside a quantity stays bare (native units)
+        mixed = _canonical_range((20, 60 * m))
+        assert mixed is not None
+        assert mixed.magnitudes == (20.0, 60.0)
+        assert mixed.units == (None, "m")
 
     def test_open_bounds_kept(self):
-        """A half-open numeric range keeps its open end as None."""
-        half_open = _canonical_range((None, 60))
+        """A half-open quantity range keeps its open end as None."""
+        half_open = _canonical_range((None, 60 * m))
         assert half_open is not None
         assert half_open.magnitudes == (None, 60.0)
+        assert half_open.units == (None, "m")
 
     @pytest.mark.parametrize(
         "value",

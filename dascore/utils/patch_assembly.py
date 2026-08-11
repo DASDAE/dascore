@@ -81,7 +81,8 @@ def _match_merge_units(patch, merge_dim, target_units):
     """
     Convert a member's merge-dim units to the first member's.
 
-    The planner groups by SI-canonical envelopes, so one output may mix
+    The planner buckets compatible unit spellings by dimensionality and
+    normalizes their envelopes to one unit, so one output may mix
     unit spellings of one dimensionality (metres with feet); merging
     requires a single spelling, and the first member's wins. Returns
     (patch, target_units); incompatible or missing units pass through
@@ -127,12 +128,22 @@ def _as_plan_units(patch, kwargs, row) -> dict:
     for name, value in kwargs.items():
         plan_units = row.get(f"_{name}_units")
         no_units = plan_units is None or pd.isnull(plan_units) or plan_units == ""
-        if name not in coord_map or no_units or not is_range(value):
+        # plan trims arrive as a raw 2-list; only a tuple reads as a range
+        ranged = tuple(value) if isinstance(value, list) else value
+        numeric = is_range(ranged) and all(
+            v is None
+            or v is Ellipsis
+            or isinstance(v, int | float | np.integer | np.floating)
+            for v in ranged
+        )
+        # only numeric magnitudes carry the plan's unit; time trims are
+        # absolute datetimes and pass through untouched
+        if name not in coord_map or no_units or not numeric:
             out[name] = value
             continue
         quantity = get_quantity(str(plan_units))
         out[name] = tuple(
-            None if v is None or v is Ellipsis else v * quantity for v in value
+            None if v is None or v is Ellipsis else v * quantity for v in ranged
         )
     return out
 

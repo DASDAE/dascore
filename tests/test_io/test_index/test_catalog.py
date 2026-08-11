@@ -6,11 +6,14 @@ import pickle
 import re
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
+from dascore.io.index.catalog import _adjust_unit_segments
 from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.units import m
 from dascore.utils.misc import _canonical_range, _CanonicalRange
 
 
@@ -185,9 +188,9 @@ class TestRelativeTimeCoords:
         """Time bounds keep their native form for the residual select."""
         assert _canonical_range(bounds) is None
 
-    def test_numeric_ranges_still_canonical(self):
-        """Numeric bounds are still resolved to SI magnitudes."""
-        assert _canonical_range((1, 10)).magnitudes == (1.0, 10.0)
+    def test_bare_numeric_ranges_never_canonicalize(self):
+        """A bare range means native units and stays its own residual."""
+        assert _canonical_range((1, 10)) is None
 
 
 class TestDirectoryCatalog:
@@ -313,15 +316,36 @@ class TestCount:
 
 
 class TestCanonicalRange:
-    """Value semantics of the deferred canonical-SI range."""
+    """Value semantics of the deferred per-bound canonical range."""
 
     def test_eq_and_hash(self):
-        """Equal magnitudes compare and hash equal; other types don't."""
-        r1, r2 = _CanonicalRange((1.0, 2.0)), _CanonicalRange((1.0, 2.0))
+        """Equal bounds compare and hash equal; other types don't."""
+        units = ("m", "m")
+        r1 = _CanonicalRange((1.0, 2.0), units)
+        r2 = _CanonicalRange((1.0, 2.0), units)
         assert r1 == r2
         assert hash(r1) == hash(r2)
-        assert r1 != _CanonicalRange((1.0, 3.0))
+        assert r1 != _CanonicalRange((1.0, 3.0), units)
+        assert r1 != _CanonicalRange((1.0, 2.0), ("m", None))  # bare bound
         assert r1 != (1.0, 2.0)  # non-CanonicalRange comparand
+
+
+class TestAdjustUnitSegments:
+    """Defensive branches of the per-unit envelope adjustment."""
+
+    def test_empty_frame_passes_through(self):
+        """An empty frame has nothing to adjust."""
+        canonical = _canonical_range((1 * m, 2 * m))
+        df = pd.DataFrame(columns=["x_min", "x_max", "x_step"])
+        assert _adjust_unit_segments(df, "x", canonical).empty
+
+    def test_frame_without_units_column_uses_magnitudes(self):
+        """A frame recording no units takes the SI magnitudes bare."""
+        canonical = _canonical_range((1 * m, 2 * m))
+        df = pd.DataFrame({"x_min": [0.0], "x_max": [5.0], "x_step": [1.0]})
+        out = _adjust_unit_segments(df, "x", canonical)
+        assert float(out["x_min"].iloc[0]) == 1.0
+        assert float(out["x_max"].iloc[0]) == 2.0
 
 
 class TestViewSerialization:

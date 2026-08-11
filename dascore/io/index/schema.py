@@ -105,7 +105,7 @@ class PatchRow(NamedTuple):
     time_min: int | None  # epoch ns; NULL for relative-time patches
     time_max: int | None
     time_step: int | None
-    distance_min: float | None  # canonical SI (m)
+    distance_min: float | None  # original units, as the coord states them
     distance_max: float | None
     distance_step: float | None
 

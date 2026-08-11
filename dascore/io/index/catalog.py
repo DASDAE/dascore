@@ -41,7 +41,6 @@ from dascore.io.index.query import (
     Query,
 )
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
-from dascore.units import convert_units
 from dascore.utils.misc import (
     _canonical_range,
     _CanonicalRange,
@@ -67,18 +66,16 @@ def _envelope_range(value):
     distinct row unit.
     """
     canonical = _canonical_range(value)
-    if canonical is None or canonical.units is None:
-        return value
-    return canonical
+    return value if canonical is None else canonical
 
 
 def _adjust_unit_segments(df, name, canonical):
     """Trim one coord's presented envelopes by a unit-bearing range.
 
-    Envelope columns hold each row's native magnitudes, so the range's
-    canonical SI magnitudes convert per distinct row unit; unitless rows
-    take the magnitudes bare, matching the query layer's rule that they
-    stay candidates.
+    Envelope columns hold each row's native magnitudes, so the range
+    re-expresses itself per distinct row unit (`magnitudes_in`); rows
+    with no stated unit take the magnitudes bare, matching the query
+    layer's rule that they stay candidates.
     """
     unit_col = f"_{name}_units"
     if df.empty:
@@ -92,12 +89,7 @@ def _adjust_unit_segments(df, name, canonical):
         if unit is None or pd.isnull(unit) or unit == "":
             rng = canonical.magnitudes
         else:
-            rng = tuple(
-                None
-                if mag is None
-                else convert_units(mag, to_units=str(unit), from_units=canonical.units)
-                for mag in canonical.magnitudes
-            )
+            rng = canonical.magnitudes_in(str(unit))
         pieces.append(adjust_segments(sub, ignore_bad_kwargs=True, **{name: rng}))
     return pd.concat(pieces).sort_index()
 
@@ -113,10 +105,11 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
 
     A bare numeric range means each coordinate's native units, so it is
     its own residual: `Patch.select` reads it natively at load, exactly
-    matching the index candidacy. A unit-bearing range becomes a
-    `_CanonicalRange` (canonical SI magnitudes plus the query's base
-    unit) so each patch decides its own representation at load time,
-    which keeps mixed unitful/unitless populations correct.
+    matching the index candidacy. A range with any unit-bearing bound
+    becomes a `_CanonicalRange` (canonical SI magnitude and base unit
+    per bound, bare bounds staying raw) so each patch decides its own
+    representation at load time, which keeps mixed unitful/unitless
+    populations correct.
 
     Selectors on non-numeric coordinates (time ranges, string ranges)
     pass through unchanged.
@@ -126,8 +119,6 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
         canonical = _canonical_range(value) if name in numeric else None
-        if canonical is not None and canonical.units is None:
-            canonical = None  # bare range: native semantics, no rewrap
         query_coords[name] = value
         residual_coords[name] = value if canonical is None else canonical
     return query_coords, residual_coords

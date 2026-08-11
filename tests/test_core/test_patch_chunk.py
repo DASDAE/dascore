@@ -874,6 +874,39 @@ class TestMixedUnitChunk:
         assert patch.shape[patch.get_axis("distance")] == 2 * n
         assert float(coord.max()) == pytest.approx(2 * n - 1)
 
+    def test_mixed_spelling_members_trim_in_plan_units(self):
+        """Length-chunking across m and ft members loses no samples.
+
+        Plan trims are magnitudes in the partition's normalized unit; a
+        member stored under another spelling must convert them, not read
+        them natively (adversarial round, D1).
+        """
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        values = (d.data + span) / 0.3048
+        pf = pm.update_coords(distance=values).set_units(distance="ft")
+        sp = dc.spool([pm, pf])
+        out = sp.chunk(distance=200, conflict="keep_first", keep_partial=True)
+        n = pm.shape[pm.get_axis("distance")]
+        assert sum(p.shape[p.get_axis("distance")] for p in out) == 2 * n
+        assert all(p.shape[p.get_axis("distance")] for p in out)  # none empty
+
+    def test_affine_quantity_length_is_a_delta(self):
+        """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
+        degf = dc.get_example_patch().set_units(distance="degF")
+        length = 20 * dc.get_quantity("degC")
+        out = dc.spool([degf]).chunk(distance=length, keep_partial=True)
+        coord = out[0].get_coord("distance")
+        assert float(coord.max() - coord.min()) <= 36.1
+
+    def test_scaled_unit_quantity_length(self):
+        """A scaled unit spelling converts for chunk lengths too."""
+        patch = dc.get_example_patch().set_units(distance="1e-9 strain/s")
+        length = 50 * dc.get_quantity("1e-9 strain/s")
+        out = dc.spool([patch]).chunk(distance=length, keep_partial=True)
+        assert len(out) == 6
+
     def test_same_units_unchanged(self):
         """The ordinary same-unit merge keeps its behavior and units."""
         p = dc.get_example_patch()

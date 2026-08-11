@@ -426,6 +426,44 @@ class TestUnitCanonicalSelection:
         assert float(coord.min()) >= 20
         assert float(coord.max()) <= 60
 
+    def test_mixed_bare_and_quantity_bounds(self, ft_patch):
+        """A bare bound stays feet beside a metre bound, as on the patch."""
+        mixed = (20, 60 * m)
+        direct = ft_patch.select(distance=mixed)
+        via = dc.spool([ft_patch]).select(distance=mixed)[0]
+        assert via.get_coord("distance") == direct.get_coord("distance")
+
+    def test_chunk_of_selected_view_converts_plan(self, ft_patch):
+        """Chunking after a quantity select trims the converted interval."""
+        sel = dc.spool([ft_patch]).select(distance=(20 * m, 60 * m))
+        out = sel.chunk(distance=None)
+        coord = out[0].get_coord("distance")
+        assert float(coord.min()) >= 65.5  # 20 m in ft
+        assert float(coord.max()) <= 197.0  # 60 m in ft
+
+    def test_chunked_spool_keeps_units(self, ft_patch):
+        """A derived (chunked) view still reports original units."""
+        df = dc.spool([ft_patch]).chunk(distance=None).get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+
+    def test_directory_spool_units_column(self, ft_patch, tmp_path):
+        """The persisted directory index presents units too."""
+        dc.write(ft_patch, tmp_path / "ft.h5", "dasdae")
+        df = dc.spool(tmp_path).update().get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+
+    def test_union_of_mixed_unit_spools(self):
+        """A union keeps each member's native units and semantics."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        pf = pm.convert_units(distance="ft")
+        union = dc.spool([pm]) + dc.spool([pf])
+        units = set(union.get_contents()["distance_units"])
+        assert units == {"m", "ft"}
+        for patch in union.select(distance=(20, 60)):
+            coord = patch.get_coord("distance")
+            assert float(coord.min()) >= 20
+            assert float(coord.max()) <= 60
+
     def test_mixed_unit_archive(self):
         """Bare selects per-file native intervals; a quantity selects one."""
         pm = dc.get_example_patch().set_units(distance="m")
