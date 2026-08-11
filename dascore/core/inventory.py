@@ -32,7 +32,12 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
-from dascore.utils.misc import check_code, is_strictly_monotonic, optional_import
+from dascore.utils.misc import (
+    check_code,
+    is_strictly_monotonic,
+    optional_import,
+    validate_acquisition_key,
+)
 from dascore.utils.models import (
     DateTime64,
     InventoryModel,
@@ -1845,14 +1850,13 @@ class Inventory(InventoryModel):
             The instant to resolve at; required whenever any epoch level has
             more than one candidate.
         """
-        parts = acquisition_key.split(".")
-        if len(parts) != 4:
-            msg = (
-                f"acquisition_key {acquisition_key!r} must have exactly four "
-                "dot-separated parts."
-            )
-            raise InvalidInventoryError(msg)
-        net_code, array_code, location, acq_code = parts
+        # The same validator PatchAttrs uses, so a key legal in one is legal
+        # in the other and a malformed one is told apart from an unknown one.
+        try:
+            acquisition_key = validate_acquisition_key(acquisition_key)
+        except ValueError as error:
+            raise InvalidInventoryError(str(error)) from error
+        net_code, array_code, location, acq_code = acquisition_key.split(".")
 
         def exactly_one(matches, kind):
             if len(matches) != 1:

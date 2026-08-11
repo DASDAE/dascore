@@ -469,7 +469,7 @@ class TestResolution:
 
     def test_wrong_shape_raises(self):
         """Wrong shape raises."""
-        with pytest.raises(InvalidInventoryError, match="four"):
+        with pytest.raises(InvalidInventoryError, match="dot separated codes"):
             build_inventory().resolve("DAS.L001.RAW")
 
 

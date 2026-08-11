@@ -798,7 +798,7 @@ class Spool(BaseSpool):
         Enriching never removes a patch: one the inventory does not
         describe comes out unchanged rather than missing, so an inventory
         covering part of an archive needs no pruning first. Deciding
-        membership is `prune_to_inventory`'s job, and leaving it there is
+        membership will be `prune_to_inventory`'s job, and leaving it there is
         what keeps this lazy — nothing resolves until a patch is pulled.
 
         Parameters

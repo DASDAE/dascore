@@ -111,13 +111,10 @@ DataCategory = Literal["", "DAS", "DTS", "DSS"]
 VALID_DATA_CATEGORIES = get_args(DataCategory)
 
 max_lens = {
-    "path": 120,
-    "file_format": 15,
     "tag": 100,
     # Four codes of at most 12 characters plus separators, with headroom.
     "acquisition_key": 64,
     "dims": 40,
-    "file_version": 9,
     "data_type": 32,
     "data_category": 4,
 }

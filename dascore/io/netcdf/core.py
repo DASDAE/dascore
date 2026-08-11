@@ -47,6 +47,13 @@ def _open_xarray_dataset(resource: H5Reader):
     return xr.open_dataset(h5_file, engine="h5netcdf")
 
 
+def _int_for_bool(attrs: dict) -> dict:
+    """Return attrs with booleans as the integer flags netCDF can store."""
+    return {
+        i: int(v) if isinstance(v, bool | np.bool_) else v for i, v in attrs.items()
+    }
+
+
 class NetCDFCFV18(FiberIO):
     """NetCDF-4 IO using xarray for read/write and CF markers for detection."""
 
@@ -113,7 +120,15 @@ class NetCDFCFV18(FiberIO):
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
-        dataset = patch_to_xarray(patch).rename("data").to_dataset()
+        array = patch_to_xarray(patch).rename("data")
+        # netCDF has no boolean attribute type, so a bool attr aborts the
+        # write. Inventory enrichment routinely sets one
+        # (closed_fiber_loop), and CF's own convention for a flag is an
+        # integer, so they are stored as 0/1 rather than dropped. Patch
+        # attrs land on the variable, the file-level ones on the dataset.
+        array.attrs = _int_for_bool(array.attrs)
+        dataset = array.to_dataset()
+        dataset.attrs = _int_for_bool(dataset.attrs)
         dataset.attrs["Conventions"] = f"CF-{self.version}"
         encoding = self._get_write_encoding(**kwargs)
         dataset.to_netcdf(

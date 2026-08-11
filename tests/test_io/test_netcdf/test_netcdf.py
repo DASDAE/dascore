@@ -424,6 +424,7 @@ class TestNetCDFCoreHelpers:
                     "time": FakeCoord(),
                     "latitude": FakeCoord(),
                 }
+                self.attrs = {}
                 self.dataset = FakeDataset()
 
             def rename(self, name):

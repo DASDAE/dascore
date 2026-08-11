@@ -48,7 +48,5 @@ class H5Simple(FiberIO):
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
-        attrs.pop("file_format", None)
-        attrs.pop("file_version", None)
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(data.dtype))]

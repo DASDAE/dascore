@@ -348,7 +348,8 @@ class TestCoords:
         """Qualified names project one field of a typed track."""
         out = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
         values = out.get_coord("coupling.medium").values
-        assert values[0] == "soil" and values[-1] is None
+        # A string coordinate has no null, so uncovered channels are empty.
+        assert values[0] == "soil" and values[-1] == ""
 
     def test_component_field(self, patch, inventory):
         """Component intervals come from the cumulative layout."""
@@ -415,8 +416,8 @@ class TestCoords:
         inv = _replace_path(inventory, annotations=annotations)
         out = patch.enrich(inv, attrs=False, coords=("zone",))
         values = out.get_coord("zone").values
-        # An all-uncovered object coord degenerates to floats under numpy.
-        assert all(x is None or np.isnan(x) for x in values)
+        # Nothing is covered, so every channel takes the empty marker.
+        assert (values == "").all()
 
 
 class TestNoOpticalPath:
@@ -1138,3 +1139,27 @@ class TestSplitReviewFindings:
         updated = spool.update()
         assert updated._inventory is inventory
         assert updated[0].attrs.gauge_length == 10.0
+
+
+class TestPartialStringCoverage:
+    """A track covering part of a patch still yields a usable patch."""
+
+    def test_uncovered_string_channels_are_a_str_coord(self, patch, inventory):
+        """A coordinate has one dtype; None beside strings makes an object
+        array which cannot be written, chunked, or sorted.
+        """
+        out = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
+        values = out.get_coord("coupling.medium").values
+        assert values.dtype.kind in "US"
+        # The example coupling covers 100-250 m of a patch spanning 100-399.
+        assert (values == "").any() and (values != "").any()
+
+    def test_partly_covered_patch_can_be_written(self, patch, inventory, tmp_path):
+        """The failure this guards against was a write, not a read."""
+        out = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
+        path = dc.write(out, tmp_path / "partial.h5", "dasdae")
+        back = dc.read(path)[0]
+        assert np.array_equal(
+            back.get_coord("coupling.medium").values,
+            out.get_coord("coupling.medium").values,
+        )

@@ -411,7 +411,10 @@ def _fill_from_intervals(distances, intervals, values, kind):
         return out.astype(bool)
     if kind == "numeric":
         return np.asarray([np.nan if x is None else x for x in out], dtype=float)
-    return out
+    # A coordinate has to be one dtype. Leaving None in an object array beside
+    # the strings makes a patch which cannot be written, chunked, or sorted,
+    # so absence is the empty string here; there is no null in a str array.
+    return np.asarray(["" if x is None else x for x in out], dtype=str)
 
 
 def _get_annotation_coord(path, group, distances):
