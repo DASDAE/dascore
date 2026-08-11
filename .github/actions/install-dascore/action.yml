@@ -63,10 +63,15 @@ runs:
       run: |
         python -c "
         import os, sys
-        requested = os.environ['REQUESTED']
-        actual = '.'.join(str(i) for i in sys.version_info[:2])
+        # Compare component-wise so a caller may pin as loosely or tightly as
+        # it likes ('3.14', '3.14.2'), and strip the free-threaded suffix:
+        # setup-python installs 3.14t correctly but reports version_info 3.14.
+        requested = os.environ['REQUESTED'].removesuffix('t').split('.')
+        actual = [str(i) for i in sys.version_info[:3]]
         print(sys.version)
-        assert actual == requested, f'wanted python {requested}, got {actual}'
+        assert actual[: len(requested)] == requested, (
+            f'wanted python {\".\".join(requested)}, got {\".\".join(actual)}'
+        )
         "
 
     # Normally just restores the cache primed by the calling workflow's setup

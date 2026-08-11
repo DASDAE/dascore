@@ -25,6 +25,9 @@ on:
     - dev
     paths:
       - 'pyproject.toml'
+      # The conda_env job exists to guard this file, so it has to run when
+      # the file changes.
+      - 'environment.yml'
       - 'docs/**/*.qmd'
       - '**.py'
       - '.github/workflows/*.yml'
@@ -221,6 +224,10 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ needs.setup.outputs.python-default }}
+          # [test] rather than the [dev] default: pip would otherwise layer
+          # ~30 PyPI distributions over the conda environment, which is the
+          # opposite of what this job is checking.
+          install-group-str: "[test]"
           prepare-test-data: "true"
 
       # No coverage upload: the uv jobs already cover this suite, and this job

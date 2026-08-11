@@ -83,6 +83,8 @@ docs = [
     "jupyter-client",
     "nbclient",
     "nbformat",
+    # quarto's own notebook driver does `from yaml import safe_load`.
+    "pyyaml",
 ]
 
 test = [
