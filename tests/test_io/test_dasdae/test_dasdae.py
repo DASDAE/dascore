@@ -452,6 +452,93 @@ class TestLegacyFixtureCompatibility:
         assert _decode_legacy_attr_value(np.asarray(5)) == 5
 
 
+class TestLegacyUnitCompanions:
+    """Released files stored ``{name}_units`` beside now fixed-unit attrs."""
+
+    def test_companion_converts_value_and_is_dropped(self):
+        """A stored companion converts the value to the contract unit."""
+        out = translate_legacy_attrs({"pulse_width": 50.0, "pulse_width_units": "ns"})
+        assert out["pulse_width"] == pytest.approx(50.0e-9)
+        assert "pulse_width_units" not in out
+
+    def test_empty_companion_is_dropped_without_conversion(self):
+        """Released attrs defaulted the companion to '', meaning unstated."""
+        out = translate_legacy_attrs({"pulse_rate": 500.0, "pulse_rate_units": ""})
+        assert out["pulse_rate"] == 500.0
+        assert "pulse_rate_units" not in out
+
+    def test_value_without_companion_is_untouched(self):
+        """No companion means the value already speaks the contract unit."""
+        out = translate_legacy_attrs({"gauge_length": 10.0})
+        assert out["gauge_length"] == 10.0
+
+    def test_companion_without_value_is_dropped(self):
+        """A stray companion beside no value is legacy noise."""
+        out = translate_legacy_attrs({"pulse_width_units": "m"})
+        assert out == {}
+
+    def test_length_pulse_width_migrates_to_pulse_length(self):
+        """Febus cached the pulse as meters; that quantity is pulse_length."""
+        out = translate_legacy_attrs({"pulse_width": 10.0, "pulse_width_units": "m"})
+        assert "pulse_width" not in out
+        assert "pulse_width_units" not in out
+        assert out["pulse_length"] == 10.0
+        assert "pulse_length_units" not in out
+
+    def test_pulse_width_ns_key_migrates(self):
+        """xml_binary spelled the units into the key name."""
+        out = translate_legacy_attrs({"pulse_width_ns": 50.0})
+        assert "pulse_width_ns" not in out
+        assert out["pulse_width"] == pytest.approx(50.0e-9)
+
+    def test_empty_companion_keeps_pulse_width_temporal(self):
+        """Unstated units mean seconds already; the name must not migrate."""
+        out = translate_legacy_attrs({"pulse_width": 5e-8, "pulse_width_units": ""})
+        assert out == {"pulse_width": 5e-8}
+
+    def test_length_pulse_width_never_clobbers_pulse_length(self):
+        """An existing pulse_length wins; the ambiguous value drops loudly."""
+        legacy = {"pulse_width": 7.0, "pulse_width_units": "m", "pulse_length": 99.0}
+        with pytest.warns(UserWarning, match="pulse_width"):
+            out = translate_legacy_attrs(legacy)
+        assert out["pulse_length"] == 99.0
+        assert "pulse_width" not in out
+
+    def test_coord_named_like_companion_attr_is_left_alone(self):
+        """A coordinate sharing an attr name keeps its coord metadata."""
+        out = translate_legacy_attrs(
+            {
+                "coords": {"gauge_length": {"min": 0.0, "max": 1.0, "units": "ft"}},
+                "gauge_length": 10.0,
+            }
+        )
+        assert out["gauge_length"] == 10.0  # not rescaled by the coord's units
+        assert out["gauge_length_units"] == "ft"  # kept for coord reconstruction
+
+    def test_stored_coord_names_protect_flat_units_keys(self):
+        """A flat-key-era coordinate's units key is not a value companion."""
+        legacy = {"pulse_rate_min": 0.0, "pulse_rate_max": 5.0}
+        legacy["pulse_rate_units"] = "1/s"
+        out = translate_legacy_attrs(legacy, coord_names={"pulse_rate"})
+        assert out["pulse_rate_units"] == "1/s"
+
+    def test_legacy_cache_matches_fresh_parse(self, random_patch, tmp_path):
+        """A patch from an old cache must equal one freshly parsed."""
+        path = tmp_path / "legacy_units.h5"
+        patch = random_patch.update_attrs(gauge_length=32.0, gauge_length_units="ft")
+        patch.io.write(path, "dasdae")
+        # simulate a legacy file: strip the root and group markers
+        with h5py.File(path, "a") as h5:
+            del h5.attrs[_SEPARATE_ATTRS_KEY]
+            for group in h5["waveforms"].values():
+                del group.attrs[_SEPARATE_ATTRS_KEY]
+        back = dc.read(path, file_format="DASDAE")[0]
+        assert back.attrs["gauge_length"] == pytest.approx(32.0 * 0.3048)
+        assert back.attrs.get("gauge_length_units") is None
+        summary = dc.scan(path, file_format="DASDAE")[0]
+        assert summary.attrs["gauge_length"] == pytest.approx(32.0 * 0.3048)
+
+
 class TestDASDAEInternalHelpers:
     """Direct tests for h5py-backed DASDAE helper branches."""
 

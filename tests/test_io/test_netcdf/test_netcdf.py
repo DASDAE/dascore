@@ -925,7 +925,8 @@ class TestNetCDFBoolAttrs:
         """Enrichment sets closed_fiber_loop, so this is the common case."""
         patch = random_patch.update_attrs(closed_fiber_loop=True)
         path = dc.write(patch, tmp_path / "flag.nc", "netcdf_cf")
-        assert dc.read(path)[0].attrs.get("closed_fiber_loop") == 1
+        back = dc.read(path, file_format="netcdf_cf")[0]
+        assert back.attrs.get("closed_fiber_loop") == 1
 
     def test_bool_collections_round_trip(self, random_patch, tmp_path):
         """A bool inside an array or tuple hits the same netCDF limit."""
@@ -933,7 +934,7 @@ class TestNetCDFBoolAttrs:
             flags=np.array([True, False]), pair=(True, False)
         )
         path = dc.write(patch, tmp_path / "flags.nc", "netcdf_cf")
-        back = dc.read(path)[0]
+        back = dc.read(path, file_format="netcdf_cf")[0]
         assert list(back.attrs.get("flags")) == [1, 0]
         assert list(back.attrs.get("pair")) == [1, 0]
 
