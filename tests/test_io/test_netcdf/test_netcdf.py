@@ -12,6 +12,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.netcdf import core as netcdf_core
 from dascore.io.netcdf import utils as netcdf_utils
 from dascore.io.netcdf.utils import (
@@ -923,6 +924,7 @@ class TestNetCDFBoolAttrs:
 
     def test_scalar_bool_attr_round_trips(self, random_patch, tmp_path):
         """Enrichment sets closed_fiber_loop, so this is the common case."""
+        _require_xarray_netcdf_engine()
         patch = random_patch.update_attrs(closed_fiber_loop=True)
         path = dc.write(patch, tmp_path / "flag.nc", "netcdf_cf")
         back = dc.read(path, file_format="netcdf_cf")[0]
@@ -930,6 +932,7 @@ class TestNetCDFBoolAttrs:
 
     def test_bool_collections_round_trip(self, random_patch, tmp_path):
         """A bool inside an array or tuple hits the same netCDF limit."""
+        _require_xarray_netcdf_engine()
         patch = random_patch.update_attrs(
             flags=np.array([True, False]), pair=(True, False)
         )
@@ -940,6 +943,22 @@ class TestNetCDFBoolAttrs:
 
     def test_writing_does_not_mutate_the_patch(self, random_patch, tmp_path):
         """The coercion is for the file, not for the patch in hand."""
+        _require_xarray_netcdf_engine()
         patch = random_patch.update_attrs(closed_fiber_loop=True)
         dc.write(patch, tmp_path / "unmutated.nc", "netcdf_cf")
         assert patch.attrs.get("closed_fiber_loop") is True
+
+
+class TestWriteRequiresHDF5Backend:
+    """Writing must refuse rather than emit a file DASCore cannot read."""
+
+    def test_write_raises_without_hdf5_engine(
+        self, random_patch, tmp_path, monkeypatch
+    ):
+        """No netCDF4/h5netcdf means no write, with an install hint."""
+        monkeypatch.setattr(
+            netcdf_core, "_HDF5_NETCDF_ENGINES", ("not_a_real_engine_module",)
+        )
+        with pytest.raises(MissingOptionalDependencyError, match="h5netcdf"):
+            dc.write(random_patch, tmp_path / "refused.nc", "netcdf_cf")
+        assert not (tmp_path / "refused.nc").exists()

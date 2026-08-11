@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 
 import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import get_exact_coord
@@ -23,6 +25,28 @@ from .utils import (
     is_netcdf4_file,
     parse_cf_version,
 )
+
+# netCDF engines that write the HDF5-based files the reader can open.
+_HDF5_NETCDF_ENGINES = ("netCDF4", "h5netcdf")
+
+
+def _require_hdf5_netcdf_backend() -> None:
+    """
+    Raise a helpful error when no HDF5-capable netCDF engine is installed.
+
+    Without one, xarray's ``to_netcdf`` silently falls back to its scipy
+    backend and writes NETCDF3 classic — a file this module's own
+    HDF5-based reader and format detection cannot open. Refusing to write
+    beats producing an archive DASCore cannot round trip.
+    """
+    if any(importlib.util.find_spec(name) for name in _HDF5_NETCDF_ENGINES):
+        return
+    msg = (
+        "Writing netcdf_cf requires an HDF5-capable netCDF engine; install "
+        "h5netcdf (or netCDF4), e.g. 'pip install h5netcdf'. Without one, "
+        "xarray would write NETCDF3 classic, which DASCore cannot read back."
+    )
+    raise MissingOptionalDependencyError(msg)
 
 
 def _open_xarray_dataset(resource: H5Reader):
@@ -136,6 +160,7 @@ class NetCDFCFV18(FiberIO):
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
+        _require_hdf5_netcdf_backend()
         array = patch_to_xarray(patch).rename("data")
         # netCDF has no boolean attribute type, so a bool attr aborts the
         # write. Inventory enrichment routinely sets one
