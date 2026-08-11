@@ -93,7 +93,7 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group):
+def _save_array(data, name, group, dataset_options=None):
     """Save an array to a group, handling datetime and string values."""
     data = np.asarray(data)
     is_dt = np.issubdtype(data.dtype, np.datetime64)
@@ -107,7 +107,11 @@ def _save_array(data, name, group):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    array_node = group.create_dataset(name, data=data)
+    # Compression/chunking need a non-empty, non-scalar dataset; anything else
+    # stays contiguous (a chunk shape may not contain zeros).
+    if not (dataset_options and data.size and data.shape):
+        dataset_options = {}
+    array_node = group.create_dataset(name, data=data, **dataset_options)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
     array_node.attrs["is_string"] = is_str
@@ -116,7 +120,7 @@ def _save_array(data, name, group):
     return array_node
 
 
-def _save_coords(patch, patch_group):
+def _save_coords(patch, patch_group, storage):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
@@ -124,7 +128,8 @@ def _save_coords(patch, patch_group):
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        array_node = _save_array(data, save_name, patch_group)
+        dataset_options = storage._dataset_options(dims, np.shape(data))
+        array_node = _save_array(data, save_name, patch_group, dataset_options)
         step = coord.step
         if step is not None:
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
@@ -137,7 +142,7 @@ def _save_coords(patch, patch_group):
         patch_group.attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, name):
+def _save_patch(patch, wave_group, name, storage):
     """Save the patch to disk."""
     if name in wave_group:
         # Replace the entire patch group so stale datasets/attrs can't survive.
@@ -147,10 +152,11 @@ def _save_patch(patch, wave_group, name):
     # in the separated-attrs form and must not be legacy-stripped on read.
     patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group)
+    _save_coords(patch, patch_group, storage)
     # add data
     if patch.data.shape:
-        _save_array(patch.data, "data", patch_group)
+        dataset_options = storage._dataset_options(patch.dims, patch.data.shape)
+        _save_array(patch.data, "data", patch_group, dataset_options)
 
 
 # --- Functions for reading
@@ -170,10 +176,8 @@ def _get_attrs(patch_group):
     return out
 
 
-def _read_array(table_array):
-    """Read an array into numpy."""
-    data = table_array[:]
-    attrs = table_array.attrs
+def _decode_array_values(data, attrs):
+    """Restore datetime/string dtypes stripped by _save_array on write."""
     if attrs.get("is_datetime64"):
         data = data.view("datetime64[ns]")
     if attrs.get("is_timedelta64"):
@@ -182,6 +186,11 @@ def _read_array(table_array):
         original_dtype = unbyte(attrs.get("original_string_dtype", ""))
         data = convert_bytes_to_strings(data, original_dtype)
     return data
+
+
+def _read_array(table_array):
+    """Read an array into numpy."""
+    return _decode_array_values(table_array[:], table_array.attrs)
 
 
 def _read_array_sample(table_array, index):
@@ -299,6 +308,7 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
         attr_info = attrs
     attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
     attrs = PatchAttrs.from_dict(attr_info)
+    data_node = patch_group["data"]
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
@@ -314,11 +324,12 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
             and ((i not in cmap) or (len(cmap[i]) == 1))
         }
         if sub_kwargs:
-            coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
+            coords, data = coords.select(array=data_node, **sub_kwargs)
+            data = _decode_array_values(np.asarray(data), data_node.attrs)
         else:
-            data = patch_group["data"][:]
+            data = _read_array(data_node)
     else:
-        data = patch_group["data"][:]
+        data = _read_array(data_node)
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 

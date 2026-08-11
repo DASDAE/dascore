@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolError, PatchError, UnitError
+from dascore.exceptions import (
+    InvalidSpoolError,
+    ParameterError,
+    PatchError,
+    UnitError,
+)
 from dascore.io.prodml.core import ProdMLV2_0, ProdMLV2_1
 from dascore.units import get_quantity_str
 from dascore.utils.misc import suppress_warnings, unbyte
@@ -71,12 +76,10 @@ class TestProdMLWriteDispatch:
             prodml_patch.io.write(path, "PRODML", file_version="2.1")
         assert dc.get_format(path) == ("PRODML", "2.1")
 
-    def test_write_accepts_forwarded_kwargs(self, prodml_patch, tmp_path):
-        """Format-specific keywords should follow the shared writer contract."""
-        path = dc.write(
-            prodml_patch, tmp_path / "kwargs.h5", "PRODML", unused_option=True
-        )
-        assert dc.get_format(path) == ("PRODML", "2.1")
+    def test_write_rejects_undeclared_kwargs(self, prodml_patch, tmp_path):
+        """Options the writer does not declare raise instead of no-op."""
+        with pytest.raises(ParameterError, match="unused_option"):
+            dc.write(prodml_patch, tmp_path / "kwargs.h5", "PRODML", unused_option=True)
 
 
 class TestProdMLWriteLayout:

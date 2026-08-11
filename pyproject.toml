@@ -163,6 +163,11 @@ NETCDF_CF__V1_8 = "dascore.io.netcdf.core:NetCDFCFV18"
 MSEED__V2 = "dascore.io.mseed.core:MSeedV2"
 MSEED__V3 = "dascore.io.mseed.core:MSeedV3"
 
+[project.entry-points."dascore.codec"]
+# Storage codecs. External packages may register additional codecs by pointing
+# an entry point in this group at a dascore.io.core.BaseCodec subclass.
+GZIP = "dascore.io.hdf5:Gzip"
+
 [project.entry-points."dascore.patch_namespace"]
 io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"
