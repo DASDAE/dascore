@@ -466,10 +466,11 @@ def _get_install_message(packages: str | Iterable[str]) -> str:
 
 def _is_missing_module(import_name: str, error: ImportError) -> bool:
     """Determine if an ImportError means import_name itself is not installed."""
-    # The import machinery always names the module it failed to find, so a
-    # nameless error (eg an installed package raising from its __init__) or one
-    # naming something else means the failure happened inside installed code.
-    if not (failed := error.name or ""):
+    # Only the import machinery proves a module is absent, and it names the
+    # module it failed to find. Any other error (eg an installed package
+    # raising from its __init__) means the failure happened inside code which
+    # is installed, as does one naming a different module.
+    if not isinstance(error, ModuleNotFoundError) or not (failed := error.name or ""):
         return False
     return import_name == failed or import_name.startswith(f"{failed}.")
 

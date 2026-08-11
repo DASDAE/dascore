@@ -461,15 +461,17 @@ class TestOptionalImport:
         assert "pip install protobuf" in msg
         assert "uv pip install protobuf" in msg
         assert exc_info.value.install_name == "protobuf"
+        assert exc_info.value.__cause__ is error
 
     @pytest.mark.parametrize(
         "error",
         [
             # An installed package which imports something missing.
             ModuleNotFoundError("No module named 'bob'", name="bob"),
-            # An installed package raising from its own __init__, which the
-            # import machinery leaves unnamed.
+            # An installed package raising from its own __init__, either
+            # unnamed or naming itself.
             ImportError("dascore.core requires the C extension"),
+            ImportError("dascore.core is broken", name="dascore.core"),
         ],
     )
     def test_broken_install_gives_no_install_advice(self, monkeypatch, error):

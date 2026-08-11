@@ -1631,6 +1631,7 @@ class TestMissingInstallName:
         """Arbitrary messages should not be mistaken for package names."""
         error = MissingOptionalDependencyError("Optional dependency foo is missing")
         assert _get_missing_install_name(error) == ""
+        assert _get_missing_install_name(MissingOptionalDependencyError()) == ""
         # Subclasses which skip the init still have an install name.
         assert MissingOptionalDependencyError.install_name is None
 
@@ -1641,6 +1642,10 @@ class TestMissingInstallName:
         msg = str(exc_info.value)
         assert "unknown (2 files)" in msg
         assert "pip install protobuf segyio" in msg
+        # Nothing should be recommended when no package was identified.
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            _handle_missing_optionals(0, {"": 2})
+        assert "pip install" not in str(exc_info.value)
 
 
 class TestIOCoreCoverageEdges:
