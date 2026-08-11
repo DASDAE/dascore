@@ -21,10 +21,28 @@ def get_test_file_paths():
     return out
 
 
+# Benchmarked one file at a time so a regression in a single reader is visible
+# rather than averaged away by the whole-registry benchmarks below. Chosen to
+# cover distinct reader strategies: record-framed protobuf, HDF5, SEG-Y, and a
+# memory-mapped binary.
+SINGLE_FILE_BENCHMARKS = (
+    "sintela_protobuf_1.pb",
+    "terra15_v6_test_file.hdf5",
+    "conoco_segy_1.sgy",
+    "sample_tdms_file_v4713.tdms",
+)
+
+
 @pytest.fixture(scope="session")
 def test_file_paths():
     """Get paths of test files."""
     return get_test_file_paths()
+
+
+@pytest.fixture(scope="session", params=SINGLE_FILE_BENCHMARKS)
+def single_file_path(request):
+    """Path to one registry file, parametrized for per-format benchmarks."""
+    return get_test_file_paths()[request.param]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -72,6 +90,24 @@ class TestIOBenchmarks:
         for path in test_file_paths.values():
             with suppress(DependencyError):
                 dc.read(path)[0]
+
+    @pytest.mark.benchmark
+    def test_scan_single_file(self, single_file_path):
+        """
+        Time one file's scan, to pair with the read below.
+
+        A scan reads headers and a read reads samples, so the two should be far
+        apart for any file whose samples dominate it. Comparing the pair is
+        what makes a reader that quietly started reading everything obvious.
+        """
+        with suppress(DependencyError):
+            dc.scan(single_file_path)
+
+    @pytest.mark.benchmark
+    def test_read_single_file(self, single_file_path):
+        """Time one file's read, as the counterpart to the scan above."""
+        with suppress(DependencyError):
+            dc.read(single_file_path)[0]
 
     @pytest.mark.benchmark
     def test_spool(self, test_file_paths):

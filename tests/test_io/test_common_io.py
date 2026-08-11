@@ -125,6 +125,30 @@ SKIP_DATA_FILES = {
 }
 
 
+# A scan's cost should track a file's headers, not its samples. Only files
+# above this size are held to that: in a small file the fixed metadata cost
+# can legitimately be most of the bytes. Every format currently reads under
+# 15% of a file this large; the failure guarded against reads 100%.
+_SCAN_COST_MIN_FILE_SIZE = 1_000_000
+_SCAN_COST_MAX_FRACTION = 0.25
+
+
+def _bytes_read_by_process() -> int:
+    """
+    Return the bytes this process has pulled through read syscalls.
+
+    Reported by the kernel, so it covers reads inside C extensions such as
+    h5py and protobuf, where format readers do most of their I/O. Page-cache
+    hits still count, so the number does not depend on how warm the file is.
+    Raises OSError where /proc is unavailable.
+    """
+    with open("/proc/self/io") as fi:
+        for line in fi:
+            if line.startswith("rchar:"):
+                return int(line.split()[1])
+    raise OSError("rchar missing from /proc/self/io")
+
+
 def _scan_summary(scan_result):
     """Normalize scan output to the patch summary view."""
     return scan_result.summary if isinstance(scan_result, dc.Patch) else scan_result
@@ -401,6 +425,41 @@ class TestScan:
         for summary in summary_list:
             assert isinstance(summary, dc.PatchSummary)
             assert str(summary.source_path) == str(data_file_path)
+
+    def test_scan_does_not_read_whole_file(self, io_path_tuple):
+        """
+        Scanning must not pull a file's sample data off disk.
+
+        A reader that walks every sample to build a summary still returns the
+        right answer, which makes this easy to regress and expensive to live
+        with: indexing a directory then costs a full read of every file in it.
+
+        Measured in bytes rather than memory, because a reader can stream a
+        file without holding it, and because sample data lands in C-extension
+        buffers that Python's allocation tracing cannot see.
+        """
+        io, path = io_path_tuple
+        size = Path(path).stat().st_size
+        if size < _SCAN_COST_MIN_FILE_SIZE:
+            pytest.skip(f"{Path(path).name} too small to hold to a scan budget")
+        # Probed on its own: a reader that raises OSError (h5py does so
+        # routinely) must fail this test, not silently turn it into a skip.
+        try:
+            _bytes_read_by_process()
+        except OSError:
+            pytest.skip("no /proc/self/io on this platform")
+        # Scan once first so lazy imports and registry lookups are not
+        # counted, then measure the steady-state cost.
+        with skip_missing():
+            io.scan(path)
+        before = _bytes_read_by_process()
+        with skip_missing():
+            io.scan(path)
+        read_bytes = _bytes_read_by_process() - before
+        assert read_bytes < size * _SCAN_COST_MAX_FRACTION, (
+            f"{type(io).__name__}.scan read {read_bytes:,} bytes of a "
+            f"{size:,} byte file; a scan should read headers, not samples."
+        )
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
         """Direct FiberIO scans should not attach source metadata."""
