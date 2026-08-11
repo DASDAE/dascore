@@ -126,5 +126,8 @@ def _get_v2_coords_and_attrs(resource):
 def _get_patches(resource, data_name, coords, attrs_dict, time=None, distance=None):
     """Read patches from an HDAS file, optionally trimming coords."""
     return build_patches(
-        coords, resource[data_name], attrs_dict, time=time, distance=distance
+        coords,
+        resource[data_name],
+        attrs_dict,
+        selection={"time": time, "distance": distance},
     )

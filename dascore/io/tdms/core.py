@@ -70,5 +70,7 @@ class TDMSFormatterV4713(FiberIO):
         data, _channel_length, attrs_full = _get_data(resource, lead_in_length=28)
         attrs = _get_default_attrs(resource, attrs_full)
         coords = dc.core.get_coord_manager(coords=attrs_full["coords"])
-        patches = build_patches(coords, data, attrs, time=time, distance=distance)
+        patches = build_patches(
+            coords, data, attrs, selection={"time": time, "distance": distance}
+        )
         return dc.spool(patches)

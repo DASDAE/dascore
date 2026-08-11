@@ -107,7 +107,9 @@ def _get_attr(resource, attr_cls, extras=None):
 def _build_patches(attrs_dict, coords, data, time, distance, attr_cls):
     """Assemble patches from attrs, coords, and a data node."""
     attrs = _validate_attrs(attrs_dict, attr_cls)
-    return build_patches(coords, data, attrs, time=time, distance=distance)
+    return build_patches(
+        coords, data, attrs, selection={"time": time, "distance": distance}
+    )
 
 
 def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):

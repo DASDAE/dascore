@@ -137,6 +137,5 @@ def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
         data,
         _get_attrs_dict(file_attrs),
         attr_cls=attr_cls,
-        time=time,
-        distance=distance,
+        selection={"time": time, "distance": distance},
     )

@@ -92,6 +92,5 @@ def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
         resource["DAS"],
         _get_attrs_dict(resource),
         attr_cls=attr_cls,
-        time=time,
-        distance=distance,
+        selection={"time": time, "distance": distance},
     )

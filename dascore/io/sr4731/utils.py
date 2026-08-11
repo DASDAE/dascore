@@ -333,7 +333,11 @@ def _get_patches(
     attrs = _get_attr_dict(parsed, extras)
     data = parsed["data_points"]["samples"][np.newaxis, :]
     return build_patches(
-        cm, data, attrs, attr_cls=attr_class, time=time, distance=distance
+        cm,
+        data,
+        attrs,
+        attr_cls=attr_class,
+        selection={"time": time, "distance": distance},
     )
 
 

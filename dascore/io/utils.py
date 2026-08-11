@@ -1,8 +1,14 @@
 """Shared utilities for IO implementations."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
 
 import dascore as dc
+from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.exceptions import CoordError
 
@@ -16,14 +22,20 @@ _MAX_SEGMENT_FRACTION = 0.1
 _MIN_SEGMENT_GUARD_SIZE = 1_000
 
 
-def build_patches(coords, data, attrs=None, attr_cls=None, **select_kwargs):
+def build_patches(
+    coords: CoordManager,
+    data,
+    attrs=None,
+    *,
+    attr_cls: type[dc.PatchAttrs] | None = None,
+    selection: Mapping[str, Any] | None = None,
+) -> list[dc.Patch]:
     """
     Trim a data source to a selection and build the resulting patch list.
 
     Most single-patch readers share this tail: apply the caller's
     dimension selections, drop the patch if nothing is left, then attach
-    attrs. Selections which are None are ignored so an untrimmed read
-    never touches the data source.
+    attrs.
 
     Parameters
     ----------
@@ -34,22 +46,40 @@ def build_patches(coords, data, attrs=None, attr_cls=None, **select_kwargs):
     attrs
         The patch attributes, or anything convertible to them.
     attr_cls
-        The PatchAttrs subclass used by the format, if any.
-    **select_kwargs
-        Dimension selections, eg time=(t1, t2).
+        The PatchAttrs subclass used by the format. Defaults to PatchAttrs.
+    selection
+        A mapping of {dimension_name: selection}, eg {"time": (t1, t2)}.
+        Entries whose value is None are dropped, so a read with nothing
+        to trim never touches the data source. Selections are passed to
+        `CoordManager.select`, which ignores names it doesn't know.
 
     Returns
     -------
     A list with one patch, or an empty list if the selection removed
     all the data.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.io.utils import build_patches
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> patches = build_patches(patch.coords, patch.data, patch.attrs)
+    >>> assert len(patches) == 1
     """
-    selection = {i: v for i, v in select_kwargs.items() if v is not None}
-    if selection:
-        coords, data = coords.select(array=data, **selection)
+    # A def-time default would need dc.PatchAttrs while dascore is still
+    # importing this module, so the sentinel is resolved here instead.
+    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
+    # Validate attrs before the selection can short-circuit, so bad metadata
+    # still raises on a read which happens to select nothing.
+    patch_attrs = attr_cls.from_dict(attrs)
+    trim = {i: v for i, v in (selection or {}).items() if v is not None}
+    if trim:
+        coords, data = coords.select(array=data, **trim)
     if not data.size:
         return []
-    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
-    return [dc.Patch(data=data[:], coords=coords, attrs=attr_cls.from_dict(attrs))]
+    # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
+    return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:

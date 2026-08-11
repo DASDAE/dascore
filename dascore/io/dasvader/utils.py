@@ -205,4 +205,6 @@ def _read_dasvader(h5, distance=None, time=None):
         if "atrib" in ref_names
         else {}
     )
-    return build_patches(cm, data, attrs, time=time, distance=distance)
+    return build_patches(
+        cm, data, attrs, selection={"time": time, "distance": distance}
+    )

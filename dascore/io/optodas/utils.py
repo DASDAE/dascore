@@ -85,5 +85,9 @@ def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the OptoDAS values into a patch."""
     attrs, coords = _get_opto_das_attrs(fi)
     return build_patches(
-        coords, fi["data"], attrs, attr_cls=attr_cls, time=time, distance=distance
+        coords,
+        fi["data"],
+        attrs,
+        attr_cls=attr_cls,
+        selection={"time": time, "distance": distance},
     )

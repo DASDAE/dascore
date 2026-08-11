@@ -84,8 +84,7 @@ class NeubrexRFSV1(FiberIO):
             data,
             attr_dict,
             attr_cls=NeubrexRFSPatchAttrs,
-            time=time,
-            distance=distance,
+            selection={"time": time, "distance": distance},
         )
         return dc.spool(patches)
 
@@ -142,8 +141,7 @@ class NeubrexDASV1(FiberIO):
             data,
             attr_dict,
             attr_cls=NeubrexDASPatchAttrs,
-            time=time,
-            distance=distance,
+            selection={"time": time, "distance": distance},
         )
         return dc.spool(patches)
 

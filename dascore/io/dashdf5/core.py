@@ -64,7 +64,6 @@ class DASHDF5(FiberIO):
             _get_cf_coords(resource),
             resource["das"],
             _get_cf_attrs(resource),
-            time=time,
-            channel=channel,
+            selection={"time": time, "channel": channel},
         )
         return dc.spool(patches)

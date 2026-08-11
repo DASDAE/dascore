@@ -65,8 +65,7 @@ class GDR_V1(FiberIO):  # noqa
             data,
             attr_dict,
             attr_cls=GDRPatchAttrs,
-            time=time,
-            distance=distance,
+            selection={"time": time, "distance": distance},
         )
         return dc.spool(patches)
 

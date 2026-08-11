@@ -174,16 +174,29 @@ In implementation code, the simplest pattern is usually:
 2. Build the exact `CoordManager` you would use for `read()`.
 3. Return one payload built by [`make_scan_payload`](`dascore.io.make_scan_payload`), which fills `dims` and `shape` from the coords.
 
-Most single-patch `read()` implementations share a tail as well: apply the caller's dimension selections, drop the patch when the selection empties it, then attach attrs. [`build_patches`](`dascore.io.build_patches`) does exactly that, so a reader usually ends with:
-
-```python
-return dc.spool(build_patches(coords, data_node, attrs, attr_cls=JinglePatchAttrs, time=time, distance=distance))
-```
-
 If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
 implementation will normalize it into the same structured payload shape. Format
 implementations should still provide a custom `scan()` whenever they can avoid
 loading the full data array.
+
+
+## Building Patches in `read`
+
+Most single-patch `read()` implementations share a tail: apply the caller's dimension selections, drop the patch when the selection empties it, then attach attrs. [`build_patches`](`dascore.io.utils.build_patches`) does exactly that, so a reader usually ends with:
+
+```python
+return dc.spool(
+    build_patches(
+        coords,
+        data_node,
+        attrs,
+        attr_cls=JingleV1PatchAttrs,
+        selection={"time": time, "distance": distance},
+    )
+)
+```
+
+where `attrs` is a dict (or `PatchAttrs`) and `attr_cls` is the format's `PatchAttrs` subclass, if it has one. Selections whose value is `None` are dropped, so a read with nothing to trim never touches the data source.
 
 
 ## Support for Streams/Buffers

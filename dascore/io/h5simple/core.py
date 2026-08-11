@@ -43,7 +43,7 @@ class H5Simple(FiberIO):
             Passed to filtering coordinates.
         """
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
-        return dc.spool(build_patches(cm, data, attrs, **kwargs))
+        return dc.spool(build_patches(cm, data, attrs, selection=kwargs))
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""

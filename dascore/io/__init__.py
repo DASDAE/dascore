@@ -13,7 +13,6 @@ from dascore.io.core import (
     scan_to_df,
     write,
 )
-from dascore.io.utils import build_patches
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.hdf5 import (
     H5Reader,
