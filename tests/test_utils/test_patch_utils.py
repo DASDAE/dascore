@@ -869,7 +869,7 @@ class TestGetPatchName:
     def test_mixed_path_sources_use_metadata(self, random_spool):
         """Mixed real and memory paths consistently use metadata names."""
         df = random_spool.get_contents().iloc[:2].copy()
-        df["source_path"] = ["/tmp/real_file.h5", "memory://registry/patch"]
+        df["source_path"] = ["/data/real_file.h5", "memory://registry/patch"]
         names = get_patch_names(df)
         assert names.iloc[0] != "real_file"
         assert names.iloc[1] != "patch"

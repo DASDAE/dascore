@@ -10,6 +10,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
@@ -296,10 +297,10 @@ class TestStorageProvenance:
         """A read patch carries no path, format, or version attr."""
         patch = dc.read(binary_xml_directory)[0]
         names = set(dict(patch.attrs))
-        assert not names & {"path", "file_format", "file_version"}
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
     def test_scan_omits_provenance(self, binary_xml_directory):
         """Neither does a scanned summary's attrs."""
         summary = dc.scan(binary_xml_directory)[0]
         names = set(dict(summary.attrs))
-        assert not names & {"path", "file_format", "file_version"}
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)

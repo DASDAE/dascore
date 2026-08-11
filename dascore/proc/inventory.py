@@ -18,7 +18,12 @@ from dascore.core.inventory import (
     _annotation_kind,
     interval_masks,
 )
-from dascore.exceptions import InvalidInventoryError, ParameterError, PatchError
+from dascore.exceptions import (
+    InvalidInventoryError,
+    ParameterError,
+    PatchError,
+    UnresolvedPatchError,
+)
 from dascore.proc.coords import update_coords
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
@@ -76,7 +81,7 @@ def _get_data_source_id(patch, data_source_id) -> str:
             "The patch has no data_source_id, so it names no inventory entry. "
             "Set one on the patch or pass data_source_id to enrich."
         )
-        raise PatchError(msg)
+        raise UnresolvedPatchError(msg)
     return out
 
 
@@ -116,9 +121,15 @@ def _resolve_context(inventory, source_id, times) -> ResolvedContext:
     boundary has two answers to every question enrich asks.
     """
     first, last = times
-    context = inventory.resolve(source_id, time=first)
+    # An id the inventory cannot resolve to exactly one entry says this
+    # inventory does not describe this patch, which a spool may have a
+    # policy about; being described twice, below, is not the same thing.
+    try:
+        context = inventory.resolve(source_id, time=first)
+        other = context if first == last else inventory.resolve(source_id, time=last)
+    except InvalidInventoryError as error:
+        raise UnresolvedPatchError(str(error)) from error
     if first != last:
-        other = inventory.resolve(source_id, time=last)
         if other.acquisition != context.acquisition:
             what = "acquisition"
         elif other.optical_path != context.optical_path:
@@ -327,12 +338,15 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
         raise PatchError(msg)
     first = resolved[0]
     for name, dim, distances in resolved[1:]:
-        if distances.shape != first[2].shape:
+        # Sharing a dimension is what makes the comparison below meaningful:
+        # two axes on different dimensions describe different things, and
+        # projecting the tracks onto either would be a guess. It also makes
+        # the two arrays the same length, since each is its dimension's.
+        if dim != first[1]:
             msg = (
-                f"The patch's {first[0]!r} and {name!r} coordinates have "
-                f"different lengths ({first[2].size} on {first[1]!r} and "
-                f"{distances.size} on {dim!r}), so at least one of them is "
-                f"not the channel axis of {acquisition.code!r}."
+                f"The patch's {first[0]!r} and {name!r} coordinates belong to "
+                f"different dimensions ({first[1]!r} and {dim!r}), so which "
+                f"one is the channel axis of {acquisition.code!r} is ambiguous."
             )
             raise PatchError(msg)
         if not np.allclose(
@@ -365,7 +379,9 @@ def _fill_from_intervals(distances, intervals, values, kind):
     """
     fill = {"boolean": False, "numeric": np.nan}.get(kind, None)
     out = np.full(len(distances), fill, dtype=object)
-    for value, covered in zip(values, interval_masks(distances, intervals)):
+    for value, covered in zip(
+        values, interval_masks(distances, intervals), strict=True
+    ):
         if not np.any(covered):
             continue
         if isinstance(value, tuple | list):

@@ -10,6 +10,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.io.febus import FebusBSLH5V1
 from dascore.io.febus.g1utils import _get_bsl_attrs
 from dascore.utils.downloader import fetch
@@ -81,7 +82,7 @@ class TestFebusBSL:
     def test_read_attrs_omit_storage_provenance(self, bsl_patch):
         """Where the bytes live belongs to the spool, not to patch attrs."""
         names = set(dict(bsl_patch.attrs))
-        assert not names & {"path", "file_format", "file_version"}
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
     def test_distance_range(self, bsl_patch):
         """Distance should span 50-149 m."""

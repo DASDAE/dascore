@@ -43,6 +43,17 @@ class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
 
 
+class UnresolvedPatchError(PatchError):
+    """
+    Raised when an inventory does not describe a patch.
+
+    The patch names no inventory entry, or names one the inventory does
+    not resolve to exactly one of. A patch the inventory describes *twice*
+    (one straddling an epoch boundary) is a different condition and raises
+    a plain `PatchError`: it needs subdividing, not a missing-data policy.
+    """
+
+
 class MissingPatchError(IndexError, PatchError):
     """
     Raised when no patch can be produced for a spool entry.

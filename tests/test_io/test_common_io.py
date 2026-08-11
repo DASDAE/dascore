@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS
+from dascore.constants import INVENTORY_ATTRS, STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import CoordError, UnknownFiberFormatError
 from dascore.io import BinaryReader
 from dascore.io.ai4eps import AI4EPSV1
@@ -718,7 +718,7 @@ class TestAttrVocabulary:
             return
         for patch in _cached_read(data_file_path):
             names = set(dict(patch.attrs))
-            assert not names & {"path", "file_format", "file_version"}
+            assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
 
 class TestIntegration:

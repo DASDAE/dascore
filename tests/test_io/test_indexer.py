@@ -313,8 +313,11 @@ class TestGetContents:
 
     def test_filter_tag_exact(self, diverse_df, diverse_indexer):
         """Ensure contents can be filtered on an attr."""
-        exact_name = diverse_df["tag"].unique()[0]
+        # empty strings mean "attr missing" and are not queryable (spec),
+        # so an empty result would satisfy the check below for free.
+        exact_name = next(x for x in diverse_df["tag"].unique() if x)
         new_df = diverse_indexer(tag=exact_name)
+        assert len(new_df)
         assert (new_df["tag"] == exact_name).all()
 
     def test_filter_isin(self, diverse_df, diverse_indexer):

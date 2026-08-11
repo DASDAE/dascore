@@ -282,9 +282,9 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "distance_min",
         "distance_max",
         "distance_step",
-        # flat-relation (spool-facing) names
-        "source_path",
-        "source_format",
+        # flat-relation (spool-facing) names; source_path and source_format
+        # keep their storage-table spelling out in the flat relation, so the
+        # entries above already reserve them.
         "source_version",
         # the keyword names the row is loaded with: an attr called one of
         # these would be splatted into dc.read alongside the row's own

@@ -160,6 +160,20 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("data_source_id", "dims", "data_type", "data_category")
 
+# Storage provenance: where a patch's bytes live rather than where its
+# signal came from. The spool owns these and no reader may put them in
+# patch attrs, since a patch merged from three files has no single answer.
+# The pre-rename spellings are listed too: a patch carrying one of those is
+# making the same claim under the old name.
+STORAGE_PROVENANCE_ATTRS = (
+    "source_path",
+    "source_format",
+    "source_version",
+    "path",
+    "file_format",
+    "file_version",
+)
+
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]
 

@@ -1067,7 +1067,7 @@ class OpticalPath(TimeRangedModel):
             raise InvalidInventoryError(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
         out = np.full((len(dist), dims.pop()), np.nan)
         masks = interval_masks(dist, [x.interval for x in self.geometry])
-        for segment, mask in zip(self.geometry, masks):
+        for segment, mask in zip(self.geometry, masks, strict=True):
             if not np.any(mask):
                 continue
             # interpolate() reports its own coverage, which excludes the

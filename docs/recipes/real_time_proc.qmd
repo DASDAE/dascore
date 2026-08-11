@@ -109,7 +109,9 @@ while True:
             time=window, step=step, engine="numpy").mean()
 
         # Save results 
-        file_name = sp.get_contents()["source_path"][patch_num]
+        # Just the name: source_path is absolute, and os.path.join would
+        # discard output_data_dir and overwrite the input file.
+        file_name = os.path.basename(sp.get_contents()["source_path"][patch_num])
         output_path = os.path.join(output_data_dir, file_name)
         rolling_mean_patch.io.write(output_path, "dasdae")
 

@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.io.febus.core import FebusG1CSV1, FebusMTXH5V1
 from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
@@ -179,7 +180,7 @@ class TestG1MTXH5:
         """Where the bytes live belongs to the spool, not to patch attrs."""
         patch = dc.read(mtx_h5_path)[0]
         names = set(dict(patch.attrs))
-        assert not names & {"path", "file_format", "file_version"}
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
     def test_scan_matches_read_attrs(self, mtx_h5_path):
         """Scan and read should return matching coord summaries."""

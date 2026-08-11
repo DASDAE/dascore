@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import warnings
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     ParameterError,
     PatchError,
+    UnresolvedPatchError,
 )
 
 
@@ -92,7 +94,7 @@ class TestResolution:
 
     def test_unknown_id_raises(self, patch, inventory):
         """An id the inventory does not contain resolves to nothing."""
-        with pytest.raises(InvalidInventoryError, match="resolves to 0"):
+        with pytest.raises(UnresolvedPatchError, match="resolves to 0"):
             patch.update_attrs(data_source_id="XX.R2D1..RAW").enrich(inventory)
 
     def test_time_with_time_axis_raises(self, patch, inventory):
@@ -574,6 +576,77 @@ class TestRemoveInventory:
         assert spool.remove_inventory()[0].equals(patch)
 
 
+class TestOnUnresolved:
+    """What a spool does with a patch its inventory does not describe."""
+
+    @pytest.fixture
+    def mixed(self, patch):
+        """A spool of one patch the example inventory knows and one it does not."""
+        return dc.spool([patch, dc.get_example_patch("random_das")])
+
+    def test_warns_and_leaves_the_patch(self, mixed, inventory):
+        """Enriching decides metadata, so the patch itself still comes out."""
+        with pytest.warns(UserWarning, match="does not describe the patch"):
+            out = list(mixed.enrich(inventory))
+        assert len(out) == len(mixed)
+        assert out[0].attrs.gauge_length == 10.0
+        assert "gauge_length" not in dict(out[1].attrs)
+
+    def test_ignore_is_silent(self, mixed, inventory):
+        """The same, without saying so."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = list(mixed.enrich(inventory, on_unresolved="ignore"))
+        assert len(out) == len(mixed)
+
+    def test_raise_fails(self, mixed, inventory):
+        """A spool which must be fully described can say so."""
+        with pytest.raises(UnresolvedPatchError, match="no data_source_id"):
+            list(mixed.enrich(inventory, on_unresolved="raise"))
+
+    def test_unknown_id_is_unresolved(self, patch, inventory):
+        """Naming an entry the inventory lacks is not being described either."""
+        stranger = patch.update_attrs(data_source_id="XX.R2D1..RAW")
+        with pytest.warns(UserWarning, match="does not describe the patch"):
+            out = dc.spool(stranger).enrich(inventory)[0]
+        assert "gauge_length" not in dict(out.attrs)
+
+    def test_straddling_patch_still_raises(self, patch, inventory):
+        """Described twice is not the same as not described; it needs splitting."""
+        array = inventory.networks[0].fiber_arrays[0]
+        acquisition = array.acquisitions[0]
+        times = patch.get_coord("time").values
+        middle = times[len(times) // 2]
+        split = inventory.replace(
+            array,
+            array.new(
+                acquisitions=(
+                    acquisition.new(end_time=middle),
+                    acquisition.new(start_time=middle, gauge_length=20.0),
+                )
+            ),
+        )
+        spool = dc.spool(patch).enrich(split, on_unresolved="ignore")
+        with pytest.raises(PatchError, match="spans a change of acquisition"):
+            spool[0]
+
+    def test_bad_policy_raises(self, patch, inventory):
+        """An unknown policy names no behavior."""
+        with pytest.raises(ParameterError, match="on_unresolved must be one of"):
+            dc.spool(patch).enrich(inventory, on_unresolved="nope")
+
+    def test_policy_is_part_of_the_spool(self, patch, inventory):
+        """Two policies mean two different behaviors on extraction."""
+        plain = dc.spool(patch)
+        assert plain.enrich(inventory) != plain.enrich(inventory, on_unresolved="raise")
+        assert plain.enrich(inventory) == plain.enrich(inventory, on_unresolved="warn")
+
+    def test_policy_survives_a_union(self, patch, inventory):
+        """The policy is part of the enrichment, so it carries with it."""
+        enriched = dc.spool(patch).enrich(inventory, on_unresolved="raise")
+        assert (enriched + dc.spool(patch))._on_unresolved == "raise"
+
+
 class TestInventoryQueryError:
     """An attached inventory changes what an unknown query name means."""
 
@@ -919,7 +992,7 @@ class TestSecondReviewFindings:
         mislabeled = patch.update_coords(
             channel=("time", np.arange(len(patch.get_coord("time"))))
         )
-        with pytest.raises(PatchError, match="different lengths"):
+        with pytest.raises(PatchError, match="belong to different dimensions"):
             mislabeled.enrich(both_axes, attrs=False, coords=("zone",))
 
     def test_unreadable_axis_leaves_the_others(self, patch, inventory):
