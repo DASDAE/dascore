@@ -815,10 +815,11 @@ class Spool(BaseSpool):
             than not at all, and raises regardless: it needs subdividing.
         **kwargs
             Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
-            each extracted patch (`attrs`, `coords`, `conflicts`, ...). The
-            names are checked here; the values each patch's own enrichment
-            checks as it is extracted. Calling `enrich` again replaces
-            these rather than adding to them.
+            each extracted patch, which documents them; the names accepted
+            here are read from its signature, so the two cannot disagree.
+            Only the names are checked at this point — the values each
+            patch's own enrichment checks as it is extracted. Calling
+            `enrich` again replaces these rather than adding to them.
 
         Examples
         --------

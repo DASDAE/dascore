@@ -45,7 +45,7 @@ _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 # as-acquired value.
 _COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
-OnMissing = Literal["raise", "nan", "skip"]
+OnMissing = Literal["raise", "null", "skip"]
 _VALID_ON_MISSING = get_args(OnMissing)
 
 # Tracks whose fields enrich can project, and where their intervals live.
@@ -60,7 +60,7 @@ _TRACK_FIELD_UNITS = {
 on_missing_description = """
 on_missing
     What to do when an explicitly requested name is one the inventory does
-    not define: "raise" (the default), "nan" to fill the dtype-appropriate
+    not define: "raise" (the default), "null" to fill the dtype-appropriate
     missing marker, or "skip" to leave it off. Blanket requests copy what is
     applicable and never trigger it, and per-channel coverage gaps are always
     missing values rather than errors.
@@ -200,7 +200,7 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
                 f"{context.acquisition.code!r}; use on_missing to allow it."
             )
             raise PatchError(msg)
-        elif on_missing == "nan":
+        elif on_missing == "null":
             out[name] = _missing_marker(context, name)
     return out
 

@@ -176,7 +176,7 @@ class TestAttrs:
     def test_missing_named_attr_nan(self, patch, inventory):
         """It can instead be filled with the missing marker."""
         out = patch.enrich(
-            inventory, attrs=("pulse_rate",), coords=False, on_missing="nan"
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="null"
         )
         assert np.isnan(out.attrs.pulse_rate)
 
@@ -390,7 +390,7 @@ class TestCoords:
 
     def test_missing_coord_nan(self, patch, inventory):
         """It can instead be filled with the missing marker."""
-        out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="nan")
+        out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="null")
         assert np.isnan(out.get_coord("nope").values).all()
 
     def test_missing_coord_skip(self, patch, inventory):
@@ -914,13 +914,13 @@ class TestSecondReviewFindings:
     def test_nan_marker_round_trips(self, patch, inventory):
         """Re-enriching a nan-filled attr is a refresh, not a conflict."""
         once = patch.enrich(
-            inventory, attrs=("pulse_rate",), coords=False, on_missing="nan"
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="null"
         )
         twice = once.enrich(
             inventory,
             attrs=("pulse_rate",),
             coords=False,
-            on_missing="nan",
+            on_missing="null",
             conflicts="raise",
         )
         assert np.isnan(twice.attrs.pulse_rate)
@@ -928,7 +928,7 @@ class TestSecondReviewFindings:
     def test_missing_marker_matches_the_field(self, patch, inventory):
         """A string field's missing marker is not a float."""
         out = patch.enrich(
-            inventory, attrs=("firmware_version",), coords=False, on_missing="nan"
+            inventory, attrs=("firmware_version",), coords=False, on_missing="null"
         )
         assert out.attrs.firmware_version is None
 
@@ -976,7 +976,7 @@ class TestSecondReviewFindings:
     def test_missing_marker_for_a_non_scalar_field(self, patch, inventory):
         """A field which is neither text nor number has no numeric marker."""
         out = patch.enrich(
-            inventory, attrs=("data_units",), coords=False, on_missing="nan"
+            inventory, attrs=("data_units",), coords=False, on_missing="null"
         )
         assert out.attrs.data_units is None
 
