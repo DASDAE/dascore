@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socketserver
 import threading
 import time
 from collections.abc import Callable
@@ -242,6 +243,32 @@ def ensure_http_fetch_file(http_test_data_root):
     return _ensure
 
 
+class _NoReverseDNSMixin:
+    """Bind without the reverse DNS lookup ``HTTPServer`` normally performs.
+
+    ``HTTPServer.server_bind`` calls ``socket.getfqdn(host)`` purely to fill in
+    ``server_name``. On a macOS CI runner that lookup for 127.0.0.1 blocks for
+    tens of seconds, which times out session fixture setup before any request
+    is served. Nothing here reads ``server_name``, so bind and fill it in
+    directly.
+    """
+
+    def server_bind(self):
+        """Bind the socket, then set server_name/port without a name lookup."""
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
+class _HTTPServer(_NoReverseDNSMixin, HTTPServer):
+    """Single-threaded test server that skips the reverse DNS lookup."""
+
+
+class _ThreadingHTTPServer(_NoReverseDNSMixin, ThreadingHTTPServer):
+    """Threading test server that skips the reverse DNS lookup."""
+
+
 @pytest.fixture(scope="session")
 def http_das_path(http_test_data_root, ensure_http_fetch_file):
     """Return a UPath pointing at a localhost HTTP view of DAS test data."""
@@ -249,7 +276,7 @@ def http_das_path(http_test_data_root, ensure_http_fetch_file):
         _SilentSimpleHTTPRequestHandler,
         directory=str(http_test_data_root),
     )
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = _ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -298,7 +325,7 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
         _RegressionHTTPRequestHandler,
         directory=str(http_regression_data_root),
     )
-    server = HTTPServer(("127.0.0.1", 0), handler)
+    server = _HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     probe_path = "example_dasdae_event_1.h5"
@@ -322,7 +349,7 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
 def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
     """Return a UPath pointing at a localhost HTTP server with range support."""
     handler = partial(_RangeHTTPRequestHandler, directory=str(http_test_data_root))
-    server = HTTPServer(("127.0.0.1", 0), handler)
+    server = _HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
