@@ -13,7 +13,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 import dascore as dc
-from dascore.constants import PatchType
+from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
 from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
@@ -108,8 +108,8 @@ def normalize_range_forms(value):
 def resolve_selector_namespaces(
     known_attrs: Collection[str],
     known_coords: Collection[str],
-    _attrs: Mapping | None = None,
-    _coords: Mapping | None = None,
+    _attrs: namespace_select_type = None,
+    _coords: namespace_select_type = None,
     kwargs: Mapping | None = None,
 ) -> tuple[dict, dict]:
     """
