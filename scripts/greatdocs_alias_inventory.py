@@ -94,6 +94,7 @@ def _resolve(name: str):
 
 
 def main() -> None:
+    """Append alias entries to the interlink inventory."""
     _ensure_dascore()
     import dascore as dc
 

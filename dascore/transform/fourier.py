@@ -266,8 +266,8 @@ def dft(
 
     See Also
     --------
-    - [idft](`dascore.transform.fourier.idft`)
-    - [stft](`dascore.transform.fourier.stft`)
+    dascore.transform.fourier.idft
+    dascore.transform.fourier.stft
 
     Examples
     --------
@@ -440,8 +440,8 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
 
     See Also
     --------
-    - [dft](`dascore.transform.fourier.dft`)
-    - [istft](`dascore.transform.fourier.istft`)
+    dascore.transform.fourier.dft
+    dascore.transform.fourier.istft
 
     Examples
     --------

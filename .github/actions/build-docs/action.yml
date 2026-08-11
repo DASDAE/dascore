@@ -1,13 +1,31 @@
 name: "Build DASCore Docs"
-description: "Builds DASCore's Documentation."
+description: "Builds DASCore's Documentation with great-docs."
 
 runs:
   using: "composite"
   steps:
 
-    - uses: ./.github/actions/prep_doc_build
+    - name: Install quarto
+      uses: quarto-dev/quarto-actions/setup@8a96df13519ee81fd526f2dfca5962811136661b  # v2.2.0
+      with:
+        # 1.3.x dies with "RangeError: Invalid string length" once the
+        # generated API sidebar gets large enough; see
+        # quarto-dev/quarto-cli#10504.
+        version: 1.8.27
 
-    - name: build quarto project
-      shell: bash
+    - name: print quarto version
+      shell: bash -l {0}
       run: |
-        quarto render docs
+        quarto --version
+
+    - name: install great-docs
+      shell: bash -l {0}
+      run: |
+        # >=0.16 renders class signatures with their parameters and points
+        # See Also links at the pages the reference actually generates.
+        python -m pip install "great-docs>=0.16"
+
+    - name: build documentation
+      shell: bash -l {0}
+      run: |
+        great-docs build

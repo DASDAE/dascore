@@ -525,10 +525,10 @@ def line_mute(
 
     See Also
     --------
-    - [`Patch.select`](`dascore.Patch.select`)
-    - [`Patch.taper_range`](`dascore.Patch.taper_range`)
-    - [`Patch.gaussian_filter`](`dascore.proc.filter.gaussian_filter`)
-    - [`Patch.slope_mute`](`dascore.Patch.slope_mute`)
+    dascore.proc.coords.select
+    dascore.proc.taper.taper_range
+    dascore.proc.filter.gaussian_filter
+    dascore.proc.mute.slope_mute
     """
     # Get geometry object to set up the problem.
     geo = _get_mute_geometry(patch, kwargs, relative)
@@ -610,8 +610,8 @@ def slope_mute(
 
     See Also
     --------
-    - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
-    - [`Patch.line_mute`](`dascore.proc.mute.line_mute`)
+    dascore.proc.filter.slope_filter
+    dascore.proc.mute.line_mute
     """
     # Convert slopes to array and validate
     slopes_array = np.asarray(slopes)

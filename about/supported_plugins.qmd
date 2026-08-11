@@ -1,5 +1,6 @@
 ---
 title: Supported Third-Party Plugins
+description: "Packages that add namespaces to DASCore's Patch and Spool."
 execute:
     warning: false
 ---

@@ -602,8 +602,8 @@ def get_patch_names(
 
     See Also
     --------
-    - [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`)
-    - [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`)
+    dascore.core.patch.Patch.get_patch_name
+    dascore.core.spool.BaseSpool.get_patch_names
 
     Examples
     --------

@@ -73,7 +73,6 @@ extras = [
 ]
 
 docs = [
-    "jinja2",
     "ipywidgets",
     "tabulate",
     # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
@@ -247,6 +246,9 @@ convention = "numpy"
 # F401: a notebook often imports a name only used inside an IPython magic,
 # which ruff cannot see, and its autofix would delete the import.
 "*.ipynb" = ["D103", "F401"]
+# The doc-build hooks report progress on stdout (T201), and import dascore
+# only after re-execing with the environment it is installed in (PLC0415).
+"scripts/greatdocs_*.py" = ["T201", "PLC0415"]
 
 [tool.pytest.ini_options]
 norecursedirs = [

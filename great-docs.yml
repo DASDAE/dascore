@@ -1,9 +1,9 @@
 # Great Docs Configuration for DASCore
 # See https://posit-dev.github.io/great-docs/user-guide/configuration.html
 #
-# This replaces the previous custom doc build (scripts/build_api_docs.py,
-# scripts/_index_api.py, scripts/_render_api.py, scripts/_qmd_builder.py,
-# scripts/_validate_links.py, and docs/filters/fill_links.py).
+# `great-docs build` renders the whole site: the narrative sections below,
+# the API reference generated from docstrings, and the agent-facing outputs
+# (llms.txt, per-page markdown, .well-known/agent-skills).
 
 display_name: DASCore
 
@@ -36,7 +36,7 @@ pre_render:
 # Site styling. `yeti` is the Bootswatch theme the previous doc build used, so
 # fonts, colors and spacing carry over unchanged; great-docs.scss is listed
 # explicitly (great-docs appends it otherwise) so assets/dascore.scss can layer
-# on top of it. That last file replaces docs/styles.css.
+# on top of it. That file carries the old site's custom CSS.
 site:
   theme:
     - yeti

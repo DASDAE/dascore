@@ -110,7 +110,7 @@ def _fix_release_body(version: str, body: list[str]) -> tuple[list[str], int, in
         # Highest count wins; ties resolve to the smaller indent.
         base = min(counts, key=lambda k: (-counts[k], k))
     if base:
-        strip_re = re.compile(r"^ {1,%d}" % base)
+        strip_re = re.compile(rf"^ {{1,{base}}}")
         new_note = [strip_re.sub("", ln) for ln in note]
         if new_note != note:
             note = new_note
@@ -127,7 +127,6 @@ def fix_changelog(path: Path) -> int:
     # Find the frontmatter/preamble, then split into per-release blocks at each
     # `{.changelog-version}` heading.
     out: list[str] = []
-    i = 0
     version: str | None = None
     block: list[str] = []
     dropped = deindented = 0
@@ -167,6 +166,7 @@ def fix_changelog(path: Path) -> int:
 
 
 def main() -> int:
+    """Patch the generated index and changelog pages in place."""
     cwd = Path.cwd()
     n_index = fix_index(cwd / "index.qmd")
     n_changelog = fix_changelog(cwd / "changelog.qmd")
