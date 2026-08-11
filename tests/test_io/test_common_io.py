@@ -11,6 +11,7 @@ test_io_core.py
 from __future__ import annotations
 
 import inspect
+import os
 from contextlib import suppress
 from functools import cache
 from io import BytesIO, UnsupportedOperation
@@ -23,7 +24,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import CoordError
-from dascore.io import BinaryReader
+from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -132,6 +133,14 @@ SKIP_DATA_FILES = {
 _SCAN_COST_MIN_FILE_SIZE = 1_000_000
 _SCAN_COST_MAX_FRACTION = 0.25
 
+# Formats whose scan is the FiberIO default, which builds the summary by
+# reading the whole file. The docs allow implementing only read, so this is a
+# choice rather than a defect, but it is one the byte budget cannot observe:
+# none of these formats has a registry file large enough to be measured.
+# Naming them here means a new format that skips scan fails a test rather
+# than quietly joining them.
+FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
+
 
 def _bytes_read_by_process() -> int:
     """
@@ -141,12 +150,36 @@ def _bytes_read_by_process() -> int:
     h5py and protobuf, where format readers do most of their I/O. Page-cache
     hits still count, so the number does not depend on how warm the file is.
     Raises OSError where /proc is unavailable.
+
+    Memory-mapped access is the one path this misses, since it faults pages
+    in rather than issuing read syscalls. No scan maps its file today (the
+    mappings in the TDMS and xml_binary readers are on their read paths), and
+    counting page faults instead is worse than it sounds: fault-around maps
+    16 pages per fault, so a mapped read is undercounted by that factor,
+    which leaves less signal than ordinary allocation contributes as noise.
     """
     with open("/proc/self/io") as fi:
         for line in fi:
             if line.startswith("rchar:"):
                 return int(line.split()[1])
     raise OSError("rchar missing from /proc/self/io")
+
+
+def _link_at_unseen_path(path, directory: Path) -> Path:
+    """
+    Return a path to the same contents that no reader has been handed yet.
+
+    Links rather than copies, so a large file does not turn into test
+    runtime, and keeps the file name so extension-sensitive readers behave
+    the same. A hard link is preferred because it also defeats caching keyed
+    on the resolved path.
+    """
+    link = directory / Path(path).name
+    try:
+        os.link(path, link)
+    except OSError:  # e.g. the temp dir is on a different filesystem
+        link.symlink_to(path)
+    return link
 
 
 def _scan_summary(scan_result):
@@ -426,7 +459,7 @@ class TestScan:
             assert isinstance(summary, dc.PatchSummary)
             assert str(summary.source_path) == str(data_file_path)
 
-    def test_scan_does_not_read_whole_file(self, io_path_tuple):
+    def test_scan_does_not_read_whole_file(self, io_path_tuple, tmp_path):
         """
         Scanning must not pull a file's sample data off disk.
 
@@ -448,17 +481,54 @@ class TestScan:
             _bytes_read_by_process()
         except OSError:
             pytest.skip("no /proc/self/io on this platform")
-        # Scan once first so lazy imports and registry lookups are not
-        # counted, then measure the steady-state cost.
+        # Scan once so lazy imports and registry lookups are not counted,
+        # then measure a path this reader has not been handed. Warming and
+        # measuring the same path would excuse a reader that caches parsed
+        # metadata per path, which reads nothing the second time and
+        # everything when a directory scan hands it each file once.
         with skip_missing():
             io.scan(path)
+        unseen_path = _link_at_unseen_path(path, tmp_path)
         before = _bytes_read_by_process()
         with skip_missing():
-            io.scan(path)
+            io.scan(unseen_path)
         read_bytes = _bytes_read_by_process() - before
         assert read_bytes < size * _SCAN_COST_MAX_FRACTION, (
             f"{type(io).__name__}.scan read {read_bytes:,} bytes of a "
             f"{size:,} byte file; a scan should read headers, not samples."
+        )
+
+    def test_formats_implement_scan(self):
+        """
+        Formats should implement scan rather than inherit the default.
+
+        The budget above can only weigh formats that have a large enough test
+        file, so it cannot see a format which never implements scan at all and
+        so reads everything through the FiberIO default. That is what this
+        covers; see FORMATS_WITH_DEFAULT_SCAN for the known exceptions.
+        """
+        FiberIO.manager.load_plugins()
+        # Other test modules register FiberIO subclasses globally on import,
+        # so only DASCore's own formats are considered here.
+        registered = {
+            type(fiber_io).__name__: fiber_io
+            for fiber_io in FiberIO.manager.yield_fiberio()
+            if type(fiber_io).__module__.startswith("dascore.io.")
+        }
+        # Every subclass gets its own type-casting wrapper around scan, so
+        # the function underneath is what says whose scan this really is.
+        default_scan = inspect.unwrap(FiberIO.scan)
+        using_default = {
+            name
+            for name, fiber_io in registered.items()
+            if inspect.unwrap(type(fiber_io).scan) is default_scan
+        }
+        expected = FORMATS_WITH_DEFAULT_SCAN & set(registered)
+        assert using_default == expected, (
+            "formats inheriting the read-everything FiberIO.scan changed; "
+            f"expected {sorted(expected)}, found {sorted(using_default)}. "
+            "Implement scan for the new format, or add it to "
+            "FORMATS_WITH_DEFAULT_SCAN with a reason."
         )
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
