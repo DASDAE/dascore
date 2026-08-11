@@ -72,10 +72,11 @@ class DascoreConfig(BaseModel):
             "data_type",
             "data_category",
             "tag",
-            # Archives predating data_source_id partition by these, and a
-            # name missing from a spool is ignored. Grouping too finely
-            # only leaves patches unmerged; too coarsely merges patches
-            # which describe different places.
+            # Legacy: these are not patch attrs any more, but archives
+            # predating data_source_id partition by them and a name
+            # missing from a spool is ignored. Grouping too finely only
+            # leaves patches unmerged; too coarsely merges patches which
+            # describe different places.
             "network",
             "station",
         ),
@@ -84,7 +85,9 @@ class DascoreConfig(BaseModel):
             "chunk/merge operations. Patches whose values differ on any of "
             "these are never combined (no error); the per-call `group` "
             "argument overrides this default. Names missing from a spool "
-            "are ignored."
+            "are ignored, which is why the legacy `network` and `station` "
+            "can stay: archives which predate `data_source_id` partition "
+            "by them."
         ),
     )
 

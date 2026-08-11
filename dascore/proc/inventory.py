@@ -31,11 +31,12 @@ from dascore.utils.time import to_datetime64
 # leaves them alone; naming one explicitly restores the as-acquired value.
 _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 
-# Observing-system facts which processing nevertheless maintains: decimating
-# in time changes the sample rate, and in distance the channel spacing. They
-# are excluded from blanket enrichment for the same reason as the data trio,
-# and naming one restores the as-acquired value.
-_PROCESSING_MAINTAINED_ATTRS = ("sample_rate", "spatial_interval")
+# Facts the patch's own coordinates already state: the time coordinate has
+# the sample rate and the distance coordinate the channel spacing, and
+# decimating changes both. Nothing should be redundant between coords and
+# attrs, so a blanket request leaves these alone; naming one restores the
+# as-acquired value.
+_COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
 OnMissing = Literal["raise", "nan", "skip"]
 _VALID_ON_MISSING = get_args(OnMissing)
@@ -166,9 +167,7 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
         return {}
     system = _get_system_attrs(inventory, context)
     if attrs is True:
-        return {
-            i: v for i, v in system.items() if i not in _PROCESSING_MAINTAINED_ATTRS
-        }
+        return {i: v for i, v in system.items() if i not in _COORD_REDUNDANT_ATTRS}
     available = dict(system)
     for name in _DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
@@ -561,8 +560,10 @@ def enrich(
         True (the default) to copy the observing-system facts the inventory
         is authoritative for, a tuple of names to copy exactly those, or
         False to copy none. The blanket form excludes `data_type`,
-        `data_category`, and `data_units`, which describe the data as it now
-        stands; naming one restores the as-acquired value.
+        `data_category`, and `data_units`, which describe the data as it
+        now stands, and `sample_rate` and `spatial_interval`, which the
+        patch's own coordinates already state; naming one restores the
+        as-acquired value.
     coords
         True (the default) to add the geometry axes and annotation groups of
         the resolved optical path, a tuple of names to add exactly those, or

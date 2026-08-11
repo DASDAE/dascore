@@ -136,14 +136,14 @@ class TestAttrs:
         assert attrs.get("interrogator.serial_number") == "sn-1"
         assert attrs.get("interrogator.model") == "FI-1"
 
-    def test_blanket_excludes_processing_maintained(self, patch, inventory):
-        """Decimating changes the sample rate without the inventory being wrong."""
+    def test_blanket_excludes_coord_redundant(self, patch, inventory):
+        """The coordinates already state these, and decimating changes them."""
         decimated = patch.decimate(time=2)
         out = decimated.enrich(inventory, coords=False)
         assert "sample_rate" not in dict(out.attrs)
         assert "spatial_interval" not in dict(out.attrs)
 
-    def test_named_processing_maintained_restores(self, patch, inventory):
+    def test_named_coord_redundant_restores(self, patch, inventory):
         """Naming one restores the as-acquired value, as for data state."""
         out = patch.enrich(inventory, attrs=("sample_rate",), coords=False)
         assert out.attrs.sample_rate == 250.0

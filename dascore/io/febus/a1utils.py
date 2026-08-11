@@ -208,10 +208,11 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     zone_attrs = feb.zone.attrs
     attr_mapping = {
         "GaugeLength": "gauge_length",
-        # Febus states the pulse as a length in meters (the vendor's own
-        # parameter tables list it beside the fiber length), so it keeps
-        # terra15's name for the same quantity rather than pulse_width,
-        # which the shared vocabulary defines as a time in seconds.
+        # Febus states the pulse as a length in meters: its own library
+        # declares PulseWidth with unit "m" (febus_optics_lib 1.4.2,
+        # plugins/plugins_das_febus.py). It therefore keeps terra15's name
+        # for the same quantity rather than pulse_width, which the shared
+        # vocabulary defines as a time in seconds.
         "PulseWidth": "pulse_length",
         "Version": "folog_a1_software_version",
     }
