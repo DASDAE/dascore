@@ -6,7 +6,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, convert_attr_units, get_attr_names
 from dascore.utils.misc import maybe_get_items
 
 _ATTR_MAP = {
@@ -24,8 +24,11 @@ _ATTR_MAP = {
     "StartPosition[m]": "start_position",
     "SpatialResolution[m]": "spatial_resolution",
     # oops, they spelled information "infomation"
-    "SystemInfomation.Devices1.SerialNum": "instrument_id",
+    "SystemInfomation.Devices1.SerialNum": "interrogator.serial_number",
 }
+
+# The header states these units in the key; patch attrs use seconds.
+_PULSE_WIDTH_UNITS = "ns"
 
 _EXPECTED_ATTRS = set(_ATTR_MAP)
 
@@ -86,13 +89,14 @@ def _get_attr_dict(resource):
     """Get the attribute map."""
     ds = resource["Acoustic"]
     attrs_dict = maybe_get_items(ds.attrs, _ATTR_MAP)
+    convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     coords = _get_coords(attrs_dict, ds.shape)
     return attrs_dict, coords
 
 
 def _validate_attrs(attrs_dict, attr_cls, extras=None):
     """Validate the subset of attrs the attr class knows about."""
-    expected_fields = set(attr_cls.model_fields)
+    expected_fields = get_attr_names(attr_cls)
     attrs_sub = {i: v for i, v in attrs_dict.items() if i in expected_fields}
     attrs_sub.update(extras if extras else {})
     return attr_cls.model_validate(attrs_sub)
@@ -210,6 +214,7 @@ def _get_carina_attrs_and_coords(resource):
     attrs_dict = maybe_get_items(
         resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
     )
+    convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     n_time, n_columns = resource[_CARINA_DATA_NAME].shape
     time_coord = _get_carina_time_coord(attrs_dict, n_time)
     distance_coord = _get_carina_distance_coord(attrs_dict, resource, n_columns)

@@ -465,16 +465,18 @@ class TestGetContents:
 class TestSelect:
     """Tests for selecting/trimming spools."""
 
-    def test_select_network(self, diverse_spool):
-        """Ensure a tuple can be used to select spools within network."""
-        network_set = {"das2", "das3"}
-        out = diverse_spool.select(network=network_set)
+    def test_select_acquisition_key(self, diverse_spool):
+        """Ensure a set can be used to select spools within data sources."""
+        source_set = {"DAS2.R2D1..RAW", "DAS3.R2D1..RAW"}
+        out = diverse_spool.select(acquisition_key=source_set)
+        assert len(out), "an empty selection would pass the check below"
         for patch in out:
-            assert patch.attrs["network"] in network_set
+            assert patch.attrs["acquisition_key"] in source_set
 
     def test_select_tag_wildcard(self, diverse_spool):
         """Ensure wildcards can be used on str columns."""
         out = diverse_spool.select(tag="some*")
+        assert len(out), "an empty selection would pass the check below"
         for patch in out:
             assert patch.attrs["tag"].startswith("some")
 
@@ -484,13 +486,13 @@ class TestSelect:
         duration = contents["time_max"] - contents["time_min"]
         new_max = (contents["time_min"] + duration / 2).max()
         out = (
-            diverse_spool.select(network="das2")
+            diverse_spool.select(acquisition_key="DAS2.*")
             .select(tag="ran*")
             .select(time=(None, new_max))
         )
         assert len(out)
         for patch in out:
-            assert patch.attrs["network"] == "das2"
+            assert patch.attrs["acquisition_key"] == "DAS2.R2D1..RAW"
             assert patch.attrs["tag"].startswith("ran")
             assert patch.get_coord("time").max() <= new_max
 

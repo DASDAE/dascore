@@ -161,7 +161,7 @@ class LiveResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Look the patch up; live patches ignore trim hints."""
-        path = str(row["path"])
+        path = str(row["source_path"])
         try:
             return self._registry[path]
         except KeyError:
@@ -195,15 +195,15 @@ class FileResolver(PatchResolver):
         """
         id_kwargs = {"source_patch_id": source_patch_id} if source_patch_id else {}
         kwargs = {"path": path}
-        if row.get("file_format"):
-            kwargs["file_format"] = row["file_format"]
-        if row.get("file_version"):
-            kwargs["file_version"] = row["file_version"]
+        if row.get("source_format"):
+            kwargs["file_format"] = row["source_format"]
+        if row.get("source_version"):
+            kwargs["file_version"] = row["source_version"]
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
-        path = row["path"]
+        path = row["source_path"]
         # relative paths resolve against the catalog root; URIs and
         # absolute paths pass through untouched.
         if self._root is not None and "://" not in str(path):
@@ -271,7 +271,7 @@ class CompositeResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Dispatch by scheme: live registry, plan, or file reader."""
-        path = str(row.get("path", ""))
+        path = str(row.get("source_path", ""))
         if is_memory_uri(path):
             return self.live.resolve(row, **trim)
         for prefix, plan in self.plans.items():
@@ -621,7 +621,7 @@ class PatchCatalog:
         resolver = self.resolver
         if self.is_view and resolver.live_entries():
             df = self.to_df()
-            paths = list(dict.fromkeys(df["path"].astype(str)))
+            paths = list(dict.fromkeys(df["source_path"].astype(str)))
             entries = resolver.live_entries()
             keep = {k: entries[k] for k in paths if k in entries}
             state["resolver"] = _membership_resolver(resolver, keep, paths)

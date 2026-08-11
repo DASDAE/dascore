@@ -143,7 +143,7 @@ def _get_g1_coords_and_attrs(resource):
     resource_name = Path(getattr(resource, "name", "")).stem
     name, _channel, _ = resource_name.split("_")
     params = _make_param_dict(resource)
-    params["instrument_id"] = name
+    params["interrogator.name"] = name
     params["data_type"] = params.pop("mode", None)
     params["data_category"] = "DSS"
 
@@ -212,18 +212,7 @@ def _get_g1_h5_patch(resource, attr_cls, data_name, attrs, coords, select_kwargs
     return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
 
 
-def _get_g1_h5_io_attrs(resource, file_format=None, file_version=None) -> dict:
-    """Return optional DASCore IO provenance attrs for a G1 HDF5 file."""
-    if file_format is None or file_version is None:
-        return {}
-    return {
-        "path": resource.filename,
-        "file_format": file_format,
-        "file_version": str(file_version),
-    }
-
-
-def _get_mtx_attrs(resource, file_format=None, file_version=None):
+def _get_mtx_attrs(resource):
     """Return normalized Febus MTX HDF5 attributes."""
     attrs = _get_g1_h5_mapped_attrs(resource, _G1_H5_ATTR_MAP)
     data_type = attrs.pop("febus_data_kind", "brillouin_spectrum")
@@ -233,7 +222,6 @@ def _get_mtx_attrs(resource, file_format=None, file_version=None):
             "data_type": data_type,
         }
     )
-    attrs.update(_get_g1_h5_io_attrs(resource, file_format, file_version))
     return attrs
 
 
@@ -294,7 +282,7 @@ def _get_bsl_coords(resource, dims=_BSL_DIMS, snap=True):
     return _get_g1_h5_base_coords(resource, dims=dims, snap=snap)
 
 
-def _get_bsl_attrs(resource, file_format=None, file_version=None):
+def _get_bsl_attrs(resource):
     """Get patch attributes from BSL HDF5 root metadata."""
     attrs = _get_g1_h5_mapped_attrs(resource, _G1_H5_ATTR_MAP)
     mode = attrs.get("mode")
@@ -308,7 +296,6 @@ def _get_bsl_attrs(resource, file_format=None, file_version=None):
             "data_units": data_units,
         }
     )
-    attrs.update(_get_g1_h5_io_attrs(resource, file_format, file_version))
     return attrs
 
 

@@ -372,6 +372,7 @@ class Patch(NamespaceOwner):
     split_gaps = dascore.proc.coords.split_gaps
     transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
+    enrich = dascore.proc.enrich
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     radians_to_strain = dascore.transform.radians_to_strain

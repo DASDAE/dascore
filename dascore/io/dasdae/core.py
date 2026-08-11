@@ -95,8 +95,8 @@ class DASDAEV1(FiberIO):
             dc.scan_to_df(patches)
             .assign(
                 source_patch_id=lambda x: get_patch_names(x),
-                file_format=self.name,
-                file_version=self.version,
+                source_format=self.name,
+                source_version=self.version,
             )
             .dropna(subset=["time_min", "time_max", "distance_min", "distance_max"])
         )

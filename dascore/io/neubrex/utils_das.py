@@ -1,6 +1,7 @@
 """Utilities functions for Neubrex DAS IO support"""
 
 import dascore as dc
+from dascore.io.utils import convert_attr_units
 from dascore.utils.misc import maybe_get_items, unbyte
 
 
@@ -67,16 +68,18 @@ def _get_attr_dict(acoustic):
     """Get a dict of neubrex attributes."""
     mapping = {
         "GaugeLength": "gauge_length",
+        "GaugeLengthUnit": "gauge_length_units",
         "GaugeLengthUnits": "gauge_length_units",
         "IndexOfRefraction": "index_of_refraction",
         "PhaseToStrainConversion(MicroStrainPerRadian)": "phase_to_strain",
-        "NEUBRESCOPE.DAS.SerialNum": "instrument_id",
-        "NEUBRESCOPE.DAS.Model": "instrument_model",
+        "NEUBRESCOPE.DAS.SerialNum": "interrogator.serial_number",
+        "NEUBRESCOPE.DAS.Model": "interrogator.model",
         "DistanceDecimationFilter": "distance_decimation_filter",
         "TimeDecimationFilter": "time_decimation_filter",
     }
     attrs = dict(acoustic.attrs)
     out = maybe_get_items(attrs, mapping)
+    convert_attr_units(out, "gauge_length", "m")
     out["data_units"] = _get_data_units_and_type(attrs)
     return out
 

@@ -485,8 +485,8 @@ class TestSizeChunkPlanDF:
         NaN is truthy, so it would reach the derived catalog as the
         string "nan" and poison every later np.dtype() of the column.
         """
-        known = sized_df.assign(station="a")
-        unknown = sized_df.assign(station="b", _dtype="")
+        known = sized_df.assign(tag="a")
+        unknown = sized_df.assign(tag="b", _dtype="")
         both = pd.concat([known, unknown], ignore_index=True)
         outputs = build_chunk_plan(both, time=5).outputs
         assert not outputs["_dtype"].isna().any()

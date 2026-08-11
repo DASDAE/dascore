@@ -41,7 +41,7 @@ from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timed
 
 # Columns which never participate in conflict policing and never carry to
 # outputs: source bookkeeping (outputs are not file rows).
-_SOURCE_COLUMNS = ("path", "file_format", "file_version", "source_patch_id")
+_SOURCE_COLUMNS = ("source_path", "source_format", "source_version", "source_patch_id")
 # The default continuity tolerance; looser values warn when they force
 # merges (#662).
 _DEFAULT_TOLERANCE = 1.5

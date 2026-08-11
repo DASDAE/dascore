@@ -14,6 +14,19 @@ import dascore as dc
 import dascore.core
 from dascore.compat import random_state
 from dascore.config import config_context
+from dascore.core.inventory import (
+    Acquisition,
+    CouplingCondition,
+    DistanceMap,
+    FiberArray,
+    FiberSegment,
+    Geometry,
+    Interrogator,
+    Inventory,
+    Network,
+    OpticalPath,
+    OpticalPathAnnotation,
+)
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
 from dascore.utils.imports import lazy_import
@@ -42,8 +55,7 @@ def random_patch(
     distance_min=0,
     distance_step=1,
     dist_array=None,
-    network="",
-    station="",
+    acquisition_key="",
     tag="random",
     shape=(300, 2_000),
 ):
@@ -66,10 +78,9 @@ def random_patch(
     dist_array
         If not None, an array of distance values and `distance_min` and
         `distance_step` will not be used.
-    network
-        The network code.
-    station
-        The station designation.
+    acquisition_key
+        The inventory identity of the data source
+        (network.fiber_array.location.acquisition).
     tag
         The patch tag
     shape
@@ -84,8 +95,7 @@ def random_patch(
     time_step = to_timedelta64(time_step)
     attrs = dict(
         category="DAS",
-        network=network,
-        station=station,
+        acquisition_key=acquisition_key,
         tag=tag,
     )
     if time_array is None:
@@ -509,8 +519,7 @@ def delta_patch(
         coords = {"distance": dist_coord, "time": time_coord}
         attrs = dict(
             category="DAS",
-            network="",
-            station="",
+            acquisition_key="",
             tag="delta",
         )
 
@@ -602,28 +611,26 @@ def diverse_spool():
     """
     A spool with a diverse set of patch metadata for testing.
 
-    There are various gaps, tags, station names, etc.
+    There are various gaps, tags, acquisition keys, etc.
     """
     spool_no_gaps = random_spool()
-    spool_no_gaps_different_network = random_spool(network="das2")
-    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), station="big_gaps")
-    spool_overlaps = random_spool(
-        time_gap=-np.timedelta64(10, "ms"), station="overlaps"
-    )
+    spool_no_gaps_different_source = random_spool(acquisition_key="DAS2.R2D1..RAW")
+    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), tag="big_gaps")
+    spool_overlaps = random_spool(time_gap=-np.timedelta64(10, "ms"), tag="overlaps")
     time_step = spool_big_gaps[0].coords.step("time")
     dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
-    spool_small_gaps = random_spool(time_gap=dt, station="smallg")
+    spool_small_gaps = random_spool(time_gap=dt, tag="smallg")
     spool_way_late = random_spool(
-        length=1, time_min=np.datetime64("2030-01-01"), station="wayout"
+        length=1, time_min=np.datetime64("2030-01-01"), tag="wayout"
     )
     spool_new_tag = random_spool(tag="some_tag", length=1)
     spool_way_early = random_spool(
-        length=1, time_min=np.datetime64("1989-05-04"), station="wayout"
+        length=1, time_min=np.datetime64("1989-05-04"), tag="wayout"
     )
 
     all_spools = [
         spool_no_gaps,
-        spool_no_gaps_different_network,
+        spool_no_gaps_different_source,
         spool_big_gaps,
         spool_overlaps,
         spool_small_gaps,
@@ -757,3 +764,80 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
         )
         raise UnknownExampleError(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
+
+
+def inventory_patch_pair():
+    """
+    Return a patch and an inventory which resolves it.
+
+    The patch is the random DAS example carrying the acquisition key of the
+    inventory's one acquisition. That acquisition places its 300 channels on
+    an optical path through a measured two-point distance map, so the path's
+    geometry, coupling, and annotations project onto the patch. Used by the
+    enrich documentation and tests.
+    """
+    patch = random_patch(acquisition_key="DAS.R2D1..RAW")
+    distance = patch.get_coord("distance")
+    # The interrogator's own axis starts at its channel 0; the path axis
+    # starts 100 m later, at the far end of the lead-in cable.
+    acquisition = Acquisition(
+        code="RAW",
+        location_code="",
+        data_type="velocity",
+        data_category="DAS",
+        gauge_length=10.0,
+        spatial_interval=1.0,
+        sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
+        pulse_width=1e-8,
+        interrogator=Interrogator(
+            manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
+        ),
+        distance_map=DistanceMap(
+            instrument_distance=(float(distance.min()), float(distance.max())),
+            distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+        ),
+    )
+    path = OpticalPath(
+        name="main",
+        location_code="",
+        optical_components=(FiberSegment(name="cable", optical_length=500.0),),
+        geometry=(
+            Geometry(
+                name="trench",
+                distance=(100.0, 400.0),
+                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+            ),
+        ),
+        coupling=(
+            CouplingCondition(
+                start_distance=100.0,
+                end_distance=250.0,
+                coupling_type="trench",
+                medium="soil",
+            ),
+        ),
+        annotations=(
+            OpticalPathAnnotation(
+                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+            ),
+            OpticalPathAnnotation(
+                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+            ),
+            OpticalPathAnnotation(
+                start_distance=150.0, end_distance=300.0, group="noisy"
+            ),
+        ),
+    )
+    inventory = Inventory(
+        networks=(
+            Network(
+                code="DAS",
+                fiber_arrays=(
+                    FiberArray(
+                        code="R2D1", acquisitions=(acquisition,), optical_paths=(path,)
+                    ),
+                ),
+            ),
+        )
+    ).check()
+    return patch, inventory

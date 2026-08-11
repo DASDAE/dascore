@@ -279,9 +279,10 @@ def _get_patch_attrs(patch_group, legacy: bool) -> dict:
     attrs = _get_attrs(patch_group)
     if legacy:
         dims = _get_dims(patch_group)
+        coord_names = _get_group_coord_names(patch_group)
         attrs["dims"] = ",".join(dims)
-        attrs = translate_legacy_attrs(attrs)
-        attrs = strip_legacy_coord_fields(attrs, _get_group_coord_names(patch_group))
+        attrs = translate_legacy_attrs(attrs, coord_names)
+        attrs = strip_legacy_coord_fields(attrs, coord_names)
     return attrs
 
 
@@ -291,7 +292,7 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
     dims = _get_dims(patch_group)
     if legacy:
         attrs["dims"] = ",".join(dims)
-        attrs = translate_legacy_attrs(attrs)
+        attrs = translate_legacy_attrs(attrs, _get_group_coord_names(patch_group))
         coords = _get_coords(patch_group, dims, attrs)
         attr_info = strip_legacy_coord_fields(attrs, set(coords.coord_map) | set(dims))
     else:
@@ -349,7 +350,7 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     dims = _get_dims(group)
     if legacy:
         out["dims"] = ",".join(dims)
-        out = translate_legacy_attrs(out)
+        out = translate_legacy_attrs(out, _get_group_coord_names(group))
         coords = _get_coords(group, dims, out, snap=snap)
         attr_info = strip_legacy_coord_fields(out, set(coords.coord_map) | set(dims))
     else:

@@ -110,12 +110,13 @@ def _make_base_attrs_dict(metadata: XMLBinaryInfo):
     ius = metadata.das_interrogator_serial
     assert len(ius) == 1, "expecting one interrogator."
     iu_name = next(iter(ius.values()))
-    attrs = dict(
-        pulse_width_ns=metadata.pulse_width_ns,
-        gauge_length=metadata.gauge_length_m,
-        instrument_id=iu_name,
-        zone_name=zone_name,
-    )
+    attrs = {
+        # The metadata states nanoseconds and meters; attrs use seconds.
+        "pulse_width": metadata.pulse_width_ns * 1e-9,
+        "gauge_length": metadata.gauge_length_m,
+        "interrogator.serial_number": iu_name,
+        "zone_name": zone_name,
+    }
     return attrs
 
 
@@ -166,7 +167,7 @@ def _paths_to_df(paths, metadata, attr_cls):
             {"time": time_coord, "distance": distance_coord},
             dims=dims,
         )
-        attrs = attr_cls(path=path, **base_attrs).model_dump()
+        attrs = attr_cls(**base_attrs).model_dump()
         record = dict(attrs)
         for name, summary in cm.to_summary_dict().items():
             for field, value in summary.model_dump().items():
@@ -191,7 +192,7 @@ def _read_single_file(path, metadata, time, distance, attr_cls):
     size = np.prod(cm.shape)
     assert memmap.size == size, f"wrong data shape for {path}"
     data = memmap.reshape(cm.shape)
-    attrs = attr_cls(path=path, **base_attrs)
+    attrs = attr_cls(**base_attrs)
     patch = dc.Patch(
         data=data,
         dims=STANDARD_DIMS,

@@ -41,17 +41,18 @@ from pathlib import Path
 import dascore as dc
 
 root = Path(tempfile.mkdtemp())
-(root / "network=XX" / "station=A").mkdir(parents=True)
-dc.get_example_patch().io.write(root / "network=XX" / "station=A" / "tag=raw.h5", "DASDAE")
+(root / "acquisition_key=XX.R2D1..RAW" / "cable=A").mkdir(parents=True)
+sub = root / "acquisition_key=XX.R2D1..RAW" / "cable=A"
+dc.get_example_patch().io.write(sub / "tag=raw.h5", "DASDAE")
 
 spool = dc.spool(root).update()
 row = spool.get_contents().iloc[0]
-assert (row["network"], row["station"], row["tag"]) == ("XX", "A", "raw")
-assert spool[0].attrs.station == "A"
+assert (row["acquisition_key"], row["cable"], row["tag"]) == ("XX.R2D1..RAW", "A", "raw")
+assert spool[0].attrs.get("cable") == "A"
 
 # a directory rename is a pure metadata rewrite
-(root / "network=XX" / "station=A").rename(root / "network=XX" / "station=B")
-assert dc.spool(root).update().get_contents()["station"].iloc[0] == "B"
+sub.rename(sub.parent / "cable=B")
+assert dc.spool(root).update().get_contents()["cable"].iloc[0] == "B"
 ```
 
 ## Ordering
@@ -110,7 +111,7 @@ assert len(dc.spool([patch, patch.new()])) == 2
 cat = PatchCatalog.from_patches([patch, patch])  # one entry, not two
 row = cat.to_df().iloc[0]
 assert len(cat.to_df()) == 1
-assert row["path"].startswith("memorypatch://")
+assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 

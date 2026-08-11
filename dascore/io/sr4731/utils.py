@@ -62,9 +62,6 @@ class SR4731PatchAttrs(PatchAttrs):
     refractive_index: float = np.nan
     trace_count: int = 0
     sample_scale: int = 0
-    manufacturer: str = ""
-    model: str = ""
-    serial_number: str = ""
 
 
 def _read_all(resource) -> bytes:
@@ -280,53 +277,48 @@ def _get_coords(parsed: dict[str, Any]) -> CoordManager:
     return get_coord_manager(coords=coords, dims=DIMS)
 
 
-def _get_attr_dict(parsed: dict[str, Any], extras: dict | None = None) -> dict:
+def _get_attr_dict(parsed: dict[str, Any]) -> dict:
     """Create DASCore patch attrs from parsed SR-4731 metadata."""
     supplier = parsed["supplier"]
     manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
-    instrument_id = "-".join(x for x in (manufacturer, model, serial_number) if x)
     data_points = parsed["data_points"]
     out = {
         "data_type": "otdr",
         "data_units": "dB",
-        "instrument_id": instrument_id,
         "wavelength_nm": parsed["fixed"]["wavelength_nm"],
         "acquisition_range_m": parsed["fixed"]["acquisition_range_m"],
         "sample_spacing_usec": parsed["fixed"]["sample_spacing_usec"],
         "refractive_index": parsed["fixed"]["refractive_index"],
         "trace_count": data_points["trace_count"],
         "sample_scale": data_points["scale"],
-        "manufacturer": manufacturer,
-        "model": model,
-        "serial_number": serial_number,
+        "interrogator.manufacturer": manufacturer,
+        "interrogator.model": model,
+        "interrogator.serial_number": serial_number,
     }
-    out.update(extras or {})
     return out
 
 
 def _get_patch_attrs(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
-    extras: dict | None = None,
 ) -> ScanPayload:
     """Return patch attrs for an SR-4731 SOR file."""
     parsed = _parse_sor(resource, load_samples=False)
     coords = _get_coords(parsed)
-    attrs = _get_attr_dict(parsed, extras)
+    attrs = _get_attr_dict(parsed)
     return make_scan_payload(attrs=attr_class(**attrs), coords=coords, dtype="float64")
 
 
 def _get_patches(
     resource,
     attr_class: type[PatchAttrs] = SR4731PatchAttrs,
-    extras: dict | None = None,
     time=None,
     distance=None,
 ):
     """Read an SR-4731 SOR file and return patches."""
     parsed = _parse_sor(resource, load_samples=True)
     cm = _get_coords(parsed)
-    attrs = _get_attr_dict(parsed, extras)
+    attrs = _get_attr_dict(parsed)
     data = parsed["data_points"]["samples"][np.newaxis, :]
     return build_patches(
         cm,

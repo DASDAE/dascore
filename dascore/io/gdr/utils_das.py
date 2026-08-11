@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import convert_attr_units, get_exact_coord
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
 from dascore.utils.misc import unbyte
 
@@ -31,7 +31,7 @@ _V1_ATTR_MAP = {
     f"{ACQ}.GaugeLength": "gauge_length",
     f"{ACQ}.GaugeLengthUnit": "gauge_length_units",
     f"{ACQ}.UnitOfMeasure": "data_units",
-    "DasMetadata/Interrogator.SerialNumber": "instrument_id",
+    "DasMetadata/Interrogator.SerialNumber": "interrogator.serial_number",
 }
 
 
@@ -51,6 +51,7 @@ def _get_attrs_coords_and_data(resource, snap):
     """
     fill = {"NaN": "", "nan": ""}
     attrs = extract_h5_attrs(resource, _V1_ATTR_MAP, fill_values=fill)
+    convert_attr_units(attrs, "gauge_length", "m")
     coords = _get_coord_manager(resource, snap)
     data = resource["DasRawData/RawData"]
     return attrs, coords, data

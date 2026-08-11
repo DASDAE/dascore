@@ -62,9 +62,7 @@ class FebusPatchAttrs(dc.PatchAttrs):
     """
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
-    pulse_width: float = np.nan
-    pulse_width_units: str = "m"
+    pulse_length: float = np.nan
 
     group: str = ""
     source: str = ""
@@ -239,9 +237,7 @@ class FebusMTXH5V1(FiberIO):
             }.items()
             if value is not None
         }
-        attrs = _get_mtx_attrs(
-            resource, file_format=self.name, file_version=self.version
-        )
+        attrs = _get_mtx_attrs(resource)
         patch = _get_mtx_patch(
             resource,
             attr_cls=FebusMTXAttrs,
@@ -294,9 +290,7 @@ class FebusBSLH5V1(FiberIO):
             for key, value in {"time": time, "distance": distance}.items()
             if value is not None
         }
-        attrs = _get_bsl_attrs(
-            resource, file_format=self.name, file_version=self.version
-        )
+        attrs = _get_bsl_attrs(resource)
         patch = _get_bsl_patch(
             resource,
             attr_cls=FebusBOTDRStrainAttrs,

@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
     KINDS,
     RESERVED_ATTR_COLUMNS,
@@ -30,6 +31,7 @@ from dascore.io.index.schema import (
     SourceRow,
 )
 from dascore.units import get_quantity
+from dascore.utils.misc import validate_acquisition_key
 from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.pd import iter_rows
 from dascore.utils.time import to_datetime64, to_int, to_timedelta64
@@ -293,6 +295,20 @@ def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
             warnings.warn(msg, UserWarning, stacklevel=2)
         if status != "ok":
             continue
+        if name == "acquisition_key":
+            # The patch validates this on the way in, so a path which
+            # cannot produce a legal id would index and then fail at every
+            # load; refuse it here, where the fix is to rename a directory.
+            try:
+                validate_acquisition_key(value)
+            except InvalidInventoryError as error:
+                if warn:
+                    msg = (
+                        f"Skipping hive-style path key {name!r} in "
+                        f"{rel_posix!r}: {error}"
+                    )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+                continue
         out[name] = value
     return out
 

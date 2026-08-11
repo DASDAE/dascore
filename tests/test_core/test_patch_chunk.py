@@ -88,7 +88,13 @@ class TestChunk:
         # len fields may differ by ±1 between summary-based and data-based
         # counts; identity/provenance columns legitimately differ between
         # plan rows and re-scanned live patches
-        skip = {"history", "path", "file_format", "file_version", "source_patch_id"}
+        skip = {
+            "history",
+            "source_path",
+            "source_format",
+            "source_version",
+            "source_patch_id",
+        }
         skip |= {c for c in common if c.endswith("_len")}
         cols = sorted(common - skip)
         comp1, comp2 = chunk_df[cols], new_content[cols]

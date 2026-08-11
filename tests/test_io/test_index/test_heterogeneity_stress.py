@@ -205,7 +205,7 @@ class TestStressNoFalseNegatives:
             name = str(rng.choice(num_coords))
             lo = float(rng.uniform(-500, 500))
             hi = lo + float(rng.uniform(1, 2000))
-            got = set(backend.query(Query(coords={name: (lo, hi)}))["path"])
+            got = set(backend.query(Query(coords={name: (lo, hi)}))["source_path"])
             for summary in summaries:
                 csum = summary.coords.get(name)
                 if csum is None:
@@ -234,7 +234,7 @@ class TestStressNoFalseNegatives:
         for _ in range(20):
             lo = base + np.timedelta64(int(rng.integers(0, 10**7)), "s")
             hi = lo + np.timedelta64(int(rng.integers(1, 10**6)), "s")
-            got = set(backend.query(Query(coords={"time": (lo, hi)}))["path"])
+            got = set(backend.query(Query(coords={"time": (lo, hi)}))["source_path"])
             for summary in summaries:
                 csum = summary.coords.get("time")
                 if csum is None or "datetime" not in str(csum.dtype):
@@ -255,5 +255,5 @@ class TestStressNoFalseNegatives:
             if not attrs:
                 continue
             name, value = next(iter(attrs.items()))
-            got = set(backend.query(Query(attrs={name: value}))["path"])
+            got = set(backend.query(Query(attrs={name: value}))["source_path"])
             assert str(summary.source_path).replace("\\", "/") in got

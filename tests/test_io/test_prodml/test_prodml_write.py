@@ -24,7 +24,6 @@ def prodml_patch():
         distance_step=2,
         time_min=np.datetime64("2020-01-01", "us"),
         time_step=np.timedelta64(2_000, "us"),
-        station="station-a",
     )
     data = np.arange(np.prod(patch.shape), dtype=np.int16).reshape(patch.shape)
     return patch.new(data=data).update_attrs(
@@ -185,7 +184,7 @@ class TestProdMLWriteLayout:
 
     def test_explicit_pulse_rate(self, prodml_patch, tmp_path):
         """PulseRate should be written only when supplied by patch metadata."""
-        patch = prodml_patch.update_attrs(pulse_rate=50, pulse_rate_units="Hz")
+        patch = prodml_patch.update_attrs(pulse_rate=50)
         path = dc.write(patch, tmp_path / "pulse_rate.h5", "PRODML")
         with h5py.File(path, "r") as file:
             attrs = file["Acquisition"].attrs
@@ -220,7 +219,7 @@ class TestProdMLWriteRoundTrip:
             assert [unbyte(x) for x in stored_dims] == [
                 "locus" if dim == "distance" else dim for dim in dims
             ]
-        expected = patch.update_attrs(tag="", station="")
+        expected = patch.update_attrs(tag="")
         assert out == expected
         assert out.data.dtype == patch.data.dtype
         assert all(
@@ -229,20 +228,10 @@ class TestProdMLWriteRoundTrip:
         assert out.attrs.facility_id == patch.attrs.facility_id
         assert out.attrs.service_company_name == patch.attrs.service_company_name
 
-    def test_station_is_facility_fallback(self, prodml_patch, tmp_path):
-        """Station should populate FacilityId when no explicit facility attr exists."""
-        attrs = prodml_patch.attrs.drop("facility_id")
-        patch = prodml_patch.new(attrs=attrs)
-        path = dc.write(patch, tmp_path / "station.h5", "PRODML")
-        with h5py.File(path, "r") as file:
-            facility = file["Acquisition"].attrs["FacilityId"]
-            assert unbyte(facility[0]) == patch.attrs.station
-        assert dc.read(path)[0].attrs.facility_id == patch.attrs.station
-
     def test_missing_metadata_uses_defaults(self, prodml_patch, tmp_path):
         """Required metadata should receive deterministic compatibility defaults."""
         attrs = prodml_patch.attrs.drop("facility_id", "service_company_name").update(
-            acquisition_id="", station="", data_units=None
+            acquisition_id="", data_units=None
         )
         patch = prodml_patch.new(attrs=attrs)
         path = dc.write(patch, tmp_path / "defaults.h5", "PRODML")
@@ -393,12 +382,10 @@ class TestProdMLWriteValidation:
         with pytest.raises(PatchError, match=r"FacilityId.*String64"):
             dc.write(patch, tmp_path / "long_string.h5", "PRODML")
 
-    def test_invalid_optional_measure_units_are_ignored(self, prodml_patch, tmp_path):
-        """Bad units on optional measures should not prevent writing."""
-        patch = prodml_patch.update_attrs(
-            pulse_width=10, pulse_width_units="not-a-unit"
-        )
-        path = dc.write(patch, tmp_path / "optional_units.h5", "PRODML")
+    def test_unusable_optional_measure_is_ignored(self, prodml_patch, tmp_path):
+        """A measure which is not a number should not prevent writing."""
+        patch = prodml_patch.update_attrs(pulse_width="not-a-number")
+        path = dc.write(patch, tmp_path / "optional_measure.h5", "PRODML")
         with h5py.File(path, "r") as file:
             assert "PulseWidth" not in file["Acquisition"].attrs
 
@@ -433,7 +420,7 @@ class TestProdMLWriteValidation:
 
     def test_nonpositive_optional_measure_ignored(self, prodml_patch, tmp_path):
         """A non-positive optional measure is dropped rather than written."""
-        patch = prodml_patch.update_attrs(pulse_width=0.0, pulse_width_units="ns")
+        patch = prodml_patch.update_attrs(pulse_width=0.0)
         path = dc.write(patch, tmp_path / "nonpositive_measure.h5", "PRODML")
         with h5py.File(path, "r") as file:
             assert "PulseWidth" not in file["Acquisition"].attrs
