@@ -37,6 +37,14 @@ git fetch --tags origin
   - `minor`: `X.Y+1.0`
   - `patch`/`bugfix` (default): `X.Y.Z+1`
 - Output the computed new tag as `vX.Y.Z`.
+- Pre-releases break both of these rules, and drafting from `dev` (step 3) is
+  exactly when they occur. Before computing anything, check whether the target
+  branch carries a pre-release tag (`aN`, `bN`, `rcN`) newer than the latest
+  stable one. If it does: the lower bound for step 3 is that pre-release tag, not
+  the last stable release, or the notes will repeat what the pre-release already
+  published; and the next tag continues the same series (`v0.2.0b1` →
+  `v0.2.0b2`), or finalizes it to `vX.Y.Z` only when the caller says the series
+  is ending. Ask which is intended rather than assuming the stable tag.
 
 3. Collect merged PRs since the last release:
 - Use the previous release tag identified in step 2 as the lower bound.
@@ -100,11 +108,14 @@ git show "$(git log -1 --format=%H -- docs/changelog.qmd)^:docs/changelog.qmd"
    entries under the sections they belong to rather than compressing the PR into
    a single line. The `User-facing changes` and `Breaking changes` headings of
    the PR body are usually already itemized this way.
-- Omit PRs with no user-facing effect (the author wrote "None", or the diff shows
-   the change is purely internal: refactors, CI, typing, tests, docs
-   infrastructure). They do not belong in any section — do not let them fall
-   through to `Bug Fixes`. Judge an empty heading from the diff, not from the
-   emptiness itself.
+- Omit PRs with no user-facing effect: the author wrote "None" under *every*
+   heading, or the diff shows the change is purely internal (refactors, CI,
+   typing, tests, docs infrastructure). A "None" applies only to the heading it
+   sits under — an ordinary non-breaking feature writes a real `User-facing
+   changes` section and "None" under `Breaking changes`, and must still appear in
+   the notes. Omitted PRs belong in no section; do not let them fall through to
+   `Bug Fixes`. Judge an empty heading from the diff, not from the emptiness
+   itself.
 - Sort entries within each section by PR number ascending.
 - Include a link to the PR in the changelog.
 

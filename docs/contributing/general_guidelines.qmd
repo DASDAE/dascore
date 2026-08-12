@@ -5,8 +5,9 @@ This page highlights a few guidelines for DASCore development.
 
 # Branching and versioning
 
-We create new features or bug fixes in their own branches and merge them into master via pull requests. We may switch
-to a more complex branching model if the need arises.
+We create new features or bug fixes in their own branches and merge them into `dev` via pull requests. `dev` is the
+integration branch; it is merged into `master` at release time. We may switch to a more complex branching model if
+the need arises.
 
 If substantial new features have been added since the last release we will bump the minor version.  If only bug
 fixes/minor changes have been made, only the patch version will be bumped. Like most Python projects, we loosely

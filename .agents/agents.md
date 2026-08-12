@@ -16,7 +16,7 @@ Also load .agents/agents.local.md if present.
 1. Work on a feature/fix branch, not `master`.
 2. Create task worktrees under the repository root at `worktrees/{slug}`. Do not create task worktrees under `.agents/worktrees`, even if the current shell starts there.
 3. Keep commits focused (one logical change per commit where possible).
-4. Open pull requests against `dev`, the integration branch, not `master`. `dev` is merged to `master` at release time. Basing a PR on `master` also serves the older pull request template, which lacks the release-note sections.
+4. Open pull requests against `dev`, the integration branch, not `master`. `dev` is merged to `master` at release time.
 
 ## Environment setup
 
