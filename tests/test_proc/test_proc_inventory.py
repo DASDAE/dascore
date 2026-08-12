@@ -174,17 +174,17 @@ class TestAttrs:
         with pytest.raises(PatchError, match="defines no 'pulse_rate'"):
             patch.enrich(inventory, attrs=("pulse_rate",), coords=False)
 
-    def test_missing_named_attr_nan(self, patch, inventory):
+    def test_missing_named_attr_null(self, patch, inventory):
         """It can instead be filled with the missing marker."""
         out = patch.enrich(
             inventory, attrs=("pulse_rate",), coords=False, on_missing="null"
         )
         assert np.isnan(out.attrs.pulse_rate)
 
-    def test_missing_named_attr_skip(self, patch, inventory):
+    def test_missing_named_attr_ignore(self, patch, inventory):
         """Or omitted entirely."""
         out = patch.enrich(
-            inventory, attrs=("pulse_rate",), coords=False, on_missing="skip"
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="ignore"
         )
         assert "pulse_rate" not in dict(out.attrs)
 
@@ -371,7 +371,7 @@ class TestCoords:
         with pytest.raises(PatchError, match="defines no 'northing'"):
             patch.enrich(inventory, attrs=False, coords=("northing",))
         out = patch.enrich(
-            inventory, attrs=False, coords=("northing",), on_missing="skip"
+            inventory, attrs=False, coords=("northing",), on_missing="ignore"
         )
         assert "northing" not in set(out.coords.coord_map)
 
@@ -398,14 +398,14 @@ class TestCoords:
         with pytest.raises(PatchError, match="defines no 'nope'"):
             patch.enrich(inventory, attrs=False, coords=("nope",))
 
-    def test_missing_coord_nan(self, patch, inventory):
+    def test_missing_coord_null(self, patch, inventory):
         """It can instead be filled with the missing marker."""
         out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="null")
         assert np.isnan(out.get_coord("nope").values).all()
 
-    def test_missing_coord_skip(self, patch, inventory):
+    def test_missing_coord_ignore(self, patch, inventory):
         """Or omitted entirely."""
-        out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="skip")
+        out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="ignore")
         assert "nope" not in set(out.coords.coord_map)
 
     def test_blanket_without_geometry(self, patch, inventory):
@@ -844,7 +844,7 @@ class TestReviewFindings:
     def test_unknown_track_field_is_missing(self, patch, inventory):
         """A misspelled field is missing rather than an all-null coordinate."""
         out = patch.enrich(
-            inventory, attrs=False, coords=("coupling.nope",), on_missing="skip"
+            inventory, attrs=False, coords=("coupling.nope",), on_missing="ignore"
         )
         assert "coupling.nope" not in set(out.coords.coord_map)
 
