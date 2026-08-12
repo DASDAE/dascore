@@ -80,7 +80,7 @@ def track(
     length
         The number of items, for sequences which cannot report their own.
     min_length
-        The minimum length to emmit a progress bar.
+        The minimum length to emit a progress bar.
     """
     total = get_track_length(sequence, length, min_length)
     # This is a dirty hack to allow debugging while running tests.
