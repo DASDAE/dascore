@@ -215,12 +215,9 @@ class TestStressNoFalseNegatives:
                 # timedelta64 a signedinteger subtype, so check dtype.kind.
                 if np.dtype(csum.dtype).kind not in "iuf":
                     continue
-                factor = 1.0
-                if csum.units is not None:
-                    factor = float(
-                        get_quantity(str(csum.units)).to_base_units().magnitude
-                    )
-                if float(csum.min) * factor <= hi and float(csum.max) * factor >= lo:
+                # A bare range means each coordinate's native units, so the
+                # oracle compares raw stored values — no unit conversion.
+                if float(csum.min) <= hi and float(csum.max) >= lo:
                     assert str(summary.source_path).replace("\\", "/") in got, (
                         name,
                         lo,

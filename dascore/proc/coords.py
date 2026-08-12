@@ -725,7 +725,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     ndim = patch.ndim
     # First get data with empty dimensions
     insert_inds = [x + ndim for x in range(len(kwargs))]
-    data = np.expand_dims(patch.data, insert_inds)
+    data = np.expand_dims(patch.data, tuple(insert_inds))
     shapes = list(data.shape)
     for ind, (_, cdata) in zip(insert_inds, kwargs.values()):
         shapes[ind] = cdata if isinstance(cdata, int) else len(cdata)

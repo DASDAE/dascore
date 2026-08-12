@@ -19,6 +19,7 @@ from dascore.io.index.planned import (
     _aux_coord_info,
     _coord_record_from_row,
     _ns,
+    _stated_units,
     collapse_working_df,
     derived_catalog,
 )
@@ -339,3 +340,16 @@ class TestCollapseGuard:
         """A live catalog has no plan to collapse."""
         catalog = dc.spool([dc.get_example_patch()])._catalog
         assert collapse_working_df(catalog) is None
+
+
+class TestStatedUnits:
+    """Row values arrive from dataframes, so absence is NaN."""
+
+    @pytest.mark.parametrize("value", [None, "", np.nan, pd.NaT])
+    def test_absent_units_read_as_none(self, value):
+        """NaN never equals itself, so it must not look like a mismatch."""
+        assert _stated_units(value) is None
+
+    def test_stated_units_pass_through(self):
+        """A real spelling survives as a string."""
+        assert _stated_units("ft") == "ft"

@@ -32,7 +32,7 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 Patches may only combine when they agree on all of:
 
 1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: acquisition key, data type/category, and tag), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
-2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's canonical units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet plan together and assembly converts them to the first member's units).
+2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
 
@@ -75,7 +75,7 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
 
 ## Chunking by size
 
-A chunk length may be a quantity instead of a bare number: either the coordinate's own units (`time=10 * s`, converted to the envelope's canonical units) or a quantity of information (`time=25 * megabytes`), which sizes each output by its data array. `overlap` accepts the same forms.
+A chunk length may be a quantity instead of a bare number: either a compatible unit (`time=10 * s`, `distance=100 * m`, converted to the partition's stated coordinate units — a spool recording no units for the coordinate raises, since there is nothing to convert to) or a quantity of information (`time=25 * megabytes`), which sizes each output by its data array. A bare length means the coordinate's own units, like every other bare number. `overlap` accepts the same forms.
 
 A size resolves per partition, because the conversion needs that partition's sampling interval, its extent along the *other* dimensions, and its element dtype:
 

@@ -425,7 +425,6 @@ class TestNoFalseNegatives:
     def test_random_numeric_ranges(self, backend):
         """Random numeric ranges."""
         rng = np.random.default_rng(7)
-        factor = {"m": 1.0, "ft": 0.3048}
         summaries = make_summaries()
         for _ in range(25):
             lo = float(rng.uniform(-100, 1000))
@@ -437,8 +436,9 @@ class TestNoFalseNegatives:
                 dcoord = summary.coords.get("distance")
                 if dcoord is None:
                     continue
-                scale = factor[str(dcoord.units.units)] if dcoord.units else 1.0
-                if dcoord.min * scale <= hi and dcoord.max * scale >= lo:
+                # bare bounds mean native units: the oracle compares raw
+                # stored values, no conversion
+                if dcoord.min <= hi and dcoord.max >= lo:
                     assert str(summary.source_path).replace("\\", "/") in result_paths
 
 

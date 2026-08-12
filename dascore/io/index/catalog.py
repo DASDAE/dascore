@@ -43,6 +43,7 @@ from dascore.io.index.query import (
 from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import (
     _canonical_range,
+    _CanonicalRange,
     express_range_for_coord,
     is_range,
 )
@@ -56,13 +57,41 @@ _DIRECTORY_ORDER = ("coord", "time", True)
 
 
 def _envelope_range(value):
-    """Return a range with quantity bounds as SI magnitudes.
+    """Return the presented-envelope form of one range selector.
 
-    Stored envelope columns are canonical SI, so the presented-envelope
-    adjustment needs bare magnitudes; non-numeric ranges pass through.
+    Bare ranges pass through untouched: they mean native units, and the
+    stored envelope columns are native, so the presented-envelope
+    adjustment is a direct comparison. Quantity ranges stay a
+    `_CanonicalRange` so `_adjust_unit_segments` can convert them per
+    distinct row unit.
     """
     canonical = _canonical_range(value)
-    return value if canonical is None else canonical.magnitudes
+    return value if canonical is None else canonical
+
+
+def _adjust_unit_segments(df, name, canonical):
+    """Trim one coord's presented envelopes by a unit-bearing range.
+
+    Envelope columns hold each row's native magnitudes, so the range
+    re-expresses itself per distinct row unit (`magnitudes_in`); rows
+    with no stated unit take the magnitudes bare, matching the query
+    layer's rule that they stay candidates.
+    """
+    unit_col = f"_{name}_units"
+    if df.empty:
+        return df
+    if unit_col not in df.columns:
+        return adjust_segments(
+            df, ignore_bad_kwargs=True, **{name: canonical.magnitudes}
+        )
+    pieces = []
+    for unit, sub in df.groupby(df[unit_col], dropna=False, sort=False):
+        if unit is None or pd.isnull(unit) or unit == "":
+            rng = canonical.magnitudes
+        else:
+            rng = canonical.magnitudes_in(str(unit))
+        pieces.append(adjust_segments(sub, ignore_bad_kwargs=True, **{name: rng}))
+    return pd.concat(pieces).sort_index()
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
@@ -73,9 +102,13 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     quantities itself and needs their units to constrain candidacy to
     dimensionally compatible coordinate definitions (a metre query must
     exclude — or raise on — a seconds coordinate, never trim it).
-    The residual keeps the range as a `_CanonicalRange` (canonical SI
-    magnitudes plus the query's base unit) so each patch decides its
-    own representation at load time, which keeps mixed unitful/unitless
+
+    A bare numeric range means each coordinate's native units, so it is
+    its own residual: `Patch.select` reads it natively at load, exactly
+    matching the index candidacy. A range with any unit-bearing bound
+    becomes a `_CanonicalRange` (canonical SI magnitude and base unit
+    per bound, bare bounds staying raw) so each patch decides its own
+    representation at load time, which keeps mixed unitful/unitless
     populations correct.
 
     Selectors on non-numeric coordinates (time ranges, string ranges)
@@ -800,8 +833,9 @@ class PatchCatalog:
                 coords=self._relative_to_absolute(query.coords),
             )
         # coord range predicates are re-applied exactly at patch load;
-        # the residual carries canonical quantities so per-patch native
-        # units are respected while the query side stays SI.
+        # bare ranges are their own residual (native units on both
+        # sides), unit-bearing ones carry canonical quantities so each
+        # patch converts them to its own units.
         residuals = self._residuals
         if query.coords:
             si_coords, residual_coords = _canonical_coord_selectors(
@@ -861,7 +895,16 @@ class PatchCatalog:
             if range_dicts and len(set(names)) == len(names):
                 range_dicts = [{k: v for d in range_dicts for k, v in d.items()}]
             for ranges in range_dicts:
-                df = adjust_segments(df, ignore_bad_kwargs=True, **ranges)
+                bare = {
+                    k: v
+                    for k, v in ranges.items()
+                    if not isinstance(v, _CanonicalRange)
+                }
+                if bare:
+                    df = adjust_segments(df, ignore_bad_kwargs=True, **bare)
+                for name, canonical in ranges.items():
+                    if isinstance(canonical, _CanonicalRange):
+                        df = _adjust_unit_segments(df, name, canonical)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)

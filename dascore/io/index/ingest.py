@@ -3,8 +3,12 @@ Convert patch summaries into normalized index records.
 
 This module is backend-independent: it turns `PatchSummary` objects into
 plain records (dicts/dataclasses) using only the four primitive storage
-types. All unit-bearing numeric values are normalized to pint base SI
-units here, so cross-patch comparisons in the index are always valid.
+types. Coordinate envelopes are stored in each coordinate's ORIGINAL
+units beside the original unit string — never converted — so the index
+shows what the patch shows and a bare numeric query means native units.
+Unit-bearing attr values are still normalized to pint base SI (one
+canonical unit per attr column); unit-bearing queries convert themselves
+per stored coordinate unit at query time.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from dascore.io.index.schema import (
     PatchRow,
     SourceRow,
 )
-from dascore.units import get_quantity
+from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.misc import validate_acquisition_key
 from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.pd import iter_rows
@@ -96,12 +100,18 @@ class CoordRecord:
         value identity), otherwise a hash of the stored summary fields
         ("sum:" prefix; lossless for the index but too weak for
         value-identity claims). Name and dims are patch-level and
-        excluded.
+        excluded. The unit spelling rides after "|" on the fp form:
+        fingerprints simplify units before hashing, so one physical
+        coordinate spelled in metres and in feet hashes identically —
+        but the stored def rows carry spelling-dependent units and
+        envelopes, so deduplicating them together would let the first
+        spelling's row lie for the second.
         """
         if self.coord_hash:
             # truncated: 128 bits is ample and key size shows up in the
             # def_key index for archives with mostly-unique time coords
-            return f"fp:{self.coord_hash[:32]}"
+            key = f"fp:{self.coord_hash[:32]}"
+            return f"{key}|{self.units}" if self.units else key
         fields = (
             self.value_kind,
             self.dtype,
@@ -169,10 +179,12 @@ def attr_column_name(name: str, kind: str) -> str:
     return f"{sanitize_attr_name(name)}__{kind}"
 
 
-def _base_unit_info(value, unit_str: str | None = None) -> tuple[float, str]:
-    """Return a value's base-unit magnitude and canonical unit string."""
-    quant = value if unit_str is None else value * get_quantity(unit_str)
-    quant = get_quantity(quant)
+def _base_unit_info(value) -> tuple[float, str]:
+    """Return an attr quantity's base-unit magnitude and unit string.
+
+    Attrs only: coordinate envelopes store original units untouched.
+    """
+    quant = get_quantity(value)
     assert quant is not None  # unit-bearing values only
     quant = quant.to_base_units()
     return float(quant.magnitude), str(quant.units)
@@ -330,10 +342,12 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         # A range summary contains its complete representation, so recover the
         # same exact identity a loaded CoordRange would have produced.
         fingerprint = summary.to_coord().fingerprint()
-    # str() on a pint Quantity is comparatively expensive; do it once and
-    # reuse it below (a Quantity-keyed cache is unsafe — 1 m == 100 cm with
-    # equal hashes but different strings).
-    units_str = str(summary.units) if summary.units is not None else None
+    # Stringify the pint Quantity once (a Quantity-keyed cache is unsafe —
+    # 1 m == 100 cm with equal hashes but different strings). This is the
+    # ORIGINAL unit, cleanly spelled: get_quantity_str drops the "1 " a
+    # magnitude-one Quantity would print while a scaled unit keeps its
+    # factor, so the string still means exactly what the patch stated.
+    units_str = get_quantity_str(summary.units) if summary.units is not None else None
     common = _CommonCoordFields(
         coord_name=name,
         dtype=summary.dtype,
@@ -358,22 +372,17 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             **common,
         )
     if np.issubdtype(dtype, np.number):
-        min_num = float(summary.min)
-        max_num = float(summary.max)
+        # Envelopes are stored in the coordinate's ORIGINAL units, never
+        # converted, beside the original unit string — what the patch
+        # shows is what the index shows, and a bare query means these
+        # native magnitudes. Only unit-bearing *queries* convert (per
+        # stored unit, in the query layer).
         step = summary.step
-        step_num = None if pd.isnull(step) else float(step)
-        if units_str is not None:
-            min_num, base = _base_unit_info(summary.min, units_str)
-            max_num, _ = _base_unit_info(summary.max, units_str)
-            if step_num is not None:
-                step_end, _ = _base_unit_info(summary.min + summary.step, units_str)
-                step_num = step_end - min_num
-            common["units"] = base
         return CoordRecord(
             value_kind="num",
-            min_num=min_num,
-            max_num=max_num,
-            step_num=step_num,
+            min_num=float(summary.min),
+            max_num=float(summary.max),
+            step_num=None if pd.isnull(step) else float(step),
             **common,
         )
     if dtype.kind in "USO":
