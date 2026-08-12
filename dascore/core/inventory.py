@@ -44,6 +44,7 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     check_code,
     is_strictly_monotonic,
@@ -52,6 +53,7 @@ from dascore.utils.misc import (
 )
 from dascore.utils.models import (
     DateTime64,
+    FrozenDictType,
     InventoryModel,
     TimeRangedModel,
     UnitQuantity,
@@ -1797,7 +1799,7 @@ class Inventory(InventoryModel):
         default_factory=CreationInfo,
         description="QuakeML-style creation and update metadata.",
     )
-    resources: dict[str, _Resource] = Field(
+    resources: FrozenDictType[str, _Resource] = Field(
         default_factory=dict,
         description="Shareable resources keyed by resource_id.",
     )
@@ -1813,7 +1815,9 @@ class Inventory(InventoryModel):
     @classmethod
     def _key_resources(cls, value):
         """Accept an iterable of resources, keying them by resource_id."""
-        if isinstance(value, dict):
+        # Mapping, not dict: FrozenDict is not a dict, so another inventory's
+        # pool would fall through to the iterable-of-resources branch.
+        if isinstance(value, Mapping):
             out = {}
             for key, resource in value.items():
                 if isinstance(resource, dict):
@@ -1948,7 +1952,8 @@ class Inventory(InventoryModel):
                     f"{type(pool[rid]).__name__}, expected one of {names}."
                 )
                 raise InvalidInventoryError(msg)
-        object.__setattr__(self, "resources", pool)
+        # object.__setattr__ bypasses the field validator, so freeze here.
+        object.__setattr__(self, "resources", FrozenDict(pool))
         object.__setattr__(self, "networks", networks)
         self.__pydantic_fields_set__.update({"resources", "networks"})
         return self

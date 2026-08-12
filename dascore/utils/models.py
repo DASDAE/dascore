@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import cached_property
-from typing import Annotated
+from typing import Annotated, TypeVar
 
 import numpy as np
 import pandas as pd
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,6 +29,8 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 # --- A list of custom types with appropriate serialization/deserialization
 # these can just be use with pydantic type-hints.
 
+# Freezes without validating contents. Use FrozenDictType below when the
+# declared value types must still be enforced.
 frozen_dict_validator = PlainValidator(lambda x: FrozenDict(x))
 frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
 
@@ -67,10 +70,16 @@ CommaSeparatedStr = Annotated[
     str, PlainValidator(lambda x: x if isinstance(x, str) else ",".join(x))
 ]
 
+K = TypeVar("K")
+V = TypeVar("V")
+
+# Mapping, not dict: the runtime value is a FrozenDict, so a dict annotation
+# would let type checkers pass writes that raise. AfterValidator, not
+# PlainValidator: a plain validator would replace the declared value-type check.
 FrozenDictType = Annotated[
-    FrozenDict,
-    frozen_dict_validator,
-    frozen_dict_serializer,
+    Mapping[K, V],
+    AfterValidator(lambda x: FrozenDict(x)),
+    PlainSerializer(dict),
 ]
 
 UTF8Str = Annotated[str, PlainValidator(unbyte)]
@@ -120,6 +129,29 @@ def values_equal(val1, val2) -> bool:
     return bool(val1 == val2 or (_all_null(val1) and _all_null(val2)))
 
 
+def _hash_key(value):
+    """Map a value onto one that hashes the way values_equal compares."""
+    if value is None or isinstance(value, str | int):
+        return value
+    # Nulls count as equal to one another above, but every nan and NaT is a
+    # fresh object and both hash by identity, so they collapse to one key.
+    if isinstance(value, float):
+        return None if value != value else value
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return None if np.isnat(value) else value
+    # Mappings are compared without regard to order.
+    if isinstance(value, Mapping):
+        return frozenset((k, _hash_key(v)) for k, v in value.items())
+    if isinstance(value, tuple):
+        return tuple(_hash_key(v) for v in value)
+    return value
+
+
+def sensible_model_hash(self: BaseModel) -> int:
+    """Hash a model on its fields, agreeing with sensible_model_equals."""
+    return hash(tuple(_hash_key(getattr(self, x)) for x in type(self).model_fields))
+
+
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
 
@@ -154,6 +186,9 @@ class DascoreBaseModel(BaseModel):
         return out
 
     __eq__ = sensible_model_equals
+    # Defined together: pydantic would otherwise derive a hash straight from
+    # the field values, which disagrees with how __eq__ treats nulls.
+    __hash__ = sensible_model_hash
 
 
 class InventoryModel(DascoreBaseModel):
@@ -165,10 +200,14 @@ class InventoryModel(DascoreBaseModel):
     (free prose for humans, matching StationXML's Description element)
     and ``extra_fields`` (typed key-values, e.g. for round-tripping
     unmodeled metadata from external formats).
+
+    Every field is immutable: collections are tuples and mappings are
+    frozen, so instances are safe to hold by reference. They hash on their
+    field values whenever those values are themselves hashable.
     """
 
     description: str = Field(default="", description="Free-text description.")
-    extra_fields: dict[str, str | int | float | bool] = Field(
+    extra_fields: FrozenDictType[str, str | int | float | bool] = Field(
         default_factory=dict,
         description="Extra metadata not represented by standardized fields.",
     )
