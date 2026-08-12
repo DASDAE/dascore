@@ -62,13 +62,18 @@ class _ManagedH5pyFile:
     the entire HDF5 access stack.
     """
 
+    # Class defaults, so a half-built instance is still closeable rather than
+    # falling through __getattr__ to a handle that may not be set yet.
+    _closed = False
+    _gc_paused_pid = None
+
     def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
         self._handle = handle
         self._owned_fileobj = owned_fileobj
-        # The pid that paused, so a handle inherited through a fork cannot
-        # resume a pause the child never took.
-        self._gc_paused_pid = os.getpid() if gc_paused else None
-        self._closed = False
+        if gc_paused:
+            # The pid that paused, so a handle inherited through a fork
+            # cannot resume a pause the child never took.
+            self._gc_paused_pid = os.getpid()
 
     def close(self):
         """Close the h5py file and, when present, the owned file object."""
@@ -91,9 +96,17 @@ class _ManagedH5pyFile:
                     resume_gc()
 
     def __del__(self):
-        """Backstop close so a leaked handle cannot pause collection forever."""
-        with suppress(Exception):
-            self.close()
+        """
+        Release a leaked handle's pause so it cannot stop collection forever.
+
+        Only the pause: closing here would also close a caller-supplied h5py
+        file or stream that this wrapper never had permission to close.
+        Reference counting still tears the underlying handles down.
+        """
+        pid = self.__dict__.pop("_gc_paused_pid", None)
+        if pid == os.getpid():
+            with suppress(Exception):
+                resume_gc()
 
     def __enter__(self):
         return self
@@ -127,10 +140,10 @@ def _is_loop_backed(resource) -> bool:
     fsspec async filesystems (http, s3, ...) bridge each read onto a shared
     event-loop thread and mark themselves with ``async_impl``; duck-typing it
     avoids importing fsspec here. Local, memory, and other synchronous
-    backends need no GC pause. Buffering wrappers hide the filesystem, so
-    unwrap a few levels: missing one would leave the deadlock window open.
+    backends need no GC pause. A buffered reader hides the filesystem behind
+    ``raw``, so unwrap it: missing it would leave the deadlock window open.
     """
-    for _ in range(4):
+    while resource is not None:
         try:
             fs = getattr(resource, "fs", None)
         except Exception:
@@ -139,10 +152,8 @@ def _is_loop_backed(resource) -> bool:
             return False
         if getattr(fs, "async_impl", False):
             return True
-        wrapped = getattr(resource, "raw", None) or getattr(resource, "buffer", None)
-        if wrapped is None or wrapped is resource:
-            return False
-        resource = wrapped
+        wrapped = getattr(resource, "raw", None)
+        resource = None if wrapped is resource else wrapped
     return False
 
 
@@ -161,13 +172,18 @@ def _open_h5_fileobj(
     same object to every FiberIO in turn, and an HDF5 miss is the expected
     outcome for most of them.
     """
-    if pause:
-        pause_gc()
     try:
+        if pause:
+            # Inside the try, and paired unconditionally below, because
+            # pause_gc always leaves the depth consistent with the pauses it
+            # took -- even when interrupted partway.
+            pause_gc()
         handle = constructor(fileobj, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
     except BaseException:
-        # Nested so nothing raised while closing, including a BaseException,
-        # can skip the resume and strand the pause.
+        # Everything the pause covers runs in here, so an interrupt at any
+        # point still rebalances. Nested so nothing raised while closing,
+        # including a BaseException, can skip the resume.
         try:
             if close_on_error:
                 with suppress(Exception):
@@ -176,7 +192,6 @@ def _open_h5_fileobj(
             if pause:
                 resume_gc()
         raise
-    return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
 
 
 def get_h5py_file(handle) -> H5pyFile:

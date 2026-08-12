@@ -464,6 +464,18 @@ class TestGetHandleFromResource:
         handle.close()
         assert gc.isenabled()
 
+    def test_dropped_wrapper_leaves_caller_handle_open(self, generic_hdf5):
+        """Collecting a wrapper must not close the handle its caller owns."""
+        file = h5py.File(generic_hdf5, "r")
+        try:
+            wrapper = H5Reader.get_handle(file)
+            assert wrapper is not file
+            del wrapper
+            gc.collect()
+            assert file  # h5py files are falsey once closed
+        finally:
+            file.close()
+
     def test_failed_open_leaves_caller_fileobj_usable(self):
         """A caller's file object must survive a failed HDF5 open.
 

@@ -209,6 +209,20 @@ def get_handle_from_resource(uri, required_type):
     return uri
 
 
+def release_handle(handle, abort: bool = False):
+    """
+    Release a file handle, closing it or discarding its uncommitted work.
+
+    Only a few handles can ``abort``; a remote HDF5 writer does, because
+    closing it uploads whatever was written so far. Everything else is
+    closed, and a handle with no ``close`` needs no release at all.
+    """
+    if abort and hasattr(handle, "abort"):
+        handle.abort()
+    else:
+        getattr(handle, "close", lambda: None)()
+
+
 class IOResourceManager:
     """
     A class for managing opening/closing files.
@@ -270,10 +284,7 @@ class IOResourceManager:
         with self._lock:
             for handle in self._cache.values():
                 try:
-                    if abort and hasattr(handle, "abort"):
-                        handle.abort()
-                    else:
-                        getattr(handle, "close", lambda: None)()
+                    release_handle(handle, abort=abort)
                 except BaseException as exc:
                     first_exc = first_exc if first_exc is not None else exc
         if first_exc is not None:

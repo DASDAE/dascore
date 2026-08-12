@@ -1625,6 +1625,37 @@ class TestCastType:
             _Exploder().read(dummy_text_file)
         assert recorder.closed
 
+    def test_handle_aborted_when_write_raises(self, dummy_text_file, monkeypatch):
+        """A failed write must discard its handle, not commit a partial file."""
+
+        class _Recorder:
+            aborted = False
+            closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            "dascore.io.core.get_handle_from_resource",
+            lambda resource, required_type: recorder,
+        )
+
+        class _BadWriter(FiberIO):
+            name = "_BadWriterIO"
+            version = "1"
+
+            def write(self, patch, resource: BinaryWriter, **kwargs):
+                raise ValueError("mid-write failure")
+
+        with pytest.raises(ValueError, match="mid-write failure"):
+            _BadWriter().write(None, dummy_text_file)
+        assert recorder.aborted
+        assert not recorder.closed
+
 
 class TestGetSupportedIOTable:
     """A test for creating the supported io table."""

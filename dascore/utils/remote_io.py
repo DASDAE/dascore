@@ -69,12 +69,15 @@ def pause_gc() -> None:
     closes that window; reference counting still frees non-cyclic garbage.
 
     Calls nest; every ``pause_gc`` needs one ``resume_gc``. ``_ManagedH5pyFile``
-    pairs them with ``close``/``__del__``.
+    pairs them with ``close``/``__del__``. An interrupted ``pause_gc`` still
+    leaves the depth consistent with the pauses it took, so a caller which
+    resumes on any failure stays balanced.
 
     The pause is process-global, so cyclic garbage from every thread
     accumulates until the last remote handle closes. A handle which is never
     closed keeps it paused; one which is dropped inside a reference cycle is
-    recovered by the collection below, on the next remote open.
+    recovered by the collection below, on the next remote open -- if the
+    program makes one. Otherwise the pause outlives every remote read.
     """
     global _gc_pause_depth, _gc_was_enabled
     # Safety valve: finalize cyclic garbage, including a handle leaked by an
@@ -85,12 +88,15 @@ def pause_gc() -> None:
     if _claim_safety_collect():
         gc.collect()
     with _gc_pause_lock:
-        # Count first: an interrupt before ``disable`` leaves a pending resume
-        # (harmless); the reverse order could leave gc off with none pending.
-        _gc_pause_depth += 1
-        if _gc_pause_depth == 1:
-            _gc_was_enabled = gc.isenabled()
-            gc.disable()
+        # The count must move even if ``disable`` is interrupted, or the depth
+        # stops matching the live handles: it would never fall back to zero,
+        # so no later pause would ever disable collection again.
+        try:
+            if _gc_pause_depth == 0:
+                _gc_was_enabled = gc.isenabled()
+                gc.disable()
+        finally:
+            _gc_pause_depth += 1
 
 
 def resume_gc() -> None:
@@ -113,11 +119,13 @@ def _reset_gc_pause_state():
     Handles inherited by the child record the pid that paused for them, so
     closing one there cannot resume a pause this child never took.
     """
-    global _gc_pause_depth, _gc_pause_lock
+    global _gc_pause_depth, _gc_pause_lock, _gc_collect_after
     _gc_pause_lock = threading.Lock()
     if _gc_pause_depth and _gc_was_enabled:
         gc.enable()
     _gc_pause_depth = 0
+    # The parent's rate limit does not describe this process.
+    _gc_collect_after = 0.0
 
 
 @_reinit_after_fork

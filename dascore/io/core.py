@@ -60,7 +60,11 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
-from dascore.utils.io import IOResourceManager, get_handle_from_resource
+from dascore.utils.io import (
+    IOResourceManager,
+    get_handle_from_resource,
+    release_handle,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _get_install_message,
@@ -869,12 +873,14 @@ def _type_caster(func, sig, required_type, arg_name):
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
         except BaseException as e:
-            # A handle created here must close even on failure, including on
-            # KeyboardInterrupt; leaking a remote handle would leave garbage
-            # collection paused for as long as the traceback is retained.
+            # A handle created here must be released even on failure,
+            # including on KeyboardInterrupt: leaking a remote handle leaves
+            # garbage collection paused for as long as the traceback is
+            # retained. Abort rather than close, so a failed remote write
+            # discards its temp file instead of uploading a partial one.
             if new_resource is not None and new_resource is not resource:
                 with suppress(Exception):
-                    getattr(new_resource, "close", lambda: None)()
+                    release_handle(new_resource, abort=True)
             # get_format can't raise; it must return False instead.
             if fun_name != "get_format" or not isinstance(e, Exception):
                 raise
@@ -882,8 +888,8 @@ def _type_caster(func, sig, required_type, arg_name):
         else:
             # if a new file handle was created we need to close it now. But it
             # shouldn't close any passed in, that should happen up the stack.
-            if new_resource is not resource and hasattr(new_resource, "close"):
-                new_resource.close()
+            if new_resource is not resource:
+                release_handle(new_resource)
         return out
 
     # attach the function and required type for later use
