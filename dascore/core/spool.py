@@ -269,6 +269,31 @@ def _drops_samples(rows: pd.DataFrame, pieces, name: str) -> bool:
     return False
 
 
+def _check_stampable(name: str, rows: pd.DataFrame) -> None:
+    """
+    Refuse a stamp which would overwrite the plan's own bookkeeping.
+
+    An annotation group may be named anything the inventory does not
+    reserve, and the stamp is assigned onto the outputs — so a group
+    called `output_id` would replace the column binding each output to
+    its members, and one called `time_min` an envelope. Overwriting a
+    carried attr is fine and is how re-splitting restamps; these are not
+    attrs.
+    """
+    envelopes = {
+        x for x in rows.columns if x.rsplit("_", 1)[-1] in {"min", "max", "step"}
+    }
+    if name not in {"output_id", "dims", *envelopes} and not name.startswith("_"):
+        return
+    msg = (
+        f"{name!r} is how the spool itself describes a patch, so stamping "
+        "it would overwrite what binds each output to the data it came "
+        "from. Rename the group, or pass stamp=False to split on it "
+        "without recording the value."
+    )
+    raise InvalidSpoolQueryError(msg)
+
+
 def _stated_channels(channels: dict) -> dict:
     """
     Return the channel selectors which actually select something.
@@ -1175,12 +1200,16 @@ class Spool(BaseSpool):
         # describes are the patch's -- and no endpoints to be relative to,
         # since what it says varies from one acquisition to the next.
         # Ignoring either quietly would answer a question nobody asked.
+        # Judged against the selectors which actually select something: a
+        # bare `...` names a fiber coordinate without asking anything of
+        # it, so it must not veto a flag the rest of the query needs.
+        stated_channels = _stated_channels(channels)
         for flag, label in ((samples, "samples"), (relative, "relative")):
-            if not (channels and flag):
+            if not (stated_channels and flag):
                 continue
             msg = (
-                f"{sorted(channels)} name coordinates the inventory defines "
-                f"along the fiber, which {label}=True cannot describe: it "
+                f"{sorted(stated_channels)} name coordinates the inventory "
+                f"defines along the fiber, which {label}=True cannot describe: it "
                 "asks about the patch's own axis, and these say what is "
                 "attached to each channel of it."
             )
@@ -1389,8 +1418,10 @@ class Spool(BaseSpool):
         Attaching promises nothing about the spool matching the
         inventory;
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
-        is what makes it so. Selecting on the coordinates an inventory
-        defines along the fiber is not implemented yet.
+        is what makes it so. Once attached, the coordinates the
+        inventory defines along the fiber become selectable, and
+        [`split_by`](`dascore.core.spool.Spool.split_by`) can expand the
+        spool by the values of one.
         """
         if not isinstance(inventory, Inventory):
             msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
@@ -1589,6 +1620,8 @@ class Spool(BaseSpool):
             )
             raise InvalidSpoolQueryError(msg)
         source_rows, working = self._plan_frames()
+        if stamp:
+            _check_stampable(name, working)
         contexts = self._plan_contexts(working)
         dim, rows, reasons = resolve_split_pieces(
             self._inventory, contexts, working, name, _glob_filter(include, exclude)

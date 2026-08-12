@@ -47,7 +47,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.proc.inventory import resolve_row_epochs
-from dascore.units import cm, m
+from dascore.units import cm, get_quantity, m
 
 
 @pytest.fixture(scope="module")
@@ -3380,3 +3380,56 @@ class TestChannelReviewFindings:
         assert not conformed._catalog.resolver.lossy
         selected = dc.spool(patch).attach_inventory(inventory).select(coupling="trench")
         assert selected._catalog.resolver.lossy
+
+    def test_a_stamp_cannot_overwrite_the_plan(self, patch, inventory):
+        """
+        A group may be named anything the inventory does not reserve,
+        and the stamp is assigned onto the plan's outputs — so a group
+        called `output_id` would replace what binds each output to the
+        data it came from, and the catalog would be built from nonsense.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        clash = inventory.replace(
+            path,
+            path.new(
+                annotations=(
+                    OpticalPathAnnotation(
+                        start_distance=100.0,
+                        end_distance=200.0,
+                        group="output_id",
+                        value="a",
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(clash)
+        with pytest.raises(InvalidSpoolQueryError, match="overwrite"):
+            spool.split_by("output_id")
+        # Splitting on it is still legal; only recording the value is not.
+        assert len(spool.split_by("output_id", stamp=False)) == 1
+
+    def test_a_no_op_channel_selector_does_not_veto_a_flag(self, patch, inventory):
+        """
+        `...` names a fiber coordinate without asking anything of it, so
+        it must not refuse a `samples` the rest of the query needs.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(distance=(0, 10), coupling=..., samples=True)
+        assert len(out) == 1
+        assert out[0].shape == (10, patch.shape[1])
+        # A selector which does ask something still refuses it.
+        with pytest.raises(InvalidSpoolQueryError, match="samples=True cannot"):
+            spool.select(coupling="trench", samples=True)
+
+    def test_a_scalar_quantity_selector_is_converted(self, patch, inventory):
+        """
+        A geometry axis is stored in the CRS's own units while a quantity
+        selector is typed in its base unit, so comparing the magnitudes
+        unconverted matched nothing — where the range form matched.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        enriched = patch.enrich(inventory, coords=("y",), attrs=False)
+        stated = float(enriched.get_array("y")[0])
+        degrees = get_quantity("degree")
+        assert len(spool.select(y=stated)) == 1
+        assert len(spool.select(y=stated * degrees)) == 1

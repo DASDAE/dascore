@@ -577,8 +577,9 @@ def unselect(
     Return the patch outside a selection.
 
     The complement of [`Patch.select`](`dascore.Patch.select`): it takes
-    the same selectors and removes exactly the samples that selection
-    would have kept.
+    the same selectors and removes the samples that selection would have
+    kept. With one coordinate named that is exactly the complement; with
+    several, each is complemented on its own — see the note below.
 
     Parameters
     ----------
@@ -612,9 +613,12 @@ def unselect(
     - Removing a range from the middle of a coordinate leaves a hole in
       it, so the result is no longer evenly sampled and the coordinate
       becomes a monotonic array. That is exactly what
-      [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses
-      coordinates for: at spool level the complement of a range is a hole
-      in every patch rather than a choice between patches.
+      [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the
+      patches' *own* coordinates for: at spool level the complement of a
+      range is a hole in every patch rather than a choice between
+      patches. The coordinates an attached inventory defines along the
+      fiber it does accept, since removing one of those chooses which
+      channels a patch holds.
 
     - Each named coordinate is complemented on its own. Selecting on two
       coordinates keeps the samples in both ranges, and everything
