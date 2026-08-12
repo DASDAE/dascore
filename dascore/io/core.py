@@ -881,7 +881,11 @@ def _type_caster(func, sig, required_type, arg_name):
             if new_resource is not None and new_resource is not resource:
                 with suppress(Exception):
                     release_handle(new_resource, abort=True)
-            # get_format can't raise; it must return False instead.
+            # get_format reports "not my format" by returning False rather
+            # than raising, so an ordinary Exception becomes False here.
+            # Everything else propagates, including a BaseException raised
+            # inside get_format: the catch is only this wide so the cleanup
+            # above runs on a KeyboardInterrupt, not to swallow one.
             if fun_name != "get_format" or not isinstance(e, Exception):
                 raise
             out = False

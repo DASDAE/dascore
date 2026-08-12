@@ -154,8 +154,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The same OS list as test_code; the deadlock these tests cover was
-        # platform-agnostic, so every supported platform should exercise it.
         os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
 
     # Keep remote-IO coverage visible without blocking unrelated changes.
