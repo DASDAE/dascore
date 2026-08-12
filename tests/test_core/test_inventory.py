@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import get_args, get_origin
-
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -1799,21 +1797,17 @@ class TestGetNames:
         excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
         assert not set(names.attrs) & excluded
 
-    def test_track_identity_fields_exist(self):
+    def test_a_declaration_naming_nothing_is_refused(self, monkeypatch):
         """
-        Each blessed track name maps to a real field of that track's model.
+        The map is derived, and the derivation checks what it derives.
 
-        The map is the one hand-written piece of the vocabulary, so it is
-        the one piece which can drift away from the models.
+        A model declaring an identity field it does not have would build
+        an entry pointing at nothing, so it fails where it is built
+        rather than somewhere a bare track name quietly resolves to NaN.
         """
-        path_fields = inv.OpticalPath.model_fields
-        for track, field in inv.TRACK_IDENTITY_FIELDS.items():
-            assert track in path_fields, track
-            members = inv._annotation_members(path_fields[track].annotation)
-            (item,) = [x for x in members if get_origin(x) is tuple]
-            for model in inv._annotation_members(get_args(item)[0]):
-                if isinstance(model, type) and issubclass(model, inv.InventoryModel):
-                    assert field in model.model_fields, (track, model)
+        monkeypatch.setattr(inv.CouplingCondition, "_identity_field", "not_a_field")
+        with pytest.raises(AssertionError):
+            inv._track_identity_fields()
 
     def test_coords_hold_the_tracks_and_groups(self, names):
         """The path's tracks, their fields, and its annotation groups."""

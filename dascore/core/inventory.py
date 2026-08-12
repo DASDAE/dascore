@@ -22,6 +22,7 @@ from types import MappingProxyType, UnionType
 from typing import (
     Annotated,
     Any,
+    ClassVar,
     Literal,
     NamedTuple,
     TypeAlias,
@@ -373,6 +374,7 @@ class _OpticalComponentBase(InventoryModel):
     with their measurements, which carry the wavelengths.
     """
 
+    _identity_field: ClassVar[str] = "name"
     optical_length: FiniteFloat = Field(
         default=0.0,
         ge=0.0,
@@ -516,6 +518,7 @@ class Geometry(InventoryModel):
     crosses segments; uncovered distance has undefined coordinates.
     """
 
+    _identity_field: ClassVar[str] = "name"
     name: str = Field(default="", description="Human-readable geometry name.")
     distance: tuple[float, ...] = Field(
         description=(
@@ -646,6 +649,7 @@ class CouplingCondition(_IntervalModel):
     and conditions may not overlap.
     """
 
+    _identity_field: ClassVar[str] = "coupling_type"
     coupling_type: CouplingType = Field(description="Controlled coupling category.")
     medium: str = Field(default="", description="Surrounding medium.")
     attachment: str = Field(default="", description="Attachment method.")
@@ -980,26 +984,38 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 _MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
 
-# The typed tracks of an optical path, each mapped to the field a bare use
-# of its name means: `coupling="trench"` asks about coupling_type, and a
-# geometry or component is asked about by name. Every other field of a
-# track is reached by its qualified name (`coupling.medium`). This is the
-# one place the mapping is written down; a test pins each entry to the
-# model it names.
-TRACK_IDENTITY_FIELDS = MappingProxyType(
-    {
-        "optical_components": "name",
-        "geometry": "name",
-        "coupling": "coupling_type",
-    }
-)
+
+def _track_identity_fields() -> Mapping[str, str]:
+    """
+    Map each typed track of an optical path to the field its name means.
+
+    `coupling="trench"` asks about coupling_type; every other field of a
+    track is reached by its qualified name (`coupling.medium`). Each
+    track model declares which of its fields is its identity, so the
+    pairing lives beside the field rather than in a list to keep in step
+    with it.
+    """
+    out = {}
+    for track, info in OpticalPath.model_fields.items():
+        # A track is a tuple of items; the path's scalar fields are not.
+        if get_origin(info.annotation) is not tuple:
+            continue
+        for model in _annotation_members(get_args(info.annotation)[0]):
+            field = getattr(model, "_identity_field", None)
+            if field is None:
+                continue
+            # The model names one of its own fields, or the map it builds
+            # would point at nothing.
+            assert field in model.model_fields, (model, field)
+            out[track] = field
+    return MappingProxyType(out)
+
 
 # Names an annotation group may not take: a group becomes a patch coordinate
 # at enrichment, where it would shadow one of these.
 RESERVED_GROUP_NAMES = frozenset(
     {"time", "distance", "channel", "instrument_distance"}
-    | set(TRACK_IDENTITY_FIELDS)
-    | {"annotations"}
+    | {"optical_components", "geometry", "coupling", "annotations"}
     | set(VALID_COORDINATE_LABELS)
 )
 
@@ -1745,6 +1761,9 @@ def _value_field_names(model) -> tuple[str, ...]:
         for name, info in model.model_fields.items()
         if name not in structural and _is_value_field(info)
     )
+
+
+TRACK_IDENTITY_FIELDS = _track_identity_fields()
 
 
 # The observing-system facts, read off the models rather than listed, so a
