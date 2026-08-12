@@ -6,13 +6,15 @@ import pickle
 
 import numpy as np
 import pytest
-from pydantic import Field
+from pydantic import Field, ValidationError
 
+from dascore.units import Quantity
 from dascore.utils.models import (
     DascoreBaseModel,
     DateTime64,
     FrozenDictType,
     TimeDelta64,
+    UnitQuantity,
     sensible_model_equals,
 )
 
@@ -54,6 +56,41 @@ class TestModelEquals:
         new = mod.new(some_str="bob")
         assert new.some_str == "bob"
         assert new is not mod
+
+
+class _UnitModel(DascoreBaseModel):
+    """A model carrying units."""
+
+    units: UnitQuantity | None = None
+
+
+class TestUnitQuantity:
+    """Units name a single unit, so they stay scalar."""
+
+    @pytest.mark.parametrize(
+        "spec", ["m/s", "1/s", "Hz", "2*degC", "2.5*degC", "10 m/s", 1.0, None, ""]
+    )
+    def test_real_spellings_accepted(self, spec):
+        """Every real unit spelling has a scalar magnitude, so it hashes."""
+        assert isinstance(hash(_UnitModel(units=spec)), int)
+
+    def test_sequence_refused(self):
+        """A sequence makes pint build a mutable, unhashable magnitude."""
+        with pytest.raises(ValidationError, match="single unit"):
+            _UnitModel(units=(1.0, 2.0))
+
+    @pytest.mark.parametrize("magnitude", [np.array([1.0, 2.0]), np.array(1.0)])
+    def test_array_magnitude_refused(self, magnitude):
+        """A quantity built by hand is held to the same rule."""
+        # A zero dimensional array is as writable as any other, so measuring
+        # how many dimensions it has would let this one through.
+        with pytest.raises(ValidationError, match="single unit"):
+            _UnitModel(units=Quantity(magnitude, "m"))
+
+    def test_serialized_units_validate_again(self):
+        """What the serializer writes has to survive being read back."""
+        model = _UnitModel(units="m/s")
+        assert _UnitModel(**model.model_dump()) == model
 
 
 class _NullModel(DascoreBaseModel):
@@ -108,15 +145,15 @@ class TestModelHash:
     def test_declaration_order_does_not_change_the_hash(self):
         """Equality compares field names, so declaration order cannot matter."""
 
-        class Ab(DascoreBaseModel):
+        class Forward(DascoreBaseModel):
             a: int = 1
             b: int = 2
 
-        class Ba(DascoreBaseModel):
+        class Reversed(DascoreBaseModel):
             b: int = 2
             a: int = 1
 
-        first, second = Ab(), Ba()
+        first, second = Forward(), Reversed()
         assert first == second
         assert hash(first) == hash(second)
 

@@ -60,9 +60,24 @@ DTypeLike = Annotated[
     PlainValidator(np.dtype),
 ]
 
+
+def _to_unit_quantity(value):
+    """Read units, refusing a quantity that carries many magnitudes."""
+    out = get_quantity(value)
+    try:
+        # Passing a sequence makes pint build an array magnitude, which is
+        # writable through the frozen model holding it. Asking whether it can
+        # be hashed is the direct question; no real unit spelling fails it.
+        hash(out)
+    except TypeError:
+        msg = f"Units must name a single unit, got {value!r}."
+        raise ValueError(msg) from None
+    return out
+
+
 UnitQuantity = Annotated[
     Quantity | str | None,
-    PlainValidator(get_quantity),
+    PlainValidator(_to_unit_quantity),
     PlainSerializer(get_quantity_str),
 ]
 
