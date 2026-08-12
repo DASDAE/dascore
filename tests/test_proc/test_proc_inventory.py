@@ -822,7 +822,9 @@ class TestSpoolEnrich:
             assert body in " ".join(spool_doc.split())
             assert body in " ".join(patch_doc.split())
         for name in forwarded:
-            assert f"\n        {name}\n" in spool_doc
+            # Whatever it is indented by: Python 3.13 dedents a docstring
+            # as it compiles it, so the depth is not the same everywhere.
+            assert re.search(rf"^\s*{re.escape(name)}$", spool_doc, re.MULTILINE), name
 
 
 class TestReviewFindings:
@@ -1499,7 +1501,7 @@ class TestInventorySelect:
         with pytest.raises(UnitError, match="unitless"):
             spool.select(gauge_length=10.0 * dc.get_quantity("m"))
 
-    def test_unit_bearing_selector_uses_the_indexs_units(self, patch, inventory):
+    def test_unit_bearing_selector_uses_the_index_units(self, patch, inventory):
         """
         Where the index does record units, a quantity converts to them.
 
