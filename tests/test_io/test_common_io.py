@@ -11,9 +11,10 @@ test_io_core.py
 from __future__ import annotations
 
 import inspect
+from collections import Counter
 from contextlib import suppress
 from functools import cache
-from io import BytesIO, UnsupportedOperation
+from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
 
@@ -24,7 +25,7 @@ import pytest
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import CoordError, UnknownFiberFormatError
-from dascore.io import BinaryReader
+from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -249,6 +250,99 @@ def _replays_stored_attrs(path) -> bool:
     with suppress(UnknownFiberFormatError):
         return dc.get_format(path)[0] in _PASS_THROUGH_FORMATS
     return False
+
+
+# A scan should read headers, not samples. Small files are exempt because
+# fixed metadata cost can legitimately dominate them; measured formats
+# currently sit under 15%.
+_SCAN_COST_MIN_FILE_SIZE = 1_000_000
+_SCAN_COST_MAX_FRACTION = 0.25
+
+# These hand the resource to a library which opens the file itself, so no
+# byte reaches our handle. Listed rather than detected: an empty count is
+# also what a reader that just started bypassing the handle would produce.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
+
+# These inherit FiberIO.scan, which reads the whole file to build a summary.
+# Implementing only read is allowed, so this is a choice rather than a defect
+# -- pinned so a new format that skips scan fails instead of joining them.
+FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
+
+
+class _CountingHandle(BufferedIOBase):
+    """
+    A readable file object which tallies the bytes it hands out.
+
+    Counting here rather than at the process keeps the number free of
+    page-cache and allocator noise, and drops the dependence on /proc, so this
+    measures on every platform DASCore tests rather than only Linux. It also
+    needs no warm-up scan, since module imports never reach this counter.
+
+    Counts bytes consumed, not bytes the kernel moved, so it reads lower than
+    /proc would by up to a buffer fill per reader. That gap is a few KB where
+    the budget is a quarter of a megabyte-plus file, and it cannot hide the
+    failure this guards: a scan that walks every sample consumes every sample.
+
+    Anything handing back the file underneath is refused, since reads through
+    it would not be counted: fileno, which also allows the whole file to be
+    mapped, plus raw, peek, and detach. No current reader needs any of them,
+    so one that does belongs in IGNORE_SCAN_CHECK.
+
+    The name attribute is the exception, and stays available: TDMS, sentek,
+    and Sintela_Binary consult it while scanning. They only stat the file
+    through it rather than read it, which is visible in their totals -- each
+    stays within a buffer fill of what /proc charges the whole scan.
+    """
+
+    _refused = frozenset({"raw", "peek", "detach"})
+
+    def __init__(self, fileobj):
+        self._fileobj = fileobj
+        self.bytes_read = 0
+
+    def read(self, size=-1, /):
+        """Read from the wrapped file, counting what comes back."""
+        out = self._fileobj.read(size)
+        self.bytes_read += len(out)
+        return out
+
+    read1 = read
+
+    def readinto(self, buffer, /):
+        """Read into a buffer, counting the bytes filled."""
+        count = self._fileobj.readinto(buffer)
+        self.bytes_read += count or 0
+        return count
+
+    readinto1 = readinto
+
+    def readline(self, size=-1, /):
+        """Read one line, counting its bytes."""
+        out = self._fileobj.readline(size)
+        self.bytes_read += len(out)
+        return out
+
+    def seek(self, offset, whence=0, /):
+        """Seek the wrapped file; seeking reads nothing."""
+        return self._fileobj.seek(offset, whence)
+
+    def tell(self):
+        """Return the wrapped file's position."""
+        return self._fileobj.tell()
+
+    def seekable(self):
+        """Report the wrapped file as seekable."""
+        return True
+
+    def readable(self):
+        """Report the wrapped file as readable."""
+        return True
+
+    def __getattr__(self, name):
+        """Defer to the wrapped file, except where that would evade counting."""
+        if name in self._refused:
+            raise UnsupportedOperation(name)
+        return getattr(self._fileobj, name)
 
 
 def _scan_summary(scan_result):
@@ -527,6 +621,82 @@ class TestScan:
         for summary in summary_list:
             assert isinstance(summary, dc.PatchSummary)
             assert str(summary.source_path) == str(data_file_path)
+
+    def test_scan_does_not_read_whole_file(self, io_path_tuple):
+        """
+        Scanning must not pull a file's sample data off disk.
+
+        A reader that walks every sample to build a summary still returns the
+        right answer, which makes this easy to regress and expensive to live
+        with: indexing a directory then costs a full read of every file in it.
+
+        Measured in bytes rather than memory, because a reader can stream a
+        file without holding it, and because sample data lands in C-extension
+        buffers that Python's allocation tracing cannot see.
+        """
+        io, path = io_path_tuple
+        if io.name.upper() in IGNORE_SCAN_CHECK:
+            pytest.skip(f"{io.name} does not read through the handle it is given")
+        size = Path(path).stat().st_size
+        if size < _SCAN_COST_MIN_FILE_SIZE:
+            pytest.skip(f"{Path(path).name} too small to hold to a scan budget")
+        with skip_missing(), open(path, "rb") as fi:
+            handle = _CountingHandle(fi)
+            io.scan(handle)
+        # Reading nothing means the handle was bypassed, not that scan is free.
+        assert handle.bytes_read, (
+            f"{type(io).__name__}.scan read nothing through the handle it was "
+            f"given, so its cost cannot be measured; if it opens the file "
+            f"itself, add {io.name} to IGNORE_SCAN_CHECK."
+        )
+        assert handle.bytes_read < size * _SCAN_COST_MAX_FRACTION, (
+            f"{type(io).__name__}.scan read {handle.bytes_read:,} bytes of a "
+            f"{size:,} byte file; a scan should read headers, not samples."
+        )
+
+    def test_formats_implement_scan(self):
+        """
+        Formats should implement scan rather than inherit the default.
+
+        The budget above can only weigh formats that have a large enough test
+        file, so it cannot see a format which never implements scan at all and
+        so reads everything through the FiberIO default. That is what this
+        covers; see FORMATS_WITH_DEFAULT_SCAN for the known exceptions.
+        """
+        FiberIO.manager.load_plugins()
+        # Other test modules register FiberIO subclasses globally on import,
+        # so only DASCore's own formats are considered here.
+        registered = {
+            type(fiber_io)
+            for fiber_io in FiberIO.manager.yield_fiberio()
+            if type(fiber_io).__module__.startswith("dascore.io.")
+        }
+        # Comparison below is by class name, so names must be unique.
+        by_name = Counter(fiber_io_class.__name__ for fiber_io_class in registered)
+        assert not (shared := [k for k, v in by_name.items() if v > 1]), (
+            f"format class names are no longer unique: {sorted(shared)}"
+        )
+        # All three are dependency-free, so all should load. Without this,
+        # a formatter failing to load would drop off both sides and pass.
+        names = {fiber_io_class.__name__ for fiber_io_class in registered}
+        assert FORMATS_WITH_DEFAULT_SCAN <= names, (
+            "formats expected to be registered are missing: "
+            f"{sorted(FORMATS_WITH_DEFAULT_SCAN - names)}"
+        )
+        # Every subclass gets its own type-casting wrapper around scan, so
+        # the function underneath is what says whose scan this really is.
+        default_scan = inspect.unwrap(FiberIO.scan)
+        using_default = {
+            fiber_io_class.__name__
+            for fiber_io_class in registered
+            if inspect.unwrap(fiber_io_class.scan) is default_scan
+        }
+        assert using_default == FORMATS_WITH_DEFAULT_SCAN, (
+            "formats inheriting the read-everything FiberIO.scan changed; "
+            f"expected {sorted(FORMATS_WITH_DEFAULT_SCAN)}, "
+            f"found {sorted(using_default)}. Implement scan for the new "
+            "format, or add it to FORMATS_WITH_DEFAULT_SCAN with a reason."
+        )
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
         """Direct FiberIO scans should not attach source metadata."""
