@@ -47,6 +47,17 @@ _gc_collect_after = 0.0
 _GC_COLLECT_INTERVAL = 10.0
 
 
+def _claim_safety_collect() -> bool:
+    """Return True when this caller wins the rate-limited safety collection."""
+    global _gc_collect_after
+    with _gc_pause_lock:
+        now = time.monotonic()
+        if now < _gc_collect_after:
+            return False
+        _gc_collect_after = now + _GC_COLLECT_INTERVAL
+        return True
+
+
 def pause_gc() -> None:
     """
     Pause automatic garbage collection for one remote read session.
@@ -65,7 +76,14 @@ def pause_gc() -> None:
     closed keeps it paused; one which is dropped inside a reference cycle is
     recovered by the collection below, on the next remote open.
     """
-    global _gc_pause_depth, _gc_was_enabled, _gc_collect_after
+    global _gc_pause_depth, _gc_was_enabled
+    # Safety valve: finalize cyclic garbage, including a handle leaked by an
+    # earlier session, so a stranded pause cannot disable collection forever.
+    # It runs before this pause is taken, so an interrupt during the collect
+    # cannot strand one, and outside the lock, since finalizing such a handle
+    # calls resume_gc, which takes it.
+    if _claim_safety_collect():
+        gc.collect()
     with _gc_pause_lock:
         # Count first: an interrupt before ``disable`` leaves a pending resume
         # (harmless); the reverse order could leave gc off with none pending.
@@ -73,17 +91,6 @@ def pause_gc() -> None:
         if _gc_pause_depth == 1:
             _gc_was_enabled = gc.isenabled()
             gc.disable()
-        # Claim the valve here so concurrent openers cannot each run it.
-        now = time.monotonic()
-        collect = now >= _gc_collect_after
-        if collect:
-            _gc_collect_after = now + _GC_COLLECT_INTERVAL
-    # Safety valve: finalize cyclic garbage, including a handle leaked by an
-    # earlier session, so a stranded pause cannot disable collection forever.
-    # Must run outside the lock, since finalizing such a handle calls
-    # resume_gc, which takes it. Rate limited; a full collect is O(live).
-    if collect:
-        gc.collect()
 
 
 def resume_gc() -> None:

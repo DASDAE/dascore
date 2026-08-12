@@ -293,7 +293,14 @@ class IOResourceManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Close all handles; on error, abort uncommitted writes instead."""
-        self.close_all(abort=exc_type is not None)
+        if exc_type is None:
+            self.close_all()
+            return
+        try:
+            self.close_all(abort=True)
+        except Exception as cleanup_error:
+            # A cleanup failure must not replace the error which caused it.
+            exc_val.add_note(f"Aborting IO resources also failed: {cleanup_error!r}")
 
     def __del__(self):
         with suppress(Exception):

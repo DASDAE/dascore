@@ -45,6 +45,11 @@ class _FakeRemoteFile(io.RawIOBase):
         return True
 
 
+def _raise_keyboard_interrupt(*args, **kwargs):
+    """Stand in for an interrupt landing inside an uninterruptible step."""
+    raise KeyboardInterrupt("interrupted")
+
+
 def _open_paused(fileobj, constructor=lambda fileobj, **kwargs: object()):
     """Open a fake loop-backed file object the way the UPath branch does."""
     return _open_h5_fileobj(fileobj, constructor, "r", pause=True, close_on_error=True)
@@ -151,6 +156,14 @@ class TestPauseAccounting:
         resume_gc()
         assert gc.isenabled()
 
+    def test_interrupted_safety_collect_takes_no_pause(self, monkeypatch):
+        """An interrupt during the safety collect cannot strand a pause."""
+        monkeypatch.setattr(remote_io.gc, "collect", _raise_keyboard_interrupt)
+        remote_io._gc_collect_after = 0.0  # the valve is rate limited
+        with pytest.raises(KeyboardInterrupt):
+            pause_gc()
+        assert gc.isenabled()
+
     def test_open_failure_releases_pause_and_fileobj(self):
         """A failed open leaves neither the pause nor the file object behind."""
         fileobj = _FakeRemoteFile()
@@ -219,6 +232,16 @@ class TestLoopBackedDetection:
     def test_plain_stream_is_not_loop_backed(self):
         """Local and in-memory streams must not pause collection."""
         assert not _is_loop_backed(io.BytesIO(b"abc"))
+
+    def test_unavailable_backend_is_not_loop_backed(self):
+        """A path whose backend is not installed raises on ``fs``, not here."""
+
+        class _MissingBackend:
+            @property
+            def fs(self):
+                raise ImportError("please install some-fs")
+
+        assert not _is_loop_backed(_MissingBackend())
 
     def test_sync_filesystem_is_not_loop_backed(self):
         """A synchronous fsspec filesystem needs no pause."""

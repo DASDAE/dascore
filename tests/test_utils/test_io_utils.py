@@ -660,6 +660,20 @@ class TestIOResourceManager:
         assert recorder2.closed
         assert not recorder2.aborted
 
+    def test_failed_abort_does_not_mask_original_error(self):
+        """A cleanup failure must not replace the error which caused it."""
+
+        class _BadAbort:
+            def abort(self):
+                raise OSError("abort failed")
+
+        man = IOResourceManager("unused")
+        man._cache["key"] = _BadAbort()
+        with pytest.raises(ValueError, match="boom") as exc_info:
+            with man:
+                raise ValueError("boom")
+        assert any("abort failed" in note for note in exc_info.value.__notes__)
+
     def test_close_all_survives_failing_handle(self):
         """One handle raising must not skip cleanup of the others."""
 

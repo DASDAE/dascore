@@ -130,7 +130,13 @@ def _is_loop_backed(resource) -> bool:
     unwrap a few levels: missing one would leave the deadlock window open.
     """
     for _ in range(4):
-        if getattr(getattr(resource, "fs", None), "async_impl", False):
+        try:
+            fs = getattr(resource, "fs", None)
+        except Exception:
+            # A UPath whose backend is not installed raises here; the open
+            # which follows reports that properly, so just skip the pause.
+            return False
+        if getattr(fs, "async_impl", False):
             return True
         wrapped = getattr(resource, "raw", None) or getattr(resource, "buffer", None)
         if wrapped is None or wrapped is resource:
