@@ -152,7 +152,7 @@ class TestBasicCoordManager:
             coord_map[cm_basic.dims[0]] = 10
 
     def test_init_with_coord_manager(self, cm_basic):
-        """Ensure initing coord manager works with a single coord manager."""
+        """Ensure initializing coord manager works with a single coord manager."""
         out = get_coord_manager(cm_basic)
         assert out == cm_basic
 
@@ -1177,7 +1177,7 @@ class TestNonDimCoords:
         assert set(out.dim_map).issuperset(set(cm_basic.dim_map))
 
     def test_init_with_1d_coordinate(self, cm_basic):
-        """Ensure initing with 1D non-dim coords works."""
+        """Ensure initializing with 1D non-dim coords works."""
         with suppress_warnings():
             coords = dict(cm_basic)
         lat = np.ones_like(cm_basic.get_array("distance"))

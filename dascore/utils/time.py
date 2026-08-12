@@ -346,7 +346,7 @@ def _float_to_num(num: float | int) -> float | int:
 @_to_int.register(list)
 @_to_int.register(tuple)
 def _array_to_int(array: np.ndarray) -> np.ndarray:
-    """Convert an array of floating point timestamps to an array of np.datetime64."""
+    """Convert an array of possible dates to int64 nanoseconds."""
     array = np.asarray(array)
     if not len(array):
         return array.astype(np.int64)
@@ -449,7 +449,7 @@ def _quantity_to_float(quant: pint.Quantity) -> float | np.ndarray:
 @_to_float.register(list)
 @_to_float.register(tuple)
 def _array_to_float(array: np.ndarray) -> np.ndarray:
-    """Convert an array of floating point timestamps to an array of np.datetime64."""
+    """Convert an array of possible dates to floats (seconds)."""
     array = np.asarray(array)
     if not len(array):
         return array.astype(np.float64)

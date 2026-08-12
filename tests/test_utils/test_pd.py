@@ -419,15 +419,15 @@ class TestAdjustSegments:
         assert row["frequency_max"] == 125.0
         assert not row["_modified"]
 
-    def test_missing_interval_col_raises_keyerror(self, adjacent_df):
-        """Ensure if an interval column is missing a KeyError is raised."""
+    def test_missing_interval_col_raises_parameter_error(self, adjacent_df):
+        """Ensure a missing interval column raises ParameterError."""
         df = adjacent_df.drop(columns=["distance_min"])
         with pytest.raises(ParameterError):
             _ = adjust_segments(df, distance=(100, 200))
 
 
 class TestFillDefaultsFromPydantic:
-    """Tests for initing empty columns from pydantic models."""
+    """Tests for initializing empty columns from pydantic models."""
 
     class Model(pydantic.BaseModel):
         """Example basemodel."""
