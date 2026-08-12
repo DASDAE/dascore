@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import pickle
 import sqlite3
+import warnings
 
 import pytest
 
@@ -141,7 +142,8 @@ class TestHiveWins:
         sub.mkdir()
         patch = dc.get_example_patch().update_attrs(station="B")
         patch.io.write(sub / "conflict.h5", "dasdae")
-        spool = Spool.from_directory(tmp_path).update(progress=None)
+        with pytest.warns(UserWarning, match="override attrs"):
+            spool = Spool.from_directory(tmp_path).update(progress=None)
         yield spool
         spool.indexer.close()
 
@@ -152,6 +154,50 @@ class TestHiveWins:
     def test_loaded_patch_shows_path_value(self, conflict_spool):
         """The loaded patch also shows the path's value."""
         assert conflict_spool[0].attrs.station == "A"
+
+    def test_override_names_the_key_and_a_path(self, tmp_path):
+        """
+        The warning says which name and where, once for the archive.
+
+        A layout disagreeing with every file it holds is a legitimate
+        correction and a common mistake, and the two look identical from
+        inside; naming one path is enough to go and look.
+        """
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        patch = dc.get_example_patch().update_attrs(station="B")
+        for name in ("one.h5", "two.h5"):
+            patch.io.write(sub / name, "dasdae")
+        with pytest.warns(UserWarning, match="override attrs") as record:
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        overrides = [x for x in record if "override attrs" in str(x.message)]
+        assert len(overrides) == 1
+        assert "'station'" in str(overrides[0].message)
+        assert "station=A" in str(overrides[0].message)
+        spool.indexer.close()
+
+    def test_agreeing_path_is_silent(self, tmp_path):
+        """Restating what the file already says overrides nothing."""
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        patch = dc.get_example_patch().update_attrs(station="A")
+        patch.io.write(sub / "agree.h5", "dasdae")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert spool.get_contents()["station"].iloc[0] == "A"
+        spool.indexer.close()
+
+    def test_unstated_attr_is_silent(self, tmp_path):
+        """A name the file never states is not one the path overrides."""
+        sub = tmp_path / "cable=north"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "quiet.h5", "dasdae")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert spool.get_contents()["cable"].iloc[0] == "north"
+        spool.indexer.close()
 
 
 class TestPatchStamping:

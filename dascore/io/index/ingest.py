@@ -471,6 +471,11 @@ def summaries_to_records(
     root_posix = str(root).replace("\\", "/") if root else None
     root_prefix = root_posix.rstrip("/") if root_posix else None
     out = []
+    # Names a directory renamed out from under the file which states them,
+    # with one path each: the layout is the correction mechanism, so this
+    # is legal, but a whole archive silently disagreeing with its own
+    # headers is worth hearing about once.
+    overridden: dict[str, str] = {}
     for path, group in by_source.items():
         first = group[0]
         patches = []
@@ -494,6 +499,10 @@ def summaries_to_records(
             path_attrs = hive_path_attrs(store_path) or None
             if path_attrs:
                 typed = hive_typed_attrs(path_attrs)
+                for patch in patches:
+                    for name in typed.keys() & patch.attrs.keys():
+                        if str(patch.attrs[name].value) != typed[name].value:
+                            overridden.setdefault(name, store_path)
                 patches = [replace(p, attrs={**p.attrs, **typed}) for p in patches]
         out.append(
             SourceRecord(
@@ -507,6 +516,14 @@ def summaries_to_records(
                 patches=tuple(patches),
             )
         )
+    if overridden:
+        shown = ", ".join(f"{k!r} (e.g. {v!r})" for k, v in sorted(overridden.items()))
+        msg = (
+            f"Hive-style path segments override attrs the files themselves "
+            f"state: {shown}. The path wins, which is how a directory rename "
+            "corrects metadata; check the layout if that was not intended."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
     return out
 
 
