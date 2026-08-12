@@ -37,6 +37,7 @@ from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
     _as_query_list,
+    _normalize_unit,
     apply_residuals,
     build_sql,
 )
@@ -1089,6 +1090,15 @@ class SQLIndexBackend(abc.ABC):
         """Return coord names known to the index."""
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
+
+    def attr_units(self, name: str) -> dict[str, str | None]:
+        """Return the canonical units the index stores one attr's kinds in."""
+        rows = self._attr_meta()
+        rows = rows[rows["attr_name"] == name]
+        return {
+            str(kind): _normalize_unit(unit)
+            for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
+        }
 
     def attr_stated_ids(self, name: str, patch_ids=None) -> set[int]:
         """

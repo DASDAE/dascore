@@ -639,6 +639,17 @@ class TestUnselect:
         with pytest.raises(ParameterError, match="needs something to remove"):
             diverse_spool.unselect()
 
+    def test_naming_only_a_no_op_raises(self, diverse_spool):
+        """
+        A no-op selector names nothing to remove either.
+
+        `select(tag=None)` is the whole spool, so its complement is an
+        empty one; that is the same guess bare `unselect()` refuses.
+        """
+        for empty in (None, ...):
+            with pytest.raises(ParameterError, match="needs something to remove"):
+                diverse_spool.unselect(tag=empty)
+
     def test_coords_tag_form_raises(self, diverse_spool):
         """The tag form names bare kwargs, and is refused the same way."""
         with pytest.raises(InvalidSpoolQueryError, match="how much of each patch"):

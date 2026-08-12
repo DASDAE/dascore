@@ -35,6 +35,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.proc.coords import update_coords
+from dascore.units import get_quantity_str
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key
@@ -238,18 +239,22 @@ def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
         if len(codes) != 4:
             continue
         bounds = _epoch_bounds(inventory, codes)
-        starts_at = np.searchsorted(bounds, sub["start"].to_numpy(), side="right")
-        ends_at = np.searchsorted(bounds, sub["end"].to_numpy(), side="right")
-        straddles = starts_at != ends_at
+        first, last = sub["start"].to_numpy(), sub["end"].to_numpy()
+        starts_at = np.searchsorted(bounds, first, side="right")
+        ends_at = np.searchsorted(bounds, last, side="right")
+        # A row with no instant of its own says nothing about which epoch
+        # applies, and resolving at NaT holds every epoch effective; that
+        # is the whole inventory answering rather than one entry.
+        unresolved = (starts_at != ends_at) | np.isnat(first) | np.isnat(last)
         contexts: dict[int, ResolvedContext | None] = {}
-        for epoch in np.unique(starts_at[~straddles]):
-            when = sub["start"].to_numpy()[starts_at == epoch][0]
+        for epoch in np.unique(starts_at[~unresolved]):
+            when = first[(starts_at == epoch) & ~unresolved][0]
             try:
                 contexts[int(epoch)] = inventory.resolve(key, time=when)
             except InvalidInventoryError:
                 contexts[int(epoch)] = None
-        for row, epoch, straddle in zip(sub.index, starts_at, straddles, strict=True):
-            out[row] = None if straddle else contexts[int(epoch)]
+        for row, epoch, skip in zip(sub.index, starts_at, unresolved, strict=True):
+            out[row] = None if skip else contexts[int(epoch)]
     return out
 
 
@@ -258,7 +263,9 @@ def get_attr_values(inventory, contexts, name: str) -> list:
     Return the value each resolved context states for one attr name.
 
     A context which does not state the name, and a row with no context at
-    all, both give None: the inventory has no answer either way.
+    all, both give None: the inventory has no answer either way. Values
+    are spelled the way a patch carrying the same fact spells them, so a
+    selector matches an inventory answer and a stated header alike.
     """
     cache: dict[int, Any] = {}
     out = []
@@ -270,10 +277,23 @@ def get_attr_values(inventory, contexts, name: str) -> list:
             interrogator = _get_interrogator(inventory, context.acquisition)
             owner, field = _attr_owner(context, interrogator, name)
             value = getattr(owner, field, None)
-            value = None if _is_unset(value) else value
+            value = None if _is_unset(value) else _as_patch_value(value)
             cache[id(context)] = value
         out.append(value)
     return out
+
+
+def _as_patch_value(value):
+    """
+    Return an inventory value in the spelling a patch attr would hold.
+
+    The inventory models units as quantities and a patch carries the
+    string it renders to, so comparing the two directly would never
+    match — the same fact stored two ways.
+    """
+    if hasattr(value, "units") and hasattr(value, "dimensionality"):
+        return get_quantity_str(value)
+    return value
 
 
 # A cache miss, told apart from a cached None (the inventory saying nothing).

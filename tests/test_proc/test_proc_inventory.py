@@ -1485,16 +1485,38 @@ class TestInventorySelect:
         out = spool.select(distance=(coord.min(), coord.max()))
         assert len(out) == 2
 
-    def test_units_are_the_inventory_s(self, two_patch_spool, inventory):
+    def test_unit_bearing_selector_against_a_unitless_index(
+        self, two_patch_spool, inventory
+    ):
         """
-        These values carry no units of their own, as the index's do not.
+        With nothing on either side to convert to, this is the same error.
 
-        A unit-bearing selector is the same error either way, which is
-        what keeps one selector from meaning two things.
+        The inventory's own units are fixed rather than recorded, so a
+        spool no patch of which states the attr has nothing to read a
+        quantity against — exactly as the index has not.
         """
         spool = two_patch_spool.attach_inventory(inventory)
         with pytest.raises(UnitError, match="unitless"):
             spool.select(gauge_length=10.0 * dc.get_quantity("m"))
+
+    def test_unit_bearing_selector_uses_the_indexs_units(self, patch, inventory):
+        """
+        Where the index does record units, a quantity converts to them.
+
+        Attaching an inventory must not turn a selector which works into
+        an error; the rows the index alone would have answered are still
+        its to answer.
+        """
+        meters = dc.get_quantity("m")
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="stated", gauge_length=10.0 * meters),
+                patch.update_attrs(tag="blank"),
+            ]
+        ).attach_inventory(inventory)
+        for selector in (10.0 * meters, (5.0 * meters, 15.0 * meters), [10.0 * meters]):
+            out = sorted(spool.select(gauge_length=selector).get_contents()["tag"])
+            assert out == ["blank", "stated"], selector
 
 
 class TestInventoryUnselect:
@@ -1699,3 +1721,98 @@ class TestSelectOnAView:
         assert window.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
             "blank"
         ]
+
+
+class TestCodexReviewFindings:
+    """Defects found reviewing inventory-backed selection."""
+
+    def test_a_patch_with_no_instant_is_not_resolved(self, patch, inventory):
+        """
+        A row whose times are NaT says nothing about which epoch applies.
+
+        Resolving at NaT holds every epoch effective, which is the whole
+        inventory answering rather than the one entry describing the row.
+        """
+        stamps = np.full(len(patch.get_coord("time")), np.datetime64("NaT", "ns"))
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="good"),
+                patch.update_coords(time=stamps).update_attrs(tag="undated"),
+            ]
+        ).attach_inventory(inventory)
+        out = spool.select(gauge_length=10.0)
+        assert out.get_contents()["tag"].tolist() == ["good"]
+
+    def test_a_reversed_glob_range_means_one_thing(self, inventory):
+        """
+        SQLite tests a range's low endpoint before testing the range.
+
+        So `[z-a]` matches `z` there, and the in-memory twin has to agree
+        rather than reading the reversed range as matching nothing.
+        """
+        spool = _two_row_spool(inventory, firmware_version="z")
+        assert len(spool.select(firmware_version="[z-a]")) == 2
+        assert len(spool.select(firmware_version="[^z-a]")) == 0
+
+    def test_a_range_with_no_bounds_raises(self, inventory):
+        """
+        An unusable range is the error it is on the index side.
+
+        Applying no bounds instead would keep every row the inventory
+        describes, and the same selector would raise or not depending on
+        whether some unrelated patch happened to state the name.
+        """
+        spool = _two_row_spool(inventory, firmware_version="v1")
+        for empty in ((None, None), (..., ...)):
+            with pytest.raises(InvalidSpoolQueryError, match="no usable bounds"):
+                spool.select(**{"firmware_version": empty})
+
+    def test_a_backwards_range_raises(self, patch, inventory):
+        """And so is one whose bounds are the wrong way round."""
+        spool = dc.spool([patch]).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
+            spool.select(gauge_length=(20.0, 5.0))
+
+    def test_units_are_spelled_the_way_a_patch_spells_them(self, patch, inventory):
+        """
+        The inventory models units as a quantity; a patch carries a string.
+
+        The same fact stored two ways would never match one selector, so
+        the inventory's answer is rendered the way a header states it.
+        """
+        described = _replace_acquisition(inventory, data_units="m/s")
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="stated", data_units="m/s"),
+                patch.update_attrs(tag="blank", data_units=""),
+            ]
+        ).attach_inventory(described)
+        out = sorted(spool.select(data_units="m / s").get_contents()["tag"])
+        assert out == ["blank", "stated"]
+
+    def test_a_wildcard_crosses_a_newline(self, inventory):
+        """SQLite's wildcards match any byte, newlines included."""
+        spool = _two_row_spool(inventory, firmware_version="a\nb")
+        assert len(spool.select(firmware_version="a*")) == 2
+
+
+class TestRelationAndIdListDisagree:
+    """The relation is realized by a route of its own."""
+
+    def test_rows_it_omits_resolve_to_nothing(self, patch, inventory, monkeypatch):
+        """
+        A row the relation leaves out is one nothing was resolved for.
+
+        The two are aligned by id rather than by position, so a relation
+        presenting fewer rows than the id list cannot silently shift
+        every context onto the wrong patch.
+        """
+        spool = dc.spool(
+            [patch.update_attrs(tag="first"), patch.update_attrs(tag="second")]
+        ).attach_inventory(inventory)
+        full = spool._df
+        monkeypatch.setattr(
+            type(spool), "_df", property(lambda self, df=full.iloc[1:]: df)
+        )
+        out = spool.select(gauge_length=10.0)
+        assert out.get_contents()["tag"].tolist() == ["second"]

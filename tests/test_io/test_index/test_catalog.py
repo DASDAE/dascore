@@ -461,6 +461,8 @@ class TestGlobTranslation:
             "no_meta",
             "a[",
             "[]",
+            "[z-a]",
+            "[^z-a]",
         ],
     )
     def test_agrees_with_sqlite(self, pattern):
@@ -480,11 +482,14 @@ class TestGlobTranslation:
                 ).fetchone()[0]
                 assert bool(expected) == bool(regex.match(value)), (pattern, value)
 
-    def test_a_pattern_no_regex_can_express_matches_nothing(self):
+    def test_a_reversed_range_matches_its_low_endpoint(self):
         """
-        SQLite reads a reversed range more leniently than a regex can.
+        A reversed range is not simply nothing.
 
-        There is no honest translation, so the pattern selects nothing
-        rather than being guessed at; the docstring says so.
+        SQLite tests a range's low endpoint as a member before testing
+        the range itself, so `[b-a]` matches `b` and nothing else.
         """
-        assert glob_to_regex("[b-a]").match("b") is None
+        pattern = glob_to_regex("[b-a]")
+        assert pattern.match("b")
+        assert pattern.match("a") is None
+        assert pattern.match("-") is None

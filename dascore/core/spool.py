@@ -123,7 +123,7 @@ def _requested_names(_attrs, _coords, kwargs) -> set[str]:
     return out
 
 
-def _match_resolved(values, name: str, selector) -> np.ndarray:
+def _match_resolved(values, name: str, selector, units=None) -> np.ndarray:
     """Return which of the values an inventory states match a selector."""
     from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
 
@@ -133,7 +133,7 @@ def _match_resolved(values, name: str, selector) -> np.ndarray:
     # and the predicate would be comparing against the missing marker.
     stated = ~_unstated(values)
     if stated.any():
-        out[stated] = evaluate_attr_predicate(values[stated], name, selector)
+        out[stated] = evaluate_attr_predicate(values[stated], name, selector, units)
     return out
 
 
@@ -489,10 +489,11 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         overlaps the range would throw away the part that does not.
         Select the ranges to keep instead.
 
-        Naming nothing raises. `select()` with no selection is the whole
-        spool, so its complement is an empty one — but "remove nothing"
-        reads just as naturally, and silently emptying a spool is not
-        something to guess at.
+        Naming nothing raises, and so does naming only no-op selectors
+        (`None`, `...`). `select()` with no selection is the whole spool,
+        so its complement is an empty one — but "remove nothing" reads
+        just as naturally, and silently emptying a spool is not something
+        to guess at.
 
         Parameters
         ----------
@@ -818,13 +819,6 @@ class Spool(BaseSpool):
     ) -> Self:
         """{doc}."""
         requested = _requested_names(_attrs, _coords, kwargs)
-        if not requested:
-            msg = (
-                "unselect needs something to remove. Naming nothing could "
-                "mean the whole spool (the complement of selecting all of "
-                "it) or none of it, so it says neither."
-            )
-            raise ParameterError(msg)
         known_attrs, known_coords = self._index_names()
         selectable = set()
         if self._inventory is not None:
@@ -849,9 +843,20 @@ class Spool(BaseSpool):
                 "to keep instead."
             )
             raise InvalidSpoolQueryError(msg)
+        # A no-op selector selects everything, so its complement is an
+        # empty spool -- and "remove nothing" reads just as naturally.
+        stated = {k: v for k, v in attrs.items() if v is not None and v is not Ellipsis}
+        if not stated:
+            msg = (
+                "unselect needs something to remove; "
+                f"{sorted(requested) or 'nothing'} names no selection. "
+                "Naming nothing could mean the whole spool (the complement "
+                "of selecting all of it) or none of it, so it says neither."
+            )
+            raise ParameterError(msg)
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
-        removed = self.select(_attrs=attrs)._catalog._ordered_ids()
+        removed = self.select(_attrs=stated)._catalog._ordered_ids()
         ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
         keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
         return self._new_from_catalog(self._catalog.restrict(keep))
@@ -949,6 +954,7 @@ class Spool(BaseSpool):
                     get_attr_values(self._inventory, contexts[~stated], name),
                     name,
                     selector,
+                    backend.attr_units(name),
                 )
             mask &= matched
         return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
@@ -968,16 +974,27 @@ class Spool(BaseSpool):
         """
         from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
 
+        out = np.full(len(ids), None, dtype=object)
         df = self._df
-        # The relation and the id list are one presentation of one view.
-        assert np.array_equal(df["_patch_id"].to_numpy(), ids)
         columns = [df.get(x) for x in ("acquisition_key", "time_min", "time_max")]
         physical = all(column is not None for column in columns) and all(
             np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
         )
         if not physical:
-            return np.full(len(df), None, dtype=object)
-        return resolve_contexts(self._inventory, *columns)
+            return out
+        # Aligned by id rather than by position: the relation is realized
+        # by a route of its own and need not present every row the id list
+        # does, and a row it leaves out is one nothing was resolved for.
+        resolved = dict(
+            zip(
+                df["_patch_id"].to_numpy(),
+                resolve_contexts(self._inventory, *columns),
+                strict=True,
+            )
+        )
+        for position, patch_id in enumerate(ids):
+            out[position] = resolved.get(patch_id)
+        return out
 
     def _index_matches(self, name: str, selector) -> np.ndarray:
         """Return the ids of the rows the index itself selects for one name."""

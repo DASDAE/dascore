@@ -359,10 +359,8 @@ def glob_to_regex(pattern: str) -> re.Pattern:
         else:
             out.append(re.escape(char))
         index += 1
-    try:
-        return re.compile("".join(out) + r"\Z")
-    except re.error:
-        return _MATCHES_NOTHING
+    # DOTALL, since SQLite's wildcards cross a newline like any other byte.
+    return re.compile("".join(out) + r"\Z", re.DOTALL)
 
 
 # A pattern which matches nothing, for a glob SQLite would not read.
@@ -373,22 +371,28 @@ def _class_body(body: str) -> str:
     """
     Escape the members of a glob character class for a regex one.
 
-    Ranges are kept as ranges, since a glob class means them, and both
-    endpoints are escaped on their own: escaping the body wholesale would
-    turn the dash of a range into a member.
+    Ranges stay ranges, since a glob class means them, with each endpoint
+    escaped on its own — escaping the body wholesale would turn the dash
+    of a range into a member. A range's low endpoint is also emitted as a
+    member: SQLite tests it before testing the range, so `[z-a]` matches
+    `z` where the reversed range alone matches nothing.
     """
     out, index, size = [], 0, len(body)
     while index < size:
+        low = body[index]
         if index + 2 < size and body[index + 1] == "-":
-            out.append(f"{re.escape(body[index])}-{re.escape(body[index + 2])}")
+            high = body[index + 2]
+            out.append(re.escape(low))
+            if low <= high:
+                out.append(f"{re.escape(low)}-{re.escape(high)}")
             index += 3
             continue
-        out.append(re.escape(body[index]))
+        out.append(re.escape(low))
         index += 1
     return "".join(out)
 
 
-def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
+def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     """
     Evaluate one attr selector against values held in memory.
 
@@ -396,9 +400,7 @@ def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
     reach the index — those an inventory states rather than a file. It
     takes the same selector shapes and means the same thing by each, so a
     selector cannot mean one thing for a patch which states the attr and
-    another for a patch the inventory answers for. The values carry no
-    units of their own, which makes a unit-bearing selector the same
-    error the index gives against a unitless column.
+    another for a patch the inventory answers for.
 
     Parameters
     ----------
@@ -408,6 +410,11 @@ def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
         The attr the selector names, for error messages.
     value
         The selector, in any shape `build_attr_clause` accepts.
+    units
+        The canonical units the index stores each kind of this attr in,
+        for converting a unit-bearing selector exactly as the index side
+        would. A kind the index knows nothing about is unitless, and a
+        selector carrying units against one is the error it is there.
 
     Returns
     -------
@@ -419,13 +426,12 @@ def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
     # kind, and `1` must not match a stored `True` on either side.
     typed = [typed_value(x) for x in values]
     kinds = {x.kind for x in typed if x is not None}
+    units = units or {}
 
     def selector(item):
         """Type one selector value the way the index would."""
         out = _coerce_scalar(item, kinds)
-        # Unit-bearing selectors have nothing to convert to here, exactly
-        # as against a column the index stores without units.
-        _to_target_unit(out, None, name)
+        _to_target_unit(out, units.get(out.kind), name)
         return out
 
     def each(func) -> np.ndarray:
@@ -440,11 +446,25 @@ def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
         # `search`, which is what the index's regex residual applies.
         return each(lambda x: x.kind == "str" and value.search(x.value))
     if is_range(value):
-        out = np.ones(len(values), dtype=bool)
-        for bound, op in zip(value, (operator.ge, operator.le), strict=True):
-            if bound is None or bound is Ellipsis:
-                continue
-            out &= compare(bound, op)
+        # The same reading of a range the index performs, so a range with
+        # no usable bounds, mixed-kind bounds, or lo above hi is the error
+        # it is there rather than a selector which quietly keeps every row.
+        probe = next(
+            (
+                _coerce_scalar(x, kinds)
+                for x in value
+                if x is not None and x is not Ellipsis
+            ),
+            None,
+        )
+        target = units.get(probe.kind) if probe is not None else None
+        kind, low, high, _ = _range_bounds(value, kinds, target, name)
+        out = each(lambda x, k=kind: x.kind == k)
+        for bound, op in ((low, operator.ge), (high, operator.le)):
+            if bound is not None:
+                out &= each(
+                    lambda x, o=op, b=bound, k=kind: x.kind == k and o(x.value, b)
+                )
         return out
     if _is_collection(value):
         out = np.zeros(len(values), dtype=bool)
