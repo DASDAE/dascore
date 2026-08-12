@@ -273,7 +273,6 @@ def _serve_das_tree(handler_cls, root, label):
     """
     handler = partial(handler_cls, directory=str(root))
     server = _ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

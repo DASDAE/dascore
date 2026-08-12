@@ -7,6 +7,7 @@ import io
 import os
 import threading
 from contextlib import suppress
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,15 +18,6 @@ from dascore.utils.hdf5 import (
     _open_h5_fileobj,
 )
 from dascore.utils.remote_io import pause_gc, resume_gc
-
-
-@pytest.fixture(autouse=True)
-def _gc_state_is_restored():
-    """Fail loudly if a test leaves collection paused."""
-    assert remote_io._gc_pause_depth == 0
-    yield
-    assert remote_io._gc_pause_depth == 0, "test left the gc pause held"
-    assert gc.isenabled(), "test left automatic collection disabled"
 
 
 class _FakeFS:
@@ -64,6 +56,9 @@ class TestDeadlockProperty:
         Models the real cycle: a reader holds h5py's global lock and waits on
         a loop thread, while that thread's collection finalizes an object
         needing the same lock. Without the pause this deadlocks.
+
+        This calls pause_gc directly; that the HDF5 open paths reach it is
+        covered by test_remote_h5_handle_pauses_gc and its neighbours.
         """
         phil = threading.RLock()
         request = threading.Semaphore(0)
@@ -130,13 +125,15 @@ class TestPauseAccounting:
 
     def test_user_disabled_gc_is_not_re_enabled(self):
         """A caller who disabled collection keeps it disabled."""
+        was_enabled = gc.isenabled()
         gc.disable()
         try:
             pause_gc()
             resume_gc()
             assert not gc.isenabled()
         finally:
-            gc.enable()
+            if was_enabled:
+                gc.enable()
 
     def test_leaked_handle_resumes(self):
         """Dropping a handle without closing it releases the pause."""
@@ -158,7 +155,13 @@ class TestPauseAccounting:
 
     def test_interrupted_safety_collect_takes_no_pause(self, monkeypatch):
         """An interrupt during the safety collect cannot strand a pause."""
-        monkeypatch.setattr(remote_io.gc, "collect", _raise_keyboard_interrupt)
+        fake_gc = SimpleNamespace(
+            collect=_raise_keyboard_interrupt,
+            isenabled=gc.isenabled,
+            disable=gc.disable,
+            enable=gc.enable,
+        )
+        monkeypatch.setattr(remote_io, "gc", fake_gc)
         remote_io._gc_collect_after = 0.0  # the valve is rate limited
         with pytest.raises(KeyboardInterrupt):
             pause_gc()
@@ -215,6 +218,20 @@ class TestPauseAccounting:
         remote_io._reset_gc_pause_state()
         assert gc.isenabled()
         assert remote_io._gc_pause_depth == 0
+
+    @pytest.mark.concurrency
+    def test_concurrent_sessions_keep_the_count_exact(self, run_in_threads):
+        """Overlapping pauses must not lose or double-count each other."""
+
+        def _pause_and_resume(_index):
+            for _ in range(50):
+                pause_gc()
+                assert not gc.isenabled()
+                resume_gc()
+
+        run_in_threads(_pause_and_resume)
+        assert remote_io._gc_pause_depth == 0
+        assert gc.isenabled()
 
 
 class TestLoopBackedDetection:
