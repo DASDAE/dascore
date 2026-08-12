@@ -252,27 +252,20 @@ def _replays_stored_attrs(path) -> bool:
     return False
 
 
-# A scan's cost should track a file's headers, not its samples. Only files
-# above this size are held to that: in a small file the fixed metadata cost
-# can legitimately be most of the bytes. Every measurable format currently
-# reads under 15% of a file this large; the failure guarded against reads
-# 100%.
+# A scan should read headers, not samples. Small files are exempt because
+# fixed metadata cost can legitimately dominate them; measured formats
+# currently sit under 15%.
 _SCAN_COST_MIN_FILE_SIZE = 1_000_000
 _SCAN_COST_MAX_FRACTION = 0.25
 
-# Formats which hand the resource to a library that opens the file itself, so
-# no byte of their scan passes through a handle we provide. Only these two:
-# every other reader parses in Python and is measured. Listing them keeps the
-# exclusion visible, which is the point -- inferring it from "the count came
-# out empty" would read a reader that started bypassing the handle as a pass.
+# These hand the resource to a library which opens the file itself, so no
+# byte reaches our handle. Listed rather than detected: an empty count is
+# also what a reader that just started bypassing the handle would produce.
 IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
 
-# Formats whose scan is the FiberIO default, which builds the summary by
-# reading the whole file. The docs allow implementing only read, so this is a
-# choice rather than a defect, but it is one the byte budget cannot observe:
-# none of these formats has a registry file large enough to be measured.
-# Naming them here means a new format that skips scan fails a test rather
-# than quietly joining them.
+# These inherit FiberIO.scan, which reads the whole file to build a summary.
+# Implementing only read is allowed, so this is a choice rather than a defect
+# -- pinned so a new format that skips scan fails instead of joining them.
 FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
 
 
@@ -301,8 +294,6 @@ class _CountingHandle(BufferedIOBase):
     stays within a buffer fill of what /proc charges the whole scan.
     """
 
-    # Attributes which hand back the wrapped file, so reads through them
-    # would not reach the counter. fileno is refused by BufferedIOBase.
     _refused = frozenset({"raw", "peek", "detach"})
 
     def __init__(self, fileobj):
@@ -652,8 +643,7 @@ class TestScan:
         with skip_missing(), open(path, "rb") as fi:
             handle = _CountingHandle(fi)
             io.scan(handle)
-        # A scan that read nothing at all went around the handle rather than
-        # being free, which would otherwise pass this test by default.
+        # Reading nothing means the handle was bypassed, not that scan is free.
         assert handle.bytes_read, (
             f"{type(io).__name__}.scan read nothing through the handle it was "
             f"given, so its cost cannot be measured; if it opens the file "
@@ -681,18 +671,13 @@ class TestScan:
             for fiber_io in FiberIO.manager.yield_fiberio()
             if type(fiber_io).__module__.startswith("dascore.io.")
         }
-        # Formats are compared by class name below, which is only meaningful
-        # while those names are unique; two classes sharing one could
-        # otherwise stand in for each other.
+        # Comparison below is by class name, so names must be unique.
         by_name = Counter(fiber_io_class.__name__ for fiber_io_class in registered)
         assert not (shared := [k for k, v in by_name.items() if v > 1]), (
             f"format class names are no longer unique: {sorted(shared)}"
         )
-        # None of the expected formats has an optional dependency, so all of
-        # them load in every environment. Checking that first matters: paring
-        # the expectation down to whatever registered would turn a formatter
-        # that failed to load into a pass, which is the silent gap this test
-        # exists to close.
+        # All three are dependency-free, so all should load. Without this,
+        # a formatter failing to load would drop off both sides and pass.
         names = {fiber_io_class.__name__ for fiber_io_class in registered}
         assert FORMATS_WITH_DEFAULT_SCAN <= names, (
             "formats expected to be registered are missing: "
