@@ -567,6 +567,80 @@ def select(
 
 
 @patch_function(history=None)
+def unselect(
+    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
+) -> PatchType:
+    """
+    Return the patch outside a selection.
+
+    The complement of [`Patch.select`](`dascore.Patch.select`): it takes
+    the same selectors and removes exactly the samples that selection
+    would have kept.
+
+    Parameters
+    ----------
+    patch
+        The patch object.
+    copy
+        If True, copy the resulting data. This is needed so the old
+        array can get gc'ed and memory freed.
+    relative
+        If True, unselect ranges are relative to the start of coordinate, if
+        positive, or the end of the coordinate, if negative.
+    samples
+        If True, the query meaning is in samples.
+    **kwargs
+        Used to specify the coordinate on which data are unselected.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.examples import get_example_patch
+    >>> patch = get_example_patch()
+    >>>
+    >>> # Drop meters 50 to 300, keeping what lies outside them.
+    >>> outside = patch.unselect(distance=(50, 300))
+    >>>
+    >>> # Drop the first ten distance samples.
+    >>> trimmed = patch.unselect(distance=(..., 10), samples=True)
+
+    Notes
+    -----
+    - Removing a range from the middle of a coordinate leaves a hole in
+      it, so the result is no longer evenly sampled and the coordinate
+      becomes a monotonic array. That is exactly what
+      [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses
+      coordinates for: at spool level the complement of a range is a hole
+      in every patch rather than a choice between patches.
+
+    - Each named coordinate is complemented on its own. Selecting on two
+      coordinates keeps the samples in both ranges, and everything
+      outside that is an L rather than a block, which no array can hold —
+      so `unselect` removes each named range instead, which is the part
+      of the complement that is expressible.
+    """
+    if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
+        invalid_list = sorted(invalid_coords)
+        valid_list = sorted(patch.coords.coord_map)
+        msg = (
+            f"Coordinate(s) {invalid_list} not found in patch coordinates: "
+            f"{valid_list}"
+        )
+        raise PatchCoordinateError(msg)
+    complements = {}
+    for name, value in kwargs.items():
+        coord = patch.coords.coord_map[name]
+        # Asking select itself which samples it would keep is what stops
+        # the two from drifting: one selector cannot come to mean
+        # different things in select and its complement.
+        _, indexer = coord.select(value, relative=relative, samples=samples)
+        kept = np.zeros(len(coord), dtype=bool)
+        kept[indexer] = True
+        complements[name] = ~kept
+    return patch.select(**complements, copy=copy)
+
+
+@patch_function(history=None)
 def order(
     patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
 ) -> PatchType:

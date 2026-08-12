@@ -438,6 +438,32 @@ sub_patch = patch.select(distance=np.array([0, 12, 10, 9]), samples=True)
 assert len(sub_patch.get_array('distance')) == 4
 ```
 
+## Unselect
+
+[`Patch.unselect`](`dascore.Patch.unselect`) is the complement of `select`: it takes the same selectors and removes exactly the samples `select` would have kept.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Everything outside meters 50 to 200.
+outside = patch.unselect(distance=(50, 200))
+
+# Together the two account for every channel, and share none.
+inside = patch.select(distance=(50, 200))
+assert len(outside.get_array("distance")) + len(inside.get_array("distance")) == 300
+```
+
+Removing a range from the middle leaves a hole, so the coordinate is no longer evenly sampled:
+
+```{python}
+assert patch.get_coord("distance").step is not None
+assert outside.get_coord("distance").step is None
+```
+
+That is why [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses coordinates. A patch can have samples removed from its middle; at spool level the complement of a range would be a hole in every patch rather than a choice between patches. When several coordinates are named, each is complemented on its own — the true complement of a block is an L, which no array can hold.
+
 ## Order
  Order is similar to [`Patch.select`](`dascore.Patch.select`), but will re-arrange data to the order specified by a value array. This may also cause parts of the patch to be duplicated.
 

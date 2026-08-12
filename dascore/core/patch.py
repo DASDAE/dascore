@@ -403,6 +403,7 @@ class Patch(NamespaceOwner):
     # --- processing funcs
 
     select = dascore.proc.select
+    unselect = dascore.proc.unselect
     order = dascore.proc.order
 
     correlate = dascore.proc.correlate
