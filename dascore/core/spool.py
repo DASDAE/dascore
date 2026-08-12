@@ -123,6 +123,21 @@ def _requested_names(_attrs, _coords, kwargs) -> set[str]:
     return out
 
 
+def _namespace_names(spec: namespace_select_type) -> set[str]:
+    """
+    Return the names an `_attrs`/`_coords` argument designates.
+
+    Either form: a mapping of name -> selector, or a name (or names)
+    tagging bare kwargs. A malformed spec keeps only what is a name, so
+    the resolver is left to complain about the rest properly.
+    """
+    if spec is None:
+        return set()
+    if isinstance(spec, str):
+        return {spec}
+    return {x for x in spec if isinstance(x, str)}
+
+
 def _match_resolved(values, name: str, selector, units=None) -> np.ndarray:
     """Return which of the values an inventory states match a selector."""
     from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
@@ -825,7 +840,10 @@ class Spool(BaseSpool):
         if self._inventory is not None:
             names = self._inventory.get_names()
             self._check_channel_level(
-                requested, set(names.coords), known_attrs | known_coords
+                requested,
+                set(names.coords),
+                known_attrs | known_coords | set(names.attrs),
+                _namespace_names(_coords),
             )
             selectable = set(names.attrs) - known_coords
         attrs, coords = resolve_selector_namespaces(
@@ -867,9 +885,17 @@ class Spool(BaseSpool):
         backend = self._catalog.backend
         return set(backend.attr_names()), set(backend.coord_names())
 
-    def _check_channel_level(self, requested, coords, known) -> None:
-        """Raise for a name the inventory defines along the fiber."""
-        if channel_level := sorted(requested & coords - known):
+    def _check_channel_level(self, requested, coords, known, wanted_coords) -> None:
+        """
+        Raise for a name the inventory defines along the fiber.
+
+        A name which is also an attr resolves to the attr, as bare names
+        always do, so only one the caller put in `_coords` is read as the
+        coordinate — an annotation group may share an acquisition field's
+        name, and selecting on the field must keep working.
+        """
+        candidates = (requested - known) | (wanted_coords & coords)
+        if channel_level := sorted(candidates & coords):
             msg = (
                 f"{channel_level} name coordinates the attached inventory "
                 "defines along the fiber, which selection cannot trim to "
@@ -891,7 +917,10 @@ class Spool(BaseSpool):
         known_attrs, known_coords = self._index_names()
         names = self._inventory.get_names()
         self._check_channel_level(
-            requested, set(names.coords), known_attrs | known_coords
+            requested,
+            set(names.coords),
+            known_attrs | known_coords | set(names.attrs),
+            _namespace_names(_coords),
         )
         # A name the index already uses for a coordinate keeps its meaning;
         # bare names resolve to attrs first, and an inventory must not

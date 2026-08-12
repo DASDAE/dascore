@@ -342,6 +342,15 @@ def _states_something_else(existing: TypedValue, path_value: str) -> bool:
             return True
     if existing.kind == "bool":
         return path_value.strip().lower() != str(existing.value).lower()
+    if existing.kind in {"time", "dur"}:
+        # Stored as integer nanoseconds, which a path segment never spells
+        # that way; read the segment as an instant before comparing.
+        convert = to_datetime64 if existing.kind == "time" else to_timedelta64
+        try:
+            stated = typed_value(convert(path_value))
+        except (ValueError, TypeError):
+            return True
+        return stated is None or stated.value != existing.value
     return str(existing.value) != path_value
 
 

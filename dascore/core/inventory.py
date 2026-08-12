@@ -1717,10 +1717,17 @@ def _is_value_field(info) -> bool:
     return any(get_origin(x) not in _COLLECTION_ORIGINS for x in members)
 
 
-def _is_multi_valued(item, field: str) -> bool:
-    """Return True when an item states a field as several values at once."""
+def _value_shape(item, field: str) -> str | None:
+    """
+    Return how an item states a field: as one value, several, or not at all.
+
+    A field stated as several values -- a multi-wavelength loss, say --
+    has none to give a channel, however scalar its annotation reads.
+    """
     value = getattr(item, field, None)
-    return isinstance(value, Sized) and not isinstance(value, str)
+    if value is None or (isinstance(value, str) and not value):
+        return None
+    return "many" if isinstance(value, Sized) and not isinstance(value, str) else "one"
 
 
 @cache
@@ -1985,7 +1992,7 @@ class Inventory(InventoryModel):
         out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
-        multi: set[str] = set()
+        shapes: dict[str, set[str]] = {}
         for path in self._optical_paths():
             groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
             for track in TRACK_IDENTITY_FIELDS:
@@ -1993,16 +2000,17 @@ class Inventory(InventoryModel):
                     fields = tracks.setdefault(track, {})
                     names = _value_field_names(type(item))
                     fields.update(dict.fromkeys(names))
-                    # A field this item states as several values -- a
-                    # multi-wavelength loss, say -- has no one value to
-                    # give a channel, however scalar its annotation reads.
-                    multi.update(
-                        f"{track}.{x}" for x in names if _is_multi_valued(item, x)
-                    )
+                    for field in names:
+                        if (shape := _value_shape(item, field)) is not None:
+                            shapes.setdefault(f"{track}.{field}", set()).add(shape)
+        # Dropped only where nothing states it as one value: another path
+        # may record a scalar where this one records several, and that
+        # path can still give it to a channel.
+        unusable = {x for x, kinds in shapes.items() if kinds == {"many"}}
         for track, fields in tracks.items():
             out[track] = None
             names = (f"{track}.{x}" for x in fields)
-            out.update(dict.fromkeys(x for x in names if x not in multi))
+            out.update(dict.fromkeys(x for x in names if x not in unusable))
         out.update(groups)
         return tuple(out)
 

@@ -354,7 +354,13 @@ def glob_to_regex(pattern: str) -> re.Pattern:
                 return _MATCHES_NOTHING
             body = pattern[index + 1 : end]
             negate, body = body.startswith("^"), body.removeprefix("^")
-            out.append(f"[{'^' if negate else ''}{_class_body(body)}]")
+            # A ']' opening a class is one of its members, and SQLite takes
+            # it as a plain one: it is not the low end of a range, so the
+            # dash which may follow it is a member too.
+            leading = ""
+            if body.startswith("]"):
+                leading, body = re.escape("]"), body[1:]
+            out.append(f"[{'^' if negate else ''}{leading}{_class_body(body)}]")
             index = end
         else:
             out.append(re.escape(char))

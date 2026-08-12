@@ -463,6 +463,9 @@ class TestGlobTranslation:
             "[]",
             "[z-a]",
             "[^z-a]",
+            "[]-a]",
+            "[^]-a]",
+            "[]a]",
         ],
     )
     def test_agrees_with_sqlite(self, pattern):
@@ -473,7 +476,7 @@ class TestGlobTranslation:
         the half of a spool the other did not.
         """
         values = ["abc", "a1c", "vax", "vxx", "ad", "]x", "ace", "", "a", "a["]
-        values += ["x\\yz", "!a", "^a", "]a", "no_meta", "[]"]
+        values += ["x\\yz", "!a", "^a", "]a", "no_meta", "[]", "-", "]", "_"]
         with sqlite3.connect(":memory:") as connection:
             regex = glob_to_regex(pattern)
             for value in values:

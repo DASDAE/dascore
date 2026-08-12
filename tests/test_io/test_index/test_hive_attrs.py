@@ -13,6 +13,7 @@ import pickle
 import sqlite3
 import warnings
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -413,7 +414,7 @@ class TestOverrideComparesMeaning:
     def _index(self, tmp_path, segment, **attrs):
         """Index one patch stating attrs under a hive segment."""
         sub = tmp_path / segment
-        sub.mkdir()
+        sub.mkdir(parents=True)
         dc.get_example_patch().update_attrs(**attrs).io.write(sub / "f.h5", "dasdae")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -442,3 +443,20 @@ class TestOverrideComparesMeaning:
         """And the opposite flag is a disagreement."""
         segment = "closed_fiber_loop=false"
         assert self._index(tmp_path, segment, closed_fiber_loop=True)
+
+    def test_a_restated_instant_is_silent(self, tmp_path):
+        """
+        A time is stored as integer nanoseconds, not as its own spelling.
+
+        Comparing that integer's text against the path segment would call
+        every datetime attr a disagreement.
+        """
+        stamp = np.datetime64("2020-01-01", "ns")
+        cases = [
+            ("observed=2020-01-01", False),
+            ("observed=2021-06-05", True),
+            ("observed=nonsense", True),
+        ]
+        for number, (segment, warns) in enumerate(cases):
+            root = tmp_path / str(number)
+            assert bool(self._index(root, segment, observed=stamp)) is warns, segment
