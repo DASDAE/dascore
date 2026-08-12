@@ -849,7 +849,10 @@ def _mask_pieces(mask: np.ndarray, grid: np.ndarray, low, high) -> list[tuple]:
     edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.view(np.int8), [0]])))
     last = len(grid) - 1
     return [
-        (low if start == 0 else grid[start], high if stop - 1 == last else grid[stop - 1])
+        (
+            low if start == 0 else grid[start],
+            high if stop - 1 == last else grid[stop - 1],
+        )
         for start, stop in zip(edges[::2], edges[1::2], strict=True)
     ]
 
@@ -929,7 +932,8 @@ def channel_placements(contexts, frame) -> tuple:
         placements.append(placement)
         # The second half of a placement is the axis when there is one and
         # the reason there is not, so only a nameless one carries a reason.
-        reasons.append(placement[1] if context is not None and not placement[0] else None)
+        placed = context is not None and not placement[0]
+        reasons.append(placement[1] if placed else None)
     named = {x for x, _ in placements if x is not None}
     if len(named) > 1:
         joined = ", ".join(sorted(named))
@@ -990,7 +994,8 @@ def _placed_rows(contexts, placements, frame, name: str):
             grid = np.arange(round((high - low) / step) + 1) * step + low
             placed = (grid, context.acquisition.channel_to_distance(grid, axis=axis))
             cache[key] = placed
-        yield PlacedRow(context, low, high, *placed, None)
+        grid, distances = placed
+        yield PlacedRow(context, low, high, grid, distances, None)
 
 
 def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
@@ -1053,13 +1058,17 @@ def _split_values(values) -> list:
     strings, a membership group into the channels it includes and those
     it does not, and a numeric one by each distinct measurement. Sorted
     so the outputs of a spool do not depend on which channel came first.
+
+    Absence is not a value, so the channels a group says nothing about
+    make no output of their own — with the one exception a membership
+    group is: `False` there means "not in this group", which is a
+    statement about every channel rather than the absence of one.
     """
     array = np.asarray(values)
-    if np.issubdtype(array.dtype, np.floating):
-        # NaN is how a numeric group spells "no value here", and it is
-        # never equal to itself, so it could not name an output anyway.
-        array = array[~np.isnan(array)]
-    return sorted(set(array.tolist()))
+    if array.dtype == bool:
+        return sorted(set(array.tolist()))
+    keep = ~np.isnan(array) if np.issubdtype(array.dtype, np.number) else array != ""
+    return sorted(set(array[keep].tolist()))
 
 
 def _channel_matches(inventory, path, name, selector, distances) -> np.ndarray:

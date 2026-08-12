@@ -203,9 +203,7 @@ def _unsubdividable(rows: pd.DataFrame, pieces, name: str) -> list:
     not for the data to be restructured.
     """
     return [
-        f"at {row_pieces[0]}"
-        if row_pieces and (pd.isnull(step) or not step)
-        else None
+        f"at {row_pieces[0]}" if row_pieces and (pd.isnull(step) or not step) else None
         for step, row_pieces in zip(rows[f"{name}_step"], pieces, strict=True)
     ]
 
@@ -277,7 +275,7 @@ def _without_names(spec: namespace_select_type, names) -> namespace_select_type:
     if not names or spec is None:
         return spec
     if isinstance(spec, Mapping):
-        return {name: value for name, value in spec.items() if name not in names}
+        return {str(k): v for k, v in spec.items() if k not in names}
     if isinstance(spec, str):
         return None if spec in names else spec
     kept = [x for x in spec if x not in names]
@@ -1165,23 +1163,17 @@ class Spool(BaseSpool):
             `unselect` uses it to leave a patch its attrs never matched
             whole, which is what makes the two halves one complement.
         """
-        from dascore.proc.inventory import (  # noqa: PLC0415
-            resolve_channel_pieces,
-            resolve_contexts,
-        )
+        from dascore.proc.inventory import resolve_channel_pieces  # noqa: PLC0415
 
         source_rows, working = self._plan_frames()
         if not len(working):
             return self
-        columns = _resolution_columns(working)
-        contexts = (
-            np.full(len(working), None, dtype=object)
-            if columns is None
-            else resolve_contexts(self._inventory, *columns)
-        )
+        contexts = self._plan_contexts(working)
         if applies_to is not None:
+            # A row the attrs did not match is a row the selection never
+            # held, so it is left unjudged rather than judged and kept.
             judged = np.isin(working["_patch_id"].to_numpy(), np.asarray(applies_to))
-            contexts = np.where(judged, contexts, None)
+            contexts[~judged] = None
         name, pieces, reasons = resolve_channel_pieces(
             self._inventory, contexts, working, query, complement=complement
         )

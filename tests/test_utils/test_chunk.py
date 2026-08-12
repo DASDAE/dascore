@@ -665,7 +665,7 @@ class TestBuildSubdivisionPlan:
     """Building a plan from pieces given directly, as a selection does."""
 
     def test_a_row_given_no_pieces_leaves(self):
-        """This is how a selection drops a patch it keeps no sample of."""
+        """A selection drops a patch this way when it keeps no sample."""
         df = _one_row_df(0.0, 1.0, 10, name="distance")
         plan = build_subdivision_plan(df, [[]], "distance")
         assert not len(plan.outputs)

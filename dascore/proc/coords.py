@@ -623,8 +623,7 @@ def unselect(
         invalid_list = sorted(invalid_coords)
         valid_list = sorted(patch.coords.coord_map)
         msg = (
-            f"Coordinate(s) {invalid_list} not found in patch coordinates: "
-            f"{valid_list}"
+            f"Coordinate(s) {invalid_list} not found in patch coordinates: {valid_list}"
         )
         raise PatchCoordinateError(msg)
     complements = {}

@@ -494,9 +494,6 @@ class PlanResolver(PatchResolver):
         return patch.update_attrs(**{x: row[x] for x in self.stamped})
 
 
-
-
-
 def _residual_ranges(residuals) -> dict:
     """Envelope-applicable value ranges from a residual tuple.
 
