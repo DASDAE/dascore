@@ -1815,12 +1815,13 @@ class Inventory(InventoryModel):
     @classmethod
     def _key_resources(cls, value):
         """Accept an iterable of resources, keying them by resource_id."""
-        # Mapping, not dict: FrozenDict is not a dict, so another inventory's
-        # pool would fall through to the iterable-of-resources branch.
+        # Mapping, not dict, at both levels: FrozenDict is not a dict, so a
+        # pool would fall through to the iterable-of-resources branch and a
+        # record would be read as an object, hiding a key that disagrees.
         if isinstance(value, Mapping):
             out = {}
             for key, resource in value.items():
-                if isinstance(resource, dict):
+                if isinstance(resource, Mapping):
                     rid = resource.get("resource_id")
                     if rid is None:
                         resource = {**resource, "resource_id": key}

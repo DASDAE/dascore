@@ -14,6 +14,7 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.models import values_equal
 
 
@@ -1235,6 +1236,14 @@ class TestImmutability:
         second = inv.Inventory(resources=first.resources)
         assert isinstance(second.resources["cable_01"], inv.Cable)
         assert second.resources == first.resources
+
+    def test_frozen_record_disagreeing_with_its_key_is_refused(self):
+        """A record is read as a record whatever kind of mapping it is."""
+        # Read as an object instead, its resource_id goes unseen and the
+        # mismatch only surfaces on the next load.
+        record = FrozenDict({"type": "Cable", "resource_id": "elsewhere"})
+        with pytest.raises(ValidationError, match="disagrees with resource_id"):
+            inv.Inventory(resources={"cable-01": record})
 
     def test_equal_inventories_hash_equally(self):
         """Equality and hashing agree, so an inventory works as a dict key."""

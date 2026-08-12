@@ -149,7 +149,10 @@ def _hash_key(value):
 
 def sensible_model_hash(self: BaseModel) -> int:
     """Hash a model on its fields, agreeing with sensible_model_equals."""
-    return hash(tuple(_hash_key(getattr(self, x)) for x in type(self).model_fields))
+    # Keyed by name and unordered, because equality compares the field names
+    # it finds rather than the order they were declared in.
+    fields = type(self).model_fields
+    return hash(frozenset((x, _hash_key(getattr(self, x))) for x in fields))
 
 
 class DascoreBaseModel(BaseModel):

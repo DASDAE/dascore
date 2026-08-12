@@ -105,6 +105,21 @@ class TestModelHash:
         """A real value is not confused with the null it replaces."""
         assert hash(_NullModel(number=1.0)) != hash(_NullModel())
 
+    def test_declaration_order_does_not_change_the_hash(self):
+        """Equality compares field names, so declaration order cannot matter."""
+
+        class Ab(DascoreBaseModel):
+            a: int = 1
+            b: int = 2
+
+        class Ba(DascoreBaseModel):
+            b: int = 2
+            a: int = 1
+
+        first, second = Ab(), Ba()
+        assert first == second
+        assert hash(first) == hash(second)
+
     def test_unhashable_field_still_refuses(self):
         """A model holding an array is unhashable, and says so."""
         with pytest.raises(TypeError, match="unhashable"):
