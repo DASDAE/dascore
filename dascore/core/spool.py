@@ -109,6 +109,20 @@ def _unstated(values) -> np.ndarray:
     return (series.isna() | series.eq("")).to_numpy()
 
 
+def _requested_names(_attrs, _coords, kwargs) -> set[str]:
+    """
+    Return every name a selection call names, whatever form it arrives in.
+
+    A tag-form `_attrs`/`_coords` names bare kwargs, so a requested name
+    is always either a bare kwarg or a key of a mapping form.
+    """
+    out = set(kwargs)
+    for spec in (_attrs, _coords):
+        if isinstance(spec, Mapping):
+            out |= set(spec)
+    return out
+
+
 def _match_resolved(values, name: str, selector) -> np.ndarray:
     """Return which of the values an inventory states match a selector."""
     from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
@@ -452,6 +466,50 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
     # --- optional methods
 
+    def unselect(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Return the spool without the patches a selection would keep.
+
+        The complement of
+        [`select`](`dascore.core.spool.Spool.select`): each keyword means
+        exactly what it means there, and the patches it would match are
+        the ones removed. This is how a spool says what it does not want —
+        one bad tag, an instrument being serviced — without spelling the
+        rest of the archive as a selection.
+
+        Coordinates are not accepted. A coordinate range decides how much
+        of each patch to keep rather than which patches to keep, and its
+        complement is a hole in the middle: removing a patch which merely
+        overlaps the range would throw away the part that does not.
+        Select the ranges to keep instead.
+
+        Parameters
+        ----------
+        _attrs
+            Attribute selections, in the forms
+            [`select`](`dascore.core.spool.Spool.select`) accepts.
+        _coords
+            Accepted only to say so; see above.
+        **kwargs
+            The selection whose matches are removed.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # everything except the patches tagged 'some_tag'
+        >>> rest = spool.unselect(tag='some_tag')
+        >>> assert len(rest) + len(spool.select(tag='some_tag')) == len(spool)
+        """
+        msg = f"spool of type {self.__class__} has no unselect implementation"
+        raise NotImplementedError(msg)
+
     def sort(self, attribute) -> Self:
         """
         Sort the Spool based on a specific attribute.
@@ -745,6 +803,64 @@ class Spool(BaseSpool):
             out = out._select_from_inventory(inventory_query)
         return out
 
+    @compose_docstring(doc=get_docstring(BaseSpool.unselect))
+    def unselect(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        **kwargs,
+    ) -> Self:
+        """{doc}."""
+        self._check_channel_level(_requested_names(_attrs, _coords, kwargs))
+        attrs, coords = resolve_selector_namespaces(
+            set(self._catalog.backend.attr_names()) | self._inventory_attr_names(),
+            self._catalog.backend.coord_names(),
+            _attrs=_attrs,
+            _coords=_coords,
+            kwargs=kwargs,
+        )
+        if coords:
+            msg = (
+                f"{sorted(coords)} name coordinates, which unselect does not "
+                "take: a range says how much of each patch to keep rather "
+                "than which patches, so removing every patch it touches "
+                "would throw away the parts outside it. Select the ranges "
+                "to keep instead."
+            )
+            raise InvalidSpoolQueryError(msg)
+        # The complement is taken against select itself rather than by
+        # negating each predicate, so the two can never drift apart.
+        removed = self.select(_attrs=attrs)._catalog._ordered_ids()
+        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
+        return self._new_from_catalog(self._catalog.restrict(keep))
+
+    def _inventory_attr_names(self) -> set[str]:
+        """The attrs an attached inventory adds to what this spool selects on."""
+        if self._inventory is None:
+            return set()
+        # A name the index already uses for a coordinate keeps its meaning;
+        # bare names resolve to attrs first, and an inventory must not
+        # quietly move one out of the namespace it has always been in.
+        names = set(self._inventory.get_names().attrs)
+        return names - set(self._catalog.backend.coord_names())
+
+    def _check_channel_level(self, requested: set[str]) -> None:
+        """Raise for a name the inventory defines along the fiber."""
+        if self._inventory is None:
+            return
+        backend = self._catalog.backend
+        known = set(backend.attr_names()) | set(backend.coord_names())
+        coords = set(self._inventory.get_names().coords)
+        if channel_level := sorted(requested & coords - known):
+            msg = (
+                f"{channel_level} name coordinates the attached inventory "
+                "defines along the fiber, which selection cannot trim to "
+                "yet. Enrich the patches and select on each one instead."
+            )
+            raise InvalidSpoolQueryError(msg)
+
     def _split_inventory_query(self, _attrs, _coords, kwargs, samples):
         """
         Split selectors into the ones the index answers and the rest.
@@ -755,35 +871,17 @@ class Spool(BaseSpool):
         """
         if self._inventory is None:
             return {}, _attrs, _coords, kwargs
-        names = self._inventory.get_names()
-        backend = self._catalog.backend
-        known_attrs, known_coords = (
-            set(backend.attr_names()),
-            set(backend.coord_names()),
-        )
-        # A tag-form _attrs/_coords names bare kwargs, so every requested
-        # name is either a bare kwarg or a key of a mapping form.
-        requested = set(kwargs)
-        for spec in (_attrs, _coords):
-            if isinstance(spec, Mapping):
-                requested |= set(spec)
-        if channel_level := sorted(
-            requested & set(names.coords) - known_attrs - known_coords
-        ):
-            msg = (
-                f"{channel_level} name coordinates the attached inventory "
-                "defines along the fiber, which selection cannot trim to "
-                "yet. Enrich the patches and select on each one instead."
-            )
-            raise InvalidSpoolQueryError(msg)
+        requested = _requested_names(_attrs, _coords, kwargs)
+        self._check_channel_level(requested)
         # samples=True selections are coordinate-only, so an attr among
         # them is an error the index states better than this can.
-        selectable = set(names.attrs) - known_coords
+        selectable = self._inventory_attr_names()
         if samples or not requested & selectable:
             return {}, _attrs, _coords, kwargs
+        backend = self._catalog.backend
         attrs, coords = resolve_selector_namespaces(
-            known_attrs | selectable,
-            known_coords,
+            set(backend.attr_names()) | selectable,
+            backend.coord_names(),
             _attrs=_attrs,
             _coords=_coords,
             kwargs=kwargs,

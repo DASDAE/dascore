@@ -1494,3 +1494,39 @@ class TestInventorySelect:
         spool = two_patch_spool.attach_inventory(inventory)
         with pytest.raises(UnitError, match="unitless"):
             spool.select(gauge_length=10.0 * dc.get_quantity("m"))
+
+
+class TestInventoryUnselect:
+    """Unselect reaches whatever select reaches."""
+
+    def test_removes_what_select_keeps(self, two_patch_spool, inventory):
+        """The complement holds for an inventory-backed name too."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.unselect(gauge_length=10.0)) == 0
+        assert len(spool.unselect(gauge_length=99.0)) == 2
+
+    def test_undescribed_patch_is_kept(self, patch, inventory):
+        """
+        Silently not matching means silently not being removed.
+
+        Unselect is the complement of a filter, so a patch the inventory
+        cannot speak for stays for the same reason it is never selected.
+        """
+        other = patch.update_attrs(tag="other", acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        out = spool.unselect(gauge_length=10.0)
+        assert out.get_contents()["tag"].tolist() == ["other"]
+
+    def test_stated_value_wins(self, patch, inventory):
+        """Per-row precedence is the same on the way out."""
+        stated = patch.update_attrs(tag="stated", gauge_length=20.0)
+        spool = dc.spool([patch, stated]).attach_inventory(inventory)
+        assert spool.unselect(gauge_length=20.0).get_contents()["tag"].tolist() == [
+            "random"
+        ]
+
+    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
+        """A track name is as unsupported here as it is in select."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
+            spool.unselect(coupling="trench")
