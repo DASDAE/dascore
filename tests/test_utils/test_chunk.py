@@ -585,11 +585,12 @@ class TestSubdivisionPieces:
         """
         A cut sitting exactly on a sample opens the piece at that sample.
 
-        Dividing the native types keeps this exact for a time
-        coordinate — datetime64 arithmetic is integer nanoseconds — where
-        converting each operand to float seconds first rounds three
-        times and puts the boundary sample one piece too early at these
-        step and index combinations.
+        Dividing the native types rounds once — datetime64 arithmetic
+        is integer nanoseconds, so only the quotient rounds — where
+        converting each operand to float seconds first rounds three times
+        and puts the boundary sample one piece too early at these step
+        and index combinations. The grid comparison settles it either
+        way, which is what these pin.
         """
         start, step = STARTTIME, np.timedelta64(17060962, "ns")
         df = _one_row_df(start, step, index + 10)
@@ -618,10 +619,10 @@ class TestSubdivisionPieces:
 
         `1.0 + 0.1` is the textbook case: the difference back out is
         `0.10000000000000009`, so the ratio is a hair above 1 and `ceil`
-        answers 2 — the sample the cut lands exactly on would open the
-        piece *before* it. Comparing against the grid is what settles
-        it, and a distance axis makes this the ordinary case rather than
-        the exotic one.
+        answers 2 — the sample the cut lands exactly on would be left in
+        the piece *before* the cut instead of opening the one after it.
+        Comparing against the grid is what settles it, and a distance
+        axis makes this the ordinary case rather than the exotic one.
         """
         start, step = 1.0, 0.1
         df = _one_row_df(start, step, 10, name="distance")
@@ -693,3 +694,48 @@ class TestBuildSubdivisionPlan:
         df = _one_row_df(0.0, 1.0, 10, name="distance")
         with pytest.raises(AssertionError):
             build_subdivision_plan(pd.concat([df, df]), [[]], "distance")
+
+
+class TestSnappedCutExactness:
+    """The property the two correction loops exist to guarantee."""
+
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_an_on_grid_cut_always_lands_on_its_own_sample(self, seed):
+        """
+        Over many float grids, a cut on a sample opens the piece there.
+
+        The ratio alone gets this wrong on a few percent of inputs in
+        either direction, and which few depends on the values, so a
+        handful of hand-picked cases cannot stand for it. The pieces are
+        read straight off `subdivision_pieces` rather than a plan so the
+        grid arithmetic is what is under test.
+        """
+        rng = np.random.default_rng(seed)
+        for _ in range(300):
+            start = float(rng.uniform(-1e4, 1e4))
+            step = float(rng.uniform(1e-6, 10))
+            index = int(rng.integers(1, 200_000))
+            cut = start + index * step
+            df = _one_row_df(start, step, index + 2, name="distance")
+            pieces = subdivision_pieces(df, [(cut,)], "distance")[0]
+            assert len(pieces) == 2
+            # The second piece opens exactly on the cut, and the first
+            # ends one step short of it, whichever way the ratio erred.
+            assert pieces[1][0] == cut
+            assert pieces[0][1] == cut - step
+
+    def test_a_cut_between_samples_opens_at_the_next(self):
+        """The other direction, over the same spread of grids."""
+        rng = np.random.default_rng(3)
+        for _ in range(300):
+            start = float(rng.uniform(-1e4, 1e4))
+            step = float(rng.uniform(1e-6, 10))
+            index = int(rng.integers(1, 200_000))
+            on_grid = start + index * step
+            cut = np.nextafter(on_grid, np.inf)
+            df = _one_row_df(start, step, index + 2, name="distance")
+            pieces = subdivision_pieces(df, [(cut,)], "distance")[0]
+            # A cut past a sample leaves that sample behind, so the piece
+            # it opens starts at the next one.
+            assert pieces[1][0] > on_grid
+            assert pieces[1][0] >= cut

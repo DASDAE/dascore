@@ -368,6 +368,7 @@ class PlanResolver(PatchResolver):
         check_behavior: WARN_LEVELS = "warn",
         origin_path=None,
         stamped: tuple[str, ...] = (),
+        lossy: bool = False,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -385,6 +386,11 @@ class PlanResolver(PatchResolver):
         self.origin_path = origin_path
         # attrs the outputs state about themselves rather than inherit
         self.stamped = tuple(stamped)
+        # Whether the outputs leave samples of their sources out. A lossy
+        # plan must never be collapsed: its members do not cover their
+        # sources, so re-planning over them would load back what it
+        # dropped. See `collapse_working_df`.
+        self.lossy = bool(lossy)
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -463,20 +469,22 @@ class PlanResolver(PatchResolver):
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
-            return self._stamp(self._load_member(members.iloc[0].to_dict()), row)
-        if self.mode == "concat":
-            patches = [
+            patch = self._load_member(members.iloc[0].to_dict())
+        elif self.mode == "concat":
+            loaded = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
             out = concatenate_patches(
-                patches, check_behavior=self.check_behavior, **{self.dim: None}
+                loaded, check_behavior=self.check_behavior, **{self.dim: None}
             )
             assert len(out) == 1
-            return self._stamp(out[0], row)
-        joined = members.assign(current_index=output_id)
-        patches = self._assembler()._patch_from_instruction_df(joined)
-        assert len(patches) == 1
-        return self._stamp(patches[0], row)
+            patch = out[0]
+        else:
+            joined = members.assign(current_index=output_id)
+            assembled = self._assembler()._patch_from_instruction_df(joined)
+            assert len(assembled) == 1
+            patch = assembled[0]
+        return self._stamp(patch, row)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -525,6 +533,7 @@ def derived_catalog(
     check_behavior: WARN_LEVELS = "warn",
     origin_path=None,
     stamped: tuple[str, ...] = (),
+    lossy: bool = False,
 ) -> PatchCatalog:
     """
     Materialize a plan into a fresh in-memory catalog.
@@ -594,6 +603,7 @@ def derived_catalog(
         check_behavior=check_behavior,
         origin_path=origin_path,
         stamped=stamped,
+        lossy=lossy,
     )
     backend = get_backend(":memory:")
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
@@ -627,9 +637,16 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     applied to the envelopes. (Planning a different dimension must keep
     the assembled boundaries, so its caller plans over the output rows
     instead and never collapses.)
+
+    A *lossy* plan is the exception and never collapses. Collapsing is
+    sound because the members of a chunk or a subdivision together cover
+    their sources, so a re-plan which merges them back is entitled to
+    load a source whole. A plan which drops samples — channel selection
+    keeping some channels of a patch and not others — breaks exactly
+    that, and collapsing it would quietly load back what it removed.
     """
     resolver = catalog.resolver
-    if not isinstance(resolver, PlanResolver):
+    if not isinstance(resolver, PlanResolver) or resolver.lossy:
         return None
     members = resolver.member_rows
     if catalog.is_view:

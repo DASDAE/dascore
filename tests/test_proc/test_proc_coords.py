@@ -704,8 +704,8 @@ class TestUnselect:
         """
         Two names remove two ranges rather than the one intersection.
 
-        The complement of a block is an L, which no array can hold, so
-        unselect removes the part of it which is expressible.
+        The complement of a block is a frame around it, which no array
+        can hold, so unselect removes the part which is expressible.
         """
         time = random_patch.get_array("time")
         window = (time[0], time[4])
@@ -719,6 +719,19 @@ class TestUnselect:
         """A misspelled name is the error it is in select."""
         with pytest.raises(PatchCoordinateError, match="not found in patch"):
             random_patch.unselect(not_a_coord=(1, 2))
+
+    def test_a_multidimensional_coordinate_raises(self, random_patch):
+        """
+        A range of one names no samples of a single dimension to drop.
+
+        Its complement is a shape spanning both, which is the same reason
+        two coordinates cannot be complemented jointly.
+        """
+        size = random_patch.shape
+        grid = np.arange(size[0] * size[1]).reshape(size)
+        patch = random_patch.update_coords(quality=(("distance", "time"), grid))
+        with pytest.raises(PatchCoordinateError, match="spans"):
+            patch.unselect(quality=(0, 10))
 
     def test_non_dimensional_coordinate(self, random_patch):
         """A coordinate along a dimension trims that dimension."""

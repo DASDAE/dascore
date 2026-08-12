@@ -442,6 +442,17 @@ def coords_from_df(
     return out
 
 
+def _check_coord_names(patch: PatchType, kwargs) -> None:
+    """Refuse a name the patch has no coordinate for, naming what it has."""
+    if not (invalid := set(kwargs) - set(patch.coords.coord_map)):
+        return
+    valid_list = sorted(patch.coords.coord_map)
+    msg = (
+        f"Coordinate(s) {sorted(invalid)} not found in patch coordinates: {valid_list}"
+    )
+    raise PatchCoordinateError(msg)
+
+
 @patch_function(history=None)
 @compose_docstring(select_params=select_values_description)
 def select(
@@ -543,15 +554,7 @@ def select(
       1999
 
     """
-    # Check for and raise on invalid kwargs.
-    if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
-        invalid_list = sorted(invalid_coords)
-        valid_list = sorted(patch.coords.coord_map)
-        msg = (
-            f"Coordinate(s) {invalid_list} not found in patch coordinates: {valid_list}"
-        )
-        raise PatchCoordinateError(msg)
-
+    _check_coord_names(patch, kwargs)
     new_coords, data = patch.coords.select(
         **kwargs,
         array=patch.data,
@@ -615,28 +618,37 @@ def unselect(
 
     - Each named coordinate is complemented on its own. Selecting on two
       coordinates keeps the samples in both ranges, and everything
-      outside that is an L rather than a block, which no array can hold —
-      so `unselect` removes each named range instead, which is the part
-      of the complement that is expressible.
+      outside that is a frame around them rather than a block, which no
+      array can hold — so `unselect` removes each named range instead,
+      which is the part of the complement that is expressible. Two
+      coordinates along one dimension therefore both take their range
+      out of it, leaving what neither removed.
     """
-    if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
-        invalid_list = sorted(invalid_coords)
-        valid_list = sorted(patch.coords.coord_map)
-        msg = (
-            f"Coordinate(s) {invalid_list} not found in patch coordinates: {valid_list}"
-        )
-        raise PatchCoordinateError(msg)
-    complements = {}
+    _check_coord_names(patch, kwargs)
+    keep: dict[str, np.ndarray] = {}
     for name, value in kwargs.items():
         coord = patch.coords.coord_map[name]
+        dims = patch.coords.dim_map[name]
+        if len(dims) != 1:
+            msg = (
+                f"Coordinate {name!r} spans {list(dims)}, so removing a range "
+                "of it does not name samples of one dimension to drop."
+            )
+            raise PatchCoordinateError(msg)
         # Asking select itself which samples it would keep is what stops
         # the two from drifting: one selector cannot come to mean
         # different things in select and its complement.
         _, indexer = coord.select(value, relative=relative, samples=samples)
-        kept = np.zeros(len(coord), dtype=bool)
-        kept[indexer] = True
-        complements[name] = ~kept
-    return patch.select(**complements, copy=copy)
+        selected = np.zeros(len(coord), dtype=bool)
+        selected[indexer] = True
+        keep[dims[0]] = keep.get(dims[0], True) & ~selected
+    # Kept as sample numbers along each dimension rather than as a mask
+    # per coordinate: coordinates sharing a dimension are applied in
+    # separate passes, so the second mask would meet an already trimmed
+    # axis, and a dimension carrying no values of its own takes samples
+    # where it would refuse an array.
+    trims = {dim: np.flatnonzero(mask) for dim, mask in keep.items()}
+    return patch.select(**trims, samples=True, copy=copy)
 
 
 @patch_function(history=None)

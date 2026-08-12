@@ -543,14 +543,34 @@ _AXIS_COORDS = {
 assert set(_AXIS_COORDS) == set(DISTANCE_MAP_AXES)
 
 
-def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+def _map_axis_coords(dist_map, names) -> list[tuple[str, str]]:
     """
-    Return every map axis the patch can be read on, with its coordinate.
+    Return each map axis paired with the name it can be read on.
 
-    The map states its control points in whichever coordinates were
-    measured, so the patch decides which of them is read. Guessing instead
-    would be wrong by the channel spacing, silently.
+    One name per axis, the first of them present: the map states its
+    control points in whichever coordinates were measured, so what is
+    carried decides which is read. Guessing instead would be wrong by the
+    channel spacing, silently. Stated once because a patch and an index
+    row must agree about it — selection answering differently than
+    enrichment would is the failure this whole path exists to avoid. No
+    two axes share a name in `_AXIS_COORDS`, so a name appears once.
     """
+    out = []
+    for axis in dist_map.axes:
+        for name in _AXIS_COORDS[axis]:
+            if name in names:
+                out.append((axis, name))
+                break
+    return out
+
+
+def _readable_on(dist_map) -> list[str]:
+    """The names a map could be read on, whichever axis answers."""
+    return sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
+
+
+def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+    """Return every map axis the patch can be read on, with its coordinate."""
     dist_map = acquisition.distance_map
     if dist_map is None:
         msg = (
@@ -558,22 +578,15 @@ def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
             "its channels cannot be placed on the optical path."
         )
         raise PatchError(msg)
-    out = []
-    for axis in dist_map.axes:
-        for name in _AXIS_COORDS[axis]:
-            if name in patch.coords.coord_map:
-                out.append((axis, name))
-                break
-    if out:
+    if out := _map_axis_coords(dist_map, patch.coords.coord_map):
         return out
-    wanted = sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
     msg = (
         f"Acquisition {acquisition.code!r} maps {list(dist_map.axes)} onto "
-        f"path distance, so it needs one of the {wanted} coordinates, and "
-        f"this patch has {sorted(patch.coords.coord_map)}. An acquisition "
-        "whose patches carry interrogator meters is calibrated with a "
-        "distance_map on the instrument_distance axis, one control point "
-        "being enough to state an origin."
+        f"path distance, so it needs one of the {_readable_on(dist_map)} "
+        f"coordinates, and this patch has {sorted(patch.coords.coord_map)}. "
+        "An acquisition whose patches carry interrogator meters is "
+        "calibrated with a distance_map on the instrument_distance axis, "
+        "one control point being enough to state an origin."
     )
     raise PatchError(msg)
 
@@ -795,27 +808,19 @@ def _channel_placement(dims: set[str], acquisition) -> tuple:
             f"{acquisition.code!r} defines no distance_map, so its channels "
             "cannot be placed on the optical path"
         )
-    found = {}
-    for axis in dist_map.axes:
-        # One coordinate per axis, the same preference `_get_channel_axes`
-        # applies; two axes landing on one dimension is that dimension
-        # stating both, which the map's own validator has already agreed.
-        for name in _AXIS_COORDS[axis]:
-            if name in dims:
-                found.setdefault(name, axis)
-                break
+    found = _map_axis_coords(dist_map, dims)
     if not found:
-        wanted = sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
         return None, (
             f"has dimensions {sorted(dims)}, and {acquisition.code!r} places "
-            f"channels by one of {wanted}"
+            f"channels by one of {_readable_on(dist_map)}"
         )
-    if len(found) > 1:
+    if len({name for _, name in found}) > 1:
         return None, (
-            f"carries {sorted(found)} as separate dimensions, so which of "
-            f"them {acquisition.code!r} places its channels by is ambiguous"
+            f"carries {sorted(name for _, name in found)} as separate "
+            f"dimensions, so which of them {acquisition.code!r} places its "
+            "channels by is ambiguous"
         )
-    name, axis = next(iter(found.items()))
+    axis, name = found[0]
     return name, axis
 
 
@@ -893,13 +898,15 @@ def resolve_channel_pieces(
     Returns
     -------
     A `(name, pieces, reasons)` triple. `reasons` holds a refusal per row
-    and None elsewhere; when any row is refused the other two are None,
-    since the caller raises rather than selecting.
+    and None elsewhere; when any row is refused `pieces` is None, since
+    the caller raises rather than selecting, and `name` is whatever the
+    rows which placed fine agreed on — possibly None.
     """
     name, placements, reasons = channel_placements(contexts, frame)
     if any(x is not None for x in reasons) or name is None:
-        # No dimension to trim along, so nothing was judged and there are
-        # no pieces to report; the caller reads that off `name`.
+        # Nothing was judged -- either a row must be refused, or no row
+        # has a fiber at all -- so there are no pieces to report; the
+        # caller reads which of the two off `reasons` and `name`.
         return name, None, reasons
     out, unusable = [], []
     for row in _placed_rows(contexts, placements, frame, name):
@@ -989,6 +996,11 @@ def _placed_rows(contexts, placements, frame, name: str):
             reason = "states no channel spacing to place its channels on"
             yield PlacedRow(context, low, high, None, None, reason)
             continue
+        # Envelopes are value-ordered whatever the coordinate's orientation,
+        # so the grid is walked by the step's magnitude -- a reverse-sorted
+        # patch states a negative one, and counting samples with it would
+        # give none at all.
+        step = abs(step)
         key = (id(context), axis, low, high, step)
         if (placed := cache.get(key)) is None:
             grid = np.arange(round((high - low) / step) + 1) * step + low
@@ -1004,9 +1016,10 @@ def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
 
     Splitting expands the spool into one patch per value a group takes
     along each row, so a row is answered with a list of `(value, piece)`
-    pairs rather than pieces alone. A group whose values overlap gives
-    some channels to more than one output, which is the whole point of a
-    membership group and why the pieces of a row need not be disjoint.
+    pairs rather than pieces alone. A value the group states in two
+    places gives that value two pieces, so a row's pieces are disjoint
+    but neither contiguous nor in envelope order — they arrive grouped by
+    value, and the values are sorted rather than the envelopes.
 
     Parameters
     ----------
@@ -1036,12 +1049,11 @@ def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
         if row.grid is None:
             continue
         path = row.context.optical_path
-        values = _get_coord_values(inventory, path, name, row.distances)
+        values, _ = _channel_values(inventory, path, name, row.distances)
         if values is None:
             # A group this path defines nowhere puts none of its channels
             # anywhere, so the row contributes no output at all.
             continue
-        values = values.values if isinstance(values, BaseCoord) else values
         for value in _split_values(values):
             if not keep(value):
                 continue
@@ -1067,24 +1079,48 @@ def _split_values(values) -> list:
     array = np.asarray(values)
     if array.dtype == bool:
         return sorted(set(array.tolist()))
-    keep = ~np.isnan(array) if np.issubdtype(array.dtype, np.number) else array != ""
-    return sorted(set(array[keep].tolist()))
+    return sorted(set(array[~_undefined_mask(array)].tolist()))
+
+
+def _channel_values(inventory, path, name, distances) -> tuple:
+    """
+    Return one name's value per channel, with the units it carries.
+
+    A path is what states anything along the fiber, so an acquisition
+    without one -- a valid inventory, describing a system which simply
+    projects nothing -- has no values, exactly as a path which defines
+    the name nowhere has none.
+    """
+    values = (
+        None if path is None else _get_coord_values(inventory, path, name, distances)
+    )
+    if values is None:
+        return None, None
+    if not isinstance(values, BaseCoord):
+        return values, None
+    # The projection carries the units the inventory documents for the
+    # field, and dropping them would refuse the unit-bearing selectors
+    # the index accepts against a stated attr of the same kind.
+    units = None if values.units is None else {"num": get_quantity_str(values.units)}
+    return values.values, units
 
 
 def _channel_matches(inventory, path, name, selector, distances) -> np.ndarray:
     """Return the channels one selector matches, as the index would."""
     from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
 
-    values = _get_coord_values(inventory, path, name, distances)
+    values, units = _channel_values(inventory, path, name, distances)
     if values is None:
         # A name this path defines nowhere states nothing about any of its
         # channels, so it matches none of them -- listing a name is not
         # promising a value for it.
         return np.zeros(len(distances), dtype=bool)
-    values = values.values if isinstance(values, BaseCoord) else values
     if selector is None:
+        # `None` is the query spelling of the undefined marker, which is a
+        # value here rather than the "select everything" a bare None means
+        # of an attr: a channel the track says nothing about is a channel.
         return _undefined_mask(values)
-    return evaluate_attr_predicate(list(values), name, selector)
+    return evaluate_attr_predicate(list(values), name, selector, units)
 
 
 def _coords_equal(existing, values) -> bool:
