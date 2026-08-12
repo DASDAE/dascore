@@ -483,11 +483,12 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         one bad tag, an instrument being serviced — without spelling the
         rest of the archive as a selection.
 
-        Coordinates are not accepted. A coordinate range decides how much
-        of each patch to keep rather than which patches to keep, and its
-        complement is a hole in the middle: removing a patch which merely
-        overlaps the range would throw away the part that does not.
-        Select the ranges to keep instead.
+        Coordinates are not accepted yet. Selecting on one trims each
+        patch to the range rather than choosing between patches, so the
+        complement is every patch cut into the pieces outside it — one
+        patch becoming two. That is subdivision rather than filtering,
+        and it needs machinery this does not have; until it does, select
+        the ranges to keep.
 
         Naming nothing raises, and so does naming only no-op selectors
         (`None`, `...`). `select()` with no selection is the whole spool,
@@ -836,10 +837,10 @@ class Spool(BaseSpool):
         )
         if coords:
             msg = (
-                f"{sorted(coords)} name coordinates, which unselect does not "
-                "take: a range says how much of each patch to keep rather "
-                "than which patches, so removing every patch it touches "
-                "would throw away the parts outside it. Select the ranges "
+                f"{sorted(coords)} name coordinates, which unselect cannot "
+                "take yet: selecting on one trims each patch, so removing "
+                "a range means cutting every patch into the pieces outside "
+                "it rather than choosing between patches. Select the ranges "
                 "to keep instead."
             )
             raise InvalidSpoolQueryError(msg)

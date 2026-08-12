@@ -255,7 +255,7 @@ subspool = spool.unselect(tag='some_tag')
 assert len(subspool) + len(spool.select(tag='some_tag')) == len(spool)
 ```
 
-Coordinates are not accepted. A coordinate range says how much of each patch to keep rather than which patches to keep, so its complement is a hole in the middle of each patch rather than a filter over them; select the ranges to keep instead.
+Coordinates are not accepted yet. Selecting on a coordinate trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering, and `unselect` does not do it yet; select the ranges to keep instead.
 
 # chunk
 
