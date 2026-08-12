@@ -16,6 +16,7 @@ applied; `Spool.chunk` runs on these plans.
 from __future__ import annotations
 
 import inspect
+import math
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1046,8 +1047,20 @@ def _snapped_cuts(cuts, start, step) -> list:
     span = to_float(step)
     out = []
     for cut in cuts:
-        index = int(np.ceil(to_float(cut - start) / span))
-        # Cuts fall strictly inside the row (see the docstring's
+        # The ratio is inexact — `to_float` rounds both operands and then
+        # the quotient — so it only starts the search, and the grid it
+        # describes settles it. `CoordRange._get_index`'s fudge factor is
+        # not enough here: at a million samples the error outgrows any
+        # fixed tolerance, and an index one too high puts the boundary
+        # sample in the epoch *before* the boundary, which is the one
+        # place it must not go. Comparing the values themselves is exact,
+        # and each loop steps at most once for any plausible error.
+        index = math.ceil(to_float(cut - start) / span)
+        while start + (index - 1) * step >= cut:
+            index -= 1
+        while start + index * step < cut:
+            index += 1
+        # Cuts sit above the row's minimum (see `build_subdivision_plan`'s
         # contract), so each one really does open a piece.
         assert index >= 1
         # Two cuts inside one sample interval name one split: the epoch
@@ -1074,9 +1087,10 @@ def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
         The relation to subdivide; one row per patch.
     cuts
         One sequence of cut values per row, in the row's own units, each
-        strictly inside that row's envelope. A cut opens a new piece at
-        the first sample at or after it, so a row with `n` distinct cuts
-        becomes at most `n + 1` outputs.
+        above that row's minimum and no greater than its maximum — a cut
+        on the maximum yields a one-sample final piece. A cut opens a new
+        piece at the first sample at or after it, so a row with `n`
+        distinct cuts becomes at most `n + 1` outputs.
     name
         The dimension being subdivided.
 
@@ -1089,6 +1103,9 @@ def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
     min_name, max_name = f"{name}_min", f"{name}_max"
     step_name = f"{name}_step"
     assert {min_name, max_name, step_name}.issubset(df.columns)
+    # One entry per row, even where it is empty: a short sequence would
+    # drop the rows past its end from the plan, and so from the spool.
+    assert len(cuts) == len(df)
     df = _ensure_patch_id(df).reset_index(drop=True)
     positions, lows, highs, modified = [], [], [], []
     for position, row_cuts in enumerate(cuts):
