@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Sized
-from typing import Any, Literal, get_args
+from typing import Any, Literal, NamedTuple, get_args
 
 import numpy as np
 import pandas as pd
@@ -203,12 +203,14 @@ def _epoch_bounds(inventory, acquisition_key: Sequence[str]) -> np.ndarray:
 
 def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
     """
-    Resolve index rows to their inventory contexts, one resolution per epoch.
+    Resolve index rows to the one inventory context each has, or to None.
 
     Each row is the half-open span of one patch. A row the inventory does
-    not describe, and a row whose span crosses an epoch boundary — which
-    the inventory describes twice rather than not at all, and which
-    `conform_to_inventory` exists to subdivide — resolve to None.
+    not describe resolves to None, and so does one whose span crosses a
+    change of acquisition or optical path — the inventory describes that
+    row twice rather than not at all, and `conform_to_inventory` exists
+    to subdivide it. A row crossing an epoch bound which changes neither
+    still has one context, and gets it.
 
     Parameters
     ----------
@@ -223,6 +225,76 @@ def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
     -------
     An object array of `ResolvedContext` or None, one per row.
     """
+    epochs = resolve_row_epochs(inventory, keys, starts, ends)
+    out = np.full(len(epochs), None, dtype=object)
+    for row, epoch in enumerate(epochs):
+        if epoch.described and not epoch.cuts and epoch.conflict is None:
+            out[row] = epoch.context
+    return out
+
+
+class RowEpochs(NamedTuple):
+    """
+    How one index row sits against the epochs of its acquisition_key.
+
+    Attributes
+    ----------
+    cuts
+        The instants inside the row at which its optical path changes;
+        empty for a row which stays within one epoch of everything.
+    conflict
+        The instant at which the row's *acquisition* changes, or None.
+        Subdividing cannot rescue this: the pieces would describe one
+        patch recorded under two configurations, which is a file that
+        should not exist rather than one to reconcile.
+    context
+        What the row resolves to where it begins, or None where the
+        inventory does not describe the row over its whole span. A row
+        with no cuts and no conflict resolves to this throughout.
+    """
+
+    cuts: tuple
+    conflict: Any
+    context: ResolvedContext | None
+
+    @property
+    def described(self) -> bool:
+        """Whether the inventory resolves this row, over its whole span."""
+        return self.context is not None
+
+
+# What a row whose key names no entry at all knows about its epochs.
+_NO_EPOCHS = RowEpochs((), None, None)
+
+
+def resolve_row_epochs(inventory, keys, starts, ends) -> list[RowEpochs]:
+    """
+    Report how each index row sits against the inventory's epochs.
+
+    Where [`resolve_contexts`](`dascore.proc.inventory.resolve_contexts`)
+    asks for the one context a row has and gives up on a row with two,
+    this reports *where* the row's answers change, so a caller can split
+    it into pieces which each have one. A row the inventory does not
+    describe over its whole span is reported undescribed rather than
+    partly described: the piece it does describe is not what the caller
+    asked about, and keeping the edge simple is worth more than
+    salvaging it.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    keys
+        Each row's acquisition_key.
+    starts, ends
+        Each row's first and last instant — the instants themselves, so
+        a row whose last instant falls exactly on a bound reaches into
+        the epoch that bound opens.
+
+    Returns
+    -------
+    A list of `RowEpochs`, one per row.
+    """
     frame = pd.DataFrame(
         {
             "key": np.asarray(keys, dtype=object),
@@ -230,7 +302,7 @@ def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
             "end": np.asarray(ends, dtype="datetime64[ns]"),
         }
     )
-    out = np.full(len(frame), None, dtype=object)
+    out = [_NO_EPOCHS] * len(frame)
     for key, sub in frame.groupby("key", sort=False):
         # The empty string is how a patch spells "no identity"; it names
         # no entry, which is not the same as naming a missing one. A
@@ -240,22 +312,81 @@ def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
             continue
         bounds = _epoch_bounds(inventory, codes)
         first, last = sub["start"].to_numpy(), sub["end"].to_numpy()
+        # Epoch i runs from bounds[i - 1] up to bounds[i], so a row spans
+        # the epochs from its start's index through its end's, and every
+        # epoch after the first opens at the bound which begins it — an
+        # instant which resolves that epoch for every row reaching it.
         starts_at = np.searchsorted(bounds, first, side="right")
         ends_at = np.searchsorted(bounds, last, side="right")
         # A row with no instant of its own says nothing about which epoch
         # applies, and resolving at NaT holds every epoch effective; that
-        # is the whole inventory answering rather than one entry.
-        unresolved = (starts_at != ends_at) | np.isnat(first) | np.isnat(last)
+        # is the whole inventory answering rather than one entry. A row
+        # ending before it starts spans no epoch at all, which is the
+        # same nothing to resolve against, reached by a different route.
+        undated = np.isnat(first) | np.isnat(last) | (last < first)
         contexts: dict[int, ResolvedContext | None] = {}
-        for epoch in np.unique(starts_at[~unresolved]):
-            when = first[(starts_at == epoch) & ~unresolved][0]
-            try:
-                contexts[int(epoch)] = inventory.resolve(key, time=when)
-            except InvalidInventoryError:
-                contexts[int(epoch)] = None
-        for row, epoch, skip in zip(sub.index, starts_at, unresolved, strict=True):
-            out[row] = None if skip else contexts[int(epoch)]
+        for position, (lo, hi) in enumerate(zip(starts_at, ends_at, strict=True)):
+            if undated[position]:
+                continue
+            for epoch in range(int(lo), int(hi) + 1):
+                if epoch not in contexts:
+                    when = bounds[epoch - 1] if epoch else first[position]
+                    contexts[epoch] = _try_resolve(inventory, key, when)
+        for row, lo, hi, bad in zip(
+            sub.index, starts_at, ends_at, undated, strict=True
+        ):
+            if bad:
+                continue
+            resolved = [contexts[epoch] for epoch in range(int(lo), int(hi) + 1)]
+            if any(x is None for x in resolved):
+                continue
+            out[row] = _epoch_changes(resolved, bounds[int(lo) : int(hi)])
     return out
+
+
+def _try_resolve(inventory, key, when) -> ResolvedContext | None:
+    """Resolve one instant, or None where the inventory has no one entry."""
+    try:
+        return inventory.resolve(key, time=when)
+    except InvalidInventoryError:
+        return None
+
+
+def _same(first, second) -> bool:
+    """
+    Return whether two resolutions say the same thing.
+
+    Identity first, because one inventory hands out the same object for
+    the same epoch and that costs nothing to check; only where the
+    objects differ is it worth dumping them to compare by value. What
+    matters to a patch is what the entry *says*, so an entity
+    re-registered unchanged across a bound is not a change — the same
+    call `_resolve_context` makes for a single patch.
+    """
+    return first is second or first == second
+
+
+def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
+    """
+    Reduce a row's consecutive contexts to what changes between them.
+
+    Only the acquisition and the optical path are compared, exactly as
+    `_resolve_context` compares them: the network and fiber array a
+    patch hangs from say nothing about it that its acquisition does not,
+    and a bound the answers do not change across is not a boundary this
+    row crosses at all.
+    """
+    cuts = []
+    # One boundary between each consecutive pair, so the three walk in
+    # step -- `resolved[1:]` alone would leave the first sequence longer.
+    for previous, current, boundary in zip(
+        resolved[:-1], resolved[1:], boundaries, strict=True
+    ):
+        if not _same(previous.acquisition, current.acquisition):
+            return RowEpochs(tuple(cuts), boundary, resolved[0])
+        if not _same(previous.optical_path, current.optical_path):
+            cuts.append(boundary)
+    return RowEpochs(tuple(cuts), None, resolved[0])
 
 
 def get_attr_values(inventory, contexts, name: str) -> list:

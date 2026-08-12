@@ -16,6 +16,7 @@ applied; `Spool.chunk` runs on these plans.
 from __future__ import annotations
 
 import inspect
+import math
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1030,3 +1031,116 @@ def build_chunk_plan(
         ignore_index=True,
     )
     return ChunkPlan(outputs, members, name, value, params)
+
+
+def _snapped_cuts(cuts, start, step) -> list:
+    """
+    Return each cut moved up to the first sample at or after it.
+
+    A cut is an arbitrary value — an epoch boundary owes the sample grid
+    nothing — while the pieces are described by inclusive envelopes,
+    which can only name samples. Snapping *up* keeps the split faithful
+    to a half-open ``[start, end)`` interval: the sample a cut lands
+    exactly on opens the piece that cut opens, and a cut falling between
+    two samples leaves the earlier one behind.
+    """
+    span = to_float(step)
+    out = []
+    for cut in cuts:
+        # The ratio is inexact — `to_float` rounds both operands and then
+        # the quotient — so it only starts the search, and the grid it
+        # describes settles it. `CoordRange._get_index`'s fudge factor is
+        # not enough here: at a million samples the error outgrows any
+        # fixed tolerance, and an index one too high puts the boundary
+        # sample in the epoch *before* the boundary, which is the one
+        # place it must not go. Comparing the values themselves is exact,
+        # and each loop steps at most once for any plausible error.
+        index = math.ceil(to_float(cut - start) / span)
+        while start + (index - 1) * step >= cut:
+            index -= 1
+        while start + index * step < cut:
+            index += 1
+        # Cuts sit above the row's minimum (see `build_subdivision_plan`'s
+        # contract), so each one really does open a piece.
+        assert index >= 1
+        # Two cuts inside one sample interval name one split: the epoch
+        # between them covers no sample of this row.
+        if (value := start + index * step) not in out:
+            out.append(value)
+    # Which cuts a row has is a set, not a sequence — but the pieces are
+    # read off consecutive pairs, so an unordered one would describe
+    # envelopes running backwards rather than an error.
+    return sorted(out)
+
+
+def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
+    """
+    Build a plan splitting each row of a relation at its own cut values.
+
+    Unlike a chunk plan, no row ever meets another: each output is one
+    contiguous piece of exactly one source row, so the pieces of a row
+    partition its samples — none is dropped, none is duplicated, and a
+    row with no cuts passes through as a single unmodified output. This
+    is what an operation which must re-describe patches rather than
+    restructure them (`Spool.conform_to_inventory`) needs.
+
+    Parameters
+    ----------
+    df
+        The relation to subdivide; one row per patch.
+    cuts
+        One sequence of cut values per row, in the row's own units, each
+        above that row's minimum and no greater than its maximum — a cut
+        on the maximum yields a one-sample final piece. Order does not
+        matter. A cut opens a new piece at the first sample at or after
+        it, so a row with `n` distinct cuts becomes at most `n + 1`
+        outputs.
+    name
+        The dimension being subdivided.
+
+    Notes
+    -----
+    Every cut row needs a usable step to find its sample grid with, so
+    callers must reject a null or zero step themselves — they are the
+    ones which can name the file it came from.
+    """
+    min_name, max_name = f"{name}_min", f"{name}_max"
+    step_name = f"{name}_step"
+    assert {min_name, max_name, step_name}.issubset(df.columns)
+    # One entry per row, even where it is empty: a short sequence would
+    # drop the rows past its end from the plan, and so from the spool.
+    assert len(cuts) == len(df)
+    df = _ensure_patch_id(df).reset_index(drop=True)
+    positions, lows, highs, modified = [], [], [], []
+    for position, row_cuts in enumerate(cuts):
+        start, stop = df.at[position, min_name], df.at[position, max_name]
+        # Envelopes are value-ordered whatever the coordinate's
+        # orientation, so the grid is walked by the step's magnitude.
+        step = abs(df.at[position, step_name])
+        assert not len(row_cuts) or (not pd.isnull(step) and step)
+        grid = _snapped_cuts(row_cuts, start, step)
+        bounds = [start, *grid]
+        for index, low in enumerate(bounds):
+            high = bounds[index + 1] - step if index + 1 < len(bounds) else stop
+            positions.append(position)
+            lows.append(low)
+            highs.append(high)
+            modified.append(bool(grid))
+    ids = np.arange(len(positions), dtype=np.int64)
+    # Outputs are not file rows: source bookkeeping stays on the members,
+    # and the dimension's structural identity described the whole row.
+    outputs = df.iloc[positions].drop(
+        columns=["_patch_id", f"_{name}_def_key", *_SOURCE_COLUMNS], errors="ignore"
+    )
+    outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
+    members = pd.DataFrame(
+        {
+            "output_id": ids,
+            "_patch_id": df["_patch_id"].to_numpy()[positions],
+            min_name: lows,
+            max_name: highs,
+            step_name: df[step_name].to_numpy()[positions],
+            "_modified": modified,
+        }
+    )
+    return ChunkPlan(outputs.reset_index(drop=True), members, name, None, {})

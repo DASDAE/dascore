@@ -10,6 +10,7 @@ import warnings
 from collections.abc import Mapping
 
 import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -35,6 +36,7 @@ from dascore.core.inventory import (
 )
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
+    CoordMergeError,
     InvalidInventoryError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
@@ -43,6 +45,7 @@ from dascore.exceptions import (
     UnitError,
     UnresolvedPatchError,
 )
+from dascore.proc.inventory import resolve_row_epochs
 
 
 @pytest.fixture(scope="module")
@@ -1916,3 +1919,611 @@ class TestConnectorReviewFindings:
         assert "optical_components.loss_db" not in build(many).get_names().coords
         assert "optical_components.loss_db" in build(many, one).get_names().coords
         assert "optical_components.loss_db" in build(one).get_names().coords
+
+
+def _split_epochs(inventory, when, *, acquisitions=False, second=None):
+    """
+    Return the inventory with its one path (or acquisition) split at `when`.
+
+    The two halves meet exactly at `when`, which epochs being half-open
+    makes the first instant of the second half rather than the last of
+    the first.
+    """
+    array = inventory.networks[0].fiber_arrays[0]
+    old = array.acquisitions[0] if acquisitions else array.optical_paths[0]
+    changed = {} if second is None else second
+    halves = (old.new(end_time=when), old.new(start_time=when, **changed))
+    field = "acquisitions" if acquisitions else "optical_paths"
+    return inventory.replace(array, array.new(**{field: halves})).check()
+
+
+def _pieces(spool):
+    """The (min, max) time envelope of each patch a spool presents."""
+    contents = spool.get_contents()
+    return list(zip(contents["time_min"], contents["time_max"], strict=True))
+
+
+@pytest.fixture(scope="module")
+def off_grid_boundary(patch):
+    """An epoch boundary a third of a sample past one of the patch's samples."""
+    coord = patch.get_coord("time")
+    return coord.min() + (coord.max() - coord.min()) / 2 + coord.step / 3
+
+
+@pytest.fixture(scope="module")
+def path_epochs(inventory, off_grid_boundary):
+    """The example inventory, its optical path split into two epochs."""
+    return _split_epochs(inventory, off_grid_boundary, second={"name": "moved"})
+
+
+class TestConformBoundaryPolicy:
+    """
+    Where a subdivided patch is cut, and which piece each sample joins.
+
+    Including the rows which offer no usable boundary at all — no
+    instants to place one against, or no identity to look one up with.
+    """
+
+    def test_split_is_lossless(self, patch, path_epochs):
+        """
+        The pieces hold every sample the patch held, in order, once.
+
+        Subdivision reconciles metadata; it must not restructure the
+        data, so a sample dropped or duplicated at the seam would be the
+        one failure the whole operation cannot afford.
+        """
+        spool = dc.spool(patch).conform_to_inventory(path_epochs)
+        assert len(spool) == 2
+        first, second = spool[0], spool[1]
+        times = np.concatenate(
+            [first.get_coord("time").values, second.get_coord("time").values]
+        )
+        assert np.array_equal(times, patch.get_coord("time").values)
+        data = np.concatenate([first.data, second.data], axis=1)
+        assert np.array_equal(data, patch.data)
+
+    def test_off_grid_boundary_keeps_its_straddling_sample(
+        self, patch, path_epochs, off_grid_boundary
+    ):
+        """
+        The sample between `boundary - step` and `boundary` is not lost.
+
+        An epoch boundary owes the sample grid nothing, so the naive
+        split of `[t_min, boundary - step]` and `[boundary, t_max]`
+        excludes any sample falling in between them from both pieces.
+        Cutting on the grid instead is what makes the split exact.
+        """
+        coord = patch.get_coord("time")
+        naive = off_grid_boundary - coord.step
+        (_, first_end), (second_start, _) = _pieces(
+            dc.spool(patch).conform_to_inventory(path_epochs)
+        )
+        # the sample the naive convention would have dropped
+        assert naive < first_end < off_grid_boundary
+        assert second_start == first_end + coord.step
+
+    def test_boundary_sample_opens_the_second_piece(self, patch, inventory):
+        """
+        A boundary landing exactly on a sample gives it to the new epoch.
+
+        Epochs are half-open (`is_effective_at` admits `start` and
+        refuses `end`), so the split has to agree with them about which
+        epoch owns the instant they meet at.
+        """
+        coord = patch.get_coord("time")
+        on_grid = coord.min() + coord.step * 10
+        split = _split_epochs(inventory, on_grid, second={"name": "moved"})
+        (_, first_end), (second_start, _) = _pieces(
+            dc.spool(patch).conform_to_inventory(split)
+        )
+        assert second_start == on_grid
+        assert first_end == on_grid - coord.step
+
+    def test_unstated_time_step_raises_naming_the_file(self, patch, inventory):
+        """
+        A patch which must be cut but states no step says so, loudly.
+
+        The cut is found on the patch's own sample grid, which the step
+        is the only description of. Backing off to the raw boundary
+        would silently drop the sample beside it, and for an operation
+        asked to reconcile metadata that is the worse answer.
+        """
+        coord = patch.get_coord("time")
+        times = np.sort(np.concatenate([coord.values[:5], coord.values[10:15]]))
+        uneven = patch.select(time=(0, 10), samples=True).update_coords(time=times)
+        assert pd.isnull(dc.spool(uneven).get_contents()["time_step"]).all()
+        split = _split_epochs(inventory, times[3], second={"name": "moved"})
+        spool = dc.spool(uneven)
+        named = re.escape(spool.get_contents()["source_path"].iloc[0])
+        with pytest.raises(PatchError, match=f"no time step.*{named}"):
+            spool.conform_to_inventory(split)
+
+    def test_a_row_with_no_instants_is_undescribed(self, patch, path_epochs):
+        """
+        A patch whose instants are unknown resolves to every epoch at once.
+
+        `is_effective_at(NaT)` holds every epoch effective, so such a row
+        would be answered by the whole inventory rather than by one
+        entry. That is ambiguity rather than resolution, so
+        `on_unresolved` governs it — the same call `Patch.enrich` makes.
+        """
+        undated = patch.update_coords(
+            time=np.full(patch.shape[1], np.datetime64("NaT"))
+        ).update_attrs(tag="undated")
+        # alongside a dated patch, so the row really does carry NaT
+        # instants rather than a time column of another kind entirely
+        spool = dc.spool([patch, undated]).attach_inventory(path_epochs)
+        assert pd.isnull(spool.get_contents()["time_min"]).any()
+        out = spool.conform_to_inventory(on_unresolved="drop")
+        assert set(out.get_contents()["tag"]) == {"random"}
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_an_empty_key_is_undescribed(self, patch, path_epochs):
+        """
+        The empty string is how a patch spells "no identity" at all.
+
+        It names no entry, which is not the same as naming a missing
+        one, and neither is something to resolve.
+        """
+        bare = patch.update_attrs(acquisition_key="", tag="bare")
+        spool = dc.spool([patch, bare]).attach_inventory(path_epochs)
+        out = spool.conform_to_inventory(on_unresolved="drop")
+        assert set(out.get_contents()["tag"]) == {"random"}
+
+    def test_a_relative_time_axis_is_undescribed(self, patch, path_epochs):
+        """
+        Lag times are not instants, so they pick no epoch either.
+
+        Reading them as instants since 1970 would choose an epoch from
+        an offset; `Patch.enrich` refuses such a patch outright, and
+        conform has a policy for it instead of a guess.
+        """
+        coord = patch.get_coord("time")
+        lags = patch.update_coords(time=coord.values - coord.min())
+        spool = dc.spool(lags).attach_inventory(path_epochs)
+        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_a_merged_patch_carries_one_key(self, patch, path_epochs):
+        """
+        Conform needs one acquisition_key per row, and merging leaves it one.
+
+        `acquisition_key` is a default group attribute, so patches from
+        two acquisitions partition apart and no output is ever built
+        from both. Grouping the partition away instead makes the key a
+        conflicted column, which merging refuses outright.
+        """
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other])
+        assert "acquisition_key" in dc.get_config().groupby_attrs
+        merged = spool.chunk(time=None)
+        assert sorted(merged.get_contents()["acquisition_key"]) == [
+            "DAS.R2D1..OTHER",
+            "DAS.R2D1..RAW",
+        ]
+        conformed = merged.conform_to_inventory(path_epochs, on_unresolved="drop")
+        assert set(conformed.get_contents()["acquisition_key"]) == {"DAS.R2D1..RAW"}
+        with pytest.raises(CoordMergeError, match="acquisition_key"):
+            spool.chunk(time=None, group="tag")
+
+    def test_a_merge_which_drops_the_key_is_undescribed(self, patch, path_epochs):
+        """
+        A row whose merge discarded the key resolves to nothing, loudly.
+
+        `conflict="drop"` is the one way an output can carry no identity
+        at all, and conform's own default reports it rather than
+        quietly returning an empty spool.
+        """
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        merged = dc.spool([patch, other]).chunk(time=None, group="tag", conflict="drop")
+        assert "acquisition_key" not in merged.get_contents().columns
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            merged.conform_to_inventory(path_epochs)
+
+
+class TestConformMembership:
+    """Which patches a conformed spool holds, and how it says so."""
+
+    def test_a_described_spool_is_unchanged(self, patch, inventory):
+        """An inventory which already describes everything removes nothing."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert len(spool.conform_to_inventory()) == len(spool) == 1
+
+    def test_undescribed_patches_drop(self, patch, inventory):
+        """A patch naming an entry the inventory lacks is not conformable."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="other")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        out = spool.conform_to_inventory(on_unresolved="drop")
+        assert out.get_contents()["tag"].tolist() == ["random"]
+
+    def test_warn_drops_and_names_them(self, patch, inventory):
+        """The middle policy removes the rows but says which they were."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="other")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        with pytest.warns(UserWarning, match="does not describe") as record:
+            out = spool.conform_to_inventory(on_unresolved="warn")
+        assert len(out) == 1
+        # the point of warning at all is saying which patch was dropped
+        dropped = spool.get_contents()["source_path"].iloc[1]
+        assert dropped in str(record[0].message)
+
+    def test_raise_is_the_default(self, patch, inventory):
+        """Conforming to an inventory which covers less says so by default."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_len_matches_the_contents(self, patch, inventory, path_epochs):
+        """
+        Conforming is metadata work, so the count it reports is final.
+
+        Both the subdivided and the merely-filtered route have to agree
+        with what iteration will actually yield.
+        """
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        subdivided = dc.spool([patch, other]).attach_inventory(path_epochs)
+        # the filtered route keeps a row rather than emptying the spool,
+        # so an agreement of zeroes cannot stand in for the real thing
+        filtered = dc.spool([patch, other]).attach_inventory(inventory)
+        for out, expected in ((subdivided, 2), (filtered, 1)):
+            out = out.conform_to_inventory(on_unresolved="drop")
+            assert len(out) == len(out.get_contents()) == len(list(out)) == expected
+
+    def test_needs_an_inventory(self, patch):
+        """With none attached and none passed there is nothing to conform to."""
+        with pytest.raises(ParameterError, match="needs an inventory"):
+            dc.spool(patch).conform_to_inventory()
+
+    def test_an_empty_spool_conforms_to_nothing(self, inventory):
+        """No rows to resolve is not a reason to fail."""
+        assert len(dc.spool([]).conform_to_inventory(inventory)) == 0
+
+    def test_policy_is_checked(self, patch, inventory):
+        """A misspelled policy is caught before any row is resolved."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(ParameterError, match="on_unresolved must be"):
+            spool.conform_to_inventory(on_unresolved="ignore")
+
+    def test_a_passed_inventory_attaches(self, patch, inventory):
+        """Passing one is also how to attach it, as with enrich."""
+        out = dc.spool(patch).conform_to_inventory(inventory)
+        assert out._inventory is inventory
+        assert out.enrich()[0].attrs.gauge_length == 10.0
+
+    def test_patches_without_keys_are_undescribed(self, inventory):
+        """A spool whose rows name no entry has nothing to resolve with."""
+        spool = dc.spool([dc.get_example_patch()]).attach_inventory(inventory)
+        assert "acquisition_key" not in spool.get_contents().columns
+        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+
+
+class TestConformSubdivision:
+    """Patches the inventory describes twice, split into pieces it describes once."""
+
+    def test_the_spool_grows(self, patch, path_epochs):
+        """One patch spanning two path epochs becomes two patches."""
+        spool = dc.spool(patch).attach_inventory(path_epochs)
+        assert len(spool) == 1
+        assert len(spool.conform_to_inventory()) == 2
+
+    def test_each_piece_enriches_from_its_own_epoch(self, patch, inventory):
+        """
+        Subdividing is what makes enrichment possible at all here.
+
+        The undivided patch is described twice, which `Patch.enrich`
+        refuses; each piece is described once and takes the geometry of
+        the epoch it falls in.
+        """
+        coord = patch.get_coord("time")
+        when = coord.min() + (coord.max() - coord.min()) / 2
+        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].annotations[0]
+        split = _split_epochs(
+            inventory,
+            when,
+            second={
+                "annotations": (
+                    moved.new(value="moved", start_distance=100.0, end_distance=400.0),
+                )
+            },
+        )
+        spool = dc.spool(patch).attach_inventory(split)
+        with pytest.raises(PatchError, match="spans a change"):
+            patch.enrich(split)
+        first, second = spool.conform_to_inventory().enrich(coords=True)
+        assert set(np.unique(first.get_coord("zone").values)) == {"north", "south"}
+        assert set(np.unique(second.get_coord("zone").values)) == {"moved"}
+
+    def test_several_epochs_split_a_patch_several_ways(self, patch, inventory):
+        """A row is cut once per boundary it crosses, not once at all."""
+        coord = patch.get_coord("time")
+        array = inventory.networks[0].fiber_arrays[0]
+        old = array.optical_paths[0]
+        edges = [coord.min() + coord.step * x for x in (500, 1000)]
+        paths = (
+            old.new(end_time=edges[0]),
+            old.new(start_time=edges[0], end_time=edges[1], name="middle"),
+            old.new(start_time=edges[1], name="last"),
+        )
+        split = inventory.replace(array, array.new(optical_paths=paths)).check()
+        out = dc.spool(patch).conform_to_inventory(split)
+        assert len(out) == 3
+        starts = [x[0] for x in _pieces(out)]
+        assert starts[1] == edges[0] and starts[2] == edges[1]
+
+    def test_an_epoch_shorter_than_one_sample_makes_one_cut(self, patch, inventory):
+        """
+        Two boundaries inside one sample interval name one split.
+
+        The epoch between them covers no sample of this patch, so a
+        piece for it would hold nothing; the samples still divide into
+        the epoch before and the epoch after.
+        """
+        coord = patch.get_coord("time")
+        array = inventory.networks[0].fiber_arrays[0]
+        old = array.optical_paths[0]
+        edges = [coord.min() + coord.step * 500 + x for x in (-coord.step / 3, 0)]
+        paths = (
+            old.new(end_time=edges[0]),
+            old.new(start_time=edges[0], end_time=edges[1], name="blink"),
+            old.new(start_time=edges[1], name="after"),
+        )
+        split = inventory.replace(array, array.new(optical_paths=paths)).check()
+        out = dc.spool(patch).conform_to_inventory(split)
+        assert len(out) == 2
+        assert _pieces(out)[1][0] == edges[1]
+        assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
+
+    def test_a_boundary_outside_the_patch_cuts_nothing(self, patch, inventory):
+        """Only the epochs a patch actually reaches into can divide it."""
+        coord = patch.get_coord("time")
+        split = _split_epochs(
+            inventory, coord.max() + coord.step * 10, second={"name": "later"}
+        )
+        assert len(dc.spool(patch).conform_to_inventory(split)) == 1
+
+    def test_a_boundary_which_changes_nothing_cuts_nothing(self, patch, inventory):
+        """
+        An epoch bound the answers do not change across is not a boundary.
+
+        Every stated time on the key's branch is a candidate, so a fiber
+        array re-registered mid-patch — renamed, say — puts a bound
+        inside the row while leaving its acquisition and optical path
+        saying exactly what they said before. Splitting there would grow
+        the spool for nothing, and refusing the patch would be worse.
+        """
+        coord = patch.get_coord("time")
+        when = coord.min() + coord.step * 500
+        array = inventory.networks[0].fiber_arrays[0]
+        network = inventory.networks[0]
+        renamed = inventory.replace(
+            network,
+            network.new(
+                fiber_arrays=(
+                    array.new(end_time=when),
+                    array.new(start_time=when, description="renamed"),
+                )
+            ),
+        ).check()
+        # the bound really does fall inside the row
+        assert coord.min() < when <= coord.max()
+        assert len(dc.spool(patch).conform_to_inventory(renamed)) == 1
+        # and enrich agrees, which is the point of comparing by value
+        assert patch.enrich(renamed).attrs.gauge_length == 10.0
+
+    def test_selection_reads_across_a_bound_which_changes_nothing(
+        self, patch, inventory
+    ):
+        """
+        Selecting resolves a row crossing a bound its answers survive.
+
+        `Patch.enrich` has always allowed this — it refuses only a real
+        change of acquisition or path — so a spool refusing it would
+        have made the two disagree about the same patch.
+        """
+        coord = patch.get_coord("time")
+        when = coord.min() + coord.step * 500
+        network = inventory.networks[0]
+        array = network.fiber_arrays[0]
+        renamed = inventory.replace(
+            network,
+            network.new(
+                fiber_arrays=(
+                    array.new(end_time=when),
+                    array.new(start_time=when, description="renamed"),
+                )
+            ),
+        ).check()
+        assert coord.min() < when <= coord.max()
+        spool = dc.spool(patch).attach_inventory(renamed)
+        assert len(spool.select(gauge_length=10.0)) == 1
+        assert patch.enrich(renamed).attrs.gauge_length == 10.0
+
+    def test_an_acquisition_change_raises(self, patch, inventory, off_grid_boundary):
+        """
+        No subdivision makes a patch recorded two ways into one patch.
+
+        The inventory describes it twice, so `on_unresolved` — which is
+        about patches it does not describe — has no say either.
+        """
+        split = _split_epochs(
+            inventory,
+            off_grid_boundary,
+            acquisitions=True,
+            second={"gauge_length": 20.0},
+        )
+        spool = dc.spool(patch).attach_inventory(split)
+        named = re.escape(spool.get_contents()["source_path"].iloc[0])
+        for policy in ("raise", "warn", "drop"):
+            with pytest.raises(
+                PatchError, match=f"change of acquisition.*{named} at .*"
+            ):
+                spool.conform_to_inventory(on_unresolved=policy)
+
+
+class TestConformComposition:
+    """How conforming sits with the rest of the spool API."""
+
+    def test_conform_is_idempotent(self, patch, path_epochs):
+        """The pieces of a conformed spool each sit inside one epoch."""
+        once = dc.spool(patch).conform_to_inventory(path_epochs)
+        twice = once.conform_to_inventory()
+        assert len(twice) == len(once) == 2
+        assert _pieces(twice) == _pieces(once)
+
+    def test_conform_nests_over_a_chunked_spool(self, patch, inventory):
+        """
+        Conforming a chunked spool splits the chunks, not their sources.
+
+        The pieces are cut out of the assembled outputs, so a chunk
+        which straddles a boundary becomes two and the rest stand.
+        """
+        coord = patch.get_coord("time")
+        when = coord.min() + np.timedelta64(6, "s")
+        split = _split_epochs(inventory, when, second={"name": "moved"})
+        chunked = dc.spool(patch).chunk(time=4)
+        assert len(chunked) == 2
+        out = chunked.conform_to_inventory(split)
+        assert len(out) == 3
+        assert [x[0] for x in _pieces(out)][2] == when
+        assert out[2].get_coord("time").min() == when
+
+    def test_selecting_after_conforming(self, patch, path_epochs, off_grid_boundary):
+        """The pieces are ordinary rows, so ordinary selection reaches them."""
+        out = dc.spool(patch).conform_to_inventory(path_epochs)
+        late = out.select(time=(off_grid_boundary, None))
+        assert len(late) == 1
+        assert late[0].get_coord("time").min() >= off_grid_boundary
+
+    def test_the_inventory_carries_over(self, patch, path_epochs):
+        """A conformed spool still knows what it was conformed to."""
+        out = dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
+        assert out._inventory is path_epochs
+        assert len(out.select(gauge_length=10.0)) == 2
+
+    def test_conform_over_a_directory_spool(self, tmp_path_factory, patch, inventory):
+        """
+        The pieces of a file-backed patch are read back exactly.
+
+        In-memory patches ignore the trim hints a plan passes down, so
+        only a real file exercises the read path the pieces take.
+        """
+        coord = patch.get_coord("time")
+        path = tmp_path_factory.mktemp("conform_directory")
+        dc.write(patch, path / "patch.h5", "dasdae")
+        split = _split_epochs(
+            inventory, coord.min() + coord.step * 500, second={"name": "moved"}
+        )
+        out = dc.spool(path).update().conform_to_inventory(split)
+        assert len(out) == 2
+        first, second = out[0], out[1]
+        assert first.shape[1] == 500
+        assert second.shape[1] == patch.shape[1] - 500
+        data = np.concatenate([first.data, second.data], axis=1)
+        assert np.array_equal(data, patch.data)
+
+
+class TestConformPartialCoverage:
+    """Rows the inventory describes for part of their span."""
+
+    def test_a_row_described_only_at_its_start_is_undescribed(
+        self, patch, inventory, off_grid_boundary
+    ):
+        """
+        A patch is judged over its whole span, not where it begins.
+
+        The acquisition lapses partway through with nothing after it, so
+        the tail of the patch has no entry. Keeping the described head
+        would answer a question the caller did not ask — they asked
+        about the patch — so the row is undescribed and `on_unresolved`
+        governs it.
+        """
+        array = inventory.networks[0].fiber_arrays[0]
+        lapsed = inventory.replace(
+            array,
+            array.new(
+                acquisitions=(array.acquisitions[0].new(end_time=off_grid_boundary),)
+            ),
+        ).check()
+        spool = dc.spool(patch).attach_inventory(lapsed)
+        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_a_path_which_lapses_divides_the_patch(
+        self, patch, inventory, off_grid_boundary
+    ):
+        """
+        An optical path ending mid-patch is a change of path like any other.
+
+        An acquisition with no optical path is a described acquisition —
+        it simply projects nothing along the fiber — so the piece after
+        the lapse is described once, as the piece before it is. This is
+        why a lapsed *path* subdivides where a lapsed *acquisition*
+        leaves the row undescribed: the acquisition is what makes a
+        patch describable at all.
+        """
+        array = inventory.networks[0].fiber_arrays[0]
+        lapsed = inventory.replace(
+            array,
+            array.new(
+                optical_paths=(array.optical_paths[0].new(end_time=off_grid_boundary),)
+            ),
+        ).check()
+        out = dc.spool(patch).conform_to_inventory(lapsed)
+        assert len(out) == 2
+        first, second = out.enrich(coords=True)
+        assert "zone" in first.coords.coord_map
+        assert "zone" not in second.coords.coord_map
+
+    def test_many_undescribed_patches_are_summarized(self, patch, inventory):
+        """Naming every file of a mismatched archive helps nobody."""
+        spool = dc.spool(
+            [
+                patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag=f"t{index}")
+                for index in range(7)
+            ]
+        ).attach_inventory(inventory)
+        with pytest.raises(UnresolvedPatchError, match=r"\(and 2 more\)"):
+            spool.conform_to_inventory()
+
+    def test_a_row_ending_before_it_starts_resolves_to_nothing(self, patch, inventory):
+        """
+        An envelope running backwards spans no epoch, so it answers none.
+
+        Envelopes are value-ordered by construction, so this is a
+        malformed row rather than a reachable state; resolution says so
+        rather than failing on the empty span it computes.
+        """
+        coord = patch.get_coord("time")
+        (epochs,) = resolve_row_epochs(
+            inventory, [patch.attrs.acquisition_key], [coord.max()], [coord.min()]
+        )
+        assert not epochs.described and not epochs.cuts
+
+
+class TestConformAndEnrichment:
+    """How conforming interacts with enrichment already set up."""
+
+    def test_conforming_keeps_enrichment(self, patch, path_epochs):
+        """The spool's own inventory is not a new one, so nothing is swapped."""
+        spool = dc.spool(patch).enrich(path_epochs, coords=False)
+        out = spool.conform_to_inventory()
+        assert out._enrich_kwargs is not None
+        assert out[0].attrs.gauge_length == 10.0
+
+    def test_passing_an_inventory_clears_enrichment(self, patch, path_epochs):
+        """
+        Passing one attaches it, and attaching always clears enrichment.
+
+        Swapping the source underneath a configured enrichment would
+        rewrite every patch's metadata, so the new one has to be asked
+        for — the rule `attach_inventory` sets, which conform inherits
+        by taking its inventory the same way `enrich` does.
+        """
+        spool = dc.spool(patch).enrich(path_epochs, coords=False)
+        out = spool.conform_to_inventory(path_epochs)
+        assert out._enrich_kwargs is None
+        assert "gauge_length" not in dict(out[0].attrs)

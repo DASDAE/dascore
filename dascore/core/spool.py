@@ -38,6 +38,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
+    PatchError,
     UnresolvedPatchError,
 )
 from dascore.utils.chunk_plan import (
@@ -46,6 +47,7 @@ from dascore.utils.chunk_plan import (
     _combined_dtype,
     _ensure_patch_id,
     build_chunk_plan,
+    build_subdivision_plan,
     samples_adjusted_envelopes,
 )
 from dascore.utils.display import get_dascore_text, get_nice_text
@@ -88,13 +90,120 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 _VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
+# Conform decides membership, not metadata, so where enrich's quiet option
+# is "ignore" -- leave the patch as it was -- conform's is "drop": every
+# policy here removes the patch, and only the noise differs.
+_VALID_ON_UNRESOLVED_CONFORM = ("raise", "warn", "drop")
 
 _UNRESOLVED_WARNING = (
     "The attached inventory does not describe every patch in this spool, and "
     "those it does not describe were not enriched. Use on_unresolved='raise' "
     "to see which, 'ignore' to silence this, or remove them from the spool "
-    "once Spool.prune_to_inventory exists."
+    "with Spool.conform_to_inventory."
 )
+
+
+def _resolution_columns(frame: pd.DataFrame) -> list | None:
+    """
+    Return the columns a relation resolves against an inventory with.
+
+    Resolution needs an identity and the instants to resolve it at, so a
+    relation missing either gets None here. A spool whose patches carry no
+    `acquisition_key` has no identity to offer, and one whose time axis
+    is not physical — lag times from a correlation, say — has no
+    instants, which is the same thing `Patch.enrich` refuses to guess at.
+    """
+    columns = [frame.get(x) for x in ("acquisition_key", "time_min", "time_max")]
+    physical = all(column is not None for column in columns) and all(
+        np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
+    )
+    return columns if physical else None
+
+
+def _first_few(items, limit: int = 5) -> str:
+    """Name a few of the offending rows, and say how many went unnamed."""
+    listed = ", ".join(str(x) for x in items[:limit])
+    extra = len(items) - limit
+    return listed if extra <= 0 else f"{listed} (and {extra} more)"
+
+
+def _report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
+    """
+    Say what conforming is about to drop, as loudly as it was asked to.
+
+    Naming the files is the whole value of the loud policies: an
+    inventory which covers an archive apart from a handful of patches is
+    reporting a gap in itself as often as a stray file.
+    """
+    if on_unresolved == "drop":
+        return
+    paths = list(rows["source_path"])
+    advice = (
+        "Pass on_unresolved='warn' to drop them with a warning, or 'drop' "
+        "to drop them silently."
+        if on_unresolved == "raise"
+        else "Pass on_unresolved='drop' to silence this, or 'raise' to fail "
+        "on the gap instead."
+    )
+    msg = (
+        f"The inventory does not describe {len(paths)} patch(es) in this "
+        f"spool: {_first_few(paths)}. {advice}"
+    )
+    if on_unresolved == "raise":
+        raise UnresolvedPatchError(msg)
+    warnings.warn(msg, UserWarning, stacklevel=3)
+
+
+def _check_one_acquisition(source_rows: pd.DataFrame, epochs) -> None:
+    """
+    Refuse the patches whose acquisition changes partway through.
+
+    Subdividing cannot reconcile these the way it reconciles a change of
+    optical path — see `RowEpochs.conflict` for why. `on_unresolved` does
+    not wave them through either: the inventory describes such a patch
+    twice rather than not at all.
+    """
+    conflicted = [
+        f"{path} at {row.conflict}"
+        for path, row in zip(source_rows["source_path"], epochs, strict=True)
+        if row.conflict is not None
+    ]
+    if not conflicted:
+        return
+    msg = (
+        f"{len(conflicted)} patch(es) span a change of acquisition, which "
+        f"subdividing cannot reconcile: {_first_few(conflicted)}. Select the "
+        "side you want, or correct the inventory."
+    )
+    raise PatchError(msg)
+
+
+def _check_subdividable(source_rows: pd.DataFrame, rows: pd.DataFrame, cuts) -> None:
+    """
+    Refuse a patch which must be split but states no sampling interval.
+
+    The pieces are found on the patch's own sample grid, which its time
+    step is the only description of: a piece ends one step short of
+    where the next begins. Without a step both pieces would have to
+    claim the boundary instant, and envelopes are inclusive, so a sample
+    landing there would appear in both. Duplicating a sample is a worse
+    answer than saying so — the caller asked for metadata
+    reconciliation, not for the data to be restructured.
+    """
+    bad = [
+        f"{path} at {row_cuts[0]}"
+        for path, step, row_cuts in zip(
+            source_rows["source_path"], rows["time_step"], cuts, strict=True
+        )
+        if row_cuts and (pd.isnull(step) or not step)
+    ]
+    if not bad:
+        return
+    msg = (
+        f"{len(bad)} patch(es) must be subdivided at an epoch boundary but "
+        f"state no time step to find their samples with: {_first_few(bad)}."
+    )
+    raise PatchError(msg)
 
 
 def _unstated(values) -> np.ndarray:
@@ -876,9 +985,7 @@ class Spool(BaseSpool):
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
         removed = self.select(_attrs=stated)._catalog._ordered_ids()
-        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
-        keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
-        return self._new_from_catalog(self._catalog.restrict(keep, ids=ids))
+        return self._restrict_to_rows(removed, keep=False)
 
     def _index_names(self) -> tuple[set[str], set[str]]:
         """The attr and coord names the index knows, read once per call."""
@@ -994,12 +1101,6 @@ class Spool(BaseSpool):
         """
         Resolve each presented row to its inventory context, or to None.
 
-        Resolution needs an identity and the instants to resolve it at. A
-        spool whose patches carry no `acquisition_key` has no identity to
-        offer, and one whose time axis is not physical — lag times from a
-        correlation, say — has no instants, which is the same thing
-        `Patch.enrich` refuses to guess at.
-
         This is where the relation is realized, which is why it is only
         reached for a name the index does not state for every row.
         """
@@ -1007,11 +1108,8 @@ class Spool(BaseSpool):
 
         out = np.full(len(ids), None, dtype=object)
         df = self._df
-        columns = [df.get(x) for x in ("acquisition_key", "time_min", "time_max")]
-        physical = all(column is not None for column in columns) and all(
-            np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
-        )
-        if not physical:
+        columns = _resolution_columns(df)
+        if columns is None:
             return out
         # Aligned by id rather than by position: the relation is realized
         # by a route of its own and need not present every row the id list
@@ -1073,9 +1171,11 @@ class Spool(BaseSpool):
 
         Notes
         -----
-        This is the metadata half of the workflow: resolving the index
-        against the inventory, subdividing it at epoch boundaries, and
-        selecting on inventory tracks are not implemented yet.
+        Attaching promises nothing about the spool matching the
+        inventory;
+        [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
+        is what makes it so. Selecting on the coordinates an inventory
+        defines along the fiber is not implemented yet.
         """
         if not isinstance(inventory, Inventory):
             msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
@@ -1135,8 +1235,10 @@ class Spool(BaseSpool):
         Enriching never removes a patch: one the inventory does not
         describe comes out unchanged rather than missing, so an inventory
         covering part of an archive needs no pruning first. Deciding
-        membership will be `prune_to_inventory`'s job, and leaving it there is
-        what keeps this lazy — nothing resolves until a patch is pulled.
+        membership is
+        [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)'s
+        job, and leaving it there is what keeps this lazy — nothing
+        resolves until a patch is pulled.
 
         Parameters
         ----------
@@ -1188,26 +1290,159 @@ class Spool(BaseSpool):
         # Settled now rather than on extraction: a misspelled argument
         # should be an error here, not on some patch pulled much later.
         enrich_kwargs = _normalize_enrich_kwargs(kwargs)
-        if on_unresolved not in _VALID_ON_UNRESOLVED:
-            msg = (
-                f"on_unresolved must be one of {_VALID_ON_UNRESOLVED}, "
-                f"got {on_unresolved!r}."
-            )
-            raise ParameterError(msg)
-        if inventory is None and self._inventory is None:
-            msg = (
-                "Spool.enrich needs an inventory: pass one, or attach one "
-                "first with Spool.attach_inventory."
-            )
-            raise ParameterError(msg)
-        new = (
-            self.__class__(self)
-            if inventory is None
-            else self.attach_inventory(inventory)
+        new = self._with_inventory(
+            inventory, on_unresolved, _VALID_ON_UNRESOLVED, "enrich"
         )
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
         return new
+
+    def conform_to_inventory(
+        self,
+        inventory=None,
+        *,
+        on_unresolved: Literal["raise", "warn", "drop"] = "raise",
+    ) -> Self:
+        """
+        Return a spool the inventory describes exactly, patch for patch.
+
+        The one eager step of the inventory workflow: every row is
+        resolved now, patches the inventory does not describe are
+        dropped, and a patch whose span crosses a change of optical path
+        is subdivided at each such change — so the spool can grow as well
+        as shrink. A bound the answers survive unchanged is not a change,
+        and does not divide anything. It is metadata work; no patch data
+        is read.
+
+        Subdivision is exact. Each piece begins at the first sample at or
+        after the change which opens it, so together they hold every
+        sample the patch held and hold none of them twice, and `len` and
+        `get_contents` describe the pieces rather than the original.
+
+        Parameters
+        ----------
+        inventory
+            The inventory to conform to. Defaults to the spool's attached
+            inventory; given one, it is attached as well — and attaching
+            clears enrichment set up from the old one, as it does
+            everywhere. Conforming to the spool's own inventory leaves
+            enrichment alone, since nothing was swapped.
+        on_unresolved
+            What to do with a patch the inventory does not describe — one
+            carrying no `acquisition_key`, one carrying a key the
+            inventory does not resolve to exactly one entry, one reaching
+            outside every matching epoch, or one with no instants to
+            resolve at because its time axis is not physical. A patch is
+            judged over its whole span, so one described at its start but
+            not at its end is undescribed. "raise" (the default)
+            fails and names them, "warn" drops them and says so, and
+            "drop" discards them silently, which is what an inventory
+            deliberately covering part of an archive wants.
+
+        Raises
+        ------
+        PatchError
+            If a patch spans a change of *acquisition*, or must be
+            subdivided but states no time step to find its samples with.
+            An acquisition change means the two halves were recorded
+            under different configurations, so no subdivision makes it
+            one honest patch, and `on_unresolved` does not cover it: the
+            inventory describes such a patch twice rather than not at
+            all.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).attach_inventory(inventory)
+        >>> assert len(spool.conform_to_inventory()) == 1
+        >>>
+        >>> # A patch the inventory says nothing about can be dropped.
+        >>> other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        >>> mixed = dc.spool([patch, other]).attach_inventory(inventory)
+        >>> assert len(mixed.conform_to_inventory(on_unresolved="drop")) == 1
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.proc.inventory import (  # noqa: PLC0415
+            _NO_EPOCHS,
+            resolve_row_epochs,
+        )
+
+        new = self._with_inventory(
+            inventory,
+            on_unresolved,
+            _VALID_ON_UNRESOLVED_CONFORM,
+            "conform_to_inventory",
+        )
+        source_rows, working = new._plan_frames()
+        # The two frames are one relation split by column, so a row of
+        # either is the same patch as the row beside it; the messages
+        # below name files from one while judging the other.
+        assert (source_rows["_patch_id"].to_numpy() == working["_patch_id"]).all()
+        columns = _resolution_columns(working)
+        epochs = (
+            [_NO_EPOCHS] * len(working)
+            if columns is None
+            else resolve_row_epochs(new._inventory, *columns)
+        )
+        _check_one_acquisition(source_rows, epochs)
+        described = np.array([x.described for x in epochs], dtype=bool)
+        if not described.all():
+            _report_unconformed(source_rows[~described], on_unresolved)
+        kept = working[described].reset_index(drop=True)
+        cuts = [x.cuts for x, keep in zip(epochs, described, strict=True) if keep]
+        if not any(cuts):  # nothing to subdivide: a filter is the whole job
+            return new._restrict_to_rows(kept["_patch_id"].to_numpy())
+        sources = source_rows[described].reset_index(drop=True)
+        _check_subdividable(sources, kept, cuts)
+        catalog = derived_catalog(
+            source_rows=sources,
+            plan=build_subdivision_plan(kept, cuts, "time"),
+            parent=new._catalog,
+            merge_kwargs={},
+            mode="chunk",
+            origin_path=new.spool_path,
+        )
+        return new._new_from_catalog(catalog)
+
+    def _with_inventory(self, inventory, on_unresolved, valid, method) -> Self:
+        """
+        Return the spool an inventory verb works on, arguments checked.
+
+        Both verbs take an inventory the same way — the attached one by
+        default, and one passed explicitly is attached as well — and both
+        police their own policy vocabulary before doing any work. Sharing
+        the entry keeps the two from drifting into saying it differently.
+        """
+        if on_unresolved not in valid:
+            msg = f"on_unresolved must be one of {valid}, got {on_unresolved!r}."
+            raise ParameterError(msg)
+        if inventory is None and self._inventory is None:
+            msg = (
+                f"Spool.{method} needs an inventory: pass one, or attach one "
+                "first with Spool.attach_inventory."
+            )
+            raise ParameterError(msg)
+        if inventory is None:
+            return self.__class__(self)
+        return self.attach_inventory(inventory)
+
+    def _restrict_to_rows(self, patch_ids, keep: bool = True) -> Self:
+        """
+        Return the view holding the named rows, or all but them.
+
+        Presentation order is the catalog's throughout, so this narrows
+        which rows a spool holds without saying anything about how they
+        come out.
+        """
+        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        named = np.isin(ids, np.asarray(patch_ids, dtype=np.int64))
+        mask = named if keep else ~named
+        if mask.all():
+            return self
+        return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
 
     def _enrichment(self):
         """Return how this spool enriches, or None if it does not."""
@@ -1224,7 +1459,7 @@ class Spool(BaseSpool):
             return patch.enrich(self._inventory, **kwargs)
         except UnresolvedPatchError:
             # The inventory does not describe this patch. Dropping it is
-            # prune_to_inventory's job, so it comes out as it went in.
+            # conform_to_inventory's job, so it comes out as it went in.
             if on_unresolved == "raise":
                 raise
             if on_unresolved == "warn" and not self._warned_unresolved:

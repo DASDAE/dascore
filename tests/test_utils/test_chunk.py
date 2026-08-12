@@ -11,7 +11,11 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
-from dascore.utils.chunk_plan import _normalize_chunk_units, build_chunk_plan
+from dascore.utils.chunk_plan import (
+    _normalize_chunk_units,
+    build_chunk_plan,
+    build_subdivision_plan,
+)
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")
@@ -533,3 +537,85 @@ class TestSizeChunkPlanDF:
         df.loc[df.index[0], "_dtype"] = "float32"
         plan = build_chunk_plan(df, time=dc.get_quantity("10 kB"))
         assert plan.params["size"]["partitions"][0]["dtype"] == "float64"
+
+
+def _one_row_df(start, step, samples):
+    """A one-row relation over an evenly sampled time dimension."""
+    return pd.DataFrame(
+        {
+            "time_min": [start],
+            "time_max": [start + step * (samples - 1)],
+            "time_step": [step],
+            "_patch_id": [0],
+        }
+    )
+
+
+class TestBuildSubdivisionPlan:
+    """Splitting each row of a relation at its own cut values."""
+
+    def test_uncut_rows_pass_through(self, contiguous_df):
+        """A row with no cuts is one unmodified output of the same span."""
+        df = contiguous_df.assign(_patch_id=np.arange(len(contiguous_df)))
+        plan = build_subdivision_plan(df, [()] * len(df), "time")
+        assert len(plan.outputs) == len(df)
+        assert not plan.members["_modified"].any()
+        assert (plan.outputs["time_min"].values == df["time_min"].values).all()
+
+    def test_pieces_partition_the_samples(self):
+        """The pieces meet exactly one step apart, with nothing between."""
+        start, step = STARTTIME, np.timedelta64(10, "ms")
+        df = _one_row_df(start, step, 100)
+        cut = start + step * 40
+        plan = build_subdivision_plan(df, [(cut,)], "time")
+        assert len(plan.outputs) == 2
+        first, second = plan.outputs.iloc[0], plan.outputs.iloc[1]
+        assert second["time_min"] == cut
+        assert first["time_max"] == cut - step
+        assert plan.members["_modified"].all()
+
+    @pytest.mark.parametrize("index", [3, 4001, 28294, 170275])
+    def test_an_on_grid_cut_lands_on_its_own_sample(self, index):
+        """
+        A cut sitting exactly on a sample opens the piece at that sample.
+
+        The index is found by a float division, which is inexact — at
+        these step and index combinations the naive quotient rounds just
+        above the integer — so an unchecked `ceil` puts the boundary
+        sample one piece too early. Only a grid comparison settles it.
+        """
+        start, step = STARTTIME, np.timedelta64(17060962, "ns")
+        df = _one_row_df(start, step, index + 10)
+        cut = start + step * index
+        plan = build_subdivision_plan(df, [(cut,)], "time")
+        assert plan.outputs["time_min"].iloc[1] == cut
+
+    def test_a_cut_a_hair_past_a_sample_opens_at_the_next(self):
+        """
+        The other direction: a cut just above a sample still snaps up.
+
+        Far enough into a long-stepped row, one nanosecond is below the
+        precision of the ratio, so the float says the cut is *on* the
+        sample it is really just past. That sample belongs to the piece
+        before the cut, and the next one opens the piece after it.
+        """
+        start, step = STARTTIME, np.timedelta64(1, "D").astype("timedelta64[ns]")
+        df = _one_row_df(start, step, 1100)
+        cut = start + step * 1000 + np.timedelta64(1, "ns")
+        plan = build_subdivision_plan(df, [(cut,)], "time")
+        assert plan.outputs["time_min"].iloc[1] == start + step * 1001
+
+    def test_a_cut_on_the_maximum_yields_one_sample(self):
+        """A row ending exactly on a boundary keeps its last sample apart."""
+        start, step = STARTTIME, np.timedelta64(10, "ms")
+        df = _one_row_df(start, step, 50)
+        cut = df["time_max"].iloc[0]
+        plan = build_subdivision_plan(df, [(cut,)], "time")
+        assert len(plan.outputs) == 2
+        assert plan.outputs["time_min"].iloc[1] == plan.outputs["time_max"].iloc[1]
+
+    def test_one_cut_sequence_per_row(self):
+        """A short sequence would silently drop rows from the plan."""
+        df = _one_row_df(STARTTIME, np.timedelta64(10, "ms"), 10)
+        with pytest.raises(AssertionError):
+            build_subdivision_plan(pd.concat([df, df]), [()], "time")
