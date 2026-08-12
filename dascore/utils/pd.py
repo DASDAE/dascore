@@ -39,6 +39,36 @@ def iter_rows(df: pd.DataFrame, row_type: type[_RowType]) -> Iterator[_RowType]:
     return cast(Iterator[_RowType], df.itertuples(index=False))
 
 
+def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose private ``_{name}_units`` columns under public names.
+
+    Coordinate envelopes are stored and presented in each coordinate's
+    original units, so the unit belongs beside the values it scales:
+    ``distance_min`` of 65.6 is self-explaining only with
+    ``distance_units`` of ``ft`` in view. The private spellings exist
+    for the planners (public columns are conflict-policed on merge), so
+    only the presented frame renames them.
+
+    An existing public column is never overwritten. For frames the index
+    builds this cannot happen: an attr whose name would claim a
+    coordinate's public units column is omitted from the flat view with
+    a warning, the same rule that protects envelope columns. A frame
+    assembled some other way keeps whatever it already had, and its
+    private column simply stays private rather than silently replacing
+    a value this function cannot vouch for.
+    """
+    renames = {}
+    for col in df.columns:
+        name = str(col)
+        if not (name.startswith("_") and name.endswith("_units")):
+            continue
+        public = name[1:]
+        if public not in df.columns:
+            renames[col] = public
+    return df.rename(columns=renames) if renames else df
+
+
 @cache
 def get_regex(seed_str):
     """Compile, and cache regex for str queries."""

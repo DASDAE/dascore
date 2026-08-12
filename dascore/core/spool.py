@@ -57,6 +57,7 @@ from dascore.utils.patch import (
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
+from dascore.utils.pd import present_units_columns
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -643,7 +644,7 @@ class Spool(BaseSpool):
     @compose_docstring(doc=get_docstring(BaseSpool.get_contents))
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
-        return _copy_public_dataframe(self._df)
+        return present_units_columns(_copy_public_dataframe(self._df))
 
     def __len__(self):
         # counting pushes to SQL (or the cold live registry); the flat

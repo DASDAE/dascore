@@ -874,6 +874,111 @@ class TestMixedUnitChunk:
         assert patch.shape[patch.get_axis("distance")] == 2 * n
         assert float(coord.max()) == pytest.approx(2 * n - 1)
 
+    def test_mixed_spelling_members_trim_in_plan_units(self):
+        """Length-chunking across m and ft members loses no samples.
+
+        Plan trims are magnitudes in the partition's normalized unit; a
+        member stored under another spelling must convert them, not read
+        them natively (adversarial round, D1).
+        """
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        values = (d.data + span) / 0.3048
+        pf = pm.update_coords(distance=values).set_units(distance="ft")
+        sp = dc.spool([pm, pf])
+        out = sp.chunk(distance=200, conflict="keep_first", keep_partial=True)
+        n = pm.shape[pm.get_axis("distance")]
+        assert sum(p.shape[p.get_axis("distance")] for p in out) == 2 * n
+        assert all(p.shape[p.get_axis("distance")] for p in out)  # none empty
+
+    @staticmethod
+    def _continuous_mixed_spool():
+        """Metre and feet patches covering one continuous 600 m span."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        return dc.spool([pm, pf.set_units(distance="ft")])
+
+    def test_single_member_output_speaks_plan_units(self):
+        """An output the merge never visits still matches its plan row.
+
+        Merging converts its members to one unit, but an output drawing
+        on a single member skips that path — so a feet member could be
+        published under a row claiming metres, making `get_contents`
+        describe an envelope no patch it yields actually has.
+        """
+        spool = self._continuous_mixed_spool().chunk(
+            distance=200, keep_partial=True, conflict="keep_first"
+        )
+        df = spool.get_contents()
+        assert set(df["distance_units"]) == {"m"}
+        for patch, (_, row) in zip(spool, df.iterrows(), strict=True):
+            coord = patch.get_coord("distance")
+            assert str(coord.units) == "1 m"
+            assert float(coord.min()) == pytest.approx(row["distance_min"])
+            assert float(coord.max()) == pytest.approx(row["distance_max"])
+        # the envelope the last row advertises is selectable
+        assert len(spool.select(distance=(400, 599))) == 1
+
+    def test_provenance_column_survives_a_like_named_coord(self):
+        """A coordinate named ``{dim}_source`` is not mistaken for units.
+
+        Its own unit column is ``_distance_source_units``, which the
+        provenance column must not collide with.
+        """
+        spool = self._continuous_mixed_spool()
+        patches = []
+        for patch in spool:
+            size = patch.coord_shapes["distance"][0]
+            values = np.arange(size, dtype=float)
+            new = patch.update_coords(distance_source=("distance", values))
+            patches.append(new.set_units(distance_source="s"))
+        chunked = dc.spool(patches).chunk(
+            distance=200, keep_partial=True, conflict="keep_first"
+        )
+        rows = chunked._catalog.resolver.member_rows
+        assert set(rows["_distance_units_source"]) == {"m", "ft"}
+        assert set(rows["_distance_units"]) == {"m"}
+        n = sum(p.shape[p.get_axis("distance")] for p in chunked)
+        assert n == 600
+
+    def test_rechunk_keeps_one_source_units_column(self):
+        """Re-chunking a derived view must not duplicate the unit column.
+
+        The plan records the file's own spelling beside its normalized
+        unit; renaming again on the second pass produced two columns of
+        one name, and one of them silently vanished when the rows became
+        load kwargs — so a member could be trimmed in the wrong unit.
+        """
+        pm = dc.get_example_patch().set_units(distance="m")
+        d = pm.get_coord("distance")
+        span = float(d.max() - d.min() + d.step)
+        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        pf = pf.set_units(distance="ft")
+        first = dc.spool([pm, pf]).chunk(distance=200, keep_partial=True)
+        second = first.chunk(distance=None, conflict="keep_first")
+        rows = second._catalog.resolver.member_rows
+        assert not rows.columns.duplicated().any()
+        # the file's own spelling survives, not the plan's normalized unit
+        assert set(rows["_distance_units_source"]) == {"m", "ft"}
+
+    def test_affine_quantity_length_is_a_delta(self):
+        """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
+        degf = dc.get_example_patch().set_units(distance="degF")
+        length = 20 * dc.get_quantity("degC")
+        out = dc.spool([degf]).chunk(distance=length, keep_partial=True)
+        coord = out[0].get_coord("distance")
+        assert float(coord.max() - coord.min()) <= 36.1
+
+    def test_scaled_unit_quantity_length(self):
+        """A scaled unit spelling converts for chunk lengths too."""
+        patch = dc.get_example_patch().set_units(distance="1e-9 strain/s")
+        length = 50 * dc.get_quantity("1e-9 strain/s")
+        out = dc.spool([patch]).chunk(distance=length, keep_partial=True)
+        assert len(out) == 6
+
     def test_same_units_unchanged(self):
         """The ordinary same-unit merge keeps its behavior and units."""
         p = dc.get_example_patch()
@@ -884,7 +989,7 @@ class TestMixedUnitChunk:
 
 
 class TestNonSIUnitTrim:
-    """Plan trims are canonical SI; a patch coordinate may not be."""
+    """Plan trims speak the coordinate's own units."""
 
     @pytest.fixture()
     def foot_spool(self):
@@ -896,28 +1001,40 @@ class TestNonSIUnitTrim:
         patch = foot_spool[0]
         axis = patch.get_axis("distance")
         expected = patch.shape[axis]
-        # keep_partial so the chunks cover the coordinate exactly; without
-        # it the dropped remainder would mask the samples a bad trim loses
-        out = foot_spool.chunk(distance=100, keep_partial=True)
+        # A quantity length of 100 m is an exact multiple of the 1 m
+        # sample step, so every sample belongs to some chunk; a length
+        # that is not a step multiple loses boundary samples on any
+        # coordinate, units aside (#870). keep_partial so the chunks
+        # cover the coordinate exactly.
+        length = 100 * dc.get_quantity("m")
+        out = foot_spool.chunk(distance=length, keep_partial=True)
         assert sum(x.shape[x.get_axis("distance")] for x in out) == expected
 
     def test_chunk_pieces_match_the_plan(self, foot_spool):
         """Each assembled piece spans the interval the plan advertised."""
-        plan = foot_spool.chunk_plan(distance=100)
-        out = foot_spool.chunk(distance=100)
+        length = 100 * dc.get_quantity("m")
+        plan = foot_spool.chunk_plan(distance=length)
+        out = foot_spool.chunk(distance=length)
         assert len(out) == len(plan.outputs)
         for patch, (_, row) in zip(out, plan.outputs.iterrows(), strict=True):
             coord = patch.get_coord("distance")
-            # the plan speaks SI, the coordinate speaks feet
-            in_si = coord.convert_units("m")
-            assert float(in_si.min()) == pytest.approx(row["distance_min"])
-            assert float(in_si.max()) == pytest.approx(row["distance_max"])
+            # the plan speaks the coordinate's own feet
+            assert float(coord.min()) == pytest.approx(row["distance_min"])
+            assert float(coord.max()) == pytest.approx(row["distance_max"])
 
     def test_trim_is_the_same_physical_interval(self, foot_spool):
         """A 100 m chunk covers 100 m of a coordinate stored in feet."""
-        out = foot_spool.chunk(distance=100)
+        out = foot_spool.chunk(distance=100 * dc.get_quantity("m"))
         span = out[0].get_coord("distance").convert_units("m")
         assert float(span.max() - span.min()) == pytest.approx(99, abs=1.0)
+
+    def test_bare_length_means_native_units(self, foot_spool):
+        """A bare 100 means 100 of the coordinate's own feet."""
+        out = foot_spool.chunk(distance=100, keep_partial=True)
+        coords = [x.get_coord("distance") for x in out]
+        assert all(float(c.max() - c.min()) <= 100 for c in coords)
+        # ~981 ft of coordinate cut into 100 ft pieces
+        assert len(out) == 10
 
     def test_si_coord_unchanged(self):
         """The ordinary SI case keeps its behavior."""
@@ -1012,7 +1129,12 @@ class TestChainedChunk:
 
 
 class TestMatchMergeUnits:
-    """The member unit normalizer's defensive paths."""
+    """The member unit normalizer's defensive paths.
+
+    Plan-driven assembly re-expresses each member in the plan's unit
+    before this runs, so these branches are exercised directly rather
+    than through a chunk.
+    """
 
     def test_incompatible_units_pass_through(self):
         """Dimensionality mismatches pass through for the merge to police."""
@@ -1021,6 +1143,17 @@ class TestMatchMergeUnits:
         out, kept = _match_merge_units(patch, "distance", target)
         assert out is patch  # unconverted
         assert kept == target
+
+    def test_compatible_units_convert(self):
+        """A member spelled differently converts to the target."""
+        patch = dc.get_example_patch().set_units(distance="ft")
+        target = get_quantity("m").units
+        out, kept = _match_merge_units(patch, "distance", target)
+        assert kept == target
+        coord = out.get_coord("distance")
+        assert get_quantity(coord.units) == get_quantity("m")
+        original = patch.get_coord("distance")
+        assert float(coord.max()) == pytest.approx(float(original.max()) * 0.3048)
 
 
 class TestUnitChunkValue:
