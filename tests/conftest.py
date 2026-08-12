@@ -170,14 +170,18 @@ def gc_pause_is_not_leaked():
     was_enabled = gc.isenabled()
     yield
     depth = remote_io._gc_pause_depth
-    if not depth and gc.isenabled() == was_enabled:
+    is_enabled = gc.isenabled()
+    if not depth and is_enabled == was_enabled:
         return
     remote_io._gc_pause_depth = 0
     if was_enabled:
         gc.enable()
     else:
         gc.disable()
-    pytest.fail(f"test left the remote-read gc pause held (depth={depth})")
+    pytest.fail(
+        f"test changed collection state: pause depth={depth}, "
+        f"gc enabled={is_enabled}, expected={was_enabled}"
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)

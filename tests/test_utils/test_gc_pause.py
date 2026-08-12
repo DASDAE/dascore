@@ -142,14 +142,14 @@ class TestPauseAccounting:
         gc.collect()
         assert gc.isenabled()
 
-    def test_stranded_cyclic_handle_is_recovered(self):
+    def test_stranded_cyclic_handle_is_recovered(self, monkeypatch):
         """A handle leaked inside a cycle is healed by the next remote open."""
         holder = {}
         handle = _open_paused(_FakeRemoteFile())
         holder["handle"], holder["self"] = handle, holder  # unreachable cycle
         del handle, holder
         assert not gc.isenabled()
-        remote_io._gc_collect_after = 0.0  # the valve is rate limited
+        monkeypatch.setattr(remote_io, "_gc_collect_after", 0.0)  # rate limited
         pause_gc()
         resume_gc()
         assert gc.isenabled()
@@ -163,7 +163,7 @@ class TestPauseAccounting:
             enable=gc.enable,
         )
         monkeypatch.setattr(remote_io, "gc", fake_gc)
-        remote_io._gc_collect_after = 0.0  # the valve is rate limited
+        monkeypatch.setattr(remote_io, "_gc_collect_after", 0.0)  # rate limited
         with pytest.raises(KeyboardInterrupt):
             pause_gc()
         assert gc.isenabled()
