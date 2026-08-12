@@ -11,6 +11,7 @@ exactly are applied as pandas residual filters.
 from __future__ import annotations
 
 import json
+import operator
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -322,6 +323,164 @@ def build_attr_clause(
     val = _to_target_unit(typed, units.get(kind), name)
     where.add(f"{col(kind)} = ?", val)
     return None
+
+
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """
+    Translate a glob to the regex which matches what SQLite's GLOB does.
+
+    SQLite is the authority on what a glob selector means, since that is
+    what the index applies, and it is not `fnmatch`: a character class is
+    negated with `[^...]`, where fnmatch spells that `[!...]` and reads a
+    leading `!` as a literal. Translating here rather than reaching for
+    fnmatch is what keeps one pattern from selecting opposite halves of a
+    spool depending on which side answered it. An unterminated class
+    matches nothing, as it does in SQLite; a class a regex cannot express
+    at all (a reversed range, which SQLite reads leniently) matches
+    nothing here rather than being guessed at.
+    """
+    out, index, size = [], 0, len(pattern)
+    while index < size:
+        char = pattern[index]
+        if char in "*?":
+            out.append(".*" if char == "*" else ".")
+        elif char == "[":
+            # A class may open with '^' to negate and may hold ']' as its
+            # first member; the class ends at the next ']' after those.
+            end = index + 1 + pattern[index + 1 : index + 2].count("^")
+            end += pattern[end : end + 1].count("]")
+            end = pattern.find("]", end)
+            if end < 0:
+                return _MATCHES_NOTHING
+            body = pattern[index + 1 : end]
+            negate, body = body.startswith("^"), body.removeprefix("^")
+            # A ']' opening a class is one of its members, and SQLite takes
+            # it as a plain one: it is not the low end of a range, so the
+            # dash which may follow it is a member too.
+            leading = ""
+            if body.startswith("]"):
+                leading, body = re.escape("]"), body[1:]
+            out.append(f"[{'^' if negate else ''}{leading}{_class_body(body)}]")
+            index = end
+        else:
+            out.append(re.escape(char))
+        index += 1
+    # DOTALL, since SQLite's wildcards cross a newline like any other byte.
+    return re.compile("".join(out) + r"\Z", re.DOTALL)
+
+
+# A pattern which matches nothing, for a glob SQLite would not read.
+_MATCHES_NOTHING = re.compile(r"(?!)")
+
+
+def _class_body(body: str) -> str:
+    """
+    Escape the members of a glob character class for a regex one.
+
+    Ranges stay ranges, since a glob class means them, with each endpoint
+    escaped on its own — escaping the body wholesale would turn the dash
+    of a range into a member. A range's low endpoint is also emitted as a
+    member: SQLite tests it before testing the range, so `[z-a]` matches
+    `z` where the reversed range alone matches nothing.
+    """
+    out, index, size = [], 0, len(body)
+    while index < size:
+        low = body[index]
+        if index + 2 < size and body[index + 1] == "-":
+            high = body[index + 2]
+            out.append(re.escape(low))
+            if low <= high:
+                out.append(f"{re.escape(low)}-{re.escape(high)}")
+            index += 3
+            continue
+        out.append(re.escape(low))
+        index += 1
+    return "".join(out)
+
+
+def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
+    """
+    Evaluate one attr selector against values held in memory.
+
+    The in-memory twin of `build_attr_clause`, for values which never
+    reach the index — those an inventory states rather than a file. It
+    takes the same selector shapes and means the same thing by each, so a
+    selector cannot mean one thing for a patch which states the attr and
+    another for a patch the inventory answers for.
+
+    Parameters
+    ----------
+    values
+        The value each row holds; every one of them states something.
+    name
+        The attr the selector names, for error messages.
+    value
+        The selector, in any shape `build_attr_clause` accepts.
+    units
+        The canonical units the index stores each kind of this attr in,
+        for converting a unit-bearing selector exactly as the index side
+        would. A kind the index knows nothing about is unitless, and a
+        selector carrying units against one is the error it is there.
+
+    Returns
+    -------
+    A boolean array of the same length as ``values``.
+    """
+    # Typed the way the index types a stored value, so a predicate
+    # compares within one kind here too: SQL reaches for the typed column
+    # a selector names and matches nothing when the values are of another
+    # kind, and `1` must not match a stored `True` on either side.
+    typed = [typed_value(x) for x in values]
+    kinds = {x.kind for x in typed if x is not None}
+    units = units or {}
+
+    def selector(item):
+        """Type one selector value the way the index would."""
+        out = _coerce_scalar(item, kinds)
+        _to_target_unit(out, units.get(out.kind), name)
+        return out
+
+    def each(func) -> np.ndarray:
+        return np.array([x is not None and bool(func(x)) for x in typed], dtype=bool)
+
+    def compare(item, op):
+        """Match rows of the selector's own kind under one operator."""
+        wanted = selector(item)
+        return each(lambda x, w=wanted, o=op: x.kind == w.kind and o(x.value, w.value))
+
+    if isinstance(value, re.Pattern):
+        # `search`, which is what the index's regex residual applies.
+        return each(lambda x: x.kind == "str" and value.search(x.value))
+    if is_range(value):
+        # The same reading of a range the index performs, so a range with
+        # no usable bounds, mixed-kind bounds, or lo above hi is the error
+        # it is there rather than a selector which quietly keeps every row.
+        probe = next(
+            (
+                _coerce_scalar(x, kinds)
+                for x in value
+                if x is not None and x is not Ellipsis
+            ),
+            None,
+        )
+        target = units.get(probe.kind) if probe is not None else None
+        kind, low, high, _ = _range_bounds(value, kinds, target, name)
+        out = each(lambda x, k=kind: x.kind == k)
+        for bound, op in ((low, operator.ge), (high, operator.le)):
+            if bound is not None:
+                out &= each(
+                    lambda x, o=op, b=bound, k=kind: x.kind == k and o(x.value, b)
+                )
+        return out
+    if _is_collection(value):
+        out = np.zeros(len(values), dtype=bool)
+        for item in value:
+            out |= compare(item, operator.eq)
+        return out
+    if isinstance(value, str) and _GLOB_CHARS & set(value):
+        pattern = glob_to_regex(value)
+        return each(lambda x: x.kind == "str" and pattern.match(x.value))
+    return compare(value, operator.eq)
 
 
 def build_coord_clause(

@@ -16,6 +16,7 @@ from dascore.core.spool import _COPY_ON_WRITE_ALWAYS, BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
     InvalidSpoolError,
+    InvalidSpoolQueryError,
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
@@ -537,6 +538,128 @@ class TestSelect:
         for patch in out:
             assert isinstance(patch, dc.Patch)
             assert not np.any(pd.isnull(patch.get_array("time")))
+
+
+class TestUnselect:
+    """Tests for removing the patches a selection would keep."""
+
+    def test_complements_select(self, diverse_spool):
+        """Every patch is in exactly one of the two halves."""
+        kept = diverse_spool.select(tag="some_tag")
+        dropped = diverse_spool.unselect(tag="some_tag")
+        assert len(kept) + len(dropped) == len(diverse_spool)
+        assert not set(kept.get_contents()["_patch_id"]) & set(
+            dropped.get_contents()["_patch_id"]
+        )
+
+    def test_removes_the_matches(self, diverse_spool):
+        """What comes back is what the selection would not have kept."""
+        out = diverse_spool.unselect(tag="some_tag")
+        assert len(out), "an empty result would pass the check below"
+        for patch in out:
+            assert patch.attrs["tag"] != "some_tag"
+
+    def test_selector_shapes(self, diverse_spool):
+        """A keyword means what it means in select, then is negated."""
+        keys = {"DAS2.R2D1..RAW", "DAS3.R2D1..RAW"}
+        out = diverse_spool.unselect(acquisition_key=keys)
+        assert len(out), "an empty result would pass the check below"
+        for patch in out:
+            assert patch.attrs["acquisition_key"] not in keys
+        wild = diverse_spool.unselect(tag="some*")
+        for patch in wild:
+            assert not patch.attrs["tag"].startswith("some")
+
+    def test_attrs_namespace(self, diverse_spool):
+        """The explicit namespace form works as it does in select."""
+        out = diverse_spool.unselect(_attrs={"tag": "some_tag"})
+        assert len(out) == len(diverse_spool.unselect(tag="some_tag"))
+
+    def test_matching_nothing_keeps_everything(self, diverse_spool):
+        """Removing what is not there removes nothing."""
+        assert len(diverse_spool.unselect(tag="not_a_tag")) == len(diverse_spool)
+
+    def test_matching_everything_keeps_nothing(self, random_spool):
+        """And removing what is all of it leaves an empty spool."""
+        assert len(random_spool.unselect(tag="*")) == 0
+
+    def test_coordinates_raise(self, diverse_spool):
+        """
+        A coordinate complement is subdivision, which this cannot do yet.
+
+        Selecting on a coordinate trims each patch, so removing a range
+        cuts every patch into the pieces outside it -- one patch becoming
+        two -- rather than choosing between patches.
+        """
+        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+            diverse_spool.unselect(time=("2020-01-03", None))
+        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+            diverse_spool.unselect(_coords={"time": ("2020-01-03", None)})
+
+    def test_unknown_name_raises(self, diverse_spool):
+        """A misspelling is one here too."""
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            diverse_spool.unselect(not_a_name=1)
+
+    def test_composes(self, diverse_spool):
+        """A spool with patches removed is a spool."""
+        tags = diverse_spool.get_contents()["tag"].tolist()
+        removed = {"some_tag", "random"}
+        out = diverse_spool.unselect(tag="some_tag").unselect(tag="random")
+        assert len(out) == sum(x not in removed for x in tags)
+        for patch in out:
+            assert patch.attrs["tag"] not in removed
+
+    def test_complements_within_a_window(self, diverse_spool):
+        """
+        A window fixes which rows are present, not which ones match.
+
+        The complement of a selection over a windowed spool is the rest
+        of the window, not nothing.
+        """
+        window = diverse_spool[2:8]
+        tags = window.get_contents()["tag"].tolist()
+        for tag in set(tags):
+            expected = sum(x != tag for x in tags)
+            assert len(window.unselect(tag=tag)) == expected
+        assert len(window.unselect(tag="not_a_tag")) == len(window)
+
+    def test_original_is_unchanged(self, diverse_spool):
+        """As everywhere else, the spool it came from is left alone."""
+        before = len(diverse_spool)
+        diverse_spool.unselect(tag="some_tag")
+        assert len(diverse_spool) == before
+
+    def test_empty_spool_names_nothing(self):
+        """A spool with no patches has no attrs, exactly as for select."""
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            dc.spool([]).unselect(tag="anything")
+
+    def test_naming_nothing_raises(self, diverse_spool):
+        """Emptying a spool is not something to guess at."""
+        with pytest.raises(ParameterError, match="needs something to remove"):
+            diverse_spool.unselect()
+
+    def test_naming_only_a_no_op_raises(self, diverse_spool):
+        """
+        A no-op selector names nothing to remove either.
+
+        `select(tag=None)` is the whole spool, so its complement is an
+        empty one; that is the same guess bare `unselect()` refuses.
+        """
+        for empty in (None, ...):
+            with pytest.raises(ParameterError, match="needs something to remove"):
+                diverse_spool.unselect(tag=empty)
+
+    def test_coords_tag_form_raises(self, diverse_spool):
+        """The tag form names bare kwargs, and is refused the same way."""
+        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+            diverse_spool.unselect(_coords="time", time=("2020-01-03", None))
+
+    def test_base_spool_unselect_raises(self, random_spool):
+        """A spool implementation which does not provide one says so."""
+        with pytest.raises(NotImplementedError, match="spool of type"):
+            BaseSpool.unselect(random_spool, tag="random")
 
 
 class TestSort:

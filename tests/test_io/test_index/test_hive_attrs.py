@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import pickle
 import sqlite3
+import warnings
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -141,7 +143,8 @@ class TestHiveWins:
         sub.mkdir()
         patch = dc.get_example_patch().update_attrs(station="B")
         patch.io.write(sub / "conflict.h5", "dasdae")
-        spool = Spool.from_directory(tmp_path).update(progress=None)
+        with pytest.warns(UserWarning, match="override attrs"):
+            spool = Spool.from_directory(tmp_path).update(progress=None)
         yield spool
         spool.indexer.close()
 
@@ -152,6 +155,52 @@ class TestHiveWins:
     def test_loaded_patch_shows_path_value(self, conflict_spool):
         """The loaded patch also shows the path's value."""
         assert conflict_spool[0].attrs.station == "A"
+
+    def test_override_names_the_key_and_a_path(self, tmp_path):
+        """
+        The warning says which name and where, once for the archive.
+
+        A layout disagreeing with every file it holds is a legitimate
+        correction and a common mistake, and the two look identical from
+        inside; naming one path is enough to go and look.
+        """
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        patch = dc.get_example_patch().update_attrs(station="B")
+        for name in ("one.h5", "two.h5"):
+            patch.io.write(sub / name, "dasdae")
+        with pytest.warns(UserWarning, match="override attrs") as record:
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        overrides = [x for x in record if "override attrs" in str(x.message)]
+        assert len(overrides) == 1
+        assert "'station'" in str(overrides[0].message)
+        assert "station=A" in str(overrides[0].message)
+        spool.indexer.close()
+
+    def test_agreeing_path_is_silent(self, tmp_path):
+        """Restating what the file already says overrides nothing."""
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        patch = dc.get_example_patch().update_attrs(station="A")
+        patch.io.write(sub / "agree.h5", "dasdae")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert not [x for x in caught if "override attrs" in str(x.message)]
+        assert spool.get_contents()["station"].iloc[0] == "A"
+        spool.indexer.close()
+
+    def test_unstated_attr_is_silent(self, tmp_path):
+        """A name the file never states is not one the path overrides."""
+        sub = tmp_path / "cable=north"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "quiet.h5", "dasdae")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert not [x for x in caught if "override attrs" in str(x.message)]
+        assert spool.get_contents()["cable"].iloc[0] == "north"
+        spool.indexer.close()
 
 
 class TestPatchStamping:
@@ -357,3 +406,57 @@ class TestHiveAcquisitionKey:
             spool = self._write(tmp_path, f"acquisition_key={value}").update()
         assert "acquisition_key" not in spool.get_contents().columns
         assert spool[0].attrs.acquisition_key == ""
+
+
+class TestOverrideComparesMeaning:
+    """The warning is about a disagreement, not about a spelling."""
+
+    def _index(self, tmp_path, segment, **attrs):
+        """Index one patch stating attrs under a hive segment."""
+        sub = tmp_path / segment
+        sub.mkdir(parents=True)
+        dc.get_example_patch().update_attrs(**attrs).io.write(sub / "f.h5", "dasdae")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        spool.indexer.close()
+        return [x for x in caught if "override attrs" in str(x.message)]
+
+    def test_a_number_restated_differently_is_silent(self, tmp_path):
+        """`10` and `10.0` are the same gauge length."""
+        assert not self._index(tmp_path, "gauge_length=10", gauge_length=10.0)
+
+    def test_a_different_number_warns(self, tmp_path):
+        """A path stating another value is the disagreement to report."""
+        assert self._index(tmp_path, "gauge_length=20", gauge_length=10.0)
+
+    def test_an_unreadable_number_warns(self, tmp_path):
+        """A path which is not a number at all changes what the attr says."""
+        assert self._index(tmp_path, "gauge_length=ten", gauge_length=10.0)
+
+    def test_a_bool_restated_differently_is_silent(self, tmp_path):
+        """Hive spells a flag in lower case; it is still the same flag."""
+        segment = "closed_fiber_loop=true"
+        assert not self._index(tmp_path, segment, closed_fiber_loop=True)
+
+    def test_a_flipped_bool_warns(self, tmp_path):
+        """And the opposite flag is a disagreement."""
+        segment = "closed_fiber_loop=false"
+        assert self._index(tmp_path, segment, closed_fiber_loop=True)
+
+    def test_a_restated_instant_is_silent(self, tmp_path):
+        """
+        A time is stored as integer nanoseconds, not as its own spelling.
+
+        Comparing that integer's text against the path segment would call
+        every datetime attr a disagreement.
+        """
+        stamp = np.datetime64("2020-01-01", "ns")
+        cases = [
+            ("observed=2020-01-01", False),
+            ("observed=2021-06-05", True),
+            ("observed=nonsense", True),
+        ]
+        for number, (segment, warns) in enumerate(cases):
+            root = tmp_path / str(number)
+            assert bool(self._index(root, segment, observed=stamp)) is warns, segment

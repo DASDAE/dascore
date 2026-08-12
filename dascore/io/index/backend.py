@@ -9,6 +9,7 @@ has a clear boundary.
 from __future__ import annotations
 
 import abc
+import json
 import time
 import warnings
 from contextlib import contextmanager, nullcontext, suppress
@@ -36,6 +37,7 @@ from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
     _as_query_list,
+    _normalize_unit,
     apply_residuals,
     build_sql,
 )
@@ -1088,6 +1090,36 @@ class SQLIndexBackend(abc.ABC):
         """Return coord names known to the index."""
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
+
+    def attr_units(self, name: str) -> dict[str, str | None]:
+        """Return the canonical units the index stores one attr's kinds in."""
+        rows = self._attr_meta()
+        rows = rows[rows["attr_name"] == name]
+        return {
+            str(kind): _normalize_unit(unit)
+            for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
+        }
+
+    def attr_stated_ids(self, name: str, patch_ids=None) -> set[int]:
+        """
+        Return the ids of the patches which state a value for one attr.
+
+        An attr may be stored in more than one typed column across an
+        archive, and a patch states it when any of them holds a value.
+        This answers without projecting the relation, so a caller can
+        tell whether it needs to look anywhere else for the rest.
+        """
+        rows = self._attr_meta()
+        columns = rows[rows["attr_name"] == name]["column_name"].unique()
+        if not len(columns):
+            return set()
+        stated = " OR ".join(f"{self.dialect.quote(x)} IS NOT NULL" for x in columns)
+        sql = f"SELECT patch_id FROM attrs WHERE ({stated})"
+        params: list = []
+        if patch_ids is not None:
+            sql += " AND patch_id IN (SELECT value FROM json_each(?))"
+            params.append(json.dumps([int(x) for x in patch_ids]))
+        return {int(x) for x in self._fetch_df(sql, params)["patch_id"]}
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""

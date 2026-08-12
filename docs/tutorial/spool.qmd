@@ -242,6 +242,21 @@ subspool = spool.select(acquisition_key={'DAS2.R2D1..RAW', 'DAS3.R2D1..RAW'})
 subspool = spool.select(tag='some*')
 ```
 
+# unselect
+
+[`unselect`](`dascore.core.spool.BaseSpool.unselect`) is the complement of `select`: it returns the patches the same selection would have removed. Each keyword means what it means in `select`, so this is how to name what a spool does *not* want without spelling out the rest of the archive.
+
+```{python}
+import dascore as dc
+spool = dc.get_example_spool('diverse_das')
+
+# Everything except the patches tagged 'some_tag'.
+subspool = spool.unselect(tag='some_tag')
+assert len(subspool) + len(spool.select(tag='some_tag')) == len(spool)
+```
+
+Coordinates are not accepted yet. Selecting on a coordinate trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering, and `unselect` does not do it yet; select the ranges to keep instead.
+
 # chunk
 
 The [`chunk`](`dascore.core.spool.BaseSpool.chunk`) method controls how data are grouped together in patches within the spool. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous patches, etc.

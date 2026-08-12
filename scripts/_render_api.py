@@ -323,6 +323,9 @@ class NumpyDocStrParser:
     stylers = {  # noqa
         "parameter": style_parameters,
         "parameters": style_parameters,
+        # Numpydoc's section for arguments a function holds and forwards
+        # rather than reads; they are parameters and render as one.
+        "other parameters": style_parameters,
         "attributes": style_parameters,
         "examples": style_examples,
         "example": style_examples,

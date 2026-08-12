@@ -16,8 +16,20 @@ from __future__ import annotations
 
 import itertools
 import os
-from collections.abc import Mapping
-from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
+from collections.abc import Mapping, Sized
+from functools import cache
+from types import MappingProxyType, UnionType
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    TypeAlias,
+    Union,
+    get_args,
+    get_origin,
+)
 from uuid import uuid4
 
 import numpy as np
@@ -362,6 +374,7 @@ class _OpticalComponentBase(InventoryModel):
     with their measurements, which carry the wavelengths.
     """
 
+    _identity_field: ClassVar[str] = "name"
     optical_length: FiniteFloat = Field(
         default=0.0,
         ge=0.0,
@@ -505,6 +518,7 @@ class Geometry(InventoryModel):
     crosses segments; uncovered distance has undefined coordinates.
     """
 
+    _identity_field: ClassVar[str] = "name"
     name: str = Field(default="", description="Human-readable geometry name.")
     distance: tuple[float, ...] = Field(
         description=(
@@ -635,6 +649,7 @@ class CouplingCondition(_IntervalModel):
     and conditions may not overlap.
     """
 
+    _identity_field: ClassVar[str] = "coupling_type"
     coupling_type: CouplingType = Field(description="Controlled coupling category.")
     medium: str = Field(default="", description="Surrounding medium.")
     attachment: str = Field(default="", description="Attachment method.")
@@ -968,6 +983,33 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 
 _MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
+
+
+def _track_identity_fields() -> Mapping[str, str]:
+    """
+    Map each typed track of an optical path to the field its name means.
+
+    `coupling="trench"` asks about coupling_type; every other field of a
+    track is reached by its qualified name (`coupling.medium`). Each
+    track model declares which of its fields is its identity, so the
+    pairing lives beside the field rather than in a list to keep in step
+    with it.
+    """
+    out = {}
+    for track, info in OpticalPath.model_fields.items():
+        # A track is a tuple of items; the path's scalar fields are not.
+        if get_origin(info.annotation) is not tuple:
+            continue
+        for model in _annotation_members(get_args(info.annotation)[0]):
+            field = getattr(model, "_identity_field", None)
+            if field is None:
+                continue
+            # The model names one of its own fields, or the map it builds
+            # would point at nothing.
+            assert field in model.model_fields, (model, field)
+            out[track] = field
+    return MappingProxyType(out)
+
 
 # Names an annotation group may not take: a group becomes a patch coordinate
 # at enrichment, where it would shadow one of these.
@@ -1628,6 +1670,114 @@ class ResolvedContext(NamedTuple):
     optical_path: OpticalPath | None
 
 
+class InventoryNames(NamedTuple):
+    """
+    The names an inventory could contribute to a patch.
+
+    Split by where each lands: `attrs` are the scalar facts about the
+    observing system, `coords` the names which take a value per channel.
+    """
+
+    attrs: tuple[str, ...]
+    coords: tuple[str, ...]
+
+
+# Fields which name or tag a record rather than describe it: the type
+# discriminator and resource id a shareable record carries, and the codes
+# locating an acquisition (a patch's acquisition_key already states them).
+_IDENTITY_FIELDS = frozenset({"type", "resource_id", "code", "location_code"})
+
+# What a distance-ranged track carries to place itself, which is its extent
+# rather than a value the channels inside it take.
+_EXTENT_FIELDS = frozenset(_IntervalModel.model_fields) - frozenset(
+    InventoryModel.model_fields
+)
+
+
+# The generics a field annotation uses to say it holds many values. Only
+# these are unwrapped further, so `tuple[float, ...]` stays a tuple rather
+# than reading as the float it contains.
+_COLLECTION_ORIGINS = (tuple, list, set, frozenset, dict)
+
+
+def _annotation_members(annotation) -> list:
+    """
+    Return the alternatives a possibly-optional union annotation admits.
+
+    `Annotated` is transparent: this file writes several of its unions as
+    `Annotated[A | B, Field(discriminator=...)]`, and the wrapper must not
+    hide what they hold. `None` is dropped, since "or nothing" says what
+    the field does when it is unset rather than what it can hold.
+    """
+    if get_origin(annotation) is Annotated:
+        return _annotation_members(get_args(annotation)[0])
+    if get_origin(annotation) in (Union, UnionType):
+        out = [
+            x for member in get_args(annotation) for x in _annotation_members(member)
+        ]
+        return [x for x in out if x is not type(None)]
+    return [annotation]
+
+
+def _is_value_field(info) -> bool:
+    """
+    Return True when a field could hold one value describing one thing.
+
+    A field which may hold another inventory model is a reference to a
+    second record rather than a fact of this one, and one which can only
+    hold a collection has no single value to state, or to give a channel.
+    """
+    members = _annotation_members(info.annotation)
+    if any(isinstance(x, type) and issubclass(x, InventoryModel) for x in members):
+        return False
+    return any(get_origin(x) not in _COLLECTION_ORIGINS for x in members)
+
+
+def _value_shape(item, field: str) -> str | None:
+    """
+    Return how an item states a field: as one value, several, or not at all.
+
+    A field stated as several values -- a multi-wavelength loss, say --
+    has none to give a channel, however scalar its annotation reads.
+    """
+    value = getattr(item, field, None)
+    if value is None or (isinstance(value, str) and not value):
+        return None
+    return "many" if isinstance(value, Sized) and not isinstance(value, str) else "one"
+
+
+@cache
+def _value_field_names(model) -> tuple[str, ...]:
+    """
+    Return the fields of a model which state a fact about one thing.
+
+    Cached on the class: the answer is a property of the model, and an
+    inventory asked for its names walks every item of every track.
+    """
+    structural = frozenset(TimeRangedModel.model_fields) | _IDENTITY_FIELDS
+    structural |= _EXTENT_FIELDS
+    return tuple(
+        name
+        for name, info in model.model_fields.items()
+        if name not in structural and _is_value_field(info)
+    )
+
+
+TRACK_IDENTITY_FIELDS = _track_identity_fields()
+
+
+# The observing-system facts, read off the models rather than listed, so a
+# field added to either automatically becomes something an inventory can
+# contribute. Pinned to INVENTORY_ATTRS by a test: the two are one
+# vocabulary, and a new field has to reach the readers as well.
+_SYSTEM_FACT_NAMES = tuple(
+    sorted(
+        list(_value_field_names(Acquisition))
+        + [f"interrogator.{x}" for x in _value_field_names(Interrogator)]
+    )
+)
+
+
 class Inventory(InventoryModel):
     """
     Top-level DASDAE inventory manifest.
@@ -1810,6 +1960,78 @@ class Inventory(InventoryModel):
         except KeyError:
             msg = f"No resource with resource_id {resource_id!r}."
             raise InvalidInventoryError(msg) from None
+
+    def get_names(self) -> InventoryNames:
+        """
+        Return the names this inventory could contribute to a patch.
+
+        These are the names
+        [`Patch.enrich`](`dascore.proc.inventory.enrich`) can be asked for
+        and selection can query, split by where each lands: `attrs` for
+        the observing-system facts, which are scalar per patch, and
+        `coords` for the names taking a value per channel. `attrs` is the
+        same for every inventory, since the models decide it; `coords`
+        depends on what this inventory holds.
+
+        Contributing a name is not promising a value for it: a name is
+        listed when some acquisition or optical path could define it, and
+        one which none does simply resolves to nothing.
+
+        Examples
+        --------
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> _, inventory = inventory_patch_pair()
+        >>> names = inventory.get_names()
+        >>> assert "gauge_length" in names.attrs
+        >>> assert "interrogator.model" in names.attrs
+        >>> assert "coupling" in names.coords  # its coupling_type
+        >>> assert "coupling.medium" in names.coords
+        """
+        return InventoryNames(attrs=_SYSTEM_FACT_NAMES, coords=self._coord_names())
+
+    def _optical_paths(self):
+        """Iterate every optical path this inventory holds."""
+        for network in self.networks:
+            for array in network.fiber_arrays:
+                yield from array.optical_paths
+
+    def _coord_names(self) -> tuple[str, ...]:
+        """
+        Return the per-channel names this inventory's paths could define.
+
+        The CRS's axes and optical distance come from the model, while the
+        annotation groups and the tracks which are actually described come
+        from the paths themselves: an inventory with no coupling track has
+        no coupling to select on.
+        """
+        labels = self.coordinate_reference_system.coordinate_labels
+        # Both spellings of the same axes: the canonical storage names and
+        # whatever this CRS declares they mean.
+        out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
+        groups: dict[str, None] = {}
+        tracks: dict[str, dict[str, None]] = {}
+        shapes: dict[str, set[str]] = {}
+        for path in self._optical_paths():
+            groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
+            for track in TRACK_IDENTITY_FIELDS:
+                for item in getattr(path, track):
+                    fields = tracks.setdefault(track, {})
+                    names = _value_field_names(type(item))
+                    fields.update(dict.fromkeys(names))
+                    for field in names:
+                        if (shape := _value_shape(item, field)) is not None:
+                            shapes.setdefault(f"{track}.{field}", set()).add(shape)
+        # Dropped only where nothing states it as one value: another path
+        # may record a scalar where this one records several, and that
+        # path can still give it to a channel.
+        unusable = {x for x, kinds in shapes.items() if kinds == {"many"}}
+        for track, fields in tracks.items():
+            out[track] = None
+            names = (f"{track}.{x}" for x in fields)
+            out.update(dict.fromkeys(x for x in names if x not in unusable))
+        out.update(groups)
+        return tuple(out)
 
     def check(self) -> Self:
         """Check the whole inventory tree against the model rules."""

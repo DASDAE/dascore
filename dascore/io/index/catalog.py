@@ -707,9 +707,22 @@ class PatchCatalog:
         return self._order if self._order is not None else self._default_order
 
     def _ordered_ids(self) -> tuple[int, ...]:
-        """The view's patch ids in presentation order (ids only, cheap)."""
+        """
+        The view's patch ids in presentation order (ids only, cheap).
+
+        A fixed membership is its own presentation order — an integer
+        array may have reordered it — so predicates composed *after* it
+        was fixed filter that order rather than replacing it. Returning
+        the membership unfiltered would ignore them entirely, and letting
+        SQL order the result would undo the arrangement.
+        """
         if self._ids is not None and self._order is None:
-            return self._ids
+            if not self._queries:
+                return self._ids
+            matched = set(
+                self.backend.query_ids(list(self._queries), patch_ids=self._ids)
+            )
+            return tuple(x for x in self._ids if x in matched)
         return tuple(
             self.backend.query_ids(
                 list(self._queries) or None,
@@ -729,15 +742,16 @@ class PatchCatalog:
         ids = self._ordered_ids()[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
-    def restrict(self, indices) -> PatchCatalog:
+    def restrict(self, indices, ids=None) -> PatchCatalog:
         """
         Return a view keeping the presented rows an array selects.
 
         ``indices`` is a boolean mask over rows or an array of integer
         positions (order-preserving; duplicate positions collapse to
-        one row, matching the spool's set semantics).
+        one row, matching the spool's set semantics). ``ids`` is this
+        view's presented ids, for a caller which has just read them.
         """
-        ids = np.asarray(self._ordered_ids())
+        ids = np.asarray(self._ordered_ids() if ids is None else ids)
         picked = ids[np.asarray(indices)]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)

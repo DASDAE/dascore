@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Sized
-from typing import Literal, get_args
+from collections.abc import Sequence, Sized
+from typing import Any, Literal, get_args
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, PatchType, attr_conflict_description
+from dascore.constants import (
+    INVENTORY_ATTRS,
+    PatchType,
+    enrich_attrs_description,
+    enrich_conflicts_description,
+    enrich_coords_description,
+    enrich_on_missing_description,
+)
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
+    TRACK_IDENTITY_FIELDS,
     VALID_COORDINATE_LABELS,
     Interrogator,
     Inventory,
@@ -26,6 +35,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.proc.coords import update_coords
+from dascore.units import get_quantity_str
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key
@@ -45,26 +55,18 @@ _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 # as-acquired value.
 _COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
-OnMissing = Literal["raise", "null", "skip"]
+OnMissing = Literal["raise", "null", "ignore"]
 _VALID_ON_MISSING = get_args(OnMissing)
 
-# Tracks whose fields enrich can project, and where their intervals live.
-_TRACK_NAMES = ("optical_components", "geometry", "coupling")
+# Tracks whose fields enrich can project. The inventory names them, so a
+# track enrich can project and one selection can ask about are the same set.
+_TRACK_NAMES = tuple(TRACK_IDENTITY_FIELDS)
 
 # Track fields whose units the inventory documents.
 _TRACK_FIELD_UNITS = {
     "coupling.depth": "m",
     "optical_components.optical_length": "m",
 }
-
-on_missing_description = """
-on_missing
-    What to do when an explicitly requested name is one the inventory does
-    not define: "raise" (the default), "null" to fill the dtype-appropriate
-    missing marker, or "skip" to leave it off. Blanket requests copy what is
-    applicable and never trigger it, and per-channel coverage gaps are always
-    missing values rather than errors.
-""".strip()
 
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
@@ -163,6 +165,139 @@ def _attr_owner(context, interrogator, name):
     prefix, _, field = name.rpartition(".")
     owner = interrogator if prefix == "interrogator" else context.acquisition
     return owner, field
+
+
+def _epoch_bounds(inventory, acquisition_key: Sequence[str]) -> np.ndarray:
+    """
+    Return the instants at which resolving one key can change its answer.
+
+    Every epoch bound along the key's branch, so two times falling between
+    the same pair of them resolve identically at every level and one
+    resolution serves both.
+    """
+    net_code, array_code, location, acq_code = acquisition_key
+    times = []
+    for network in inventory.networks:
+        if network.code != net_code:
+            continue
+        times += [network.start_time, network.end_time]
+        for array in network.fiber_arrays:
+            if array.code != array_code:
+                continue
+            times += [array.start_time, array.end_time]
+            times += [
+                x
+                for acq in array.acquisitions
+                if acq.code == acq_code and acq.location_code == location
+                for x in (acq.start_time, acq.end_time)
+            ]
+            times += [
+                x
+                for path in array.optical_paths
+                if path.location_code == location
+                for x in (path.start_time, path.end_time)
+            ]
+    stamps = [x for x in times if not np.isnat(x)]
+    return np.unique(np.array(stamps, dtype="datetime64[ns]"))
+
+
+def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
+    """
+    Resolve index rows to their inventory contexts, one resolution per epoch.
+
+    Each row is the half-open span of one patch. A row the inventory does
+    not describe, and a row whose span crosses an epoch boundary — which
+    the inventory describes twice rather than not at all, and which
+    `conform_to_inventory` exists to subdivide — resolve to None.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    keys
+        Each row's acquisition_key.
+    starts, ends
+        Each row's first and last instant.
+
+    Returns
+    -------
+    An object array of `ResolvedContext` or None, one per row.
+    """
+    frame = pd.DataFrame(
+        {
+            "key": np.asarray(keys, dtype=object),
+            "start": np.asarray(starts, dtype="datetime64[ns]"),
+            "end": np.asarray(ends, dtype="datetime64[ns]"),
+        }
+    )
+    out = np.full(len(frame), None, dtype=object)
+    for key, sub in frame.groupby("key", sort=False):
+        # The empty string is how a patch spells "no identity"; it names
+        # no entry, which is not the same as naming a missing one. A
+        # malformed key names none either, and resolve would say so.
+        codes = key.split(".") if isinstance(key, str) else []
+        if len(codes) != 4:
+            continue
+        bounds = _epoch_bounds(inventory, codes)
+        first, last = sub["start"].to_numpy(), sub["end"].to_numpy()
+        starts_at = np.searchsorted(bounds, first, side="right")
+        ends_at = np.searchsorted(bounds, last, side="right")
+        # A row with no instant of its own says nothing about which epoch
+        # applies, and resolving at NaT holds every epoch effective; that
+        # is the whole inventory answering rather than one entry.
+        unresolved = (starts_at != ends_at) | np.isnat(first) | np.isnat(last)
+        contexts: dict[int, ResolvedContext | None] = {}
+        for epoch in np.unique(starts_at[~unresolved]):
+            when = first[(starts_at == epoch) & ~unresolved][0]
+            try:
+                contexts[int(epoch)] = inventory.resolve(key, time=when)
+            except InvalidInventoryError:
+                contexts[int(epoch)] = None
+        for row, epoch, skip in zip(sub.index, starts_at, unresolved, strict=True):
+            out[row] = None if skip else contexts[int(epoch)]
+    return out
+
+
+def get_attr_values(inventory, contexts, name: str) -> list:
+    """
+    Return the value each resolved context states for one attr name.
+
+    A context which does not state the name, and a row with no context at
+    all, both give None: the inventory has no answer either way. Values
+    are spelled the way a patch carrying the same fact spells them, so a
+    selector matches an inventory answer and a stated header alike.
+    """
+    cache: dict[int, Any] = {}
+    out = []
+    for context in contexts:
+        if context is None:
+            out.append(None)
+            continue
+        if (value := cache.get(id(context), _UNCACHED)) is _UNCACHED:
+            interrogator = _get_interrogator(inventory, context.acquisition)
+            owner, field = _attr_owner(context, interrogator, name)
+            value = getattr(owner, field, None)
+            value = None if _is_unset(value) else _as_patch_value(value)
+            cache[id(context)] = value
+        out.append(value)
+    return out
+
+
+def _as_patch_value(value):
+    """
+    Return an inventory value in the spelling a patch attr would hold.
+
+    The inventory models units as quantities and a patch carries the
+    string it renders to, so comparing the two directly would never
+    match — the same fact stored two ways.
+    """
+    if hasattr(value, "units") and hasattr(value, "dimensionality"):
+        return get_quantity_str(value)
+    return value
+
+
+# A cache miss, told apart from a cached None (the inventory saying nothing).
+_UNCACHED = object()
 
 
 def _get_system_attrs(inventory, context) -> dict:
@@ -492,8 +627,13 @@ def _get_coord_values(inventory, path, name, distances):
         # The distances are already the optical path's, in meters.
         return get_coord(data=distances, units="m")
     track, _, field = name.partition(".")
-    if track in _TRACK_NAMES and field:
-        return _get_track_coord(path, track, field, distances)
+    if track in _TRACK_NAMES:
+        # A bare track name means the track's identity: which coupling
+        # condition, which geometry segment, which component a channel
+        # falls in. Every other field is asked for by its qualified name.
+        return _get_track_coord(
+            path, track, field or TRACK_IDENTITY_FIELDS[track], distances
+        )
     if name in VALID_COORDINATE_LABELS:
         return _get_geometry_coord(inventory, path, name, distances)
     return _get_annotation_coord(path, name, distances)
@@ -556,7 +696,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             )
             raise PatchError(msg)
         if values is None:
-            if blanket or on_missing == "skip":
+            if blanket or on_missing == "ignore":
                 continue
             if on_missing == "raise":
                 msg = (
@@ -572,7 +712,10 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
 
 @patch_function()
 @compose_docstring(
-    conflict_desc=attr_conflict_description, on_missing_desc=on_missing_description
+    attrs_desc=enrich_attrs_description,
+    coords_desc=enrich_coords_description,
+    on_missing_desc=enrich_on_missing_description,
+    conflicts_desc=enrich_conflicts_description,
 )
 def enrich(
     patch: PatchType,
@@ -598,20 +741,8 @@ def enrich(
         The patch to enrich.
     inventory
         The inventory to resolve against.
-    attrs
-        True (the default) to copy the observing-system facts the inventory
-        is authoritative for, a tuple of names to copy exactly those, or
-        False to copy none. The blanket form excludes `data_type`,
-        `data_category`, and `data_units`, which describe the data as it
-        now stands, and `sample_rate` and `spatial_interval`, which the
-        patch's own coordinates already state; naming one restores the
-        as-acquired value.
-    coords
-        True (the default) to add the geometry axes and annotation groups of
-        the resolved optical path, a tuple of names to add exactly those, or
-        False to add none. Names may be `distance` for optical distance, a
-        coordinate label the inventory's CRS defines, an annotation group, or
-        a qualified track field such as `coupling.medium`.
+    {attrs_desc}
+    {coords_desc}
     acquisition_key
         The inventory identity to resolve, for a patch which does not carry
         one. Given both, the patch and this argument must agree.
@@ -620,13 +751,7 @@ def enrich(
         physical. A patch with a real time coordinate resolves at its own
         time and passing this raises.
     {on_missing_desc}
-    conflicts
-        {conflict_desc}
-        Enrichment combines the inventory's values with the patch's own, so
-        the default `keep_first` lets the inventory win and re-enriching is
-        a refresh. `raise` is the misresolution guard: a header disagreeing
-        with the resolved acquisition usually means the `acquisition_key`
-        resolved to the wrong place.
+    {conflicts_desc}
 
     Examples
     --------

@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import inspect
 import warnings
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
@@ -23,6 +23,10 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    enrich_attrs_description,
+    enrich_conflicts_description,
+    enrich_coords_description,
+    enrich_on_missing_description,
     namespace_select_type,
     numeric_types,
     path_types,
@@ -57,7 +61,7 @@ from dascore.utils.patch import (
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
-from dascore.utils.pd import present_units_columns
+from dascore.utils.pd import present_units_columns, resolve_selector_namespaces
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -91,6 +95,61 @@ _UNRESOLVED_WARNING = (
     "to see which, 'ignore' to silence this, or remove them from the spool "
     "once Spool.prune_to_inventory exists."
 )
+
+
+def _unstated(values) -> np.ndarray:
+    """
+    Return a mask of the entries which state no value.
+
+    A patch says it does not know a name by leaving it null, which a
+    string column spells as the empty string; both are what an attached
+    inventory is asked to fill in.
+    """
+    series = pd.Series(np.asarray(values, dtype=object))
+    return (series.isna() | series.eq("")).to_numpy()
+
+
+def _requested_names(_attrs, _coords, kwargs) -> set[str]:
+    """
+    Return every name a selection call names, whatever form it arrives in.
+
+    A tag-form `_attrs`/`_coords` names bare kwargs, so a requested name
+    is always either a bare kwarg or a key of a mapping form.
+    """
+    out = set(kwargs)
+    for spec in (_attrs, _coords):
+        if isinstance(spec, Mapping):
+            out |= set(spec)
+    return out
+
+
+def _namespace_names(spec: namespace_select_type) -> set[str]:
+    """
+    Return the names an `_attrs`/`_coords` argument designates.
+
+    Either form: a mapping of name -> selector, or a name (or names)
+    tagging bare kwargs. A malformed spec keeps only what is a name, so
+    the resolver is left to complain about the rest properly.
+    """
+    if spec is None:
+        return set()
+    if isinstance(spec, str):
+        return {spec}
+    return {x for x in spec if isinstance(x, str)}
+
+
+def _match_resolved(values, name: str, selector, units=None) -> np.ndarray:
+    """Return which of the values an inventory states match a selector."""
+    from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
+
+    values = np.asarray(values, dtype=object)
+    out = np.zeros(len(values), dtype=bool)
+    # A name the inventory has no answer for is not one it can select on,
+    # and the predicate would be comparing against the missing marker.
+    stated = ~_unstated(values)
+    if stated.any():
+        out[stated] = evaluate_attr_predicate(values[stated], name, selector, units)
+    return out
 
 
 def _normalize_enrich_kwargs(kwargs) -> dict:
@@ -422,6 +481,57 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
     # --- optional methods
 
+    def unselect(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Return the spool without the patches a selection would keep.
+
+        The complement of
+        [`select`](`dascore.core.spool.Spool.select`): each keyword means
+        exactly what it means there, and the patches it would match are
+        the ones removed. This is how a spool says what it does not want —
+        one bad tag, an instrument being serviced — without spelling the
+        rest of the archive as a selection.
+
+        Coordinates are not accepted yet. Selecting on one trims each
+        patch to the range rather than choosing between patches, so the
+        complement is every patch cut into the pieces outside it — one
+        patch becoming two. That is subdivision rather than filtering,
+        and it needs machinery this does not have; until it does, select
+        the ranges to keep.
+
+        Naming nothing raises, and so does naming only no-op selectors
+        (`None`, `...`). `select()` with no selection is the whole spool,
+        so its complement is an empty one — but "remove nothing" reads
+        just as naturally, and silently emptying a spool is not something
+        to guess at.
+
+        Parameters
+        ----------
+        _attrs
+            Attribute selections, in the forms
+            [`select`](`dascore.core.spool.Spool.select`) accepts.
+        _coords
+            Accepted only to say so; see above.
+        **kwargs
+            The selection whose matches are removed.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # everything except the patches tagged 'some_tag'
+        >>> rest = spool.unselect(tag='some_tag')
+        >>> assert len(rest) + len(spool.select(tag='some_tag')) == len(spool)
+        """
+        msg = f"spool of type {self.__class__} has no unselect implementation"
+        raise NotImplementedError(msg)
+
     def sort(self, attribute) -> Self:
         """
         Sort the Spool based on a specific attribute.
@@ -700,26 +810,237 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        try:
-            catalog = self._catalog.select(
-                _attrs=_attrs,
-                _coords=_coords,
-                samples=samples,
-                relative=relative,
-                **kwargs,
+        inventory_query, _attrs, _coords, kwargs = self._split_inventory_query(
+            _attrs, _coords, kwargs, samples
+        )
+        catalog = self._catalog.select(
+            _attrs=_attrs,
+            _coords=_coords,
+            samples=samples,
+            relative=relative,
+            **kwargs,
+        )
+        out = self._new_from_catalog(catalog)
+        if inventory_query:
+            out = out._select_from_inventory(inventory_query)
+        return out
+
+    @compose_docstring(doc=get_docstring(BaseSpool.unselect))
+    def unselect(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        **kwargs,
+    ) -> Self:
+        """{doc}."""
+        requested = _requested_names(_attrs, _coords, kwargs)
+        known_attrs, known_coords = self._index_names()
+        selectable = set()
+        if self._inventory is not None:
+            names = self._inventory.get_names()
+            self._check_channel_level(
+                requested,
+                set(names.coords),
+                known_attrs | known_coords | set(names.attrs),
+                _namespace_names(_coords),
             )
-        except InvalidSpoolQueryError as error:
-            # A name the index does not know may still be one the attached
-            # inventory defines, and the index's message would deny it exists.
-            if self._inventory is None:
-                raise
+            selectable = set(names.attrs) - known_coords
+        attrs, coords = resolve_selector_namespaces(
+            known_attrs | selectable,
+            known_coords,
+            _attrs=_attrs,
+            _coords=_coords,
+            kwargs=kwargs,
+        )
+        if coords:
             msg = (
-                f"{error} If this names a field the attached inventory "
-                "defines, selecting on it is not supported yet: enrich the "
-                "patches and select on each one instead."
+                f"{sorted(coords)} name coordinates, which unselect cannot "
+                "take yet: selecting on one trims each patch, so removing "
+                "a range means cutting every patch into the pieces outside "
+                "it rather than choosing between patches. Select the ranges "
+                "to keep instead."
             )
-            raise InvalidSpoolQueryError(msg) from error
-        return self._new_from_catalog(catalog)
+            raise InvalidSpoolQueryError(msg)
+        # A no-op selector selects everything, so its complement is an
+        # empty spool -- and "remove nothing" reads just as naturally.
+        stated = {k: v for k, v in attrs.items() if v is not None and v is not Ellipsis}
+        if not stated:
+            msg = (
+                "unselect needs something to remove; "
+                f"{sorted(requested) or 'nothing'} names no selection. "
+                "Naming nothing could mean the whole spool (the complement "
+                "of selecting all of it) or none of it, so it says neither."
+            )
+            raise ParameterError(msg)
+        # The complement is taken against select itself rather than by
+        # negating each predicate, so the two can never drift apart.
+        removed = self.select(_attrs=stated)._catalog._ordered_ids()
+        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
+        return self._new_from_catalog(self._catalog.restrict(keep, ids=ids))
+
+    def _index_names(self) -> tuple[set[str], set[str]]:
+        """The attr and coord names the index knows, read once per call."""
+        backend = self._catalog.backend
+        return set(backend.attr_names()), set(backend.coord_names())
+
+    def _check_channel_level(self, requested, coords, known, wanted_coords) -> None:
+        """
+        Raise for a name the inventory defines along the fiber.
+
+        A name which is also an attr resolves to the attr, as bare names
+        always do, so only one the caller put in `_coords` is read as the
+        coordinate — an annotation group may share an acquisition field's
+        name, and selecting on the field must keep working.
+        """
+        candidates = (requested - known) | (wanted_coords & coords)
+        if channel_level := sorted(candidates & coords):
+            msg = (
+                f"{channel_level} name coordinates the attached inventory "
+                "defines along the fiber, which selection cannot trim to "
+                "yet. Enrich the patches and select on each one instead."
+            )
+            raise InvalidSpoolQueryError(msg)
+
+    def _split_inventory_query(self, _attrs, _coords, kwargs, samples):
+        """
+        Split selectors into the ones the index answers and the rest.
+
+        A name the attached inventory could contribute is evaluated per
+        row rather than pushed into SQL: the index states it for some rows
+        and the inventory only fills in the others.
+        """
+        if self._inventory is None:
+            return {}, _attrs, _coords, kwargs
+        requested = _requested_names(_attrs, _coords, kwargs)
+        known_attrs, known_coords = self._index_names()
+        names = self._inventory.get_names()
+        self._check_channel_level(
+            requested,
+            set(names.coords),
+            known_attrs | known_coords | set(names.attrs),
+            _namespace_names(_coords),
+        )
+        # A name the index already uses for a coordinate keeps its meaning;
+        # bare names resolve to attrs first, and an inventory must not
+        # quietly move one out of the namespace it has always been in.
+        selectable = set(names.attrs) - known_coords
+        # samples=True selections are coordinate-only, so an attr among
+        # them is an error the index states better than this can.
+        if samples or not requested & selectable:
+            return {}, _attrs, _coords, kwargs
+        attrs, coords = resolve_selector_namespaces(
+            known_attrs | selectable,
+            known_coords,
+            _attrs=_attrs,
+            _coords=_coords,
+            kwargs=kwargs,
+        )
+        query = {}
+        for name in list(attrs):
+            if name not in selectable:
+                continue
+            value = attrs.pop(name)
+            # A bare None or ... selects everything, here as everywhere.
+            if value is not None and value is not Ellipsis:
+                query[name] = value
+        return query, attrs, coords, {}
+
+    def _select_from_inventory(self, query: dict) -> Self:
+        """
+        Keep the rows whose inventory-backed values match.
+
+        Precedence is per row: a row which states the name is judged by
+        the index, exactly as it would be without an inventory, and only
+        the rows leaving it unstated are resolved. A spool whose headers
+        state everything therefore never touches the inventory, and one
+        which states nothing resolves once per epoch rather than per row.
+        A row the inventory has no answer for is not selected, as a patch
+        lacking the attr entirely is not. Straddling is decided against
+        the row as it now stands, so a range which has already trimmed a
+        row inside one epoch leaves it resolvable.
+        """
+        from dascore.proc.inventory import get_attr_values  # noqa: PLC0415
+
+        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        if not len(ids):
+            return self
+        backend = self._catalog.backend
+        known = set(backend.attr_names())
+        contexts = None
+        mask = np.ones(len(ids), dtype=bool)
+        for name, selector in query.items():
+            # Which rows state the name is asked of the index rather than
+            # read off the relation, so a spool whose headers state it
+            # everywhere is never realized: the index alone answers.
+            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
+            # SQL never matches a row which states nothing, so this is the
+            # verdict for the stated rows and False everywhere else.
+            matched = np.isin(ids, self._index_matches(name, selector, known))
+            if not stated.all():
+                if contexts is None:
+                    contexts = self._resolve_rows(ids)
+                matched[~stated] = _match_resolved(
+                    get_attr_values(self._inventory, contexts[~stated], name),
+                    name,
+                    selector,
+                    backend.attr_units(name),
+                )
+            mask &= matched
+        return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
+
+    def _resolve_rows(self, ids) -> np.ndarray:
+        """
+        Resolve each presented row to its inventory context, or to None.
+
+        Resolution needs an identity and the instants to resolve it at. A
+        spool whose patches carry no `acquisition_key` has no identity to
+        offer, and one whose time axis is not physical — lag times from a
+        correlation, say — has no instants, which is the same thing
+        `Patch.enrich` refuses to guess at.
+
+        This is where the relation is realized, which is why it is only
+        reached for a name the index does not state for every row.
+        """
+        from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
+
+        out = np.full(len(ids), None, dtype=object)
+        df = self._df
+        columns = [df.get(x) for x in ("acquisition_key", "time_min", "time_max")]
+        physical = all(column is not None for column in columns) and all(
+            np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
+        )
+        if not physical:
+            return out
+        # Aligned by id rather than by position: the relation is realized
+        # by a route of its own and need not present every row the id list
+        # does, and a row it leaves out is one nothing was resolved for.
+        resolved = dict(
+            zip(
+                df["_patch_id"].to_numpy(),
+                resolve_contexts(self._inventory, *columns),
+                strict=True,
+            )
+        )
+        for position, patch_id in enumerate(ids):
+            out[position] = resolved.get(patch_id)
+        return out
+
+    def _index_matches(self, name: str, selector, known: set[str]) -> np.ndarray:
+        """
+        Return the ids of the rows the index itself selects for one name.
+
+        A name no patch states is asked about rather than tried: the index
+        rejects it and the inventory answers for every row, and catching
+        that rejection would catch a malformed selector with it.
+        """
+        if name not in known:
+            return np.empty(0, dtype=np.int64)
+        return np.asarray(
+            self._catalog.select(_attrs={name: selector})._ordered_ids(),
+            dtype=np.int64,
+        )
 
     def attach_inventory(self, inventory) -> Self:
         """
@@ -789,6 +1110,12 @@ class Spool(BaseSpool):
         new._enrich_kwargs = None
         return new
 
+    @compose_docstring(
+        attrs_desc=enrich_attrs_description,
+        coords_desc=enrich_coords_description,
+        on_missing_desc=enrich_on_missing_description,
+        conflicts_desc=enrich_conflicts_description,
+    )
     def enrich(
         self,
         inventory=None,
@@ -824,12 +1151,27 @@ class Spool(BaseSpool):
             A patch which *straddles* two epochs is described twice rather
             than not at all, and raises regardless: it needs subdividing.
         **kwargs
-            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
-            each extracted patch, which documents them; the names accepted
-            here are read from its signature, so the two cannot disagree.
-            Only the names are checked at this point — the values each
-            patch's own enrichment checks as it is extracted. Calling
-            `enrich` again replaces these rather than adding to them.
+            Held and passed to
+            [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
+            extracted patch. The names accepted are read from its
+            signature, so the two cannot disagree, and only the names are
+            checked at this point — the values each patch's own enrichment
+            checks as it is extracted. Calling `enrich` again replaces
+            these rather than adding to them. They are:
+
+        Other Parameters
+        ----------------
+        {attrs_desc}
+        {coords_desc}
+        acquisition_key
+            The inventory identity to resolve, for patches which do not
+            carry one. Given both, each patch and this argument must agree.
+        time
+            The instant to resolve at, for patches whose time axis is not
+            physical. A patch with a real time coordinate resolves at its
+            own time and passing this raises.
+        {on_missing_desc}
+        {conflicts_desc}
 
         Examples
         --------
