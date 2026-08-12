@@ -47,7 +47,7 @@ def deprecate(
     """
 
     def _build_msg(func):
-        """Build the message to emmit."""
+        """Build the message to emit."""
         # Build a clear message for both runtime and typing hint
         qual = f"{func.__module__}.{getattr(func, '__qualname__', func.__name__)}"
         since_str = f" since {since}" if since else ""

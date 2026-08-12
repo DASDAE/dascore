@@ -92,10 +92,10 @@ def differentiate(
         The dimension(s) along which to differentiate. If None differentiates
         over all dimensions.
     order
-        The order of the differentiation operator. Must be a possitive, even
-        integar.
+        The order of the differentiation operator. Must be a positive, even
+        integer.
     step
-        The number of columns/rows to skip for differention.
+        The number of columns/rows to skip for differentiation.
         eg: an array of [a b c d e] uses b and d to calculate diff of c when
         step = 1 and order = 2. When step = 2, a and e are used to calculate
         diff at c.

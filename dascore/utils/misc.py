@@ -511,7 +511,7 @@ def optional_import(
         If "raise" raise an Error if missing, if "warn" or "ignore",
         return None.
     required_for
-        A string indicating what this import is requried for.
+        A string indicating what this import is required for.
 
     Raises
     ------

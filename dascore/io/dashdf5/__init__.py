@@ -1,5 +1,5 @@
 """
-Basic support for DAS-HDF5 a subset of CF (climate and forcasting).
+Basic support for DAS-HDF5 a subset of CF (climate and forecasting).
 
 This was created mainly for reading PoroTomo data from Brady Hotsprings.
 

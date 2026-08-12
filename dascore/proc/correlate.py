@@ -116,9 +116,9 @@ def correlate(
         value along that axis. See examples for details.
     **kwargs
         Specifies correlation dimension and the master source(s), to which
-        we want to cross-correlate all other channels/time samples.If the
+        we want to cross-correlate all other channels/time samples. If the
         master source is an array, the function will compute correlations for
-        all the posible pairs.
+        all the possible pairs.
 
     Examples
     --------

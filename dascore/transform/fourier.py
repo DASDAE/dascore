@@ -218,7 +218,7 @@ def dft(
         None, perform dft over all dimensions.
     real
         Either 1) The name of the axis over which to perform a rfft, 2)
-        True, which means the last (possibly only) dimenson should have an
+        True, which means the last (possibly only) dimension should have an
         rfft performed, or 3) None, meaning no rfft.
     pad
         If True, pad patch before performing dft along desired dimensions to

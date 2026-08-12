@@ -1,106 +1,77 @@
 ---
 name: draft-release
-description: Draft the next release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into master since last release via gh, and printing the proposed version and categorized changelog.
+description: Draft the next release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into the release branch (usually dev) since last release via gh, and printing the proposed version and categorized changelog.
 ---
 
 # draft-release
 
 Draft the next release version and changelog from merged PRs.
 
-## Inputs
-
-- `release_type` (optional): `major`, `minor`, `patch`, or `bugfix`.
-- If omitted, default to `bugfix` (`patch` and `bugfix` are equivalent).
+Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). Default `bugfix`.
 
 ## Workflow
 
-0. Ask for elevated permissions with network access to run the `git fetch` and GitHub CLI PR commands used to collect merged PRs (for example `gh pr list`, `gh pr view`, or `gh api`).
-1. Fetch the latest refs and tags from `origin` only. Do **not** use
-   `git fetch --all` — it also fetches unrelated remotes (e.g. a personal fork or
-   another contributor's remote) and can fail on those or clobber local tags,
-   aborting the whole fetch:
+1. Ask for network permission (`git fetch`, `gh`), then `git fetch --tags origin`.
+   Not `--all`: unrelated remotes can fail or clobber tags, aborting the fetch.
+   To read tags without touching local state, `git ls-remote --tags origin`.
 
-```bash
-git fetch --tags origin
-```
+2. Next version. Among tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$` (base `v0.0.0`
+   if none), take the latest and bump per `release_type`: `X+1.0.0`, `X.Y+1.0`,
+   or `X.Y.Z+1`. Pre-releases break this: if the target branch carries a newer
+   `aN`/`bN`/`rcN` tag, use *it* as step 3's lower bound (or the notes repeat what
+   it published) and continue that series (`v0.2.0b1` → `v0.2.0b2`). Ask before
+   finalizing to a stable tag instead.
 
-   If you only need to read the tags without touching local state, use
-   `git ls-remote --tags origin` instead.
+3. Scope PRs to `last_release_tag..origin/<target>`, where `<target>` is the
+   branch being released; ask if not given. It is **not** always `master` — work
+   lands on `dev`, so scoping to `master` silently omits everything not merged
+   down. Compare `git rev-list --count` for both first. Read them with `gh`,
+   keeping number, title, merge date, URL, labels, and body; consult diffs when
+   the body is thin.
 
-2. Determine the next version number:
-- Consider only tags that start with `v` and match strict semver:
-  `^v[0-9]+\.[0-9]+\.[0-9]+$` (ignore pre-release/build suffixes).
-- Find the latest existing release tag from that set (e.g., `v1.2.3`).
-- If no matching tags exist, use `v0.0.0` as the base.
-- Bump according to `release_type`:
-  - `major`: `X+1.0.0`
-  - `minor`: `X.Y+1.0`
-  - `patch`/`bugfix` (default): `X.Y.Z+1`
-- Output the computed new tag as `vX.Y.Z`.
+4. Drop reverted pairs. When a PR in scope reverts another in scope, omit both
+   and note them as `Reverted (no net change)` so the missing numbers are
+   explained.
 
-3. Collect merged PRs since the last release:
-- Use the previous release tag identified in step 2 as the lower bound.
-- Define PR scope as changes reachable in `last_release_tag..origin/master`
-  (or `..origin/<default_branch>` if default branch is not `master`).
-- Use GitHub CLI (`gh`) to read merged PRs for that scope.
-- Include at minimum PR number, title, merge date, URL, labels, and body text.
-- Look at the git diffs to extract additional info if needed.
+5. Collect entries. Each PR body has a `## Changelog` section, already written
+   and categorized by its author per "Changelog entries" in
+   `docs/contributing/general_guidelines.qmd` and enforced by
+   `.github/scripts/check_pr_changelog.py`. Read those bullets rather than
+   re-deriving them: each becomes one entry under the section its category
+   names, and every `**breaking**` entry is also listed under `Breaking Changes`.
+   Preserve the author's wording. Never add the marker yourself — it means
+   "breaks the last *released* version", so a drastic-looking change may break
+   nothing any user has.
 
-4. Draft a changelog with these sections:
-- `New Features`
-- `Bug Fixes`
-- `Breaking Changes`
+   A literal `none` is trustworthy; an empty or absent section means the PR
+   predates the policy, so classify it yourself from title, body, and diff.
+   Labels here are topical (`proc`, `spool`, `IO`) rather than semantic: `Added`
+   for a new capability, `Fixed` for corrected behavior, `Changed` for anything
+   else observable including performance. Check the tag before marking anything
+   breaking — an API introduced after it cannot break anyone.
 
-5. Drop reverted pairs first. If a PR in scope reverts another PR that is also
-   in scope (revert PRs usually say "Revert ..." and name the reverted PR or
-   commit in the title/body), the two cancel out to no net user-facing change.
-   Omit both from the sections and instead list them under a short
-   `Reverted (no net change)` note at the end, so the reader knows why those PR
-   numbers are absent.
+   For the first release after `docs/changelog.qmd` became a stub, also read its
+   pre-stub revision, per "Draft the release notes" in
+   `docs/contributing/publish_a_new_release.qmd` — which also lists the sections
+   to use, and their order.
 
-6. Classify the remaining PRs. This repo does not use conventional-commit
-   markers, and its labels are topical (`proc`, `viz`, `spool`, `IO`,
-   `transform`, `bug`, ...) rather than semantic, so labels alone are not
-   enough — read each PR's title and body and use judgment:
-- `Breaking Changes` if the change removes or alters existing public API,
-   defaults, or behavior in a way that can break callers — regardless of whether
-   any `!`, `breaking` label, or `BREAKING CHANGE` text is present. A signature
-   or keyword change to a documented `Patch`/`dc` method is breaking even when
-   unlabeled; when unsure, list it here with a one-line note on what changed.
-- Otherwise `New Features` if the PR adds a capability, option, or notable
-   performance improvement (judge from the title/body, not just a
-   `feature`/`enhancement` label, which is often missing).
-- Otherwise `Bug Fixes`.
-- Prefer user-facing behavior over internal implementation when deciding and
-   when summarizing.
-- Sort entries within each section by PR number ascending.
-- Include a link to the PR in the changelog.
-
-7. Print to screen:
-- The new version tag.
-- The drafted changelog.
+6. Print the new tag and the changelog. Split a PR's unrelated changes into
+   separate entries, omit PRs with no user-facing effect rather than letting them
+   fall through to `Fixed`, and sort each section by PR number ascending.
 
 ## Output Format
 
 ```text
 Next Version: vX.Y.Z
 
-## New Features
-- #123: Short summary (https://github.com/OWNER/REPO/pull/123)
-
-## Bug Fixes
-- #124: Short summary (https://github.com/OWNER/REPO/pull/124)
-
 ## Breaking Changes
+- #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+
+## Changed
 - #125: Short summary (https://github.com/OWNER/REPO/pull/125)
 
 Reverted (no net change): #126 reverted by #127
 ```
 
-## Notes
-
-- If there are no items for a section, include the section with `- None`.
-- Prefer explicit, user-facing PR summaries over internal implementation details.
-- If no merged PRs are found in scope, still print the next version and include
-  all sections with `- None`.
-- Omit the `Reverted (no net change)` line when no reverted pairs exist.
+A `**breaking**` entry appears twice, as #125 does. Omit empty sections and the
+`Reverted` line when unused. If no PRs are in scope, print the version and say so.

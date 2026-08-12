@@ -43,7 +43,7 @@ def fbe(
         Return patch data in decibel [dB] instead of original units.
         Decibel is calculated as 20 * log10( sqrt(mean(x^2)) ).
     **kwargs
-        Used to specify the dimension and asociated frequency, wavelength, or
+        Used to specify the dimension and associated frequency, wavelength, or
         equivalent limits. For example time=(1, 100) applies a time-dimension bandpass
         of 1-100 Hz. See [pass_filter](`dascore.Patch.pass_filter`) for more details.
 
