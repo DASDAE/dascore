@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
+import re
 import warnings
 
 import numpy as np
@@ -1530,3 +1531,171 @@ class TestInventoryUnselect:
         spool = two_patch_spool.attach_inventory(inventory)
         with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
             spool.unselect(coupling="trench")
+
+
+class TestInventorySelectCoverage:
+    """Selector shapes and inventory shapes the main tests do not reach."""
+
+    def test_regex_selector(self, two_patch_spool, inventory):
+        """A compiled pattern is a selector shape the index takes too."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(**{"interrogator.model": re.compile("FI-")})) == 2
+        assert len(spool.select(**{"interrogator.model": re.compile("^ZZ")})) == 0
+
+    def test_half_open_ranges(self, two_patch_spool, inventory):
+        """An open end bounds nothing, exactly as on an indexed attr."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(gauge_length=(5.0, None))) == 2
+        assert len(spool.select(gauge_length=(None, 5.0))) == 0
+        assert len(spool.select(gauge_length=(None, 15.0))) == 2
+
+    def test_unrelated_branches_are_skipped(self, patch, inventory):
+        """
+        Only the key's own branch decides where its epochs are.
+
+        An inventory describing several networks and arrays must not have
+        another one's epoch boundaries chop up this one's patches.
+        """
+        network = inventory.networks[0]
+        array = network.fiber_arrays[0]
+        elsewhere = network.new(
+            code="ZZ",
+            fiber_arrays=(array.new(code="L999", start_time="2001-01-01"),),
+        )
+        sibling = array.new(code="L998", start_time="2001-01-02")
+        crowded = inventory.new(
+            networks=(
+                elsewhere,
+                network.new(fiber_arrays=(sibling, *network.fiber_arrays)),
+            )
+        )
+        spool = dc.spool([patch]).attach_inventory(crowded)
+        assert len(spool.select(gauge_length=10.0)) == 1
+
+
+def _two_row_spool(inventory, **acquisition):
+    """One row the index states and one the inventory answers, same value."""
+    patch = inventory_patch_pair()[0]
+    ((name, value),) = acquisition.items()
+    described = _replace_acquisition(inventory, **acquisition)
+    return dc.spool(
+        [
+            patch.update_attrs(tag="unstated", **{name: type(value)()}),
+            patch.update_attrs(tag="stated", **{name: value}),
+        ]
+    ).attach_inventory(described)
+
+
+class TestSelectorMeansOneThing:
+    """
+    A selector must mean the same thing on both sides of the split.
+
+    Each of these puts the identical value in two rows -- one stated in
+    the header, one answered by the inventory -- so any difference in the
+    verdict is the two predicates disagreeing rather than the data.
+    """
+
+    def test_a_regex_searches(self, inventory):
+        """The index applies its regex residual with search, not match."""
+        spool = _two_row_spool(inventory, firmware_version="v1.2.3")
+        out = spool.select(firmware_version=re.compile("1.2"))
+        assert sorted(out.get_contents()["tag"]) == ["stated", "unstated"]
+
+    def test_a_glob_is_sqlites(self, inventory):
+        """
+        A negated class is spelled the way the index reads it.
+
+        `[!x]` is fnmatch's spelling and `[^x]` SQLite's; reaching for
+        fnmatch made each spelling select the half the other did not.
+        """
+        spool = _two_row_spool(inventory, firmware_version="v1.2.3")
+        assert len(spool.select(firmware_version="v[^x]*")) == 2
+        assert len(spool.select(firmware_version="v[!x]*")) == 0
+        assert len(spool.select(firmware_version="v[^1]*")) == 0
+
+    def test_a_range_of_the_wrong_kind_matches_nothing(self, inventory):
+        """
+        The index reaches for the typed column a selector names.
+
+        A numeric range against a string column matches nothing there, so
+        it matches nothing here rather than comparing across types.
+        """
+        spool = _two_row_spool(inventory, firmware_version="v1.2.3")
+        assert len(spool.select(firmware_version=(1.0, 2.0))) == 0
+
+    def test_a_number_does_not_match_a_bool(self, patch, inventory):
+        """`1` and `True` are stored as different kinds, so they differ."""
+        described = _replace_acquisition(inventory, closed_fiber_loop=True)
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="unstated"),
+                patch.update_attrs(tag="stated", closed_fiber_loop=True),
+            ]
+        ).attach_inventory(described)
+        assert len(spool.select(closed_fiber_loop=1)) == 0
+        assert len(spool.select(closed_fiber_loop=True)) == 2
+
+
+class TestNothingToResolveWith:
+    """Rows which offer no identity, or no instant to resolve it at."""
+
+    def test_spool_without_acquisition_keys(self, inventory):
+        """A patch naming no entry is one the inventory cannot describe."""
+        spool = dc.spool([dc.get_example_patch()]).attach_inventory(inventory)
+        assert "acquisition_key" not in spool.get_contents().columns
+        assert len(spool.select(gauge_length=10.0)) == 0
+
+    def test_lag_times_are_not_instants(self, patch, inventory):
+        """
+        A relative time axis says nothing about which epoch applies.
+
+        `Patch.enrich` refuses such a patch outright; reading its lags as
+        instants since 1970 would pick an epoch from an offset.
+        """
+        array = inventory.networks[0].fiber_arrays[0]
+        acquisition = array.acquisitions[0]
+        split = np.datetime64("1970-01-01T00:00:10", "ns")
+        described = inventory.replace(
+            array,
+            array.new(
+                acquisitions=(
+                    acquisition.new(end_time=split, gauge_length=10.0),
+                    acquisition.new(start_time=split, gauge_length=20.0),
+                )
+            ),
+        )
+        lags = patch.get_coord("time").values - patch.get_coord("time").min()
+        spool = dc.spool(
+            [
+                patch.update_coords(time=lags).update_attrs(tag="early"),
+                patch.update_coords(time=lags + np.timedelta64(20, "s")).update_attrs(
+                    tag="late"
+                ),
+            ]
+        ).attach_inventory(described)
+        assert len(spool.select(gauge_length=10.0)) == 0
+        assert len(spool.select(gauge_length=20.0)) == 0
+
+
+class TestSelectOnAView:
+    """A spool whose membership is already fixed still selects correctly."""
+
+    def test_windowed_spool_respects_stated_values(self, patch, inventory):
+        """
+        A window fixes which rows are present, not what they say.
+
+        The index's verdict for a windowed spool has to be the predicate's,
+        not the whole membership, or a row contradicting the selector
+        would ride along on the strength of being present.
+        """
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="states", gauge_length=99.0),
+                patch.update_attrs(tag="blank"),
+            ]
+        ).attach_inventory(inventory)
+        window = spool[0:2]
+        assert len(window) == 2
+        assert window.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "blank"
+        ]

@@ -1863,3 +1863,96 @@ class TestGetNames:
     def test_attrs_do_not_depend_on_contents(self):
         """The models decide the attrs, so every inventory has the same."""
         assert Inventory().get_names().attrs == build_inventory().get_names().attrs
+
+
+class TestGetNamesRoundTrip:
+    """Every name the accessor lists is one enrichment can be asked for."""
+
+    def test_every_coord_name_projects(self):
+        """
+        Enriching by each listed name gives a coordinate, or says nothing.
+
+        Contributing a name is not promising a value for it, but it is
+        promising the name is one enrichment understands: a name it
+        cannot project at all would be listed and unusable.
+        """
+        patch, inventory = dc.examples.inventory_patch_pair()
+        for name in inventory.get_names().coords:
+            if name in patch.coords.coord_map:
+                continue  # the patch's own axis, which enrich will not touch
+            out = patch.enrich(
+                inventory, attrs=False, coords=(name,), on_missing="null"
+            )
+            assert name in out.coords.coord_map, name
+
+    def test_bare_track_name_is_its_identity(self):
+        """
+        A bare track name means the field the blessed map points at.
+
+        The map is what makes `coupling` a name at all, so a bare use of
+        it has to give the same values as the qualified one.
+        """
+        patch, inventory = dc.examples.inventory_patch_pair()
+        for track, field in inv.TRACK_IDENTITY_FIELDS.items():
+            bare = patch.enrich(inventory, attrs=False, coords=(track,))
+            qualified = patch.enrich(
+                inventory, attrs=False, coords=(f"{track}.{field}",)
+            )
+            assert np.array_equal(
+                bare.get_coord(track).values,
+                qualified.get_coord(f"{track}.{field}").values,
+            ), track
+
+    def test_multi_valued_field_is_not_listed(self):
+        """
+        A field stated as several values has none to give a channel.
+
+        A multi-wavelength loss is a legitimate thing for a component to
+        record and an impossible thing to project, so the name is not one
+        this inventory contributes however scalar its annotation reads.
+        """
+        base = build_inventory()
+        path = base.networks[0].fiber_arrays[0].optical_paths[0]
+        component = path.optical_components[0]
+        measured = base.new(
+            resources={"m1": inv.OpticalMeasurement(resource_id="m1")}
+        ).replace(
+            component,
+            component.new(loss_db=(0.2, 0.25), loss_measurement=("m1", "m1")),
+        )
+        coords = set(measured.get_names().coords)
+        assert "optical_components.loss_db" not in coords
+        assert "optical_components.name" in coords
+        assert "optical_components.loss_db" in set(base.get_names().coords)
+
+    def test_optional_collection_is_not_a_value(self):
+        """
+        "A tuple or nothing" is still a tuple, not a value.
+
+        `tuple[float, ...] | None` is how this file spells several of its
+        fields, so reading the `None` arm as the scalar would list them.
+        """
+
+        class _Probe(inv.InventoryModel):
+            """A model shaped like the optional collections here."""
+
+            wavelengths: tuple[float, ...] | None = None
+            plain: float | None = None
+
+        assert inv._value_field_names(_Probe) == ["plain"]
+
+    def test_annotated_unions_are_transparent(self):
+        """
+        A discriminated union is written Annotated, and holds models.
+
+        The models here spell their unions that way, so a field holding
+        one must read as a reference rather than as a value.
+        """
+
+        class _Probe(inv.InventoryModel):
+            """A model whose reference is spelled the way this file does."""
+
+            resource: inv._Resource | None = None
+            plain: float | None = None
+
+        assert inv._value_field_names(_Probe) == ["plain"]

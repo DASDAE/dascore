@@ -284,10 +284,11 @@ on_missing
     always missing values rather than errors.
 """.strip()
 
+# One paragraph, not two: a blank line inside a parameter description
+# reads as the start of the next parameter when the API docs are built.
 enrich_conflicts_description = f"""
 conflicts
 {textwrap.indent(attr_conflict_description.strip(), "    ")}
-
     Enrichment combines the inventory's values with the patch's own, so
     the default `keep_first` lets the inventory win and re-enriching is
     a refresh. `raise` is the misresolution guard: a header disagreeing

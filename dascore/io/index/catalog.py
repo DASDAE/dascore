@@ -707,9 +707,22 @@ class PatchCatalog:
         return self._order if self._order is not None else self._default_order
 
     def _ordered_ids(self) -> tuple[int, ...]:
-        """The view's patch ids in presentation order (ids only, cheap)."""
+        """
+        The view's patch ids in presentation order (ids only, cheap).
+
+        A fixed membership is its own presentation order — an integer
+        array may have reordered it — so predicates composed *after* it
+        was fixed filter that order rather than replacing it. Returning
+        the membership unfiltered would ignore them entirely, and letting
+        SQL order the result would undo the arrangement.
+        """
         if self._ids is not None and self._order is None:
-            return self._ids
+            if not self._queries:
+                return self._ids
+            matched = set(
+                self.backend.query_ids(list(self._queries), patch_ids=self._ids)
+            )
+            return tuple(x for x in self._ids if x in matched)
         return tuple(
             self.backend.query_ids(
                 list(self._queries) or None,

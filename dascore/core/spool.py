@@ -489,6 +489,11 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         overlaps the range would throw away the part that does not.
         Select the ranges to keep instead.
 
+        Naming nothing raises. `select()` with no selection is the whole
+        spool, so its complement is an empty one — but "remove nothing"
+        reads just as naturally, and silently emptying a spool is not
+        something to guess at.
+
         Parameters
         ----------
         _attrs
@@ -812,7 +817,15 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        self._check_channel_level(_requested_names(_attrs, _coords, kwargs))
+        requested = _requested_names(_attrs, _coords, kwargs)
+        if not requested:
+            msg = (
+                "unselect needs something to remove. Naming nothing could "
+                "mean the whole spool (the complement of selecting all of "
+                "it) or none of it, so it says neither."
+            )
+            raise ParameterError(msg)
+        self._check_channel_level(requested)
         attrs, coords = resolve_selector_namespaces(
             set(self._catalog.backend.attr_names()) | self._inventory_attr_names(),
             self._catalog.backend.coord_names(),
@@ -899,19 +912,15 @@ class Spool(BaseSpool):
         state everything therefore never touches the inventory, and one
         which states nothing resolves once per epoch rather than per row.
         A row the inventory has no answer for is not selected, as a patch
-        lacking the attr entirely is not.
+        lacking the attr entirely is not. Straddling is decided against
+        the row as it now stands, so a range which has already trimmed a
+        row inside one epoch leaves it resolvable.
         """
-        from dascore.proc.inventory import (  # noqa: PLC0415
-            get_attr_values,
-            resolve_contexts,
-        )
+        from dascore.proc.inventory import get_attr_values  # noqa: PLC0415
 
         df = self._df
         if not len(df):
             return self
-        # Resolution needs an identity and a time, which the relation
-        # always carries: they are structural columns of the index.
-        assert {"acquisition_key", "time_min", "time_max"} <= set(df.columns)
         ids = df["_patch_id"].to_numpy()
         contexts = None
         mask = np.ones(len(df), dtype=bool)
@@ -926,12 +935,7 @@ class Spool(BaseSpool):
             matched = np.isin(ids, self._index_matches(name, selector))
             if not stated.all():
                 if contexts is None:
-                    contexts = resolve_contexts(
-                        self._inventory,
-                        df["acquisition_key"],
-                        df["time_min"],
-                        df["time_max"],
-                    )
+                    contexts = self._resolve_rows(df)
                 matched[~stated] = _match_resolved(
                     get_attr_values(self._inventory, contexts[~stated], name),
                     name,
@@ -939,6 +943,26 @@ class Spool(BaseSpool):
                 )
             mask &= matched
         return self._new_from_catalog(self._catalog.restrict(mask))
+
+    def _resolve_rows(self, df) -> np.ndarray:
+        """
+        Resolve each presented row to its inventory context, or to None.
+
+        Resolution needs an identity and the instants to resolve it at. A
+        spool whose patches carry no `acquisition_key` has no identity to
+        offer, and one whose time axis is not physical — lag times from a
+        correlation, say — has no instants, which is the same thing
+        `Patch.enrich` refuses to guess at.
+        """
+        from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
+
+        columns = [df.get(x) for x in ("acquisition_key", "time_min", "time_max")]
+        physical = all(column is not None for column in columns) and all(
+            np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
+        )
+        if not physical:
+            return np.full(len(df), None, dtype=object)
+        return resolve_contexts(self._inventory, *columns)
 
     def _index_matches(self, name: str, selector) -> np.ndarray:
         """Return the ids of the rows the index itself selects for one name."""

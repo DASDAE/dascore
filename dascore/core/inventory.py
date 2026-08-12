@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import itertools
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from types import MappingProxyType, UnionType
 from typing import (
     Annotated,
@@ -1684,10 +1684,22 @@ _COLLECTION_ORIGINS = (tuple, list, set, frozenset, dict)
 
 
 def _annotation_members(annotation) -> list:
-    """Return the alternatives a possibly-optional union annotation admits."""
-    if get_origin(annotation) not in (Union, UnionType):
-        return [annotation]
-    return [x for member in get_args(annotation) for x in _annotation_members(member)]
+    """
+    Return the alternatives a possibly-optional union annotation admits.
+
+    `Annotated` is transparent: this file writes several of its unions as
+    `Annotated[A | B, Field(discriminator=...)]`, and the wrapper must not
+    hide what they hold. `None` is dropped, since "or nothing" says what
+    the field does when it is unset rather than what it can hold.
+    """
+    if get_origin(annotation) is Annotated:
+        return _annotation_members(get_args(annotation)[0])
+    if get_origin(annotation) in (Union, UnionType):
+        out = [
+            x for member in get_args(annotation) for x in _annotation_members(member)
+        ]
+        return [x for x in out if x is not type(None)]
+    return [annotation]
 
 
 def _is_value_field(info) -> bool:
@@ -1702,6 +1714,12 @@ def _is_value_field(info) -> bool:
     if any(isinstance(x, type) and issubclass(x, InventoryModel) for x in members):
         return False
     return any(get_origin(x) not in _COLLECTION_ORIGINS for x in members)
+
+
+def _is_multi_valued(item, field: str) -> bool:
+    """Return True when an item states a field as several values at once."""
+    value = getattr(item, field, None)
+    return isinstance(value, Sized) and not isinstance(value, str)
 
 
 def _value_field_names(model) -> list[str]:
@@ -1960,15 +1978,24 @@ class Inventory(InventoryModel):
         out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
+        multi: set[str] = set()
         for path in self._optical_paths():
             groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
             for track in TRACK_IDENTITY_FIELDS:
                 for item in getattr(path, track):
                     fields = tracks.setdefault(track, {})
-                    fields.update(dict.fromkeys(_value_field_names(type(item))))
+                    names = _value_field_names(type(item))
+                    fields.update(dict.fromkeys(names))
+                    # A field this item states as several values -- a
+                    # multi-wavelength loss, say -- has no one value to
+                    # give a channel, however scalar its annotation reads.
+                    multi.update(
+                        f"{track}.{x}" for x in names if _is_multi_valued(item, x)
+                    )
         for track, fields in tracks.items():
             out[track] = None
-            out.update(dict.fromkeys(f"{track}.{x}" for x in fields))
+            names = (f"{track}.{x}" for x in fields)
+            out.update(dict.fromkeys(x for x in names if x not in multi))
         out.update(groups)
         return tuple(out)
 

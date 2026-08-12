@@ -607,8 +607,13 @@ def _get_coord_values(inventory, path, name, distances):
         # The distances are already the optical path's, in meters.
         return get_coord(data=distances, units="m")
     track, _, field = name.partition(".")
-    if track in _TRACK_NAMES and field:
-        return _get_track_coord(path, track, field, distances)
+    if track in _TRACK_NAMES:
+        # A bare track name means the track's identity: which coupling
+        # condition, which geometry segment, which component a channel
+        # falls in. Every other field is asked for by its qualified name.
+        return _get_track_coord(
+            path, track, field or TRACK_IDENTITY_FIELDS[track], distances
+        )
     if name in VALID_COORDINATE_LABELS:
         return _get_geometry_coord(inventory, path, name, distances)
     return _get_annotation_coord(path, name, distances)

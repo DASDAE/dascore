@@ -617,6 +617,16 @@ class TestUnselect:
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             dc.spool([]).unselect(tag="anything")
 
+    def test_naming_nothing_raises(self, diverse_spool):
+        """Emptying a spool is not something to guess at."""
+        with pytest.raises(ParameterError, match="needs something to remove"):
+            diverse_spool.unselect()
+
+    def test_coords_tag_form_raises(self, diverse_spool):
+        """The tag form names bare kwargs, and is refused the same way."""
+        with pytest.raises(InvalidSpoolQueryError, match="how much of each patch"):
+            diverse_spool.unselect(_coords="time", time=("2020-01-03", None))
+
     def test_base_spool_unselect_raises(self, random_spool):
         """A spool implementation which does not provide one says so."""
         with pytest.raises(NotImplementedError, match="spool of type"):

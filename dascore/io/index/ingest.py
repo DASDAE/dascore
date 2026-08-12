@@ -325,6 +325,26 @@ def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
     return out
 
 
+def _states_something_else(existing: TypedValue, path_value: str) -> bool:
+    """
+    Return True when a path segment changes what an attr says.
+
+    The comparison is on meaning rather than spelling: a directory named
+    `gauge_length=10` over a file stating `10.0` restates it, and warning
+    there would send someone looking for a disagreement the layout does
+    not contain. A path value which cannot be read as the stored kind at
+    all does change what the attr says, whatever it then says.
+    """
+    if existing.kind == "num":
+        try:
+            return float(path_value) != float(existing.value)
+        except ValueError:
+            return True
+    if existing.kind == "bool":
+        return path_value.strip().lower() != str(existing.value).lower()
+    return str(existing.value) != path_value
+
+
 def hive_typed_attrs(path_attrs: dict[str, str]) -> dict[str, TypedValue]:
     """Wrap hive path attrs as string TypedValues (no type inference)."""
     return {name: TypedValue("str", value) for name, value in path_attrs.items()}
@@ -474,7 +494,9 @@ def summaries_to_records(
     # Names a directory renamed out from under the file which states them,
     # with one path each: the layout is the correction mechanism, so this
     # is legal, but a whole archive silently disagreeing with its own
-    # headers is worth hearing about once.
+    # headers is worth hearing about once. Only sources being scanned are
+    # compared -- a detected move rewrites the stored attrs without
+    # reopening the file, so what the file itself says is not on hand.
     overridden: dict[str, str] = {}
     for path, group in by_source.items():
         first = group[0]
@@ -501,7 +523,7 @@ def summaries_to_records(
                 typed = hive_typed_attrs(path_attrs)
                 for patch in patches:
                     for name in typed.keys() & patch.attrs.keys():
-                        if str(patch.attrs[name].value) != typed[name].value:
+                        if _states_something_else(patch.attrs[name], path_attrs[name]):
                             overridden.setdefault(name, store_path)
                 patches = [replace(p, attrs={**p.attrs, **typed}) for p in patches]
         out.append(
