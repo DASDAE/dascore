@@ -2358,7 +2358,7 @@ class TestConformSubdivision:
         named = re.escape(spool.get_contents()["source_path"].iloc[0])
         for policy in ("raise", "warn", "drop"):
             with pytest.raises(
-                PatchError, match=f"change of acquisition.*{named} at .*"
+                PatchError, match=f"change of acquisition.*{named} \\(at .*"
             ):
                 spool.conform_to_inventory(on_unresolved=policy)
 

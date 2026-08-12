@@ -49,6 +49,7 @@ from dascore.utils.chunk_plan import (
     build_chunk_plan,
     build_subdivision_plan,
     samples_adjusted_envelopes,
+    subdivision_pieces,
 )
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring, get_docstring
@@ -154,56 +155,57 @@ def _report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
     warnings.warn(msg, UserWarning, stacklevel=3)
 
 
-def _check_one_acquisition(source_rows: pd.DataFrame, epochs) -> None:
+def _refuse_rows(source_rows: pd.DataFrame, reasons, summary: str) -> None:
     """
-    Refuse the patches whose acquisition changes partway through.
+    Raise naming the patches an inventory verb cannot handle, and why.
+
+    Every refusal these verbs make has the same shape — a few patches out
+    of an archive, each with its own particular; naming them is the whole
+    value, since the fix is nearly always to one file or one inventory
+    entry. `reasons` holds a particular per row and None where the row is
+    fine, so a caller judges rows without also formatting them.
+    """
+    named = [
+        f"{path} ({reason})"
+        for path, reason in zip(source_rows["source_path"], reasons, strict=True)
+        if reason is not None
+    ]
+    if not named:
+        return
+    msg = f"{len(named)} patch(es) {summary}: {_first_few(named)}."
+    raise PatchError(msg)
+
+
+def _acquisition_conflicts(epochs) -> list:
+    """
+    Name the patches whose acquisition changes partway through.
 
     Subdividing cannot reconcile these the way it reconciles a change of
     optical path — see `RowEpochs.conflict` for why. `on_unresolved` does
     not wave them through either: the inventory describes such a patch
     twice rather than not at all.
     """
-    conflicted = [
-        f"{path} at {row.conflict}"
-        for path, row in zip(source_rows["source_path"], epochs, strict=True)
-        if row.conflict is not None
-    ]
-    if not conflicted:
-        return
-    msg = (
-        f"{len(conflicted)} patch(es) span a change of acquisition, which "
-        f"subdividing cannot reconcile: {_first_few(conflicted)}. Select the "
-        "side you want, or correct the inventory."
-    )
-    raise PatchError(msg)
+    return [None if x.conflict is None else f"at {x.conflict}" for x in epochs]
 
 
-def _check_subdividable(source_rows: pd.DataFrame, rows: pd.DataFrame, cuts) -> None:
+def _unsubdividable(rows: pd.DataFrame, pieces, name: str) -> list:
     """
-    Refuse a patch which must be split but states no sampling interval.
+    Name the patches which must be split but state no sampling interval.
 
-    The pieces are found on the patch's own sample grid, which its time
-    step is the only description of: a piece ends one step short of
-    where the next begins. Without a step both pieces would have to
-    claim the boundary instant, and envelopes are inclusive, so a sample
-    landing there would appear in both. Duplicating a sample is a worse
-    answer than saying so — the caller asked for metadata
-    reconciliation, not for the data to be restructured.
+    The pieces are found on the patch's own sample grid, which its step
+    is the only description of: a piece ends one step short of where the
+    next begins. Without a step both pieces would have to claim the
+    boundary value, and envelopes are inclusive, so a sample landing
+    there would appear in both. Duplicating a sample is a worse answer
+    than saying so — the caller asked for the metadata to be reconciled,
+    not for the data to be restructured.
     """
-    bad = [
-        f"{path} at {row_cuts[0]}"
-        for path, step, row_cuts in zip(
-            source_rows["source_path"], rows["time_step"], cuts, strict=True
-        )
-        if row_cuts and (pd.isnull(step) or not step)
+    return [
+        f"at {row_pieces[0]}"
+        if row_pieces and (pd.isnull(step) or not step)
+        else None
+        for step, row_pieces in zip(rows[f"{name}_step"], pieces, strict=True)
     ]
-    if not bad:
-        return
-    msg = (
-        f"{len(bad)} patch(es) must be subdivided at an epoch boundary but "
-        f"state no time step to find their samples with: {_first_few(bad)}."
-    )
-    raise PatchError(msg)
 
 
 def _unstated(values) -> np.ndarray:
@@ -1364,7 +1366,6 @@ class Spool(BaseSpool):
         >>> mixed = dc.spool([patch, other]).attach_inventory(inventory)
         >>> assert len(mixed.conform_to_inventory(on_unresolved="drop")) == 1
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
         from dascore.proc.inventory import (  # noqa: PLC0415
             _NO_EPOCHS,
             resolve_row_epochs,
@@ -1387,7 +1388,12 @@ class Spool(BaseSpool):
             if columns is None
             else resolve_row_epochs(new._inventory, *columns)
         )
-        _check_one_acquisition(source_rows, epochs)
+        _refuse_rows(
+            source_rows,
+            _acquisition_conflicts(epochs),
+            "span a change of acquisition, which subdividing cannot "
+            "reconcile; select the side you want, or correct the inventory",
+        )
         described = np.array([x.described for x in epochs], dtype=bool)
         if not described.all():
             _report_unconformed(source_rows[~described], on_unresolved)
@@ -1396,16 +1402,36 @@ class Spool(BaseSpool):
         if not any(cuts):  # nothing to subdivide: a filter is the whole job
             return new._restrict_to_rows(kept["_patch_id"].to_numpy())
         sources = source_rows[described].reset_index(drop=True)
-        _check_subdividable(sources, kept, cuts)
+        _refuse_rows(
+            sources,
+            _unsubdividable(kept, cuts, "time"),
+            "must be subdivided at an epoch boundary but state no time step "
+            "to find their samples with",
+        )
+        return new._subdivided(
+            sources, kept, subdivision_pieces(kept, cuts, "time"), "time"
+        )
+
+    def _subdivided(self, sources, rows, pieces, name: str) -> Self:
+        """
+        Return the spool whose patches are the given pieces of these rows.
+
+        The pieces are a plan rather than a rewritten relation, so the
+        outputs *are* the contents rows — `len` and `get_contents` stay
+        exact — and loading goes through the machinery which already
+        trims a member on extraction.
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+
         catalog = derived_catalog(
             source_rows=sources,
-            plan=build_subdivision_plan(kept, cuts, "time"),
-            parent=new._catalog,
+            plan=build_subdivision_plan(rows, pieces, name),
+            parent=self._catalog,
             merge_kwargs={},
             mode="chunk",
-            origin_path=new.spool_path,
+            origin_path=self.spool_path,
         )
-        return new._new_from_catalog(catalog)
+        return self._new_from_catalog(catalog)
 
     def _with_inventory(self, inventory, on_unresolved, valid, method) -> Self:
         """
