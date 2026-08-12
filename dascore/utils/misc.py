@@ -25,9 +25,10 @@ from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
 from dascore.config import config_context, get_config
-from dascore.constants import WARN_LEVELS, WARNING_ACTIONS
+from dascore.constants import WARN_LEVELS, WARNING_ACTIONS, max_lens
 from dascore.exceptions import (
     FilterValueError,
+    InvalidInventoryError,
     MissingOptionalDependencyError,
     ParameterError,
 )
@@ -441,6 +442,40 @@ def iterate(obj):
     return obj if isinstance(obj, Iterable) else (obj,)
 
 
+# Import names whose installable package name differs from the import name.
+_INSTALL_NAMES = {
+    "google.protobuf": "protobuf",
+    "yaml": "pyyaml",
+}
+
+
+def _get_install_name(import_name: str) -> str:
+    """Get the package to install which provides the module import_name."""
+    parts = import_name.split(".")
+    # Search most to least specific so sub-modules resolve to their parent.
+    for stop in range(len(parts), 0, -1):
+        if (name := _INSTALL_NAMES.get(".".join(parts[:stop]))) is not None:
+            return name
+    return parts[0]
+
+
+def _get_install_message(packages: str | Iterable[str]) -> str:
+    """Get a message telling the user how to install one or more packages."""
+    names = " ".join(sorted(iterate(packages)))
+    return f"Install with `pip install {names}` or `uv pip install {names}`."
+
+
+def _is_missing_module(import_name: str, error: ImportError) -> bool:
+    """Determine if an ImportError means import_name itself is not installed."""
+    # Only the import machinery proves a module is absent, and it names the
+    # module it failed to find. Any other error (eg an installed package
+    # raising from its __init__) means the failure happened inside code which
+    # is installed, as does one naming a different module.
+    if not isinstance(error, ModuleNotFoundError) or not (failed := error.name or ""):
+        return False
+    return import_name == failed or import_name.startswith(f"{failed}.")
+
+
 @overload
 def optional_import(
     package_name: str,
@@ -498,8 +533,25 @@ def optional_import(
     """
     try:
         mod = importlib.import_module(package_name)
-    except ImportError:
-        msg = f"{package_name} is not installed but is required for {required_for}"
+    except ImportError as ex:
+        install_name = _get_install_name(package_name)
+        if _is_missing_module(package_name, ex):
+            msg = (
+                f"{package_name} is not installed but is required for "
+                f"{required_for}. {_get_install_message(install_name)}"
+            )
+        else:
+            # The package is installed; something it imports is not, so
+            # installing it again wouldn't help.
+            install_name = None
+            msg = (
+                f"{package_name} could not be imported ({ex}) but is "
+                f"required for {required_for}."
+            )
+        # Raise here (rather than with warn_or_raise) so the install name is
+        # attached to the exception for callers which aggregate them.
+        if on_missing == "raise":
+            raise MissingOptionalDependencyError(msg, install_name=install_name) from ex
         warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
         mod = None
     return mod
@@ -1326,3 +1378,62 @@ def is_strictly_monotonic(values, increasing: bool | None = None) -> bool:
         return bool(np.all(view1 > view2))
     except TypeError:  # values which do not support comparison
         return False
+
+
+_CODE_RE = re.compile(r"[A-Za-z0-9-]+")
+_LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
+# The tokens of an acquisition_key, in order. Only location may be blank.
+ACQUISITION_KEY_PARTS = ("network", "fiber_array", "location", "acquisition")
+
+
+def check_code(value: str, allow_blank: bool = False) -> str:
+    """
+    Validate a single code token of an acquisition key.
+
+    Parameters
+    ----------
+    value
+        The token to validate.
+    allow_blank
+        If True an empty token is valid, as it is for location codes.
+    """
+    pattern = _LOCATION_RE if allow_blank else _CODE_RE
+    if pattern.fullmatch(value) is None:
+        blank = " (or blank)" if allow_blank else ""
+        msg = f"Invalid code {value!r}; codes use letters, digits, and '-'{blank}."
+        raise InvalidInventoryError(msg)
+    return value
+
+
+def validate_acquisition_key(value: str) -> str:
+    """
+    Validate a composite acquisition key.
+
+    An acquisition key names an inventory acquisition as
+    network.fiber_array.location.acquisition. An empty string means unset,
+    which is how patches with no inventory identity are spelled.
+
+    Both the inventory model and `PatchAttrs` use this function so a code
+    legal in one is legal in the other.
+    """
+    if not value:
+        return value
+    parts = value.split(".")
+    if len(parts) != len(ACQUISITION_KEY_PARTS):
+        expected = ".".join(ACQUISITION_KEY_PARTS)
+        msg = (
+            f"Invalid acquisition_key {value!r}; got {len(parts)} dot separated "
+            f"codes but expected {len(ACQUISITION_KEY_PARTS)} ({expected})."
+        )
+        raise InvalidInventoryError(msg)
+    for part, name in zip(parts, ACQUISITION_KEY_PARTS, strict=True):
+        check_code(part, allow_blank=name == "location")
+    # PatchAttrs bounds the field, so a key too long to store must not read
+    # as merely unknown to the inventory; the two have to agree on legality.
+    if len(value) > max_lens["acquisition_key"]:
+        msg = (
+            f"Invalid acquisition_key {value!r}; it is {len(value)} characters "
+            f"and the limit is {max_lens['acquisition_key']}."
+        )
+        raise InvalidInventoryError(msg)
+    return value

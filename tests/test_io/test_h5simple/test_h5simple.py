@@ -8,6 +8,7 @@ import h5py
 import pytest
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.utils.downloader import fetch
 
 
@@ -39,3 +40,21 @@ class TestH5Simple:
         """Ensure if 'dims' is in attrs it gets used."""
         patch = dc.spool(h5simple_with_dim_attrs_path, file_format="h5simple")[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_provenance_in_file_is_not_a_patch_attr(self, h5simple_path, tmp_path):
+        """A root attr naming where the bytes live is the spool's, not the patch's.
+
+        The format has no header schema, so every root attr is copied. The
+        example files happen to carry none of these, which is why only a
+        file written with them shows the leak.
+        """
+        path = tmp_path / "provenance.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["file_version"] = "1"
+            h5.attrs["path"] = "/somewhere/original.h5"
+        read_names = set(dict(dc.read(path)[0].attrs))
+        scan_names = set(dict(dc.scan(path)[0].attrs))
+        assert not read_names & set(STORAGE_PROVENANCE_ATTRS)
+        # Stripping it in only one of the two is how they came to disagree.
+        assert read_names == scan_names

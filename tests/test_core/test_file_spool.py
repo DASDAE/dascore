@@ -81,6 +81,10 @@ class TestBasic:
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "dasdae", file_version="1")
         file_spool = Spool.from_file(path)
-        kwargs = {"path": str(path), "file_format": "DASDAE", "file_version": "1"}
+        kwargs = {
+            "source_path": str(path),
+            "source_format": "DASDAE",
+            "source_version": "1",
+        }
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             file_spool._catalog.resolver.resolve(kwargs)

@@ -10,7 +10,6 @@ from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
-    _get_attrs,
     _get_coords,
     _get_filtered_data_and_coords,
     _get_segy_version,
@@ -50,7 +49,7 @@ class SegyV1_0(FiberIO):  # noqa
         path_str = str(resource)
         with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path_str, self, include_source=True)
+            attrs = dc.PatchAttrs()
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
@@ -70,7 +69,7 @@ class SegyV1_0(FiberIO):  # noqa
         path_str = str(resource)
         with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path_str, self)
+            attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
         return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
 

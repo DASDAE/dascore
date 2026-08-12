@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
 from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import unbyte
@@ -19,13 +20,17 @@ FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
 DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
 
 
-def _get_attrs_coords_and_data(h5, snap, fiber_io):
+def _get_attrs_coords_and_data(h5, snap):
     """Return attrs, coordinate manager, and data node."""
     attrs = h5.attrs
-    attr_names = set(attrs) - DEFAULT_ATTRS
+    # This format has no header schema, so every root attr is copied. Two
+    # kinds must not be: storage provenance, which belongs to the spool,
+    # and the format discriminator, which says which reader to use. A file
+    # carrying either would otherwise pass it on as a patch attr -- and
+    # only scan used to drop them, so scan and read disagreed.
+    skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
+    attr_names = set(attrs) - skip
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
-    attr_dict["file_version"] = fiber_io.version
-    attr_dict["file_format"] = fiber_io.name
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
     attr_dict.pop("dims", None)
     return attr_dict, cm, data

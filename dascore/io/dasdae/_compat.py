@@ -4,7 +4,9 @@ Backward compatibility for legacy DASDAE metadata.
 Older DASDAE files mixed coordinate metadata into the patch attr namespace:
 coord summaries were stored as a (sometimes pickled) ``coords`` attr, and
 flat keys such as ``time_min`` or ``d_time`` lived alongside true patch
-attrs. Files written after attrs and coords were fully separated carry the
+attrs. They also stored unit companions (``gauge_length_units``) beside
+values that patch attrs now record in the inventory's fixed units. Files
+written after attrs and coords were fully separated carry the
 ``__attrs_coords_separate__`` root marker and store only true attrs.
 
 This module is private to ``dascore.io.dasdae``; nothing else in DASCore may
@@ -20,7 +22,10 @@ from collections.abc import Iterable
 
 from dascore.config import get_config
 from dascore.core.coords import CoordSummary
-from dascore.exceptions import InvalidFiberFileError
+from dascore.exceptions import InvalidFiberFileError, UnitError
+from dascore.io.utils import convert_attr_units
+from dascore.units import convert_units, get_quantity_str
+from dascore.utils.misc import unbyte
 
 # Every flat coord-summary key an old file may contain ({name}_{field}).
 _LEGACY_COORD_FIELDS = tuple(CoordSummary.model_fields)
@@ -28,6 +33,31 @@ _LEGACY_COORD_FIELDS = tuple(CoordSummary.model_fields)
 # never appeared as flat keys, so translate re-emits only these while the
 # strip above removes the full (superset) field family.
 _LEGACY_FLAT_FIELDS = ("min", "max", "step", "units", "dtype", "len")
+# Attr names whose released reader models stored a ``{name}_units``
+# companion, with the fixed unit each now records. The companion is spent
+# at the parse boundary exactly as readers spend a foreign format's unit
+# declaration, so a patch loaded from an old cache matches one freshly
+# read from its source.
+_LEGACY_UNIT_COMPANIONS = (
+    ("gauge_length", "m"),
+    ("pulse_width", "s"),
+    ("pulse_rate", "Hz"),
+)
+
+
+def _units_are_length(units) -> bool:
+    """True when a stated unit converts to meters."""
+    quantity = get_quantity_str(unbyte(units))
+    # A null/empty companion means unstated, and convert_units treats a
+    # None from_units as a no-op rather than a mismatch, so it must be
+    # rejected before the conversion probe or nothing would look wrong.
+    if quantity is None:
+        return False
+    try:
+        convert_units(1.0, to_units="m", from_units=quantity)
+    except (TypeError, ValueError, UnitError):
+        return False
+    return True
 
 
 def strip_legacy_coord_fields(attrs: dict, coord_names: Iterable[str]) -> dict:
@@ -50,8 +80,14 @@ def strip_legacy_coord_fields(attrs: dict, coord_names: Iterable[str]) -> dict:
     return out
 
 
-def translate_legacy_attrs(attrs):
-    """Normalize legacy DASDAE attr payloads to flat coord metadata."""
+def translate_legacy_attrs(attrs, coord_names: Iterable[str] = ()):
+    """
+    Normalize legacy DASDAE attr payloads to flat coord metadata.
+
+    ``coord_names`` are the coordinates actually stored in the patch group;
+    flat unit keys belonging to them are coordinate metadata rather than
+    value companions, whatever the attr payload itself claims.
+    """
     out = dict(attrs)
     coords = out.pop("coords", {})
     if isinstance(coords, str):
@@ -102,4 +138,40 @@ def translate_legacy_attrs(attrs):
         new_name = f"{name}_step"
         if new_name not in out and old_name in out:
             out[new_name] = out.pop(old_name)
+    # A coordinate sharing one of these names owns its ``{name}_units``
+    # key — whether it was just flattened from the coords payload or is
+    # the only surviving record of a flat-key-era coordinate's units — so
+    # coord reconstruction still needs it and it is not a value companion.
+    protected = set(coords) | set(dims) | set(coord_names)
+    # xml_binary's released reader spelled the pulse units into the key
+    # name; restated as a companion, the loop below converts it like every
+    # other released spelling.
+    ns_pulse = (
+        "pulse_width_ns" in out
+        and "pulse_width" not in out
+        and not {"pulse_width", "pulse_width_ns"} & protected
+    )
+    if ns_pulse:
+        out["pulse_width"] = out.pop("pulse_width_ns")
+        out["pulse_width_units"] = "ns"
+    for name, to_units in _LEGACY_UNIT_COMPANIONS:
+        companion = f"{name}_units"
+        if name in protected or companion not in out:
+            continue
+        length_pulse = (
+            name == "pulse_width"
+            and name in out
+            and "pulse_length" not in out
+            and "pulse_length" not in protected
+            and _units_are_length(out[companion])
+        )
+        if length_pulse:
+            # A length-dimensioned companion (a ProdML uom in meters, or a
+            # hand-set attr) states the quantity the vocabulary names
+            # pulse_length, so the name migrates along with the units.
+            out["pulse_length"] = out.pop(name)
+            out["pulse_length_units"] = out.pop(companion)
+            convert_attr_units(out, "pulse_length", "m")
+            continue
+        convert_attr_units(out, name, to_units)
     return out

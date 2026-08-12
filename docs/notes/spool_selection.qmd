@@ -28,8 +28,8 @@ spool = dc.get_example_spool("diverse_das")
 with pytest.raises(InvalidSpoolQueryError):
     spool.select(not_a_name="anything")
 
-selected = spool.select(network="das2")
-assert all(p.attrs.network == "das2" for p in selected)
+selected = spool.select(acquisition_key="DAS2.*")
+assert all(p.attrs.acquisition_key.startswith("DAS2.") for p in selected)
 
 df = spool.get_contents()
 t0 = df["time_min"].min()

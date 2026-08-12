@@ -163,7 +163,7 @@ def _get_default_attrs(root_node_attrs):
     out = {}
     _root_attrs = {
         "data_product": "data_type",
-        "serial_number": "instrument_id",
+        "serial_number": "interrogator.serial_number",
         "data_product_units": "data_units",
         "pulse_rate": "pulse_rate",
         "pulse_length": "pulse_length",

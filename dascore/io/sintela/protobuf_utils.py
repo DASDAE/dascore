@@ -78,6 +78,34 @@ _TAG_TO_PACKET = {
 }
 # sample_count is a uint32 field; contiguity checks wrap at this bound.
 _SAMPLE_COUNT_MODULUS = 2**32
+# Bytes of a payload pulled by metadata-only paths, where protobuf puts the
+# `header` submessage; ample for any header, a fraction of a typical packet.
+_HEADER_PREFIX_SIZE = 1 << 16
+# Protobuf wire key for field 1, wire type 2 (length-delimited): `header`.
+_HEADER_FIELD_KEY = 0x0A
+# A seek skips a payload's transfer but costs a platter rotation (~18 ms
+# measured on a USB HDD), more than sequentially reading the ~1.6 MB it saves.
+# Smaller remainders are read and dropped, keeping readahead engaged.
+_SEEK_SKIP_THRESHOLD = 1 << 21
+# Window for the backwards search from EOF for the final record's framing:
+# the first packet's size plus slack for jitter, and a wider second attempt
+# used only when that finds nothing (a recording opening with a short warm-up
+# packet does not predict its own final packet's size).
+_TAIL_SEARCH_SLACK = 1 << 12
+_MAX_TAIL_SEARCH = 1 << 23
+# A base-128 varint encodes at most a 64-bit value, so it never exceeds this.
+_MAX_VARINT_BYTES = 10
+# How far endpoint timestamps may drift from the span their sample counts
+# imply. Recorders resynchronize their clock against the counter, so valid
+# files do NOT agree exactly: across a 10,308 file archive a quarter drifted,
+# worst 56 ms over a 60 s span (~0.09%). Set an order of magnitude above that,
+# since a false rejection silently costs a full read while what is worth
+# catching is wrong by seconds to hours. The per-packet term is one packet,
+# not several: a declared length is corruption-controlled, so scaling by it
+# would let a malformed file widen its own budget.
+_ENDPOINT_TIME_TOLERANCE = 1 / 100
+_ENDPOINT_TIME_PACKETS = 1
+_ENDPOINT_TIME_FLOOR_NS = 10_000_000
 DIMS_TS = ("time", "distance")
 DIMS_BAND = ("time", "distance", "band")
 DIMS_FFT = ("time", "distance", "frequency")
@@ -116,14 +144,10 @@ class SintelaProtobufAttrs(PatchAttrs):
     """Patch attributes for Sintela protobuf recordings."""
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
     packet_type: str = ""
     recorder_namespace: str = ""
     metadata_recording_time: np.datetime64 | None = None
-    instrument_manufacturer: str = ""
-    instrument_model: str = ""
     fiber_id: int | None = None
-    serial_number: str = ""
     start_channel: int | None = None
     channel_step: int | None = None
     demod_data_type: str = ""
@@ -154,8 +178,67 @@ def _timestamp_to_dt64(timestamp) -> np.datetime64 | None:
     return np.datetime64(seconds, "s") + np.timedelta64(nanos, "ns")
 
 
-def _iter_envelope_records(resource, *, strict: bool) -> Iterator[EnvelopeRecord]:
-    """Read all MTLV envelope records from a binary stream."""
+def _read_varint(buf: bytes, pos: int) -> tuple[int | None, int]:
+    """
+    Return the varint starting at ``pos`` and the position after it.
+
+    Gives up after ``_MAX_VARINT_BYTES``: a valid varint never runs longer, and
+    an unterminated run of continuation bytes would otherwise build an integer
+    as wide as the buffer, one 7-bit shift at a time.
+    """
+    value = shift = 0
+    end = min(len(buf), pos + _MAX_VARINT_BYTES)
+    while pos < end:
+        byte = buf[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, pos
+        shift += 7
+    return None, pos
+
+
+def _leading_header_bytes(payload_prefix: bytes) -> bytes | None:
+    """
+    Return the serialized ``header`` submessage from the front of a payload.
+
+    Every Sintela data packet carries ``header`` in field 1. The wire format
+    permits any field order, but implementations emit ascending field numbers,
+    so in practice the header sits at the front of the payload and can be
+    recovered from a short prefix -- which is what lets the metadata paths
+    ignore the samples behind it, ~99.99% of a recording.
+
+    Returns None when the prefix does not open with field 1 or does not hold
+    the whole submessage, so a differently ordered payload is still handled
+    correctly, just read in full.
+    """
+    if not payload_prefix or payload_prefix[0] != _HEADER_FIELD_KEY:
+        return None
+    length, pos = _read_varint(payload_prefix, 1)
+    if length is None or pos + length > len(payload_prefix):
+        return None
+    return payload_prefix[: pos + length]
+
+
+def _stream_size(resource) -> int:
+    """Return the total length of a seekable binary stream."""
+    resource.seek(0, 2)
+    return resource.tell()
+
+
+def _iter_envelope_records(
+    resource, *, strict: bool, headers_only: bool = False
+) -> Iterator[EnvelopeRecord]:
+    """
+    Read all MTLV envelope records from a binary stream.
+
+    With ``headers_only`` a data packet's payload is truncated to its leading
+    ``header`` submessage and the samples behind it skipped, so a metadata-only
+    pass never holds them. A payload whose header cannot be recovered from the
+    prefix is re-read whole, so a yielded payload always parses on its own.
+    META and unrecognized records are never truncated: field 1 of a META
+    payload is an ordinary string, not a header.
+    """
 
     def _stop(message):
         """Raise in strict mode; otherwise signal a clean stop to the caller."""
@@ -163,8 +246,40 @@ def _iter_envelope_records(resource, *, strict: bool) -> Iterator[EnvelopeRecord
             raise InvalidFiberFileError(message)
         return True
 
+    # Bytes of the current payload still to be stepped over. Deferred to the
+    # top of the next iteration so a consumer that stops early -- format
+    # detection returns on the first data tag -- never pays for a record it
+    # did not ask for.
+    pending = 0
+
+    def _advance():
+        """Step over the previous payload's tail, seeking only when it pays."""
+        nonlocal pending
+        if pending >= _SEEK_SKIP_THRESHOLD:
+            resource.seek(pending, 1)
+        elif pending > 0:
+            # Streaming a small remainder beats a seek on spinning media and
+            # keeps the kernel's sequential readahead engaged.
+            resource.read(pending)
+        pending = 0
+
+    def _read_header_payload(offset, size):
+        """Return just the header submessage of the payload at `offset`."""
+        nonlocal pending
+        prefix = resource.read(min(size, _HEADER_PREFIX_SIZE))
+        header = _leading_header_bytes(prefix)
+        if header is None:
+            resource.seek(offset)
+            return resource.read(size)
+        pending = size - len(prefix)
+        return header
+
+    # Payload truncation is judged against the stream's length rather than a
+    # short read, because a skipped tail never produces one.
+    file_size = _stream_size(resource)
     resource.seek(0)
     while True:
+        _advance()
         # Each record opens with a 4-byte magic word; an empty read here is a
         # clean end-of-file, while a short or wrong magic is a malformed record.
         magic = resource.read(4)
@@ -185,15 +300,21 @@ def _iter_envelope_records(resource, *, strict: bool) -> Iterator[EnvelopeRecord
         size = struct.unpack("<I", header[4:8])[0]
         # The payload is `size` bytes of serialized protobuf, decoded later by
         # the message class matching the tag.
-        payload = resource.read(size)
-        if len(payload) < size and _stop("Truncated Sintela protobuf payload."):
+        payload_start = resource.tell()
+        if file_size - payload_start < size and _stop(
+            "Truncated Sintela protobuf payload."
+        ):
             return
+        if headers_only and tag in _TAG_TO_PACKET:
+            payload = _read_header_payload(payload_start, size)
+        else:
+            payload = resource.read(size)
         yield EnvelopeRecord(tag=tag, payload=payload)
 
 
 def get_supported_family_tag(resource) -> str | None:
     """Return the first supported data tag in a file without using protobuf."""
-    for record in _iter_envelope_records(resource, strict=False):
+    for record in _iter_envelope_records(resource, strict=False, headers_only=True):
         if record.tag == META_TAG:
             continue
         if record.tag in _TAG_TO_PACKET:
@@ -201,6 +322,77 @@ def get_supported_family_tag(resource) -> str | None:
         # Detection is intentionally tolerant of unknown non-data records so a
         # valid family tag later in the file can still identify the format.
         continue
+    return None
+
+
+def _parse_frame(buf: bytes, index: int = 0) -> tuple[str, int] | None:
+    """Return the (tag, payload size) of the MTLV framing at ``buf[index:]``."""
+    if index + 12 > len(buf):
+        return None
+    if struct.unpack("<I", buf[index : index + 4])[0] != PBUF_MAGIC:
+        return None
+    tag = buf[index + 4 : index + 8].rstrip(b"\x00").decode("utf-8", errors="ignore")
+    size = struct.unpack("<I", buf[index + 8 : index + 12])[0]
+    return tag, size
+
+
+def _read_record_head(resource, offset: int, file_size: int):
+    """
+    Return (tag, payload size, payload prefix) for the record at ``offset``.
+
+    None when the framing is invalid or declares a payload the file is too
+    short to hold. That length check matters: later steps size reads and
+    buffers from it, so one corrupt field could pull a whole file into memory.
+    """
+    resource.seek(offset)
+    buf = resource.read(12 + _HEADER_PREFIX_SIZE)
+    frame = _parse_frame(buf)
+    if frame is None or offset + 12 + frame[1] > file_size:
+        return None
+    return (*frame, buf[12:])
+
+
+def _find_first_data_record(resource, file_size: int):
+    """
+    Walk from the start of the file to its first data record.
+
+    Returns the META metadata picked up on the way plus that record as
+    (tag, size, payload prefix), or None when the framing is unreadable or the
+    file holds no data records at all.
+    """
+    meta = ParsedMeta()
+    offset = 0
+    while offset < file_size:
+        record = _read_record_head(resource, offset, file_size)
+        if record is None:
+            return None
+        tag, size, _prefix = record
+        if tag in _TAG_TO_PACKET:
+            return meta, record
+        if tag == META_TAG:
+            resource.seek(offset + 12)
+            meta = _parse_meta(resource.read(size))
+        offset += 12 + size
+    return None
+
+
+def _find_last_record(resource, file_size: int, window: int):
+    """
+    Locate the file's final record by searching backwards from its end.
+
+    The real last record is the one whose framing lands exactly on EOF. A
+    stray magic word in sample data would need a length hitting that same
+    byte, so the first match walking backwards is the record itself.
+    """
+    start = max(0, file_size - window)
+    resource.seek(start)
+    buf = resource.read(file_size - start)
+    index = len(buf)
+    while (index := buf.rfind(struct.pack("<I", PBUF_MAGIC), 0, index)) != -1:
+        frame = _parse_frame(buf, index)
+        if frame is not None and start + index + 12 + frame[1] == file_size:
+            payload = buf[index + 12 : index + 12 + _HEADER_PREFIX_SIZE]
+            return (*frame, payload)
     return None
 
 
@@ -463,6 +655,17 @@ def _common_header_time(common_header) -> np.datetime64 | None:
     )
 
 
+def _parse_packet(tag: str, payload: bytes, messages, decode_error):
+    """Decode one data record's payload into its packet message."""
+    msg = messages[_TAG_TO_PACKET[tag]]()
+    try:
+        msg.ParseFromString(payload)
+    except decode_error as exc:
+        out = f"Failed to parse Sintela protobuf {tag} payload: {exc}"
+        raise InvalidFiberFileError(out) from exc
+    return msg
+
+
 def _parse_records(
     records: Iterable[EnvelopeRecord], *, scan_mode: bool = False
 ) -> tuple[list[Any], ParsedMeta]:
@@ -477,16 +680,10 @@ def _parse_records(
         if tag == META_TAG:
             meta = _parse_meta(record.payload)
             continue
-        packet_name = _TAG_TO_PACKET.get(tag)
-        if packet_name is None:
+        if tag not in _TAG_TO_PACKET:
             first_unsupported_tag = first_unsupported_tag or tag
             continue
-        msg = messages[packet_name]()
-        try:
-            msg.ParseFromString(record.payload)
-        except decode_error as exc:
-            out = f"Failed to parse Sintela protobuf {tag} payload: {exc}"
-            raise InvalidFiberFileError(out) from exc
+        msg = _parse_packet(tag, record.payload, messages, decode_error)
         if scan_mode:
             # Omitting the sample fields from the scan descriptor stops them
             # being *decoded*, but protobuf still retains their raw bytes as
@@ -563,20 +760,21 @@ def _base_attrs(
     Each packet family supplies its own ``data_type``/``data_units`` via
     ``extra``; the fields below are shared across all families.
     """
-    attrs = SintelaProtobufAttrs(
-        data_category="DAS",
-        packet_type=packet_type,
-        recorder_namespace=meta.recorder_namespace,
-        metadata_recording_time=meta.metadata_recording_time,
-        instrument_manufacturer=meta.instrument_manufacturer,
-        instrument_model=meta.instrument_model,
-        # Mirror the recorder serial into the canonical PatchAttrs field while
-        # preserving the raw vendor-specific name for round-tripping/debugging.
-        instrument_id=meta.serial_number,
-        serial_number=meta.serial_number,
-        fiber_id=meta.fiber_id,
-        start_channel=int(getattr(common_header, "start_channel", 0)),
-        channel_step=None,
+    # Validated from a dict because the interrogator facts are nested names,
+    # which no keyword argument can spell.
+    attrs = SintelaProtobufAttrs.model_validate(
+        {
+            "data_category": "DAS",
+            "packet_type": packet_type,
+            "recorder_namespace": meta.recorder_namespace,
+            "metadata_recording_time": meta.metadata_recording_time,
+            "fiber_id": meta.fiber_id,
+            "start_channel": int(getattr(common_header, "start_channel", 0)),
+            "channel_step": None,
+            "interrogator.manufacturer": meta.instrument_manufacturer,
+            "interrogator.model": meta.instrument_model,
+            "interrogator.serial_number": meta.serial_number,
+        }
     )
     return attrs.new(**extra) if extra else attrs
 
@@ -713,8 +911,21 @@ class TimeseriesMetadata(_PacketMetadata):
     channel_step: int
 
     @classmethod
-    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
-        """Validate timeseries headers and build shared attrs/coords."""
+    def from_parsed(
+        cls,
+        parsed: list[tuple[str, Any]],
+        meta: ParsedMeta,
+        *,
+        total_samples: int | None = None,
+    ):
+        """
+        Validate timeseries headers and build shared attrs/coords.
+
+        ``total_samples`` lets a caller holding only the file's first and last
+        packets supply the length it derived from their sample counts. Without
+        it ``parsed`` is taken to be every packet in the file and their
+        contiguity is checked here.
+        """
         headers = [msg.header for _tag, msg in parsed]
         common_headers = [h.common_header for h in headers]
         fields = [
@@ -750,22 +961,24 @@ class TimeseriesMetadata(_PacketMetadata):
                 raise InvalidFiberFileError(
                     "Dropped samples in Sintela protobuf stream."
                 )
-        sample_counts = [int(h.sample_count) for h in headers]
-        num_samples_per_packet = [f.num_samples for f in fields]
-        for current, nxt, count in zip(
-            sample_counts,
-            sample_counts[1:],
-            num_samples_per_packet[:-1],
-            strict=False,
-        ):
-            # sample_count is a uint32 on the wire, so a long acquisition (or a
-            # recorder-wide counter) can wrap to zero mid-file. Compare modulo
-            # 2**32 so a wrapped-but-contiguous packet is not read as a gap.
-            if (current + count) % _SAMPLE_COUNT_MODULUS != nxt:
-                raise InvalidFiberFileError(
-                    "Non-contiguous Sintela protobuf sample counts."
-                )
-        total_samples = sum(num_samples_per_packet)
+        if total_samples is None:
+            sample_counts = [int(h.sample_count) for h in headers]
+            num_samples_per_packet = [f.num_samples for f in fields]
+            for current, nxt, count in zip(
+                sample_counts,
+                sample_counts[1:],
+                num_samples_per_packet[:-1],
+                strict=False,
+            ):
+                # sample_count is a uint32 on the wire, so a long acquisition
+                # (or a recorder-wide counter) can wrap to zero mid-file.
+                # Compare modulo 2**32 so a wrapped-but-contiguous packet is
+                # not read as a gap.
+                if (current + count) % _SAMPLE_COUNT_MODULUS != nxt:
+                    raise InvalidFiberFileError(
+                        "Non-contiguous Sintela protobuf sample counts."
+                    )
+            total_samples = sum(num_samples_per_packet)
         first_time = _common_header_time(common_headers[0])
         if first_time is None:
             raise InvalidFiberFileError("Missing Sintela protobuf start time.")
@@ -801,31 +1014,96 @@ class TimeseriesMetadata(_PacketMetadata):
             attrs=attrs,
         )
 
+    def _fill_packet(self, data, index: int, tag: str, msg) -> int:
+        """Copy one packet's samples into ``data`` at ``index``, return its rows."""
+        packet = np.asarray(msg.samples, dtype=np.float32)
+        rows = int(msg.header.num_samples)
+        expected = rows * self.num_channels
+        if not packet.size and msg.raw_frames:
+            # Timeseries packets may carry samples in the packed `raw_frames`
+            # blob instead of the repeated `samples` field. That encoding is
+            # undocumented here, so fail with a specific message rather than a
+            # confusing payload-size mismatch.
+            msg_ = (
+                f"Sintela protobuf {tag} packets store samples in "
+                "raw_frames, which DASCore cannot yet decode."
+            )
+            raise InvalidFiberFileError(msg_)
+        if packet.size != expected:
+            raise InvalidFiberFileError(
+                "Unexpected Sintela protobuf TS sample payload size."
+            )
+        data[index : index + rows] = packet.reshape(rows, self.num_channels)
+        return rows
+
     def decode(self, parsed: list[tuple[str, Any]]):
         """Decode timeseries packets into data, coords, and attrs."""
         data = np.empty(self.shape, dtype=self.dtype)
         index = 0
         for tag, msg in parsed:
-            packet = np.asarray(msg.samples, dtype=np.float32)
-            rows = int(msg.header.num_samples)
-            expected = rows * self.num_channels
-            if not packet.size and msg.raw_frames:
-                # Timeseries packets may carry samples in the packed
-                # `raw_frames` blob instead of the repeated `samples` field.
-                # That encoding is undocumented here, so fail with a specific
-                # message rather than a confusing payload-size mismatch.
-                msg_ = (
-                    f"Sintela protobuf {tag} packets store samples in "
-                    "raw_frames, which DASCore cannot yet decode."
-                )
-                raise InvalidFiberFileError(msg_)
-            if packet.size != expected:
-                raise InvalidFiberFileError(
-                    "Unexpected Sintela protobuf TS sample payload size."
-                )
-            data[index : index + rows] = packet.reshape(rows, self.num_channels)
-            index += rows
+            index += self._fill_packet(data, index, tag, msg)
         return data, self.coords, self.attrs
+
+    def decode_stream(self, resource, meta: ParsedMeta):
+        """
+        Fill the patch array packet by packet straight from the stream.
+
+        The endpoint shortcut already established the shape, so samples go
+        straight to their final home and each decoded packet is released at
+        once; holding every packet *and* the output array, as the generic path
+        must, costs roughly twice the patch.
+
+        Headers are copied into fresh messages before the packet is dropped.
+        Clearing the samples in place would not do: protobuf releases an arena
+        only when the whole message dies, so a cleared packet still owns the
+        space its samples occupied. The copies go to ``from_parsed`` at the
+        end, so full cross-packet validation still runs and supplies the coords
+        and attrs returned.
+        """
+        messages = _get_proto_messages(include_sample_fields=True)
+        header_messages = _get_proto_messages(include_sample_fields=False)
+        decode_error = _get_protobuf_decode_error()
+        data = np.empty(self.shape, dtype=self.dtype)
+        parsed: list[tuple[str, Any]] = []
+        index = 0
+        for record in _iter_envelope_records(resource, strict=True):
+            if record.tag == META_TAG:
+                # Every record is visited here, so META is picked up wherever
+                # it sits, matching the read-everything path. The endpoint
+                # scan only sees the ones before the first data packet.
+                meta = _parse_meta(record.payload)
+                continue
+            if record.tag not in _TAG_TO_PACKET:
+                continue
+            if record.tag not in TS_TAGS:
+                raise InvalidFiberFileError(
+                    "Mixed Sintela protobuf packet families are unsupported."
+                )
+            msg = _parse_packet(record.tag, record.payload, messages, decode_error)
+            if index + int(msg.header.num_samples) > self.shape[0]:
+                # More samples than the endpoints implied: the packets in
+                # between are not the contiguous run this path assumed.
+                raise InvalidFiberFileError(
+                    "Non-contiguous Sintela protobuf sample counts."
+                )
+            index += self._fill_packet(data, index, record.tag, msg)
+            light = header_messages[_TAG_TO_PACKET[record.tag]]()
+            # Round-tripped rather than copied: the sample-bearing and
+            # header-only classes come from separate descriptor pools, so
+            # CopyFrom rejects them as different types. A header is ~100 bytes.
+            light.header.ParseFromString(msg.header.SerializeToString())
+            parsed.append((record.tag, light))
+            del msg
+        metadata = type(self).from_parsed(parsed, meta)
+        if index != self.shape[0]:
+            # Contiguity, validated just above, should force the packet lengths
+            # to sum to the endpoint-derived total. Checked unconditionally
+            # anyway: the alternative to raising is handing back the
+            # uninitialized tail of the output array.
+            raise InvalidFiberFileError(
+                "Sintela protobuf packets do not fill the expected sample count."
+            )
+        return data, metadata.coords, metadata.attrs
 
 
 class BandMetadata(_PacketMetadata):
@@ -1042,8 +1320,153 @@ _FAMILY_CLASSES = {
 }
 
 
+def _parse_packet_header(tag: str, payload_prefix: bytes):
+    """Parse just the header submessage of a data packet from a payload prefix."""
+    header_bytes = _leading_header_bytes(payload_prefix)
+    if header_bytes is None:
+        return None
+    messages = _get_proto_messages(include_sample_fields=False)
+    try:
+        return _parse_packet(tag, header_bytes, messages, _get_protobuf_decode_error())
+    except InvalidFiberFileError:
+        # Leave the diagnostic to the read-everything path.
+        return None
+
+
+def _fits_in_file(total_samples: int, num_channels: int, file_size: int) -> bool:
+    """
+    Return whether a file this size could hold that many samples.
+
+    Guards the *over*-estimate direction only: a float32 sample costs at least
+    four bytes on the wire, so a length implying more bytes than exist cannot
+    be real -- the shape of a counter that ran backwards, which the modular
+    difference turns into billions of samples. Under-estimates pass trivially;
+    ``_endpoint_time_agrees`` catches those.
+    """
+    if total_samples <= 0 or num_channels <= 0:
+        return False
+    return total_samples * num_channels * 4 <= file_size
+
+
+def _endpoint_time_agrees(first_header, last_header, total_samples: int) -> bool:
+    """
+    Check the endpoint timestamps against the span their sample counts imply.
+
+    The counters cannot tell one contiguous recording from two concatenated
+    ones, or from a counter that reset partway; the timestamps are an
+    independent witness, since for a contiguous run the elapsed time between
+    the stamps should equal the samples between them over the sample rate.
+
+    Coarse by design: recorder clocks resynchronize as a recording runs, so a
+    valid file's stamps drift by milliseconds and the tolerance must absorb
+    that, which leaves room for a small mid-file gap to hide. It catches the
+    gross disagreement -- seconds to hours -- left by concatenation, a reset
+    counter, a reconfiguration, or a misidentified final record.
+
+    Returns False when either stamp is missing: an unverifiable shortcut is not
+    worth taking when the full read is always available.
+    """
+    first_time = _common_header_time(first_header.common_header)
+    last_time = _common_header_time(last_header.common_header)
+    if first_time is None or last_time is None:
+        return False
+    rate = float(first_header.common_header.sample_rate)
+    if not np.isfinite(rate) or rate <= 0:
+        return False
+    # Samples strictly between the two stamps, i.e. excluding the last packet.
+    leading = total_samples - int(last_header.num_samples)
+    expected_ns = round(leading / rate * 1e9)
+    elapsed_ns = int((last_time - first_time).astype("timedelta64[ns]").astype(int))
+    packet_ns = round(int(last_header.num_samples) / rate * 1e9)
+    tolerance = max(
+        _ENDPOINT_TIME_PACKETS * packet_ns,
+        expected_ns * _ENDPOINT_TIME_TOLERANCE,
+        _ENDPOINT_TIME_FLOOR_NS,
+    )
+    return abs(elapsed_ns - expected_ns) <= tolerance
+
+
+def _get_endpoint_metadata(resource):
+    """
+    Summarize a timeseries recording from its first and last packets alone.
+
+    A summary needs only header fields, and ``sample_count`` numbers the
+    samples preceding each packet, so the last packet's count plus its length
+    is the total. Scanning a half-gigabyte recording becomes two small reads.
+
+    This assumes the packets in between are one contiguous, homogeneous run.
+    Three checks test that assumption: each endpoint's declared length must fit
+    its own record, the total must fit the file, and the endpoint timestamps
+    must match the span those samples imply. A concatenated file, a reset
+    counter, or a bogus tail match fails one of them.
+
+    Returns ``(metadata, meta)``, or None when any check fails or the layout
+    does not suit the shortcut, leaving the caller to read the whole file.
+    Only META preceding the first data packet is seen here; ``read`` picks up
+    any that appear later.
+    """
+    file_size = _stream_size(resource)
+    head = _find_first_data_record(resource, file_size)
+    if head is None:
+        return None
+    meta, (tag, size, prefix) = head
+    # Only the timeseries family has an evenly sampled time coord derivable
+    # from the endpoints; BAND and FFT time coords list every packet's stamp.
+    if tag not in TS_TAGS:
+        return None
+    # Capped as well as floored: the first packet's declared size comes off
+    # disk, and an implausible one would otherwise make the window swallow the
+    # whole file in a single buffer.
+    tail = _find_last_record(
+        resource, file_size, min(size + _TAIL_SEARCH_SLACK, _MAX_TAIL_SEARCH)
+    )
+    if tail is None:
+        # Sizing the window from the first packet assumes the last one is
+        # about as big. A recording that opens with a short warm-up packet
+        # breaks that, so widen once rather than give up and read everything
+        # -- the retry costs one read, and only for files that need it.
+        tail = _find_last_record(resource, file_size, min(file_size, _MAX_TAIL_SEARCH))
+    if tail is None or tail[0] != tag:
+        return None
+    first = _parse_packet_header(tag, prefix)
+    last = _parse_packet_header(tag, tail[2])
+    if first is None or last is None:
+        return None
+    channels = int(first.header.common_header.num_channels)
+    # Each endpoint's declared length has to fit the record carrying it. The
+    # time check below cannot see the last packet's own length -- it cancels
+    # out of the elapsed-time comparison -- so without this a packet could
+    # claim millions of samples it has no room for and still be believed.
+    if not (
+        _fits_in_file(int(first.header.num_samples), channels, size)
+        and _fits_in_file(int(last.header.num_samples), channels, tail[1])
+    ):
+        return None
+    total_samples = (
+        int(last.header.sample_count) - int(first.header.sample_count)
+    ) % _SAMPLE_COUNT_MODULUS + int(last.header.num_samples)
+    if not _fits_in_file(total_samples, channels, file_size):
+        return None
+    if not _endpoint_time_agrees(first.header, last.header, total_samples):
+        return None
+    try:
+        metadata = TimeseriesMetadata.from_parsed(
+            [(tag, first), (tag, last)], meta, total_samples=total_samples
+        )
+    except InvalidFiberFileError:
+        # Endpoints that fail validation may be a genuinely bad file or a
+        # false tail match; either way the full path decides, reporting the
+        # same error for the former rather than trusting a doubtful header.
+        return None
+    return metadata, meta
+
+
 def read_payload(resource):
     """Decode a Sintela protobuf file into data, coords, and attrs."""
+    endpoints = _get_endpoint_metadata(resource)
+    if endpoints is not None:
+        metadata, meta = endpoints
+        return metadata.decode_stream(resource, meta)
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=False)
     return _decode_family(parsed, meta)
@@ -1051,8 +1474,13 @@ def read_payload(resource):
 
 def scan_payload(resource) -> list[ScanPayload]:
     """Decode a Sintela protobuf file and return FiberIO scan payloads."""
-    records = _iter_envelope_records(resource, strict=True)
-    parsed, meta = _parse_records(records, scan_mode=True)
-    family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
-    shape, coords, attrs, dtype = family_cls.from_parsed(parsed, meta).scan()
+    endpoints = _get_endpoint_metadata(resource)
+    if endpoints is not None:
+        metadata = endpoints[0]
+    else:
+        records = _iter_envelope_records(resource, strict=True, headers_only=True)
+        parsed, meta = _parse_records(records, scan_mode=True)
+        family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
+        metadata = family_cls.from_parsed(parsed, meta)
+    shape, coords, attrs, dtype = metadata.scan()
     return [make_scan_payload(attrs=attrs, coords=coords, shape=shape, dtype=dtype)]

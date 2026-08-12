@@ -169,7 +169,6 @@ class TestSR4731:
         data_points = _expected_data_values(_get_block_payload(sor_path, "DataPts"))
         supplier = _expected_supplier_values(_get_block_payload(sor_path, "SupParams"))
         manufacturer, model, serial_number = [*supplier, "", "", ""][:3]
-        instrument_id = "-".join(x for x in (manufacturer, model, serial_number) if x)
         payloads = self.parser.scan(sor_path)
         assert len(payloads) == 1
         payload = payloads[0]
@@ -181,7 +180,9 @@ class TestSR4731:
         assert payload["dims"] == ("time", "distance")
         assert attr.data_type == "otdr"
         assert attr.data_units == dc.get_quantity("dB")
-        assert attr.instrument_id == instrument_id
+        assert attr.get("interrogator.manufacturer") == manufacturer
+        assert attr.get("interrogator.model") == model
+        assert attr.get("interrogator.serial_number") == serial_number
         assert attr.wavelength_nm == fixed["wavelength_nm"]
         assert attr.acquisition_range_m == pytest.approx(fixed["acquisition_range_m"])
         assert attr.sample_spacing_usec == pytest.approx(fixed["sample_spacing_usec"])
@@ -240,7 +241,9 @@ class TestSR4731:
         assert attrs.acquisition_range_m == pytest.approx(4181.579556111035)
         assert attrs.trace_count == 1
         assert attrs.sample_scale == 1000
-        assert attrs.instrument_id == "FIBERCLOUD-FC4000-0901001"
+        assert attrs.get("interrogator.manufacturer") == "FIBERCLOUD"
+        assert attrs.get("interrogator.model") == "FC4000"
+        assert attrs.get("interrogator.serial_number") == "0901001"
         assert distance.step == pytest.approx(0.2552233615790427)
         assert patch.get_coord("time").min() == np.datetime64("2026-06-12T10:58:14")
         assert_allclose(patch.data[0, :5], [9.064, 10.146, 11.439, 11.98, 12.539])
@@ -274,7 +277,7 @@ class TestSR4731:
         """BytesIO streams can be read."""
         bio = BytesIO(sor_path.read_bytes())
         out = self.parser.read(bio)[0]
-        assert out.update_attrs(path=sor_patch.attrs.path).equals(sor_patch)
+        assert out.equals(sor_patch)
 
     def test_get_format_false_for_version_mismatch(self, sor_path):
         """A valid SOR with the wrong map version should not be claimed."""

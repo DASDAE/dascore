@@ -265,7 +265,7 @@ with config_context(patch_history="disabled"):
 assert out.attrs.history == old_history
 ```
 
-`Patch.attrs` only stores non-coordinate metadata. This includes things like network, station, data units, and format-specific fields such as `gauge_length` or `pulse_width`.
+`Patch.attrs` only stores non-coordinate metadata. This includes things like the acquisition key, data units, and observing-system fields such as `gauge_length` or `pulse_width`.
 
 ## Summary
 
@@ -537,7 +537,7 @@ pa = dc.get_example_patch()
 new_data_patch = pa.update(data=pa.data * 10)
 
 # Completely replace the attributes.
-new_attrs_patch = pa.update(attrs=dict(station="TMU"))
+new_attrs_patch = pa.update(attrs=dict(tag="TMU"))
 ```
 
 ## Update attrs
@@ -548,13 +548,13 @@ new_attrs_patch = pa.update(attrs=dict(station="TMU"))
 import dascore as dc
 pa = dc.get_example_patch()
 
-# Update existing attribute 'network' and create new attr 'new_attr'
-pa1 = pa.update_attrs(network='exp1', new_attr=42)
+# Update existing attribute 'acquisition_key' and create new attr 'new_attr'
+pa1 = pa.update_attrs(acquisition_key='EXP1.R2D1..RAW', new_attr=42)
 ```
 
 ```{python}
 #| echo: false
-assert pa1.attrs.network == "exp1"
+assert pa1.attrs.acquisition_key == "EXP1.R2D1..RAW"
 assert pa1.attrs.new_attr == 42
 ```
 

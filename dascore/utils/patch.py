@@ -53,6 +53,9 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
+# Longest repr a single history argument may contribute.
+_MAX_HISTORY_VALUE_LEN = 120
+
 
 def _format_values(val):
     """String formatting for values for history string."""
@@ -72,6 +75,10 @@ def _format_values(val):
         out = "Patch..."
     else:
         out = str(val)
+        if len(out) > _MAX_HISTORY_VALUE_LEN:
+            # An argument with a large repr (an inventory, say) would
+            # otherwise be pasted into the history of every patch it touches.
+            out = f"{type(val).__name__}..."
     return out
 
 
@@ -559,7 +566,7 @@ def get_patch_names(
     # breaks get_type_hints and the API doc renderer.
     patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool | Iterable[dc.Patch],
     prefix="DAS",
-    attrs=("network", "station", "tag"),
+    attrs=("acquisition_key", "tag"),
     coords=("time",),
     sep="__",
     strip_extension=True,
@@ -589,7 +596,7 @@ def get_patch_names(
     The first one, is when a column called "name" already exists. This
     will simply be returned.
 
-    The second is when a column called "path" exists. In this case, the
+    The second is when a column called "source_path" exists. In this case, the
     output will be the file name with the extension removed (if
     strip_extension). The path must use '/' as a delinater.
 
@@ -636,7 +643,10 @@ def get_patch_names(
         ser = path_ser.astype(str)
         split_ser = ser.str.split("/")
         if strip_extension:
-            file_names = [x[-1].split(".")[0] for x in split_ser]
+            # Only the extension: an acquisition_key puts dots in the name
+            # itself, and splitting on the first one would collide every
+            # patch of one source onto a single truncated name.
+            file_names = [x[-1].rsplit(".", 1)[0] for x in split_ser]
         else:
             file_names = [x[-1] for x in split_ser]
         return pd.Series(file_names)
@@ -659,12 +669,12 @@ def get_patch_names(
     # Handle special cases.
     if "name" in col_set:
         return df["name"].astype(str)
-    path_ser = df["path"].astype(str) if "path" in col_set else None
+    path_ser = df["source_path"].astype(str) if "source_path" in col_set else None
     if path_ser is not None:
         # synthetic in-memory identities are not real file names
         usable = path_ser.str.len().gt(0) & ~path_ser.map(is_memory_uri)
         if usable.all():
-            return _get_filename(df["path"], strip_extension)
+            return _get_filename(df["source_path"], strip_extension)
     # Determine the requested fields; absent columns render as empty so
     # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])

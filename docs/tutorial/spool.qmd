@@ -88,7 +88,7 @@ It is best not to delete files once added to a directory managed by DASCore.
 
 ### Path attributes (hive-style directories)
 
-Directory spools parse `key=value` pairs out of the paths inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`network=XX/`), and any segment — including the file name, whose extension is ignored — can hold several separated by `__` (the same separator DASCore's default patch names use). The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory (or file) is how you attach or correct metadata without rewriting data.
+Directory spools parse `key=value` pairs out of the paths inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`acquisition_key=XX.R2D1..RAW/`), and any segment — including the file name, whose extension is ignored — can hold several separated by `__` (the same separator DASCore's default patch names use). The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory (or file) is how you attach or correct metadata without rewriting data.
 
 ```{python}
 import tempfile
@@ -213,7 +213,7 @@ from IPython.display import display
 display(contents.drop(columns=[c for c in contents.columns if c.startswith('_')]))
 ```
 
-The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `path`, `file_format`, and `source_patch_id` are also available for file-backed spools.
+The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `source_path`, `source_format`, and `source_patch_id` are also available for file-backed spools.
 
 # select
 
@@ -235,8 +235,8 @@ import dascore as dc
 # Load a spool which has many diverse patches.
 spool = dc.get_example_spool('diverse_das')
 
-# Only include patches which are in network 'das2' or 'das3'.
-subspool = spool.select(network={'das2', 'das3'})
+# Only include patches from two named data sources.
+subspool = spool.select(acquisition_key={'DAS2.R2D1..RAW', 'DAS3.R2D1..RAW'})
 
 # Only include spools which match some unix-style query on their tags.
 subspool = spool.select(tag='some*')

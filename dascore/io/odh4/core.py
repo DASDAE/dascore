@@ -18,7 +18,6 @@ class ODH4PatchAttrs(dc.PatchAttrs):
     """Patch attributes for ODH4 files."""
 
     gauge_length: float = np.nan
-    gauge_length_units: str = "m"
     scale_factor_to_strain: float = np.nan
 
 

@@ -12,10 +12,11 @@ import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.io.utils import get_attr_names
 from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-DEFAULT_ATTRS = set(PatchAttrs.model_fields)
+DEFAULT_ATTRS = get_attr_names(PatchAttrs)
 
 
 def type_not_supported(vargin):
@@ -208,7 +209,7 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time,distance"
-    out["instrument_id"] = out.get("SystemInfomation.Devices0.SerialNum")
+    out["interrogator.serial_number"] = out.get("SystemInfomation.Devices0.SerialNum")
     # Rename some attributes to preferred names
     d_coord = _get_distance_coord(out)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()

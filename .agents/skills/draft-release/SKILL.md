@@ -80,13 +80,17 @@ git fetch --tags origin
    and diff there rather than dropping the PR. Older PRs predate the headings
    entirely and always need the fallback.
 
-   One-time note for the first release drafted after the changelog was retired:
-   `docs/changelog.qmd` previously accumulated curated entries for unreleased
-   work, and that text is richer than what the PR bodies alone give you for those
-   PRs. Read it before drafting:
+   One-time note, applying only to the first release drafted once
+   `docs/changelog.qmd` is a stub pointing at the releases page. Until then the
+   page still carries its own curated entries and you should read the working
+   copy. Afterwards, those entries — richer than the PR bodies alone for work
+   merged before the template gained its release-note sections — are still in
+   git history. Find the commit that reduced the page to a stub, then read the
+   revision before it:
 
 ```bash
-git show "$(git log -1 --format=%H -- docs/changelog.qmd)^:docs/changelog.qmd"
+git log --oneline -- docs/changelog.qmd
+git show <commit-before-the-stub>:docs/changelog.qmd
 ```
 
    This repo does not use conventional-commit markers, and its

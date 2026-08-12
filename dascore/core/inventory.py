@@ -5,7 +5,7 @@ The inventory extends the StationXML concept with first-class support for
 fiber-optic arrays. It describes the physical optical path (fiber, connectors,
 splices), the geometry, coupling, and annotation tracks along optical
 distance, and the interrogator configurations (acquisitions) that produced
-patches. Patches carry a ``data_source_id``
+patches. Patches carry a ``acquisition_key``
 (``network.fiber_array.location.acquisition``) which, together with time,
 resolves against an inventory.
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import itertools
 import os
-import re
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias, get_args
 from uuid import uuid4
 
@@ -32,7 +32,12 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
-from dascore.utils.misc import is_strictly_monotonic, optional_import
+from dascore.utils.misc import (
+    check_code,
+    is_strictly_monotonic,
+    optional_import,
+    validate_acquisition_key,
+)
 from dascore.utils.models import (
     DateTime64,
     InventoryModel,
@@ -67,29 +72,17 @@ CoordinateLabel = Literal[
 ]
 VALID_COORDINATE_LABELS = get_args(CoordinateLabel)
 
-_CODE_RE = re.compile(r"[A-Za-z0-9-]+")
-_LOCATION_RE = re.compile(r"[A-Za-z0-9-]*")
-
-
-def _check_code(value: str, allow_blank: bool = False) -> str:
-    """Validate a data_source_id code token."""
-    pattern = _LOCATION_RE if allow_blank else _CODE_RE
-    if pattern.fullmatch(value) is None:
-        blank = " (or blank)" if allow_blank else ""
-        msg = f"Invalid code {value!r}; codes use letters, digits, and '-'{blank}."
-        raise InvalidInventoryError(msg)
-    return value
-
-
-# Code tokens used in data_source_id; location codes alone may be blank.
-CodeStr = Annotated[str, AfterValidator(_check_code)]
+# Code tokens used in acquisition_key; location codes alone may be blank.
+# The token rule is shared with PatchAttrs.acquisition_key so a code legal
+# in one is legal in the other.
+CodeStr = Annotated[str, AfterValidator(check_code)]
 # A float which must be finite; nan/inf silently poison downstream math.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 # Sensor orientation, in the ranges seismology already uses.
 Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
 Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
 LocationCodeStr = Annotated[
-    str, AfterValidator(lambda value: _check_code(value, allow_blank=True))
+    str, AfterValidator(lambda value: check_code(value, allow_blank=True))
 ]
 # Stable identifier for a shareable inventory resource.
 ResourceIdStr = Annotated[
@@ -526,15 +519,7 @@ class Geometry(InventoryModel):
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
-        if len(self.distance) < 2:
-            msg = "Geometry requires at least two distance control points."
-            raise InvalidInventoryError(msg)
-        if not np.all(np.isfinite(self.distance)):
-            msg = "Geometry distance values must be finite."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(self.distance, increasing=True):
-            msg = "Geometry distance values must be strictly increasing."
-            raise InvalidInventoryError(msg)
+        _check_control_points(self.distance, "Geometry distance", minimum=2)
         if len(self.coordinates) != len(self.distance):
             msg = "Geometry coordinates and distance must have the same length."
             raise InvalidInventoryError(msg)
@@ -570,6 +555,31 @@ class Geometry(InventoryModel):
                 dist[inside], np.asarray(self.distance), coords[:, dim]
             )
         return out
+
+
+def interval_masks(values, intervals) -> list[np.ndarray]:
+    """
+    Return, per interval, the mask of values that interval covers.
+
+    Coverage is half-open, ``[start, end)``, with one exception: the end of
+    a coverage run belongs to the interval ending there when no half-open
+    interval claims it, so the last point of a run is not left out. Point
+    markers (equal start and end) cover nothing.
+    """
+    values = np.asarray(values, dtype=float)
+    spans = [(lo, hi) for lo, hi in intervals]
+    claimed = np.zeros(len(values), dtype=bool)
+    for lo, hi in spans:
+        if lo < hi:
+            claimed |= (values >= lo) & (values < hi)
+    out = []
+    for lo, hi in spans:
+        if lo >= hi:  # a point marker covers nothing
+            out.append(np.zeros(len(values), dtype=bool))
+            continue
+        mask = (values >= lo) & (values < hi)
+        out.append(mask | ((values == hi) & ~claimed))
+    return out
 
 
 class _IntervalModel(InventoryModel):
@@ -653,18 +663,57 @@ class OpticalPathAnnotation(_IntervalModel):
         default=True, description="Value of the variable over this interval."
     )
 
+    @field_validator("value")
+    @classmethod
+    def _reject_empty_string(cls, value):
+        """An annotation whose value is empty states nothing.
+
+        It would also be indistinguishable from an uncovered channel, since
+        a string coordinate spells absence as the empty string.
+        """
+        if isinstance(value, str) and not value:
+            msg = (
+                "An annotation value may not be the empty string; it would "
+                "state nothing and would read as an uncovered channel."
+            )
+            raise ValueError(msg)
+        return value
+
+
+# The coordinates a DistanceMap may be written in, in preference order.
+DISTANCE_MAP_AXES = ("channel", "instrument_distance")
+
+
+def _check_control_points(values, what: str, minimum: int = 1) -> None:
+    """Check an axis of control points: enough of them, finite, increasing."""
+    if len(values) < minimum:
+        plural = "" if minimum == 1 else "s"
+        msg = f"{what} requires at least {minimum} control point{plural}."
+        raise InvalidInventoryError(msg)
+    if not np.all(np.isfinite(values)):
+        msg = f"{what} values must be finite."
+        raise InvalidInventoryError(msg)
+    if not is_strictly_monotonic(values, increasing=True):
+        msg = f"{what} values must be strictly increasing."
+        raise InvalidInventoryError(msg)
+
 
 class DistanceMap(InventoryModel):
     """
     Measured control-point map from a channel-like coordinate onto optical
     path distance.
 
-    The map is a function, not a roster of existing channels. Exactly one
-    input axis is populated: ``channel`` when the interrogator reports channel
-    numbers, ``instrument_distance`` when it reports its own nominal meters.
-    Values between control points are piecewise-linearly interpolated;
-    channels outside the covered range are undefined (NaN). A single-point
-    map takes its slope from the acquisition's nominal ``spatial_interval``.
+    The map is a function, not a roster of existing channels. It states one
+    set of control points in whichever input coordinates were measured:
+    ``channel`` when the interrogator reports channel numbers,
+    ``instrument_distance`` when it reports its own nominal meters, or both
+    when the same points are known in both, which lets one acquisition
+    serve patches whose axes differ. Values between control points are
+    piecewise-linearly interpolated; channels outside the covered range are
+    undefined (NaN). A single-point map states an origin and takes its
+    slope from the axis it is read on: the acquisition's nominal
+    ``spatial_interval`` on the channel axis, and one meter of path per
+    interrogator meter on the instrument_distance axis.
     """
 
     channel: tuple[float, ...] | None = Field(
@@ -676,59 +725,96 @@ class DistanceMap(InventoryModel):
         description="Interrogator-reported nominal distances; strictly increasing.",
     )
     distance: tuple[float, ...] = Field(
-        description="Optical path distances at the control points; increasing.",
+        description=(
+            "Optical path distances at the control points; strictly increasing."
+        ),
     )
 
     @model_validator(mode="after")
     def _validate_map(self) -> Self:
-        """Enforce one input axis and paired increasing control points."""
-        inputs = [self.channel, self.instrument_distance]
-        populated = [x for x in inputs if x is not None]
-        if len(populated) != 1:
+        """Enforce paired, increasing control points on every input axis."""
+        if not self.axes:
             msg = (
-                "DistanceMap requires exactly one input axis: "
+                "DistanceMap requires at least one input axis: "
                 "channel or instrument_distance."
             )
             raise InvalidInventoryError(msg)
-        source = populated[0]
-        if len(source) != len(self.distance):
-            msg = "DistanceMap input and distance must have the same length."
-            raise InvalidInventoryError(msg)
-        if len(source) < 1:
-            msg = "DistanceMap requires at least one control point."
-            raise InvalidInventoryError(msg)
-        if not (np.all(np.isfinite(source)) and np.all(np.isfinite(self.distance))):
-            msg = "DistanceMap control points must be finite."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(source, increasing=True):
-            msg = "DistanceMap input values must be strictly increasing."
-            raise InvalidInventoryError(msg)
-        if not is_strictly_monotonic(self.distance, increasing=True):
-            msg = "DistanceMap distance values must be strictly increasing."
-            raise InvalidInventoryError(msg)
+        _check_control_points(self.distance, "DistanceMap distance")
+        for axis in self.axes:
+            source = getattr(self, axis)
+            if len(source) != len(self.distance):
+                msg = (
+                    f"DistanceMap {axis} and distance must have the same "
+                    "length; they are the same control points."
+                )
+                raise InvalidInventoryError(msg)
+            _check_control_points(source, f"DistanceMap {axis}")
+        self._check_axes_agree()
         return self
 
+    def _check_axes_agree(self) -> None:
+        """
+        Check that two input axes describe one interrogator.
+
+        An interrogator samples at a fixed spacing, so its channel numbers
+        and its own meters are related by a constant. Axes which imply a
+        varying spacing describe no instrument, and reading the map on one
+        axis would then contradict reading it on the other.
+        """
+        if len(self.axes) < 2 or len(self.distance) < 3:
+            return
+        channel = np.asarray(self.channel, dtype=float)
+        instrument = np.asarray(self.instrument_distance, dtype=float)
+        ratios = np.diff(instrument) / np.diff(channel)
+        if not np.allclose(ratios, ratios[0], rtol=1e-6, atol=0):
+            msg = (
+                "DistanceMap channel and instrument_distance imply a channel "
+                f"spacing which varies along the fiber ({ratios.min()} to "
+                f"{ratios.max()} interrogator meters per channel); one "
+                "interrogator samples at a fixed spacing."
+            )
+            raise InvalidInventoryError(msg)
+
     @property
-    def source_values(self) -> tuple[float, ...]:
-        """The populated input axis values."""
-        out = self.channel if self.channel is not None else self.instrument_distance
-        assert out is not None  # guaranteed by the model validator
+    def axes(self) -> tuple[str, ...]:
+        """The input axes this map is written in, in preference order."""
+        return tuple(x for x in DISTANCE_MAP_AXES if getattr(self, x) is not None)
+
+    def source_values(self, axis: str | None = None) -> tuple[float, ...]:
+        """Return the control points on one input axis."""
+        axis = self.axes[0] if axis is None else axis
+        if axis not in DISTANCE_MAP_AXES:
+            msg = (
+                f"{axis!r} is not a DistanceMap input axis; the axes are "
+                f"{DISTANCE_MAP_AXES}."
+            )
+            raise InvalidInventoryError(msg)
+        out = getattr(self, axis)
+        if out is None:
+            msg = f"This DistanceMap is not written in {axis!r}; it has {self.axes}."
+            raise InvalidInventoryError(msg)
         return out
 
-    def map_to_distance(self, values, slope: float | None = None) -> np.ndarray:
+    def map_to_distance(
+        self, values, axis: str | None = None, slope: float | None = None
+    ) -> np.ndarray:
         """
         Map channel-like values onto optical path distance.
 
         Parameters
         ----------
         values
-            Channel numbers or instrument distances (per the populated axis).
+            Channel numbers or instrument distances.
+        axis
+            The input axis ``values`` are on; the map's first axis by
+            default.
         slope
-            Distance per input unit, used only for single-point maps
-            (normally the acquisition's nominal ``spatial_interval``).
+            Distance per input unit, used only for single-point maps. The
+            caller supplies it in the units of that axis; see
+            ``Acquisition.channel_to_distance``.
         """
         vals = np.atleast_1d(np.asarray(values, dtype=float))
-        source = np.asarray(self.source_values, dtype=float)
+        source = np.asarray(self.source_values(axis), dtype=float)
         dist = np.asarray(self.distance, dtype=float)
         if len(source) == 1:
             if slope is None:
@@ -749,8 +835,10 @@ class Acquisition(TimeRangedModel):
 
     ``(location_code, code)`` pairs are unique within a ``FiberArray`` for
     overlapping time ranges. The ``location_code`` names the optical path
-    lineage this acquisition interrogates. ``start_distance`` and
-    ``distance_map`` are mutually exclusive channel-resolution mechanisms.
+    lineage this acquisition interrogates. The ``distance_map`` is the one
+    channel-resolution mechanism: a single control point states an origin
+    (and, on the channel axis, takes ``spatial_interval`` as its slope),
+    and more points describe a measured, bending relationship.
     On export to FDSN DAS metadata, ``extra_fields`` maps to native_headers.
     """
 
@@ -809,23 +897,15 @@ class Acquisition(TimeRangedModel):
         default=None,
         description=(
             "Nominal spatial sampling interval between channels in meters. "
-            "Participates in channel resolution only as the affine slope, or "
-            "as the slope of a single-point distance_map."
-        ),
-    )
-    start_distance: FiniteFloat | None = Field(
-        default=None,
-        description=(
-            "Optical path distance corresponding to channel position 0. "
-            "Mutually exclusive with distance_map."
+            "Participates in channel resolution only as the slope of a "
+            "single-point distance_map read on the channel axis."
         ),
     )
     distance_map: DistanceMap | None = Field(
         default=None,
         description=(
-            "Measured map from interrogator-reported channels or distances "
-            "onto optical path distance. Mutually exclusive with "
-            "start_distance."
+            "Map from interrogator-reported channels or distances onto "
+            "optical path distance."
         ),
     )
     closed_fiber_loop: bool = Field(
@@ -833,36 +913,45 @@ class Acquisition(TimeRangedModel):
         description="True when the interrogator is attached to both path ends.",
     )
 
-    @model_validator(mode="after")
-    def _check_resolution_mechanism(self) -> Self:
-        """start_distance and distance_map are mutually exclusive."""
-        if self.start_distance is not None and self.distance_map is not None:
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_start_distance(cls, data):
+        """Explain the removed affine form rather than 'extra inputs'."""
+        if isinstance(data, Mapping) and "start_distance" in data:
             msg = (
-                "Acquisition defines at most one channel-resolution mechanism: "
-                "start_distance and distance_map are mutually exclusive."
+                "Acquisition no longer takes start_distance; the distance_map "
+                "is the one channel-resolution mechanism. Write "
+                f"start_distance: {data['start_distance']} as distance_map: "
+                f"{{channel: [0], distance: [{data['start_distance']}]}}, which "
+                "states the same origin and takes spatial_interval as its slope."
             )
             raise InvalidInventoryError(msg)
-        return self
+        return data
 
-    def channel_to_distance(self, values) -> np.ndarray:
+    def channel_to_distance(self, values, axis: str | None = None) -> np.ndarray:
         """
         Map channel-like patch coordinates onto optical path distance.
 
-        Uses the measured ``distance_map`` when present, else the affine
-        ``start_distance`` + ``spatial_interval`` form.
+        Parameters
+        ----------
+        values
+            The interrogator-reported coordinate to place on the path.
+        axis
+            Which of the map's input axes ``values`` are on; the map's
+            first axis by default.
         """
-        if self.distance_map is not None:
-            return self.distance_map.map_to_distance(
-                values, slope=self.spatial_interval
-            )
-        if self.start_distance is None or self.spatial_interval is None:
+        if (dist_map := self.distance_map) is None:
             msg = (
-                "Acquisition defines no channel-resolution mechanism; set "
-                "start_distance and spatial_interval, or a distance_map."
+                f"Acquisition {self.code!r} defines no distance_map, so its "
+                "channels cannot be placed on the optical path."
             )
             raise InvalidInventoryError(msg)
-        vals = np.atleast_1d(np.asarray(values, dtype=float))
-        return self.start_distance + vals * self.spatial_interval
+        axis = dist_map.axes[0] if axis is None else axis
+        # The slope carries the units of the axis being read: meters of path
+        # per channel on the channel axis, and per interrogator meter --
+        # nominally one -- on the instrument_distance axis.
+        slope = self.spatial_interval if axis == "channel" else 1.0
+        return dist_map.map_to_distance(values, axis=axis, slope=slope)
 
 
 def _overlapping_epochs(items, key) -> list[tuple]:
@@ -879,6 +968,14 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 
 _MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
+
+# Names an annotation group may not take: a group becomes a patch coordinate
+# at enrichment, where it would shadow one of these.
+RESERVED_GROUP_NAMES = frozenset(
+    {"time", "distance", "channel", "instrument_distance"}
+    | {"optical_components", "geometry", "coupling", "annotations"}
+    | set(VALID_COORDINATE_LABELS)
+)
 
 
 def _times_equal(time1, time2) -> bool:
@@ -978,8 +1075,10 @@ class OpticalPath(TimeRangedModel):
         """
         Return CRS coordinates at the requested optical distances.
 
-        Uncovered distance returns NaN rows. Segment coverage is half-open;
-        the outermost covered endpoint of the geometry track is included.
+        Uncovered distance returns NaN rows. Segment coverage is half-open,
+        with the end of each coverage run included: a distance on a
+        segment's last control point belongs to that segment unless another
+        segment claims it.
         """
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         if not self.geometry:
@@ -988,17 +1087,16 @@ class OpticalPath(TimeRangedModel):
         if len(dims) > 1:
             raise InvalidInventoryError(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
         out = np.full((len(dist), dims.pop()), np.nan)
-        for segment in self.geometry:
-            seg_coords = segment.interpolate(dist)
-            filled = ~np.isnan(seg_coords[:, 0])
-            out[filled] = seg_coords[filled]
-        # The outermost endpoint of the geometry coverage domain is included.
-        outer = max(seg.interval[1] for seg in self.geometry)
-        at_outer = dist == outer
-        if np.any(at_outer):
-            segment = max(self.geometry, key=lambda s: s.interval[1])
-            coords = np.asarray(segment.coordinates, dtype=float)
-            out[at_outer] = coords[-1]
+        masks = interval_masks(dist, [x.interval for x in self.geometry])
+        for segment, mask in zip(self.geometry, masks, strict=True):
+            if not np.any(mask):
+                continue
+            # interpolate() reports its own coverage, which excludes the
+            # run end the mask includes, so fill that from the last point.
+            seg_coords = segment.interpolate(dist[mask])
+            last = np.asarray(segment.coordinates, dtype=float)[-1]
+            seg_coords[np.isnan(seg_coords[:, 0])] = last
+            out[mask] = seg_coords
         return out
 
     def check(self, tolerance: float = 1e-9) -> Self:
@@ -1047,6 +1145,12 @@ class OpticalPath(TimeRangedModel):
         for annotation in self.annotations:
             groups.setdefault(annotation.group, []).append(annotation)
         errors = []
+        for group in sorted(set(groups) & RESERVED_GROUP_NAMES):
+            errors.append(
+                f"Annotation group {group!r} is a reserved name; a group "
+                "becomes a coordinate and cannot shadow a structural "
+                "coordinate, a typed track, or a coordinate label."
+            )
         for group, items in groups.items():
             kinds = {_annotation_kind(x.value) for x in items}
             if len(kinds) > 1:
@@ -1516,7 +1620,7 @@ def _drop_empty(value, _in_extras=False):
 
 
 class ResolvedContext(NamedTuple):
-    """The inventory objects a data_source_id + time resolve to."""
+    """The inventory objects an acquisition_key + time resolve to."""
 
     network: Network
     fiber_array: FiberArray
@@ -1750,30 +1854,34 @@ class Inventory(InventoryModel):
                     check_width(len(channel.coordinates), what)
         return errors
 
-    def resolve(self, data_source_id: str, time=None) -> ResolvedContext:
+    def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
         """
-        Resolve a data_source_id (and time) to its inventory context.
+        Resolve an acquisition_key (and time) to its inventory context.
 
         Parameters
         ----------
-        data_source_id
+        acquisition_key
             A dotted ``network.fiber_array.location.acquisition`` identifier.
         time
             The instant to resolve at; required whenever any epoch level has
             more than one candidate.
         """
-        parts = data_source_id.split(".")
-        if len(parts) != 4:
-            msg = (
-                f"data_source_id {data_source_id!r} must have exactly four "
-                "dot-separated parts."
-            )
+        # The same validator PatchAttrs uses, so a key legal in one is legal
+        # in the other and a malformed one is told apart from an unknown one.
+        # It accepts the empty string, which is how a patch spells "no
+        # identity" -- legal to carry, but nothing to resolve.
+        try:
+            acquisition_key = validate_acquisition_key(acquisition_key)
+        except ValueError as error:
+            raise InvalidInventoryError(str(error)) from error
+        if not acquisition_key:
+            msg = "Cannot resolve an empty acquisition_key; it names no entry."
             raise InvalidInventoryError(msg)
-        net_code, array_code, location, acq_code = parts
+        net_code, array_code, location, acq_code = acquisition_key.split(".")
 
         def exactly_one(matches, kind):
             if len(matches) != 1:
-                msg = f"{data_source_id!r} resolves to {len(matches)} {kind}."
+                msg = f"{acquisition_key!r} resolves to {len(matches)} {kind}."
                 raise InvalidInventoryError(msg)
             return matches[0]
 
@@ -1811,7 +1919,7 @@ class Inventory(InventoryModel):
             if x.location_code == location and x.is_effective_at(time)
         ]
         if len(paths) > 1:
-            msg = f"{data_source_id!r} resolves to {len(paths)} optical paths."
+            msg = f"{acquisition_key!r} resolves to {len(paths)} optical paths."
             raise InvalidInventoryError(msg)
         path = paths[0] if paths else None
         return ResolvedContext(network, array, acqs[0], path)

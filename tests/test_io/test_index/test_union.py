@@ -73,10 +73,10 @@ class TestMemoryUnion:
         sp1 = dc.get_example_spool("random_das")
         sp2 = dc.get_example_spool("diverse_das")
         combined = sp1 + sp2
-        selected = combined.select(network="das2")
+        selected = combined.select(acquisition_key="DAS2.*")
         assert len(selected)
         for patch in selected:
-            assert patch.attrs.network == "das2"
+            assert patch.attrs.acquisition_key == "DAS2.R2D1..RAW"
 
     def test_non_spool_add(self):
         """Adding a non-spool returns NotImplemented semantics."""
@@ -99,7 +99,7 @@ class TestMemoryUnion:
     def test_selection_carries_by_membership(self):
         """A selected input contributes only its selected rows."""
         sp2 = dc.get_example_spool("diverse_das")
-        sub = sp2.select(network="das2")
+        sub = sp2.select(acquisition_key="DAS2.*")
         combined = dc.get_example_spool("random_das") + sub
         assert len(combined) == len(dc.get_example_spool("random_das")) + len(sub)
 
@@ -225,7 +225,7 @@ class TestPatchIdentity:
         """Removing a live source removes it from the store as well."""
         patch = dc.get_example_patch()
         catalog = PatchCatalog.from_patches([patch])
-        path = catalog.to_df().iloc[0]["path"]
+        path = catalog.to_df().iloc[0]["source_path"]
         catalog.remove([path])
         assert len(catalog.to_df()) == 0
         # A pickled catalog rebuilds from the registry; the removed patch
@@ -303,7 +303,7 @@ class TestExportPushdown:
         assert len(combined) == 2
         # the file-backed member still loads (its path was made absolute)
         contents = combined.get_contents()
-        file_row = contents[contents["path"].str.endswith("a.h5")]
+        file_row = contents[contents["source_path"].str.endswith("a.h5")]
         assert len(file_row) == 1
         loaded = [p for p in combined]
         assert len(loaded) == 2

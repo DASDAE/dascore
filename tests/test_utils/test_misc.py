@@ -18,6 +18,7 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
+    _get_install_name,
     _iter_filesystem,
     _locked,
     _spool_map,
@@ -419,6 +420,15 @@ class TestAllDiffsCloseEnough:
         assert not all_diffs_close_enough(diffs)
 
 
+def _raise_error(error):
+    """Return a function which raises error when called."""
+
+    def _func(*args, **kwargs):
+        raise error
+
+    return _func
+
+
 class TestOptionalImport:
     """Ensure the optional import works."""
 
@@ -438,6 +448,56 @@ class TestOptionalImport:
         """If on_missing == "ignore" none is returned."""
         out = optional_import("boblib4", on_missing="ignore")
         assert out is None
+
+    def test_message_has_install_instructions(self, monkeypatch):
+        """The error should say how to install the package, not the module."""
+        error = ModuleNotFoundError("No module named 'google'", name="google")
+        monkeypatch.setattr(
+            "importlib.import_module", _raise_error(error), raising=True
+        )
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            optional_import("google.protobuf.descriptor_pb2")
+        msg = str(exc_info.value)
+        assert "pip install protobuf" in msg
+        assert "uv pip install protobuf" in msg
+        assert exc_info.value.install_name == "protobuf"
+        assert exc_info.value.__cause__ is error
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            # An installed package which imports something missing.
+            ModuleNotFoundError("No module named 'bob'", name="bob"),
+            # An installed package raising from its own __init__, either
+            # unnamed or naming itself.
+            ImportError("dascore.core requires the C extension"),
+            ImportError("dascore.core is broken", name="dascore.core"),
+        ],
+    )
+    def test_broken_install_gives_no_install_advice(self, monkeypatch, error):
+        """An import failing inside an installed package isn't fixed by install."""
+        monkeypatch.setattr(
+            "importlib.import_module", _raise_error(error), raising=True
+        )
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            optional_import("dascore.core")
+        msg = str(exc_info.value)
+        assert "could not be imported" in msg
+        assert str(error) in msg
+        assert "pip install" not in msg
+        assert exc_info.value.install_name is None
+        assert exc_info.value.__cause__ is error
+
+
+class TestGetInstallName:
+    """Tests for mapping import names to installable package names."""
+
+    def test_install_names(self):
+        """Sub-modules resolve to the package which provides them."""
+        assert _get_install_name("xarray") == "xarray"
+        assert _get_install_name("dascore.utils.misc") == "dascore"
+        assert _get_install_name("google.protobuf.message") == "protobuf"
+        assert _get_install_name("yaml") == "pyyaml"
 
 
 class TestGetStencilCoefficients:

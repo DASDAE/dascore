@@ -89,7 +89,7 @@ class TestHelpers:
             PlanResolver(
                 token="x",
                 dim="time",
-                member_rows=pd.DataFrame({"path": []}),
+                member_rows=pd.DataFrame({"source_path": []}),
                 loader=None,
                 merge_kwargs={},
             )

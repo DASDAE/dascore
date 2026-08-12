@@ -21,7 +21,6 @@ class GDRPatchAttrs(dc.PatchAttrs):
     """Patch attrs for GDR files."""
 
     gauge_length: float
-    gauge_length_units: str
     project_number: str = ""
 
 

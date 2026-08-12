@@ -283,7 +283,7 @@ class TestCount:
 
     def test_len_does_not_realize(self, diverse_catalog, monkeypatch):
         """A cold len() must not pivot coordinates or fetch the relation."""
-        catalog = diverse_catalog.select(network="das2")
+        catalog = diverse_catalog.select(acquisition_key="DAS2.*")
         fresh = catalog._view(catalog._queries, catalog._residuals)
 
         def _boom(self):

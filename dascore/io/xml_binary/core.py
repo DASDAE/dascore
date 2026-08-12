@@ -19,9 +19,8 @@ from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
-    pulse_width_ns: float = np.nan
+    pulse_width: float = np.nan
     gauge_length: float = np.nan
-    instrument_id: UTF8Str = ""
     zone_name: UTF8Str = ""
 
 

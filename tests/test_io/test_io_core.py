@@ -31,7 +31,9 @@ from dascore.exceptions import (
 from dascore.io.core import (
     FiberIO,
     _FiberIOManager,
+    _get_missing_install_name,
     _get_reloadable_source_path,
+    _handle_missing_optionals,
     _reinit_manager_lock,
     _resolve_read_spool,
     _scan_result_to_summary,
@@ -41,7 +43,7 @@ from dascore.io.core import (
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import build_patches, get_exact_coord
+from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
@@ -1106,8 +1108,10 @@ class TestScan:
         path.write_text("placeholder")
 
         msg = "found files that can be read if additional packages"
-        with pytest.raises(MissingOptionalDependencyError, match=msg):
+        with pytest.raises(MissingOptionalDependencyError, match=msg) as exc_info:
             dc.scan(path)
+        # The message should say how to install the missing package.
+        assert "pip install not_optional_pkg" in str(exc_info.value)
 
     def test_scan_missing_optional_dependency_warns_with_other_outputs(self, tmp_path):
         """Scan should warn if optional deps are missing but other files load."""
@@ -1611,6 +1615,39 @@ class TestGetSupportedIOTable:
         assert len(result_df) > 0
 
 
+class TestMissingInstallName:
+    """Tests for guessing the package to install from a dependency error."""
+
+    def test_name_sources(self):
+        """The name comes from the attr, the module, or the legacy message."""
+        errors = [
+            MissingOptionalDependencyError("blah", install_name="protobuf"),
+            MissingOptionalDependencyError("blah", name="google.protobuf"),
+            MissingOptionalDependencyError("protobuf is not installed but..."),
+        ]
+        assert [_get_missing_install_name(x) for x in errors] == ["protobuf"] * 3
+
+    def test_unidentifiable_package(self):
+        """Arbitrary messages should not be mistaken for package names."""
+        error = MissingOptionalDependencyError("Optional dependency foo is missing")
+        assert _get_missing_install_name(error) == ""
+        assert _get_missing_install_name(MissingOptionalDependencyError()) == ""
+        # Subclasses which skip the init still have an install name.
+        assert MissingOptionalDependencyError.install_name is None
+
+    def test_message_omits_unknown_packages(self):
+        """Only identified packages belong in the install command."""
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            _handle_missing_optionals(0, {"": 2, "segyio": 1, "protobuf": 3})
+        msg = str(exc_info.value)
+        assert "unknown (2 files)" in msg
+        assert "pip install protobuf segyio" in msg
+        # Nothing should be recommended when no package was identified.
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            _handle_missing_optionals(0, {"": 2})
+        assert "pip install" not in str(exc_info.value)
+
+
 class TestIOCoreCoverageEdges:
     """Remaining io.core resolution/robustness branches."""
 
@@ -1673,3 +1710,58 @@ class TestIOCoreCoverageEdges:
         bad.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 256)
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(bad)
+
+
+class TestConvertAttrUnits:
+    """Readers spend a file's unit declaration at the parse boundary."""
+
+    def test_converts_and_drops_units(self):
+        """The companion attr is consumed, the value converted."""
+        attrs = {"gauge_length": 100.0, "gauge_length_units": "cm"}
+        out = convert_attr_units(attrs, "gauge_length", "m")
+        assert out["gauge_length"] == 1.0
+        assert "gauge_length_units" not in out
+
+    def test_documented_units(self):
+        """A format whose units live in the key name states them itself."""
+        attrs = {"pulse_width": 10.0}
+        out = convert_attr_units(attrs, "pulse_width", "s", from_units="ns")
+        assert out["pulse_width"] == pytest.approx(1e-8)
+
+    def test_declared_units_win(self):
+        """A file which states its units is believed over the default."""
+        attrs = {"pulse_width": 10.0, "pulse_width_units": "us"}
+        out = convert_attr_units(attrs, "pulse_width", "s", from_units="ns")
+        assert out["pulse_width"] == pytest.approx(1e-5)
+
+    def test_missing_units_keeps_value(self):
+        """With no declaration the format's documented default stands."""
+        assert convert_attr_units({"gauge_length": 5.0}, "gauge_length", "m") == {
+            "gauge_length": 5.0
+        }
+
+    def test_missing_value_is_noop(self):
+        """A file which omits the measure gets no measure."""
+        assert (
+            convert_attr_units({"gauge_length_units": "m"}, "gauge_length", "m") == {}
+        )
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [
+            {"gauge_length": 5.0, "gauge_length_units": "not-a-unit"},
+            {"gauge_length": 5.0, "gauge_length_units": "s"},
+            {"gauge_length": "ten", "gauge_length_units": "m"},
+        ],
+    )
+    def test_unusable_conversion_drops_value(self, attrs):
+        """
+        A value whose stated units cannot be used has an unknown scale.
+
+        Keeping the number would pass it off as canonical: a gauge length
+        of "5 s" would be read downstream as 5 meters. Vendor headers do
+        carry junk, so this warns rather than refusing the file.
+        """
+        with pytest.warns(UserWarning, match="Dropping gauge_length"):
+            out = convert_attr_units(attrs, "gauge_length", "m")
+        assert "gauge_length" not in out

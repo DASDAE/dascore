@@ -118,14 +118,14 @@ class TestMergePlan:
         assert len(plan.outputs) > 1
         # every output's members share that output's group attr values
         merged = plan.members.merge(
-            diverse_flat[["_patch_id", "network", "station", "tag"]],
+            diverse_flat[["_patch_id", "acquisition_key", "tag"]],
             on="_patch_id",
         ).merge(
-            plan.outputs[["output_id", "network", "station", "tag"]],
+            plan.outputs[["output_id", "acquisition_key", "tag"]],
             on="output_id",
             suffixes=("_src", "_out"),
         )
-        for col in ("network", "station", "tag"):
+        for col in ("acquisition_key", "tag"):
             src, out = merged[f"{col}_src"], merged[f"{col}_out"]
             equal = (src == out) | (src.isnull() & out.isnull())
             assert equal.all()
@@ -267,32 +267,33 @@ class TestGroupParameter:
     """Group attrs partition instead of raising."""
 
     @pytest.fixture(scope="class")
-    def two_station_flat(self):
-        """Contiguous patches from two stations."""
+    def two_source_flat(self):
+        """Contiguous patches from two data sources."""
         t0 = np.datetime64("2020-01-01", "ns")
         p1 = dc.get_example_patch(time_min=t0)
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
-        p3 = p1.update_attrs(station="XX2")
-        p4 = p2.update_attrs(station="XX2")
+        p3 = p1.update_attrs(acquisition_key="XX2.R2D1..RAW")
+        p4 = p2.update_attrs(acquisition_key="XX2.R2D1..RAW")
         return _flat([p1, p2, p3, p4])
 
-    def test_station_partitions(self, two_station_flat):
-        """Different stations produce separate outputs, no error."""
-        plan = build_chunk_plan(two_station_flat, time=None)
+    def test_source_partitions(self, two_source_flat):
+        """Different data sources produce separate outputs, no error."""
+        plan = build_chunk_plan(two_source_flat, time=None)
         assert len(plan.outputs) == 2
-        assert set(plan.outputs["station"]) == set(two_station_flat["station"])
+        expected = set(two_source_flat["acquisition_key"])
+        assert set(plan.outputs["acquisition_key"]) == expected
 
-    def test_group_override(self, two_station_flat):
-        """An explicit empty group means station conflicts raise."""
-        with pytest.raises(CoordMergeError, match="station"):
-            build_chunk_plan(two_station_flat, time=None, group=())
+    def test_group_override(self, two_source_flat):
+        """An explicit empty group means acquisition_key conflicts raise."""
+        with pytest.raises(CoordMergeError, match="acquisition_key"):
+            build_chunk_plan(two_source_flat, time=None, group=())
 
-    def test_config_group(self, two_station_flat):
+    def test_config_group(self, two_source_flat):
         """Config groupby_attrs drives the default partitioning."""
-        with dc.config_context(groupby_attrs=("network",)):
-            with pytest.raises(CoordMergeError, match="station"):
-                build_chunk_plan(two_station_flat, time=None)
+        with dc.config_context(groupby_attrs=("tag",)):
+            with pytest.raises(CoordMergeError, match="acquisition_key"):
+                build_chunk_plan(two_source_flat, time=None)
 
 
 class TestDeterminism:

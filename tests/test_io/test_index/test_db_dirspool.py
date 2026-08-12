@@ -41,7 +41,7 @@ class TestDBDirectorySpools:
     def test_contents_columns(self, db_spool):
         """The contents df carries what the spool machinery needs."""
         df = db_spool.get_contents()
-        for col in ("path", "time_min", "time_max", "time_step", "dims"):
+        for col in ("source_path", "time_min", "time_max", "time_step", "dims"):
             assert col in df.columns
 
     def test_load_patches(self, db_spool):
