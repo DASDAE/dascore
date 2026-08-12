@@ -57,6 +57,18 @@ PLAN_SCHEME = "plan://"
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
 
 
+def _stated_units(value) -> str | None:
+    """Return a unit string, or None when the row states none.
+
+    Row values arrive from dataframes, so an absent unit is NaN rather
+    than None — and NaN never equals itself, which would make an unstated
+    unit look like a mismatch.
+    """
+    if value is None or value == "" or pd.isnull(value):
+        return None
+    return str(value)
+
+
 def _source_units_column(name: str) -> str:
     """Return the private column recording a member's own unit spelling.
 
@@ -404,8 +416,10 @@ class PlanResolver(PatchResolver):
             # trim the wrong physical interval, so it is dropped (hints
             # are optional — slower, never wrong) and the exact trim is
             # applied above in plan units.
-            plan_units = kwargs.get(f"_{self.dim}_units")
-            source_units = kwargs.get(_source_units_column(self.dim), plan_units)
+            plan_units = _stated_units(kwargs.get(f"_{self.dim}_units"))
+            source_units = _stated_units(
+                kwargs.get(_source_units_column(self.dim), plan_units)
+            )
             if plan_units is not None and source_units != plan_units:
                 for suffix in ("_min", "_max", "_step"):
                     trim.pop(f"{self.dim}{suffix}", None)
@@ -426,8 +440,8 @@ class PlanResolver(PatchResolver):
         """
         if self.mode == "identity":
             return patch
-        plan_units = kwargs.get(f"_{self.dim}_units")
-        if plan_units is None or pd.isnull(plan_units) or plan_units == "":
+        plan_units = _stated_units(kwargs.get(f"_{self.dim}_units"))
+        if plan_units is None:
             return patch
         coord = patch.coords.coord_map.get(self.dim)
         current = getattr(coord, "units", None) if coord is not None else None

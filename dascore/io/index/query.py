@@ -162,7 +162,23 @@ def _range_bounds(
             lo = val
         else:
             hi = val
-    if kind in target_kinds and lo is not None and hi is not None and lo > hi:
+    # A coordinate range mixing a bare bound with a unit-bearing one holds
+    # magnitudes in two frames of reference — the bare bound means the
+    # stored coordinate's units, the other its own base unit — so the two
+    # are not comparable until each is expressed in the unit of the
+    # definition being tested, which happens per stored unit in
+    # build_coord_clause. Attr ranges convert both bounds to the column's
+    # one canonical unit above, so they stay comparable here.
+    comparable = (
+        target_units is not _UNSET or len({x.units is None for x in typed_values}) < 2
+    )
+    if (
+        kind in target_kinds
+        and comparable
+        and lo is not None
+        and hi is not None
+        and lo > hi
+    ):
         msg = f"Range {value!r} has lo > hi after coercion."
         raise InvalidSpoolQueryError(msg)
     return kind, lo, hi, typed_values

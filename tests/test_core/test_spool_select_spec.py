@@ -443,6 +443,24 @@ class TestUnitCanonicalSelection:
         via = dc.spool([ft_patch]).select(distance=mixed)[0]
         assert via.get_coord("distance") == direct.get_coord("distance")
 
+    def test_mixed_bound_ordering_is_checked_after_conversion(self, ft_patch):
+        """(100, 50*m) is a valid interval once both bounds speak feet.
+
+        The bare bound means the coordinate's units and the quantity
+        means its own, so comparing their raw magnitudes rejects a range
+        the patch accepts.
+        """
+        value = (100, 50 * m)
+        direct = ft_patch.select(distance=value)
+        via = dc.spool([ft_patch]).select(distance=value)[0]
+        assert via.get_coord("distance") == direct.get_coord("distance")
+
+    def test_reversed_ranges_still_raise(self, ft_patch):
+        """Bounds in one frame of reference keep their ordering check."""
+        for value in ((60, 20), (60 * m, 20 * m)):
+            with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
+                len(dc.spool([ft_patch]).select(distance=value))
+
     def test_chunk_of_selected_view_converts_plan(self, ft_patch):
         """Chunking after a quantity select trims the converted interval."""
         sel = dc.spool([ft_patch]).select(distance=(20 * m, 60 * m))

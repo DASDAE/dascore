@@ -268,6 +268,11 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     unit_col = f"_{name}_units"
     if unit_col not in df.columns:
         return df
+    # Only numeric envelopes are stored per spelling and so need this;
+    # time-like ones are canonical nanoseconds whatever unit the
+    # coordinate names, and converting them as floats would raise.
+    if not pd.api.types.is_numeric_dtype(df[f"{name}_min"]):
+        return df
     units = df[unit_col]
     present = units.notna() & (units != "")
     distinct = set(units[present])

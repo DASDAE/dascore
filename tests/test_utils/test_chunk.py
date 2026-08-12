@@ -11,7 +11,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
-from dascore.utils.chunk_plan import build_chunk_plan
+from dascore.utils.chunk_plan import _normalize_chunk_units, build_chunk_plan
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")
@@ -350,6 +350,35 @@ class TestPlanMembers:
         )
         assert len(plan.outputs) == len(df)
         assert not plan.members["_modified"].any()
+
+
+class TestNormalizeChunkUnits:
+    """Only numeric envelopes are re-spelled to one unit."""
+
+    def test_time_like_envelopes_pass_through(self):
+        """Time envelopes are canonical ns whatever unit the coord names.
+
+        Converting them as floats would raise, and there is nothing to
+        normalize: the magnitudes do not depend on the spelling.
+        """
+        df = pd.DataFrame(
+            {
+                "time_min": [
+                    np.datetime64("2020-01-01T00:00:00"),
+                    np.datetime64("2020-01-01T00:00:10"),
+                ],
+                "time_max": [
+                    np.datetime64("2020-01-01T00:00:09"),
+                    np.datetime64("2020-01-01T00:00:19"),
+                ],
+                "time_step": [np.timedelta64(1, "s")] * 2,
+                "_time_units": ["s", "ms"],
+                "_patch_id": [1, 2],
+            }
+        )
+        out = _normalize_chunk_units(df, "time")
+        assert out["time_min"].tolist() == df["time_min"].tolist()
+        assert out["_time_units"].tolist() == ["s", "ms"]
 
 
 class TestQuantityChunkValues:
