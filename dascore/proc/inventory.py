@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sized
-from typing import Literal, get_args
+from collections.abc import Sequence, Sized
+from typing import Any, Literal, get_args
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import (
@@ -163,6 +164,120 @@ def _attr_owner(context, interrogator, name):
     prefix, _, field = name.rpartition(".")
     owner = interrogator if prefix == "interrogator" else context.acquisition
     return owner, field
+
+
+def _epoch_bounds(inventory, acquisition_key: Sequence[str]) -> np.ndarray:
+    """
+    Return the instants at which resolving one key can change its answer.
+
+    Every epoch bound along the key's branch, so two times falling between
+    the same pair of them resolve identically at every level and one
+    resolution serves both.
+    """
+    net_code, array_code, location, acq_code = acquisition_key
+    times = []
+    for network in inventory.networks:
+        if network.code != net_code:
+            continue
+        times += [network.start_time, network.end_time]
+        for array in network.fiber_arrays:
+            if array.code != array_code:
+                continue
+            times += [array.start_time, array.end_time]
+            times += [
+                x
+                for acq in array.acquisitions
+                if acq.code == acq_code and acq.location_code == location
+                for x in (acq.start_time, acq.end_time)
+            ]
+            times += [
+                x
+                for path in array.optical_paths
+                if path.location_code == location
+                for x in (path.start_time, path.end_time)
+            ]
+    stamps = [x for x in times if not np.isnat(x)]
+    return np.unique(np.array(stamps, dtype="datetime64[ns]"))
+
+
+def resolve_contexts(inventory, keys, starts, ends) -> np.ndarray:
+    """
+    Resolve index rows to their inventory contexts, one resolution per epoch.
+
+    Each row is the half-open span of one patch. A row the inventory does
+    not describe, and a row whose span crosses an epoch boundary — which
+    the inventory describes twice rather than not at all, and which
+    `conform_to_inventory` exists to subdivide — resolve to None.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    keys
+        Each row's acquisition_key.
+    starts, ends
+        Each row's first and last instant.
+
+    Returns
+    -------
+    An object array of `ResolvedContext` or None, one per row.
+    """
+    frame = pd.DataFrame(
+        {
+            "key": np.asarray(keys, dtype=object),
+            "start": np.asarray(starts, dtype="datetime64[ns]"),
+            "end": np.asarray(ends, dtype="datetime64[ns]"),
+        }
+    )
+    out = np.full(len(frame), None, dtype=object)
+    for key, sub in frame.groupby("key", sort=False):
+        # The empty string is how a patch spells "no identity"; it names
+        # no entry, which is not the same as naming a missing one. A
+        # malformed key names none either, and resolve would say so.
+        codes = key.split(".") if isinstance(key, str) else []
+        if len(codes) != 4:
+            continue
+        bounds = _epoch_bounds(inventory, codes)
+        starts_at = np.searchsorted(bounds, sub["start"].to_numpy(), side="right")
+        ends_at = np.searchsorted(bounds, sub["end"].to_numpy(), side="right")
+        straddles = starts_at != ends_at
+        contexts: dict[int, ResolvedContext | None] = {}
+        for epoch in np.unique(starts_at[~straddles]):
+            when = sub["start"].to_numpy()[starts_at == epoch][0]
+            try:
+                contexts[int(epoch)] = inventory.resolve(key, time=when)
+            except InvalidInventoryError:
+                contexts[int(epoch)] = None
+        for row, epoch, straddle in zip(sub.index, starts_at, straddles, strict=True):
+            out[row] = None if straddle else contexts[int(epoch)]
+    return out
+
+
+def get_attr_values(inventory, contexts, name: str) -> list:
+    """
+    Return the value each resolved context states for one attr name.
+
+    A context which does not state the name, and a row with no context at
+    all, both give None: the inventory has no answer either way.
+    """
+    cache: dict[int, Any] = {}
+    out = []
+    for context in contexts:
+        if context is None:
+            out.append(None)
+            continue
+        if (value := cache.get(id(context), _UNCACHED)) is _UNCACHED:
+            interrogator = _get_interrogator(inventory, context.acquisition)
+            owner, field = _attr_owner(context, interrogator, name)
+            value = getattr(owner, field, None)
+            value = None if _is_unset(value) else value
+            cache[id(context)] = value
+        out.append(value)
+    return out
+
+
+# A cache miss, told apart from a cached None (the inventory saying nothing).
+_UNCACHED = object()
 
 
 def _get_system_attrs(inventory, context) -> dict:

@@ -11,10 +11,12 @@ exactly are applied as pandas residual filters.
 from __future__ import annotations
 
 import json
+import operator
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from fnmatch import fnmatch
 
 import numpy as np
 import pandas as pd
@@ -322,6 +324,58 @@ def build_attr_clause(
     val = _to_target_unit(typed, units.get(kind), name)
     where.add(f"{col(kind)} = ?", val)
     return None
+
+
+def evaluate_attr_predicate(values, name: str, value) -> np.ndarray:
+    """
+    Evaluate one attr selector against values held in memory.
+
+    The in-memory twin of `build_attr_clause`, for values which never
+    reach the index — those an inventory states rather than a file. It
+    takes the same selector shapes and means the same thing by each, so a
+    selector cannot mean one thing for a patch which states the attr and
+    another for a patch the inventory answers for. The values carry no
+    units of their own, which makes a unit-bearing selector the same
+    error the index gives against a unitless column.
+
+    Parameters
+    ----------
+    values
+        The value each row holds; every one of them states something.
+    name
+        The attr the selector names, for error messages.
+    value
+        The selector, in any shape `build_attr_clause` accepts.
+
+    Returns
+    -------
+    A boolean array of the same length as ``values``.
+    """
+
+    def scalar(item):
+        """Coerce one selector value the way the index would."""
+        return _to_target_unit(_coerce_scalar(item, set()), None, name)
+
+    def each(func) -> np.ndarray:
+        return np.array([bool(func(x)) for x in values], dtype=bool)
+
+    if isinstance(value, re.Pattern):
+        return each(lambda x: isinstance(x, str) and value.match(x))
+    if is_range(value):
+        out = np.ones(len(values), dtype=bool)
+        for bound, compare in zip(value, (operator.ge, operator.le), strict=True):
+            if bound is None or bound is Ellipsis:
+                continue
+            limit = scalar(bound)
+            out &= each(lambda x, c=compare, b=limit: c(x, b))
+        return out
+    if _is_collection(value):
+        wanted = [scalar(x) for x in value]
+        return each(lambda x: any(x == item for item in wanted))
+    if isinstance(value, str) and _GLOB_CHARS & set(value):
+        return each(lambda x: isinstance(x, str) and fnmatch(x, value))
+    wanted = scalar(value)
+    return each(lambda x: x == wanted)
 
 
 def build_coord_clause(

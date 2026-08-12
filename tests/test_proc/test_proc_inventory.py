@@ -36,6 +36,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     ParameterError,
     PatchError,
+    UnitError,
     UnresolvedPatchError,
 )
 
@@ -717,7 +718,7 @@ class TestInventoryQueryError:
     def test_inventory_field_names_the_inventory(self, patch, inventory):
         """The index's 'no such attribute' would deny a field which exists."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="not supported yet"):
+        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
             spool.select(coupling="cement")
 
     def test_plain_spool_keeps_its_message(self, patch):
@@ -1277,3 +1278,219 @@ class TestThirdReviewFindings:
         )
         with pytest.raises(InvalidInventoryError, match="characters"):
             spool[0]
+
+
+@pytest.fixture(scope="module")
+def two_patch_spool(patch):
+    """Two patches from one acquisition, neither stating gauge_length."""
+    return dc.spool([patch, patch.update_attrs(tag="second")])
+
+
+class TestInventorySelect:
+    """Selecting a spool on the facts an inventory states."""
+
+    def test_selects_on_an_unstated_attr(self, two_patch_spool, inventory):
+        """A name no patch states is answered by the inventory."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert "gauge_length" not in spool.get_contents().columns
+        assert len(spool.select(gauge_length=10.0)) == 2
+
+    def test_non_matching_value_selects_nothing(self, two_patch_spool, inventory):
+        """The inventory's answer has to match to keep a patch."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(gauge_length=99.0)) == 0
+
+    def test_needs_an_inventory(self, two_patch_spool):
+        """Without one the name is simply not something the spool knows."""
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            two_patch_spool.select(gauge_length=10.0)
+
+    def test_len_is_exact_and_nothing_is_read(self, two_patch_spool, inventory):
+        """Selection is metadata work: the count is final and exact."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        out = spool.select(gauge_length=10.0)
+        assert len(out) == len(out.get_contents()) == 2
+
+    def test_dotted_names_select(self, two_patch_spool, inventory):
+        """An interrogator fact is reached by its qualified name."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        query = {"interrogator.model": "FI-1"}
+        assert len(spool.select(**query)) == 2
+        assert len(spool.select(_attrs=query)) == 2
+        assert len(spool.select(**{"interrogator.model": "nope"})) == 0
+
+    def test_selector_shapes(self, two_patch_spool, inventory):
+        """A range, a collection, and a glob mean what they do on the index."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(gauge_length=(5.0, 15.0))) == 2
+        assert len(spool.select(gauge_length=(15.0, 25.0))) == 0
+        assert len(spool.select(gauge_length=[10.0, 20.0])) == 2
+        assert len(spool.select(gauge_length=[20.0, 30.0])) == 0
+        assert len(spool.select(**{"interrogator.model": "FI-*"})) == 2
+        assert len(spool.select(**{"interrogator.model": "XX-*"})) == 0
+
+    def test_names_combine_with_and(self, two_patch_spool, inventory):
+        """Two inventory-backed selectors both have to hold."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        both = spool.select(gauge_length=10.0, **{"interrogator.model": "FI-1"})
+        assert len(both) == 2
+        one = spool.select(gauge_length=10.0, **{"interrogator.model": "nope"})
+        assert len(one) == 0
+
+    def test_combines_with_index_selectors(self, two_patch_spool, inventory):
+        """An index name and an inventory name compose in one call."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        out = spool.select(tag="second", gauge_length=10.0)
+        assert len(out) == 1
+        assert out.get_contents()["tag"].tolist() == ["second"]
+
+    def test_undescribed_patch_is_not_selected(self, patch, inventory):
+        """
+        A patch the inventory does not describe silently does not match.
+
+        Select is a filter, and a patch with no entry has no gauge length
+        any more than one which never states the attr does.
+        """
+        other = patch.update_attrs(tag="other", acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        out = spool.select(gauge_length=10.0)
+        assert len(out) == 1
+        assert out.get_contents()["tag"].tolist() == ["random"]
+
+    def test_patch_without_identity_is_not_selected(self, patch, inventory):
+        """One naming no entry resolves to nothing, and matches nothing."""
+        bare = patch.update_attrs(tag="bare", acquisition_key="")
+        spool = dc.spool([patch, bare]).attach_inventory(inventory)
+        assert len(spool.select(gauge_length=10.0)) == 1
+
+    def test_stated_value_wins(self, patch, inventory):
+        """
+        Precedence is per row: the patch states it, the inventory fills in.
+
+        A file which recorded its own gauge length is the authority for
+        that patch even when the inventory disagrees, and the inventory
+        answers only for the patches which left it unstated.
+        """
+        stated = patch.update_attrs(tag="stated", gauge_length=20.0)
+        spool = dc.spool([patch, stated]).attach_inventory(inventory)
+        by_patch = spool.select(gauge_length=20.0)
+        by_inventory = spool.select(gauge_length=10.0)
+        assert by_patch.get_contents()["tag"].tolist() == ["stated"]
+        assert by_inventory.get_contents()["tag"].tolist() == ["random"]
+
+    def test_empty_string_is_unstated(self, patch, inventory):
+        """
+        A string column spells "not known" as the empty string.
+
+        It is a value the index stores and can compare, which is exactly
+        why the inventory has to be asked for it anyway.
+        """
+        described = _replace_acquisition(inventory, firmware_version="v1.2.3")
+        spool = dc.spool(
+            [
+                patch.update_attrs(tag="blank", firmware_version=""),
+                patch.update_attrs(tag="stated", firmware_version="v9"),
+            ]
+        ).attach_inventory(described)
+        assert "firmware_version" in spool.get_contents().columns
+        assert spool.select(firmware_version="v1.2.3").get_contents()[
+            "tag"
+        ].tolist() == ["blank"]
+        assert spool.select(firmware_version="v9").get_contents()["tag"].tolist() == [
+            "stated"
+        ]
+
+    def test_straddling_patch_is_not_selected(self, patch, inventory):
+        """
+        A patch described twice has no single answer, so it matches neither.
+
+        Subdividing it is `conform_to_inventory`'s job; until it runs, a
+        straddling patch is one the selection cannot speak for.
+        """
+        old = inventory.networks[0].fiber_arrays[0]
+        acq = old.acquisitions[0]
+        times = patch.get_coord("time").values
+        middle = times[len(times) // 2]
+        split = inventory.replace(
+            old,
+            old.new(
+                acquisitions=(
+                    acq.new(end_time=middle, gauge_length=10.0),
+                    acq.new(start_time=middle, gauge_length=20.0),
+                )
+            ),
+        )
+        spool = dc.spool([patch]).attach_inventory(split)
+        assert len(spool.select(gauge_length=10.0)) == 0
+        assert len(spool.select(gauge_length=20.0)) == 0
+
+    def test_empty_spool(self, inventory):
+        """Nothing to select from stays nothing."""
+        spool = dc.spool([]).attach_inventory(inventory)
+        assert len(spool.select(gauge_length=10.0)) == 0
+
+    def test_selection_composes(self, two_patch_spool, inventory):
+        """A selection is a spool, so it selects again."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        out = spool.select(gauge_length=10.0).select(tag="second")
+        assert len(out) == 1
+
+    def test_enrichment_survives(self, two_patch_spool, inventory):
+        """The derived spool is the same spool, inventory and all."""
+        spool = two_patch_spool.enrich(inventory)
+        out = spool.select(gauge_length=10.0)
+        assert out[0].attrs.gauge_length == 10.0
+
+    def test_original_is_unchanged(self, two_patch_spool, inventory):
+        """Selecting leaves the spool it came from alone."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        spool.select(gauge_length=99.0)
+        assert len(spool) == 2
+
+    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
+        """
+        A track name is a real inventory name which select cannot use yet.
+
+        Saying which of the two it is takes the names accessor, and this
+        is what it was added for.
+        """
+        spool = two_patch_spool.attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
+            spool.select(coupling="trench")
+        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
+            spool.select(zone="east")
+
+    def test_unknown_name_still_raises(self, two_patch_spool, inventory):
+        """A name neither side knows is a misspelling, and says so."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            spool.select(not_a_name=1)
+
+    def test_samples_stays_coordinate_only(self, two_patch_spool, inventory):
+        """samples=True is a coordinate form; an attr is an error there."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError):
+            spool.select(gauge_length=10.0, samples=True)
+
+    def test_indexed_coordinate_is_not_intercepted(self, two_patch_spool, inventory):
+        """
+        `distance` names both an inventory coordinate and a real one.
+
+        The patch's own axis is what a range on it means, exactly as
+        without an inventory.
+        """
+        spool = two_patch_spool.attach_inventory(inventory)
+        coord = spool[0].get_coord("distance")
+        out = spool.select(distance=(coord.min(), coord.max()))
+        assert len(out) == 2
+
+    def test_units_are_the_inventory_s(self, two_patch_spool, inventory):
+        """
+        These values carry no units of their own, as the index's do not.
+
+        A unit-bearing selector is the same error either way, which is
+        what keeps one selector from meaning two things.
+        """
+        spool = two_patch_spool.attach_inventory(inventory)
+        with pytest.raises(UnitError, match="unitless"):
+            spool.select(gauge_length=10.0 * dc.get_quantity("m"))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import inspect
 import warnings
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
@@ -61,7 +61,7 @@ from dascore.utils.patch import (
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
-from dascore.utils.pd import present_units_columns
+from dascore.utils.pd import present_units_columns, resolve_selector_namespaces
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -95,6 +95,32 @@ _UNRESOLVED_WARNING = (
     "to see which, 'ignore' to silence this, or remove them from the spool "
     "once Spool.prune_to_inventory exists."
 )
+
+
+def _unstated(values) -> np.ndarray:
+    """
+    Return a mask of the entries which state no value.
+
+    A patch says it does not know a name by leaving it null, which a
+    string column spells as the empty string; both are what an attached
+    inventory is asked to fill in.
+    """
+    series = pd.Series(np.asarray(values, dtype=object))
+    return (series.isna() | series.eq("")).to_numpy()
+
+
+def _match_resolved(values, name: str, selector) -> np.ndarray:
+    """Return which of the values an inventory states match a selector."""
+    from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
+
+    values = np.asarray(values, dtype=object)
+    out = np.zeros(len(values), dtype=bool)
+    # A name the inventory has no answer for is not one it can select on,
+    # and the predicate would be comparing against the missing marker.
+    stated = ~_unstated(values)
+    if stated.any():
+        out[stated] = evaluate_attr_predicate(values[stated], name, selector)
+    return out
 
 
 def _normalize_enrich_kwargs(kwargs) -> dict:
@@ -704,26 +730,127 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        try:
-            catalog = self._catalog.select(
-                _attrs=_attrs,
-                _coords=_coords,
-                samples=samples,
-                relative=relative,
-                **kwargs,
-            )
-        except InvalidSpoolQueryError as error:
-            # A name the index does not know may still be one the attached
-            # inventory defines, and the index's message would deny it exists.
-            if self._inventory is None:
-                raise
+        inventory_query, _attrs, _coords, kwargs = self._split_inventory_query(
+            _attrs, _coords, kwargs, samples
+        )
+        catalog = self._catalog.select(
+            _attrs=_attrs,
+            _coords=_coords,
+            samples=samples,
+            relative=relative,
+            **kwargs,
+        )
+        out = self._new_from_catalog(catalog)
+        if inventory_query:
+            out = out._select_from_inventory(inventory_query)
+        return out
+
+    def _split_inventory_query(self, _attrs, _coords, kwargs, samples):
+        """
+        Split selectors into the ones the index answers and the rest.
+
+        A name the attached inventory could contribute is evaluated per
+        row rather than pushed into SQL: the index states it for some rows
+        and the inventory only fills in the others.
+        """
+        if self._inventory is None:
+            return {}, _attrs, _coords, kwargs
+        names = self._inventory.get_names()
+        backend = self._catalog.backend
+        known_attrs, known_coords = (
+            set(backend.attr_names()),
+            set(backend.coord_names()),
+        )
+        # A tag-form _attrs/_coords names bare kwargs, so every requested
+        # name is either a bare kwarg or a key of a mapping form.
+        requested = set(kwargs)
+        for spec in (_attrs, _coords):
+            if isinstance(spec, Mapping):
+                requested |= set(spec)
+        if channel_level := sorted(
+            requested & set(names.coords) - known_attrs - known_coords
+        ):
             msg = (
-                f"{error} If this names a field the attached inventory "
-                "defines, selecting on it is not supported yet: enrich the "
-                "patches and select on each one instead."
+                f"{channel_level} name coordinates the attached inventory "
+                "defines along the fiber, which selection cannot trim to "
+                "yet. Enrich the patches and select on each one instead."
             )
-            raise InvalidSpoolQueryError(msg) from error
-        return self._new_from_catalog(catalog)
+            raise InvalidSpoolQueryError(msg)
+        # samples=True selections are coordinate-only, so an attr among
+        # them is an error the index states better than this can.
+        selectable = set(names.attrs) - known_coords
+        if samples or not requested & selectable:
+            return {}, _attrs, _coords, kwargs
+        attrs, coords = resolve_selector_namespaces(
+            known_attrs | selectable,
+            known_coords,
+            _attrs=_attrs,
+            _coords=_coords,
+            kwargs=kwargs,
+        )
+        query = {x: attrs.pop(x) for x in list(attrs) if x in selectable}
+        return query, attrs, coords, {}
+
+    def _select_from_inventory(self, query: dict) -> Self:
+        """
+        Keep the rows whose inventory-backed values match.
+
+        Precedence is per row: a row which states the name is judged by
+        the index, exactly as it would be without an inventory, and only
+        the rows leaving it unstated are resolved. A spool whose headers
+        state everything therefore never touches the inventory, and one
+        which states nothing resolves once per epoch rather than per row.
+        A row the inventory has no answer for is not selected, as a patch
+        lacking the attr entirely is not.
+        """
+        from dascore.proc.inventory import (  # noqa: PLC0415
+            get_attr_values,
+            resolve_contexts,
+        )
+
+        df = self._df
+        if not len(df):
+            return self
+        # Resolution needs an identity and a time, which the relation
+        # always carries: they are structural columns of the index.
+        assert {"acquisition_key", "time_min", "time_max"} <= set(df.columns)
+        ids = df["_patch_id"].to_numpy()
+        contexts = None
+        mask = np.ones(len(df), dtype=bool)
+        for name, selector in query.items():
+            stated = (
+                ~_unstated(df[name])
+                if name in df.columns
+                else np.zeros(len(df), dtype=bool)
+            )
+            # SQL never matches a row which states nothing, so this is the
+            # verdict for the stated rows and False everywhere else.
+            matched = np.isin(ids, self._index_matches(name, selector))
+            if not stated.all():
+                if contexts is None:
+                    contexts = resolve_contexts(
+                        self._inventory,
+                        df["acquisition_key"],
+                        df["time_min"],
+                        df["time_max"],
+                    )
+                matched[~stated] = _match_resolved(
+                    get_attr_values(self._inventory, contexts[~stated], name),
+                    name,
+                    selector,
+                )
+            mask &= matched
+        return self._new_from_catalog(self._catalog.restrict(mask))
+
+    def _index_matches(self, name: str, selector) -> np.ndarray:
+        """Return the ids of the rows the index itself selects for one name."""
+        try:
+            catalog = self._catalog.select(_attrs={name: selector})
+        except InvalidSpoolQueryError:
+            # No patch in this spool states the name, so the index selects
+            # none of them and the inventory answers for every row.
+            return np.empty(0, dtype=np.int64)
+        return np.asarray(catalog._ordered_ids(), dtype=np.int64)
 
     def attach_inventory(self, inventory) -> Self:
         """
