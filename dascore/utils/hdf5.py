@@ -145,14 +145,15 @@ def _is_loop_backed(resource) -> bool:
     """
     while resource is not None:
         try:
-            fs = getattr(resource, "fs", None)
+            if getattr(getattr(resource, "fs", None), "async_impl", False):
+                return True
+            wrapped = getattr(resource, "raw", None)
         except Exception:
-            # A UPath whose backend is not installed raises here; the open
-            # which follows reports that properly, so just skip the pause.
+            # Probing can fail rather than return nothing: a UPath whose
+            # backend is not installed raises from ``fs``, and a wrapper
+            # can refuse an attribute with something other than
+            # AttributeError. Either way the open below reports it.
             return False
-        if getattr(fs, "async_impl", False):
-            return True
-        wrapped = getattr(resource, "raw", None)
         resource = None if wrapped is resource else wrapped
     return False
 

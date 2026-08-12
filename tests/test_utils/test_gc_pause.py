@@ -261,6 +261,15 @@ class TestLoopBackedDetection:
 
         assert not _is_loop_backed(_MissingBackend())
 
+    def test_refused_attribute_is_not_loop_backed(self):
+        """A wrapper may refuse an attribute with more than AttributeError."""
+
+        class _Refusing:
+            def __getattr__(self, name):
+                raise io.UnsupportedOperation(name)
+
+        assert not _is_loop_backed(_Refusing())
+
     def test_sync_filesystem_is_not_loop_backed(self):
         """A synchronous fsspec filesystem needs no pause."""
 
