@@ -57,8 +57,9 @@ class _ManagedH5pyFile:
 
     For path-backed opens, this wrapper owns only the h5py handle. For
     ``h5py.File(..., driver="fileobj")`` paths, it also owns the Python
-    file-like object DASCore created on behalf of the caller. ``close()`` is
-    therefore the point where DASCore tears down the entire HDF5 access stack.
+    file-like object underneath, whether DASCore created it or the caller
+    supplied it. ``close()`` is therefore the point where DASCore tears down
+    the entire HDF5 access stack.
     """
 
     def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
@@ -165,11 +166,15 @@ def _open_h5_fileobj(
     try:
         handle = constructor(fileobj, mode=mode, driver="fileobj")
     except BaseException:
-        if close_on_error:
-            with suppress(Exception):
-                fileobj.close()
-        if pause:
-            resume_gc()
+        # Nested so nothing raised while closing, including a BaseException,
+        # can skip the resume and strand the pause.
+        try:
+            if close_on_error:
+                with suppress(Exception):
+                    fileobj.close()
+        finally:
+            if pause:
+                resume_gc()
         raise
     return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
 

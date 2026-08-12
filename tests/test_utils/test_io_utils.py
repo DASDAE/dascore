@@ -411,6 +411,11 @@ class TestGetHandleFromResource:
                 {},
                 {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}},
             ),
+            (
+                "https://example.com/example.h5",
+                {},
+                {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}},
+            ),
         ],
     )
     def test_remote_h5_open_kwargs_are_tuned(self, monkeypatch, url, options, expected):
