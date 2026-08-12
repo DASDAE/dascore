@@ -367,6 +367,7 @@ class PlanResolver(PatchResolver):
         mode: str = "chunk",
         check_behavior: WARN_LEVELS = "warn",
         origin_path=None,
+        stamped: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -382,6 +383,8 @@ class PlanResolver(PatchResolver):
         self.check_behavior = check_behavior
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
+        # attrs the outputs state about themselves rather than inherit
+        self.stamped = tuple(stamped)
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -460,7 +463,7 @@ class PlanResolver(PatchResolver):
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
-            return self._load_member(members.iloc[0].to_dict())
+            return self._stamp(self._load_member(members.iloc[0].to_dict()), row)
         if self.mode == "concat":
             patches = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
@@ -469,11 +472,29 @@ class PlanResolver(PatchResolver):
                 patches, check_behavior=self.check_behavior, **{self.dim: None}
             )
             assert len(out) == 1
-            return out[0]
+            return self._stamp(out[0], row)
         joined = members.assign(current_index=output_id)
         patches = self._assembler()._patch_from_instruction_df(joined)
         assert len(patches) == 1
-        return patches[0]
+        return self._stamp(patches[0], row)
+
+    def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
+        """
+        Apply the attrs the outputs state about themselves, if any.
+
+        An output is assembled from its members, so it carries their
+        attrs and knows nothing of why it was cut out. `stamped` is how
+        an operation which does know says so -- `Spool.split_by`
+        recording which value each patch was split on -- and it keeps
+        the patch which comes out agreeing with the row `get_contents`
+        shows for it.
+        """
+        if not self.stamped:
+            return patch
+        return patch.update_attrs(**{x: row[x] for x in self.stamped})
+
+
+
 
 
 def _residual_ranges(residuals) -> dict:
@@ -506,6 +527,7 @@ def derived_catalog(
     mode: str = "chunk",
     check_behavior: WARN_LEVELS = "warn",
     origin_path=None,
+    stamped: tuple[str, ...] = (),
 ) -> PatchCatalog:
     """
     Materialize a plan into a fresh in-memory catalog.
@@ -574,6 +596,7 @@ def derived_catalog(
         mode=mode,
         check_behavior=check_behavior,
         origin_path=origin_path,
+        stamped=stamped,
     )
     backend = get_backend(":memory:")
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()

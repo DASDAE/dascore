@@ -893,6 +893,34 @@ def resolve_channel_pieces(
     and None elsewhere; when any row is refused the other two are None,
     since the caller raises rather than selecting.
     """
+    name, placements, reasons = channel_placements(contexts, frame)
+    if any(x is not None for x in reasons) or name is None:
+        # No dimension to trim along, so nothing was judged and there are
+        # no pieces to report; the caller reads that off `name`.
+        return name, None, reasons
+    out, unusable = [], []
+    for row in _placed_rows(contexts, placements, frame, name):
+        unusable.append(row.reason)
+        if row.grid is None:
+            # A row the inventory is silent about is not selected, and so
+            # its complement keeps it whole; one it cannot place is refused
+            # above rather than answered for.
+            out.append([(row.low, row.high)] if complement and not row.reason else [])
+            continue
+        mask = np.ones(len(row.grid), dtype=bool)
+        for wanted, selector in query.items():
+            mask &= _channel_matches(
+                inventory, row.context.optical_path, wanted, selector, row.distances
+            )
+        out.append(_mask_pieces(~mask if complement else mask, *row.grid_bounds))
+    return name, out, [x or y for x, y in zip(reasons, unusable, strict=True)]
+
+
+def channel_placements(contexts, frame) -> tuple:
+    """
+    Return the one dimension a relation's channels run along, and per row
+    how each is placed on it, or why it cannot be.
+    """
     placements, reasons = [], []
     for context, dims in zip(contexts, frame["dims"], strict=True):
         placement = (None, None)
@@ -902,71 +930,136 @@ def resolve_channel_pieces(
         # The second half of a placement is the axis when there is one and
         # the reason there is not, so only a nameless one carries a reason.
         reasons.append(placement[1] if context is not None and not placement[0] else None)
-    named = {name for name, _ in placements if name is not None}
+    named = {x for x, _ in placements if x is not None}
     if len(named) > 1:
         joined = ", ".join(sorted(named))
         msg = (
             "The patches of this spool place their channels along different "
-            f"dimensions ({joined}), so a selection along the fiber has no "
-            "one dimension to trim. Select them apart first."
+            f"dimensions ({joined}), so an operation along the fiber has no "
+            "one dimension to work on. Select them apart first."
         )
         raise InvalidSpoolQueryError(msg)
-    name = next(iter(named), None)
-    if any(x is not None for x in reasons) or name is None:
-        # No dimension to trim along, so nothing was judged and there are
-        # no pieces to report; the caller reads that off `name`.
-        return name, None, reasons
-    pieces, unusable = _row_pieces(
-        inventory, contexts, placements, frame, name, query, complement
-    )
-    return name, pieces, [x or y for x, y in zip(reasons, unusable, strict=True)]
+    return next(iter(named), None), placements, reasons
 
 
-def _row_bounds(frame, name: str):
-    """Return each row's inclusive envelope along one dimension."""
-    return zip(
-        frame[f"{name}_min"].to_numpy(), frame[f"{name}_max"].to_numpy(), strict=True
-    )
+class PlacedRow(NamedTuple):
+    """One index row's channels, placed on its optical path."""
+
+    context: Any
+    low: Any
+    high: Any
+    grid: np.ndarray | None
+    distances: np.ndarray | None
+    reason: str | None
+
+    @property
+    def grid_bounds(self) -> tuple:
+        """The arguments `_mask_pieces` reads a mask against."""
+        return self.grid, self.low, self.high
 
 
-def _row_pieces(
-    inventory, contexts, placements, frame, name, query, complement
-) -> tuple[list[list], list]:
-    """Return the kept pieces of each row, and any row with no usable grid."""
+def _placed_rows(contexts, placements, frame, name: str):
+    """
+    Yield each row's channel grid and where it lands on the optical path.
+
+    A row with no context, or no usable step to rebuild its grid with,
+    yields no grid; the two are different answers, so only the second
+    carries a reason to refuse it with.
+    """
     steps = frame[f"{name}_step"].to_numpy()
+    bounds = zip(frame[f"{name}_min"], frame[f"{name}_max"], strict=True)
     # Keyed by identity because that is what is cheap: sibling epochs
     # resolve to one shared context object, and `__eq__` on an inventory
     # model dumps the whole subtree. A miss only recomputes.
-    cache: dict[tuple, list] = {}
-    out, unusable = [], []
-    rows = zip(contexts, placements, _row_bounds(frame, name), steps, strict=True)
-    for context, (dim, axis), (low, high), step in rows:
-        unusable.append(None)
+    cache: dict[tuple, tuple] = {}
+    for context, (dim, axis), (low, high), step in zip(
+        contexts, placements, bounds, steps, strict=True
+    ):
         if context is None or dim is None:
-            # A row the inventory is silent about is not selected, and so
-            # its complement keeps it whole.
-            out.append([(low, high)] if complement else [])
+            yield PlacedRow(context, low, high, None, None, None)
             continue
         if pd.isnull(step) or not step:
-            # Which channels match is decided on the sample grid, and the
-            # step is its only description. Guessing would trim the wrong
-            # channels silently, which is worse than saying so.
-            unusable[-1] = "states no channel spacing to place its channels on"
-            out.append([])
+            # Which channels are which is decided on the sample grid, and
+            # the step is its only description. Guessing would trim the
+            # wrong channels silently, which is worse than saying so.
+            reason = "states no channel spacing to place its channels on"
+            yield PlacedRow(context, low, high, None, None, reason)
             continue
-        key = (id(context), axis, low, high, step, complement)
-        if (pieces := cache.get(key)) is None:
+        key = (id(context), axis, low, high, step)
+        if (placed := cache.get(key)) is None:
             grid = np.arange(round((high - low) / step) + 1) * step + low
-            distances = context.acquisition.channel_to_distance(grid, axis=axis)
-            mask = np.ones(len(grid), dtype=bool)
-            for wanted, selector in query.items():
-                mask &= _channel_matches(
-                    inventory, context.optical_path, wanted, selector, distances
-                )
-            pieces = _mask_pieces(~mask if complement else mask, grid, low, high)
-            cache[key] = pieces
-        out.append(pieces)
-    return out, unusable
+            placed = (grid, context.acquisition.channel_to_distance(grid, axis=axis))
+            cache[key] = placed
+        yield PlacedRow(context, low, high, *placed, None)
+
+
+def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
+    """
+    Return the channel dimension, each row's pieces by value, and refusals.
+
+    Splitting expands the spool into one patch per value a group takes
+    along each row, so a row is answered with a list of `(value, piece)`
+    pairs rather than pieces alone. A group whose values overlap gives
+    some channels to more than one output, which is the whole point of a
+    membership group and why the pieces of a row need not be disjoint.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    contexts
+        Each row's resolved context, or None where it has none.
+    frame
+        The relation being split; one row per patch.
+    name
+        The inventory-derived coordinate to split on.
+    keep
+        Decides which values to emit, by the value itself.
+
+    Returns
+    -------
+    A `(dim, rows, reasons)` triple, `rows` holding the `(value, piece)`
+    pairs of each row in value order.
+    """
+    dim, placements, reasons = channel_placements(contexts, frame)
+    if any(x is not None for x in reasons) or dim is None:
+        return dim, None, reasons
+    out, unusable = [], []
+    for row in _placed_rows(contexts, placements, frame, dim):
+        unusable.append(row.reason)
+        out.append([])
+        if row.grid is None:
+            continue
+        path = row.context.optical_path
+        values = _get_coord_values(inventory, path, name, row.distances)
+        if values is None:
+            # A group this path defines nowhere puts none of its channels
+            # anywhere, so the row contributes no output at all.
+            continue
+        values = values.values if isinstance(values, BaseCoord) else values
+        for value in _split_values(values):
+            if not keep(value):
+                continue
+            pieces = _mask_pieces(np.asarray(values) == value, *row.grid_bounds)
+            out[-1].extend((value, piece) for piece in pieces)
+    return dim, out, [x or y for x, y in zip(reasons, unusable, strict=True)]
+
+
+def _split_values(values) -> list:
+    """
+    Return the distinct values a group takes, in a stable order.
+
+    Every kind splits, one output per value: a categorical group by its
+    strings, a membership group into the channels it includes and those
+    it does not, and a numeric one by each distinct measurement. Sorted
+    so the outputs of a spool do not depend on which channel came first.
+    """
+    array = np.asarray(values)
+    if np.issubdtype(array.dtype, np.floating):
+        # NaN is how a numeric group spells "no value here", and it is
+        # never equal to itself, so it could not name an output anyway.
+        array = array[~np.isnan(array)]
+    return sorted(set(array.tolist()))
 
 
 def _channel_matches(inventory, path, name, selector, distances) -> np.ndarray:

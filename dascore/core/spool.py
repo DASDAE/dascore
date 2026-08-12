@@ -6,6 +6,7 @@ import abc
 import inspect
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from dataclasses import replace
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
@@ -56,6 +57,7 @@ from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
+    iterate,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
@@ -232,6 +234,35 @@ def _requested_names(_attrs, _coords, kwargs) -> set[str]:
         if isinstance(spec, Mapping):
             out |= set(spec)
     return out
+
+
+def _glob_filter(include, exclude):
+    """
+    Return a predicate deciding which split values to keep.
+
+    The patterns are matched against each value written as a string, so
+    one vocabulary covers every kind a group can hold: `"hole_*"` reads a
+    categorical group, and a membership group is `"True"` and `"False"`.
+    Globs mean what they mean everywhere else here, which is what SQLite
+    means by them rather than what `fnmatch` does.
+    """
+    from dascore.io.index.query import glob_to_regex  # noqa: PLC0415
+
+    patterns = tuple(
+        None if spec is None else [glob_to_regex(str(x)) for x in iterate(spec)]
+        for spec in (include, exclude)
+    )
+
+    def keep(value) -> bool:
+        wanted, unwanted = patterns
+        text = str(value)
+        if unwanted is not None and any(x.match(text) for x in unwanted):
+            # Excluding wins, so naming a family and carving one out of it
+            # reads in either order.
+            return False
+        return wanted is None or any(x.match(text) for x in wanted)
+
+    return keep
 
 
 def _without_names(spec: namespace_select_type, names) -> namespace_select_type:
@@ -1421,6 +1452,95 @@ class Spool(BaseSpool):
         new._on_unresolved = on_unresolved
         return new
 
+    def split_by(
+        self,
+        name: str,
+        *,
+        include: str | Sequence[str] | None = None,
+        exclude: str | Sequence[str] | None = None,
+        stamp: bool = True,
+    ) -> Self:
+        """
+        Expand the spool into one patch per value of an inventory coordinate.
+
+        Most often an annotation group. Every kind of group splits: a
+        categorical one by each of its strings, a membership group into
+        the channels it includes and those it does not, and a numeric one
+        by each distinct measurement. Groups are allowed to overlap, so a
+        channel may appear in more than one output patch, and a patch
+        whose channels take several values becomes several patches — this
+        can greatly expand the spool.
+
+        Parameters
+        ----------
+        name
+            The inventory-derived coordinate to split on.
+        include, exclude
+            Glob patterns matched against each value written as a string,
+            so `"trench_?a"` and `"hole_*"` both work and `True` is
+            matched as `"True"`. With `include`, only values matching one
+            of them are kept; `exclude` drops the values it matches, and
+            wins where both match.
+        stamp
+            Whether to record the value on each output patch as an attr
+            named after the coordinate, so overlapping siblings stay
+            distinguishable and later operations can select on it. Pass
+            False for a nested split, where the second should not
+            overwrite the first.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).attach_inventory(inventory)
+        >>>
+        >>> # The example path annotates two zones along the fiber.
+        >>> zones = spool.split_by("zone")
+        >>> assert len(zones) == 2
+        >>> assert set(zones.get_contents()["zone"]) == {"north", "south"}
+        >>>
+        >>> # Which can be narrowed by a glob over the values.
+        >>> assert len(spool.split_by("zone", include="nor*")) == 1
+        """
+        from dascore.proc.inventory import resolve_split_pieces  # noqa: PLC0415
+
+        if self._inventory is None:
+            msg = (
+                "Spool.split_by needs an inventory to split on: the values "
+                "it expands into are the ones an inventory states along the "
+                "fiber. Attach one with Spool.attach_inventory."
+            )
+            raise ParameterError(msg)
+        source_rows, working = self._plan_frames()
+        contexts = self._plan_contexts(working)
+        dim, rows, reasons = resolve_split_pieces(
+            self._inventory, contexts, working, name, _glob_filter(include, exclude)
+        )
+        _refuse_rows(
+            source_rows,
+            reasons,
+            "are described by the inventory but cannot have their channels "
+            "placed along the fiber",
+        )
+        if dim is None:  # nothing to split: no row has a fiber to split on
+            return self._restrict_to_rows([])
+        pieces = [[piece for _, piece in row] for row in rows]
+        marks = None
+        if stamp:
+            marks = (name, [value for row in rows for value, _ in row])
+        return self._subdivided(source_rows, working, pieces, dim, marks)
+
+    def _plan_contexts(self, working) -> np.ndarray:
+        """Resolve each row of a planning frame to its inventory context."""
+        from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
+
+        columns = _resolution_columns(working)
+        if columns is None:
+            return np.full(len(working), None, dtype=object)
+        return resolve_contexts(self._inventory, *columns)
+
     def conform_to_inventory(
         self,
         inventory=None,
@@ -1534,24 +1654,32 @@ class Spool(BaseSpool):
             sources, kept, subdivision_pieces(kept, cuts, "time"), "time"
         )
 
-    def _subdivided(self, sources, rows, pieces, name: str) -> Self:
+    def _subdivided(self, sources, rows, pieces, name: str, stamp=None) -> Self:
         """
         Return the spool whose patches are the given pieces of these rows.
 
         The pieces are a plan rather than a rewritten relation, so the
         outputs *are* the contents rows — `len` and `get_contents` stay
         exact — and loading goes through the machinery which already
-        trims a member on extraction.
+        trims a member on extraction. `stamp` names an attr to record on
+        each output, in the order the pieces were given.
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
+        plan = build_subdivision_plan(rows, pieces, name)
+        stamped = ()
+        if stamp is not None:
+            stamp_name, values = stamp
+            plan = replace(plan, outputs=plan.outputs.assign(**{stamp_name: values}))
+            stamped = (stamp_name,)
         catalog = derived_catalog(
             source_rows=sources,
-            plan=build_subdivision_plan(rows, pieces, name),
+            plan=plan,
             parent=self._catalog,
             merge_kwargs={},
             mode="chunk",
             origin_path=self.spool_path,
+            stamped=stamped,
         )
         return self._new_from_catalog(catalog)
 
