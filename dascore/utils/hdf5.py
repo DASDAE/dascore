@@ -316,10 +316,14 @@ class H5Reader(_H5CasterBase):
         protocol = getattr(resource, "protocol", None)
         if protocol not in remote_hdf5_tuned_protocols:
             return {}
+        # One snapshot: config is swappable, and reading the size and the
+        # block count separately could pair one setting with the other's
+        # replacement, for a cap neither configuration asked for.
+        config = get_config()
         # h5py performs many small seeks while opening HDF5 metadata, and
         # remote backends default to large readahead blocks (s3fs uses 50 MB)
         # which can pull most of a file just to satisfy those probes.
-        out = {"block_size": get_config().remote_hdf5_block_size}
+        out = {"block_size": config.remote_hdf5_block_size}
         if protocol not in http_protocols:
             return out | {"cache_type": "readahead"}
         # HTTP needs a block LRU instead: the probe alternates between the
@@ -327,7 +331,7 @@ class H5Reader(_H5CasterBase):
         # refetches a full block (or the whole file on range-less servers) on
         # every jump. A few blocks keep both ends resident; the cap bounds
         # what one open handle retains.
-        max_blocks = get_config().remote_hdf5_max_blocks
+        max_blocks = config.remote_hdf5_max_blocks
         return out | {
             "cache_type": "blockcache",
             "cache_options": {"maxblocks": max_blocks},

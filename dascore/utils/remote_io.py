@@ -58,9 +58,13 @@ def _warn_gc_pause_once() -> None:
     remote files from repeating it.
     """
     global _gc_pause_warned
-    if _gc_pause_warned or not get_config().warn_on_gc_pause:
-        return
-    _gc_pause_warned = True
+    # Claimed under the lock so two openers cannot both warn.
+    with _gc_pause_lock:
+        if _gc_pause_warned or not get_config().warn_on_gc_pause:
+            return
+        _gc_pause_warned = True
+    # Warned outside it: a filter turning this into an error must not
+    # propagate while the lock is held.
     msg = (
         "Reading remote HDF5 pauses Python's automatic garbage collection "
         "until the last such handle closes, which avoids a deadlock between "
@@ -110,7 +114,6 @@ def pause_gc() -> None:
     program makes one. Otherwise the pause outlives every remote read.
     """
     global _gc_pause_depth, _gc_was_enabled
-    _warn_gc_pause_once()
     # Safety valve: finalize cyclic garbage, including a handle leaked by an
     # earlier session, so a stranded pause cannot disable collection forever.
     # It runs before this pause is taken, so an interrupt during the collect
@@ -128,6 +131,10 @@ def pause_gc() -> None:
                 gc.disable()
         finally:
             _gc_pause_depth += 1
+    # Last, so a warning filter which raises cannot escape before the pause is
+    # accounted for. The caller resumes on any failure, and would otherwise
+    # release a pause this call never took -- stranding another live handle.
+    _warn_gc_pause_once()
 
 
 def resume_gc() -> None:
@@ -150,13 +157,15 @@ def _reset_gc_pause_state():
     Handles inherited by the child record the pid that paused for them, so
     closing one there cannot resume a pause this child never took.
     """
-    global _gc_pause_depth, _gc_pause_lock, _gc_collect_after
+    global _gc_pause_depth, _gc_pause_lock, _gc_collect_after, _gc_pause_warned
     _gc_pause_lock = threading.Lock()
     if _gc_pause_depth and _gc_was_enabled:
         gc.enable()
     _gc_pause_depth = 0
-    # The parent's rate limit does not describe this process.
+    # Neither the parent's rate limit nor its warning describes this process;
+    # a pool worker which pauses collection should say so itself.
     _gc_collect_after = 0.0
+    _gc_pause_warned = False
 
 
 @_reinit_after_fork

@@ -272,6 +272,34 @@ class TestPauseWarning:
             finally:
                 resume_gc()
 
+    def test_raising_filter_cannot_steal_a_live_pause(self):
+        """A warning turned into an error must not release someone else's pause.
+
+        The caller resumes on any failure from pause_gc, so a warning which
+        raises before the depth moves would release a pause this call never
+        took, re-enabling collection under a handle still open.
+        """
+        with config_context(warn_on_gc_pause=False):
+            pause_gc()  # stand in for a handle already open
+        try:
+            with pytest.raises(UserWarning), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                pause_gc()
+            resume_gc()  # what _open_h5_fileobj does on failure
+            assert not gc.isenabled(), "the live pause was stolen"
+            assert remote_io._gc_pause_depth == 1
+        finally:
+            resume_gc()
+
+    def test_fork_rearms_the_warning(self):
+        """A pool worker which pauses collection should say so itself."""
+        with pytest.warns(UserWarning, match="pauses Python's automatic garbage"):
+            pause_gc()
+        resume_gc()
+        assert remote_io._gc_pause_warned
+        remote_io._reset_gc_pause_state()
+        assert not remote_io._gc_pause_warned
+
 
 class TestLoopBackedDetection:
     """Missing a loop-backed object leaves the deadlock window open."""
