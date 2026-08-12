@@ -1775,6 +1775,29 @@ class TestCodexReviewFindings:
         with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
             spool.select(gauge_length=(20.0, 5.0))
 
+    def test_a_malformed_selector_raises_where_the_index_answers(
+        self, patch, inventory
+    ):
+        """
+        A bad selector is bad whether or not an inventory is attached.
+
+        Every patch here states the name, so the inventory is never
+        consulted and the index's own complaint is the only one there is;
+        swallowing it as "the index selects nothing" would turn the error
+        into an empty spool.
+
+        The count is what forces it: an index-only select composes the
+        predicate lazily and complains when the rows are realized, while
+        an inventory-backed one realizes them at the call.
+        """
+        stated = patch.update_attrs(gauge_length=10.0)
+        for spool in (
+            dc.spool([stated]),
+            dc.spool([stated]).attach_inventory(inventory),
+        ):
+            with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
+                len(spool.select(gauge_length=(20.0, 5.0)))
+
     def test_units_are_spelled_the_way_a_patch_spells_them(self, patch, inventory):
         """
         The inventory models units as a quantity; a patch carries a string.

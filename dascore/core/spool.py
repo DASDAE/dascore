@@ -859,7 +859,7 @@ class Spool(BaseSpool):
         removed = self.select(_attrs=stated)._catalog._ordered_ids()
         ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
         keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
-        return self._new_from_catalog(self._catalog.restrict(keep))
+        return self._new_from_catalog(self._catalog.restrict(keep, ids=ids))
 
     def _index_names(self) -> tuple[set[str], set[str]]:
         """The attr and coord names the index knows, read once per call."""
@@ -937,6 +937,7 @@ class Spool(BaseSpool):
         if not len(ids):
             return self
         backend = self._catalog.backend
+        known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
         for name, selector in query.items():
@@ -946,7 +947,7 @@ class Spool(BaseSpool):
             stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
             # SQL never matches a row which states nothing, so this is the
             # verdict for the stated rows and False everywhere else.
-            matched = np.isin(ids, self._index_matches(name, selector))
+            matched = np.isin(ids, self._index_matches(name, selector, known))
             if not stated.all():
                 if contexts is None:
                     contexts = self._resolve_rows(ids)
@@ -996,15 +997,20 @@ class Spool(BaseSpool):
             out[position] = resolved.get(patch_id)
         return out
 
-    def _index_matches(self, name: str, selector) -> np.ndarray:
-        """Return the ids of the rows the index itself selects for one name."""
-        try:
-            catalog = self._catalog.select(_attrs={name: selector})
-        except InvalidSpoolQueryError:
-            # No patch in this spool states the name, so the index selects
-            # none of them and the inventory answers for every row.
+    def _index_matches(self, name: str, selector, known: set[str]) -> np.ndarray:
+        """
+        Return the ids of the rows the index itself selects for one name.
+
+        A name no patch states is asked about rather than tried: the index
+        rejects it and the inventory answers for every row, and catching
+        that rejection would catch a malformed selector with it.
+        """
+        if name not in known:
             return np.empty(0, dtype=np.int64)
-        return np.asarray(catalog._ordered_ids(), dtype=np.int64)
+        return np.asarray(
+            self._catalog.select(_attrs={name: selector})._ordered_ids(),
+            dtype=np.int64,
+        )
 
     def attach_inventory(self, inventory) -> Self:
         """

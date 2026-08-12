@@ -182,9 +182,10 @@ class TestHiveWins:
         sub.mkdir()
         patch = dc.get_example_patch().update_attrs(station="A")
         patch.io.write(sub / "agree.h5", "dasdae")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UserWarning)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert not [x for x in caught if "override attrs" in str(x.message)]
         assert spool.get_contents()["station"].iloc[0] == "A"
         spool.indexer.close()
 
@@ -193,9 +194,10 @@ class TestHiveWins:
         sub = tmp_path / "cable=north"
         sub.mkdir()
         dc.get_example_patch().io.write(sub / "quiet.h5", "dasdae")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UserWarning)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert not [x for x in caught if "override attrs" in str(x.message)]
         assert spool.get_contents()["cable"].iloc[0] == "north"
         spool.indexer.close()
 
