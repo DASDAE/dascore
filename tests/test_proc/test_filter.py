@@ -83,9 +83,9 @@ class TestPassFilterChecks:
 
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
-        nyquest = 0.5 / (random_patch.coords["time"].step / dc.to_timedelta64(1))
+        nyquist = 0.5 / (random_patch.coords["time"].step / dc.to_timedelta64(1))
         hz = dc.get_quantity("Hz")
-        filt = (1 * hz, nyquest * 1.1 * hz)
+        filt = (1 * hz, nyquist * 1.1 * hz)
         match = "possible filter bounds are"
         with pytest.raises(FilterValueError, match=match):
             random_patch.pass_filter(time=filt)
@@ -362,7 +362,7 @@ class TestSavgolFilter:
 
 
 class TestGaussianFilter:
-    """Test the Guassian Filter."""
+    """Test the Gaussian Filter."""
 
     def test_filter_time(self, event_patch_2):
         """Test for simple filter along the time axis."""

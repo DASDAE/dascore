@@ -80,7 +80,7 @@ class TestToDateTime64:
             assert datestr in str(el)
 
     def test_datetime64(self):
-        """A datetitme64 should remain thus and equal."""
+        """A datetime64 should remain thus and equal."""
         d_time = to_datetime64("2020-01-01")
         out = to_datetime64(d_time)
         assert d_time == out
@@ -172,7 +172,7 @@ class TestToDateTime64:
         assert out.dtype == np.dtype("<M8[ns]")
 
     def test_series(self):
-        """Ensure a series od datatime64 works."""
+        """Ensure a series of datetime64 works."""
         ser = pd.Series(to_datetime64(["2020-01-12", "2024-01-02"]))
         out = to_datetime64(ser)
         assert out.equals(ser)
@@ -237,7 +237,7 @@ class TestToTimeDelta64:
         assert out == np.timedelta64(1_000_000_000, "ns")
 
     def test_float_array(self):
-        """Ensure an array of flaots can be converted to ns timedelta."""
+        """Ensure an array of floats can be converted to ns timedelta."""
         ar = [1.0, 0.000000001, 0.001]
         expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64[ns]")
         out = to_timedelta64(ar)
@@ -251,7 +251,7 @@ class TestToTimeDelta64:
         out = to_timedelta64(expected)
         assert np.equal(out, expected).all()
 
-    def test_timedetla64(self):
+    def test_timedelta64(self):
         """Test for passing a time delta."""
         td = to_timedelta64(123)
         out = np.timedelta64(123, "s")
@@ -608,7 +608,7 @@ class TestIsDateTime:
     def test_datetime_series(
         self,
     ):
-        """is_datettime should work with a pandas series."""
+        """is_datetime should work with a pandas series."""
         array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
         ser = pd.Series(array)
         assert is_datetime64(ser)

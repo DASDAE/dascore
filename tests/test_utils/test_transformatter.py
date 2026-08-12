@@ -40,7 +40,7 @@ class TestFTDimensionRename:
         assert out == ("distance", "ift_time")
 
     def test_undo_forward_index(self, ft_reformatter):
-        """Ensure forward prefex is undone by inverse."""
+        """Ensure forward prefix is undone by inverse."""
         dims = tuple(f"{ft_reformatter.forward_prefix}{x}" for x in self.dims)
         out = ft_reformatter.rename_dims(dims, forward=False)
         assert out == self.dims

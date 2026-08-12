@@ -30,7 +30,7 @@ class TestSetUnits:
             coord = patch.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
             value = new.summary.get_coord_summary(dim).units
-            # time shouldn't ever be a anything other than s
+            # time shouldn't ever be anything other than s
             if dtype_time_like(coord.dtype):
                 expected_quant = get_quantity("s")
             assert value == expected_quant

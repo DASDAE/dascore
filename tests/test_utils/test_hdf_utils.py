@@ -126,7 +126,7 @@ class TestExtractH5Attrs:
         assert "sample_rate" in out and "country" in out
 
     def test_bad_attr_raises(self, h5_example_file):
-        """A bad attibute should raise a KeyError."""
+        """A bad attribute should raise a KeyError."""
         map_name = {
             "DasMetadata.CountryBumpkins": "country",
         }

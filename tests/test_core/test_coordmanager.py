@@ -223,7 +223,7 @@ class TestBasicCoordManager:
         assert not hasattr(cm_basic, "_NOT_A_DIM")
 
     def test_iterate(self, cm_basic):
-        """Ensure coordinates yield name an coordinate when iterated."""
+        """Ensure coordinates yield name and coordinate when iterated."""
         for dim, coord in iter(cm_basic):
             expected = cm_basic.get_coord(dim)
             assert all_close(coord, expected)
@@ -253,7 +253,7 @@ class TestCoordManagerInputs:
         assert isinstance(out, CoordManager)
 
     def test_additional_coords(self):
-        """Ensure a additional (non-dimensional) coords work."""
+        """Ensure additional (non-dimensional) coords work."""
         coords = dict(COORDS)
         lats = random_state.rand(len(COORDS["distance"]))
         coords["latitude"] = ("distance", lats)
@@ -462,7 +462,7 @@ class TestSelect:
             assert coord.shape[axis] == expected_len
 
     def test_select_handles_non_dim_kwargs(self, cm_basic):
-        """The coord manager should handle (supress) non dim keyword args."""
+        """The coord manager should handle (suppress) non dim keyword args."""
         ar = np.ones(cm_basic.shape)
         out, new = cm_basic.select(bob=(10, 20), array=ar)
         assert new.shape == ar.shape

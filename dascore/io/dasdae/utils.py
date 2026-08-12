@@ -157,7 +157,7 @@ def _save_patch(patch, wave_group, name):
 
 
 def _get_attrs(patch_group):
-    """Get the saved attributes form the group attrs."""
+    """Get the saved attributes from the group attrs."""
     out = {}
     attrs = [x for x in patch_group.attrs if x.startswith(_ATTR_PREFIX)]
     for attr_name in attrs:

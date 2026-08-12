@@ -63,7 +63,7 @@ def written_dascore_v1_random_copy(written_dascore_v1_random, tmp_path_factory):
 @register_func(WRITTEN_FILES)
 def written_dascore_v1_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
-    path = tmp_path_factory.mktemp("empty_patcc") / "empty.hdf5"
+    path = tmp_path_factory.mktemp("empty_patch") / "empty.hdf5"
     patch = dc.Patch()
     dc.write(patch, path, "DASDAE", file_version="1")
     return path
@@ -73,7 +73,7 @@ def written_dascore_v1_empty(tmp_path_factory):
 @register_func(WRITTEN_FILES)
 def written_dascore_correlate(tmp_path_factory, random_patch):
     """Write a correlate patch to the dascore format."""
-    path = tmp_path_factory.mktemp("correlate_patcc") / "correlate.hdf5"
+    path = tmp_path_factory.mktemp("correlate_patch") / "correlate.hdf5"
     padded_pa = random_patch.pad(time="correlate")
     dft_pa = padded_pa.dft("time", real=True)
     cc_pa = dft_pa.correlate(distance=[0, 1, 2], samples=True)
@@ -83,7 +83,7 @@ def written_dascore_correlate(tmp_path_factory, random_patch):
 
 @pytest.fixture(params=WRITTEN_FILES, scope="class")
 def dasdae_v1_file_path(request):
-    """Gatherer fixture to iterate through each written dasedae format."""
+    """Gatherer fixture to iterate through each written dasdae format."""
     return request.getfixturevalue(request.param)
 
 
@@ -145,7 +145,7 @@ class TestReadDASDAE:
 
     def test_round_trip_random_patch(self, random_patch, tmp_path_factory):
         """Ensure the random patch can be round-tripped."""
-        path = tmp_path_factory.mktemp("dasedae_round_trip") / "rt.h5"
+        path = tmp_path_factory.mktemp("dasdae_round_trip") / "rt.h5"
         dc.write(random_patch, path, "DASDAE")
         out = dc.read(path)
         assert len(out) == 1
@@ -192,7 +192,7 @@ class TestReadDASDAE:
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes."""
         # create a patch with a custom dt attribute.
-        path = tmp_path_factory.mktemp("dasdae_dt_saes") / "rt.h5"
+        path = tmp_path_factory.mktemp("dasdae_dt_saves") / "rt.h5"
         dt = np.datetime64("2010-09-12")
         patch = random_patch.update_attrs(custom_dt=dt)
         patch.io.write(path, "dasdae")
@@ -808,7 +808,7 @@ class TestRoundTrips:
 
     def test_roundtrip_datetime_coord(self, tmp_path_factory, random_patch):
         """Ensure a patch with an attached datetime coord works."""
-        path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
+        path = tmp_path_factory.mktemp("roundtrip_datetime_coord") / "out.h5"
         dist = random_patch.get_coord("distance")
         dt = dc.to_datetime64(np.zeros_like(dist))
         dt[0] = dc.to_datetime64("2017-09-17")

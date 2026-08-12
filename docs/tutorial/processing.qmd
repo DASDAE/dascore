@@ -202,7 +202,7 @@ def plot_time_and_frequency(patch, channel=0):
     td_ax.set_title("Time Domain")
     td_ax.set_xlabel("time (s)")
 
-    # Plot freq amplitdue
+    # Plot freq amplitude
     ft_patch = sq_patch.dft("time", real=True)
     freq = ft_patch.get_array("ft_time")
     fd_ax.plot(freq, ft_patch.abs().data, color="tab:red")

@@ -24,9 +24,9 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     # Extract an array containing just the sources
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
-    selecter = [slice(None), slice(None), None]
-    selecter[source_axis] = np.atleast_1d(index_source)
-    source = patch.data[tuple(selecter)]
+    selector = [slice(None), slice(None), None]
+    selector[source_axis] = np.atleast_1d(index_source)
+    source = patch.data[tuple(selector)]
     # Now transpose source so source dim is list. Essentially we just
     # need to swap the source axis with the last axis.
     out = np.swapaxes(source, source_axis, -1)

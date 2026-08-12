@@ -542,9 +542,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @abc.abstractmethod
     # Left unannotated on purpose. An int index yields a bare value, so the
-    # honest return contains Any, and Any absorbs everything -- annotating it
-    # would not let the checker verify the overloads above, only look as if
-    # it did.
+    # honest return contains Any, which would absorb the overloads above
+    # rather than let the checker verify them.
     def __getitem__(self, item):
         """Index the coord; slices return a new coord, int indices a value."""
 
@@ -1093,7 +1092,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             and just return an index referring to the end
             (len(coords) - 1) or beginning (0).
         relative
-            If True, the provided values are relative to the start (if possitve)
+            If True, the provided values are relative to the start (if positive)
             or end (if negative) of the coordinate.
 
         Examples
@@ -1614,7 +1613,7 @@ class CoordRange(BaseCoord):
         if forward_forward or reverse_reverse:
             return self, slice(None)
         new_step = -self.step
-        if reverse:  # reversing a forward sorted Coordrange
+        if reverse:  # reversing a forward sorted CoordRange
             new_start = self.max()
         else:  # order a reverse sorted one
             new_start = self.min()

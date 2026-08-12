@@ -201,10 +201,8 @@ def phase_weighted_stack(
     amp = np.maximum(np.abs(analytic_data), eps)
     unit_phasors = analytic_data / amp
     mean_phasor = np.mean(unit_phasors, axis=stack_axis, keepdims=True)
-    # Get weights based on coherence.
-    # The coherence |mean_phasor| naturally ranges from 0 to 1:
-    # - 0: completely incoherent (random phases)
-    # - 1: perfectly coherent (all phases aligned)
+    # Weight by coherence: |mean_phasor| runs from 0 (random phases) to 1
+    # (all phases aligned).
     weights = np.abs(mean_phasor) ** power
     # Stack original data and apply weights (we can do this since weights
     # are common across all samples)

@@ -205,7 +205,7 @@ class TestApplyUfunc:
 
     def test_unsupported_raises(self, random_patch):
         """
-        When ufuncs don't have the right number of input/ouput an error
+        When ufuncs don't have the right number of input/output an error
         should be raised.
         """
         msg = "ufuncs with input/output"

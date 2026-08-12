@@ -284,7 +284,7 @@ class TestWaterfall:
         check_label_units(patch, ax)
 
     def test_timedelta_axis(self, timedelta_patch):
-        """Ensure plot works when one axis has timedleta dtype. See #309."""
+        """Ensure plot works when one axis has timedelta dtype. See #309."""
         # if this doesnt raise it probably works ;)
         ax = timedelta_patch.viz.waterfall()
         assert ax is not None

@@ -394,7 +394,7 @@ def coords_from_df(
       the patch.dims. This will either add new coordinates, or update existing
       ones if they already exist.
 
-    * This function uess linear extrapolation between the nearest two points
+    * This function uses linear extrapolation between the nearest two points
       to get values in patch coords that aren't in the dataframe.
 
     """
@@ -631,7 +631,7 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     ----------
     *dims
         Dimension names which define the new data axis order.
-        Can also include ... to indicate diemsnions that should be left
+        Can also include ... to indicate dimensions that should be left
         alone.
 
     Examples

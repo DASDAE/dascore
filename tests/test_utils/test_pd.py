@@ -338,7 +338,7 @@ class TestAdjustSegments:
 
     @pytest.fixture()
     def adjacent_df(self):
-        """Create a ddtaframe with adjacent times."""
+        """Create a dataframe with adjacent times."""
         time_mins = [
             np.datetime64("2020-01-01"),
             np.datetime64("2020-01-01T00:00:10.01"),
@@ -419,7 +419,7 @@ class TestAdjustSegments:
         assert row["frequency_max"] == 125.0
         assert not row["_modified"]
 
-    def test_missing_interval_col_raises_keyerro(self, adjacent_df):
+    def test_missing_interval_col_raises_keyerror(self, adjacent_df):
         """Ensure if an interval column is missing a KeyError is raised."""
         df = adjacent_df.drop(columns=["distance_min"])
         with pytest.raises(ParameterError):
@@ -427,7 +427,7 @@ class TestAdjustSegments:
 
 
 class TestFillDefaultsFromPydantic:
-    """Tests for initing empty columns from pydanitc models."""
+    """Tests for initing empty columns from pydantic models."""
 
     class Model(pydantic.BaseModel):
         """Example basemodel."""

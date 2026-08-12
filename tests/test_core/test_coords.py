@@ -1113,7 +1113,7 @@ class TestOrder:
         out, _inds = coord_with_duplicates.order(to_find)
         assert len(out) == expected_len
 
-    def test_order_samples_non_int_aray(self, evenly_sampled_coord):
+    def test_order_samples_non_int_array(self, evenly_sampled_coord):
         """Ensure an error is raised if non-int array is used with samples."""
         msg = "requires integer dtype"
         bad_array = np.array([1.22, 2.33])
@@ -1352,7 +1352,7 @@ class TestCoordRange:
         start, stop = np.datetime64("2023-01-01"), np.datetime64("2023-01-01T01")
         step = np.timedelta64(60, "s")
         coord = get_coord(start=start, stop=stop, step=step)
-        # change maximum value, keeping length the same and chaning step
+        # change maximum value, keeping length the same and changing step
         coord_new = coord.update_limits(max=stop + 10 * step)
         assert coord_new.max() == stop + 10 * step
 
@@ -1820,7 +1820,7 @@ class TestPartialCoord:
         assert isinstance(summary, CoordSummary)
 
     def test_equals_to_other_coord(self, basic_non_coord):
-        """Non cord should not be equal to other coord of same length."""
+        """Non coord should not be equal to other coord of same length."""
         other = get_coord(data=np.arange(len(basic_non_coord)))
         assert other != basic_non_coord
         assert basic_non_coord != other

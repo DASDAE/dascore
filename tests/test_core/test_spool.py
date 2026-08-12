@@ -757,7 +757,7 @@ class TestSplit:
         assert sum(len(x) for x in split) == 10
 
     def test_base_split_raises(self, random_spool):
-        """Ensure BaseSpool split raises NoteImplementedError."""
+        """Ensure BaseSpool split raises NotImplementedError."""
         msg = "has no split implementation"
         with pytest.raises(NotImplementedError, match=msg):
             BaseSpool.split(

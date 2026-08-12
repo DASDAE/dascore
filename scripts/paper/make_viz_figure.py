@@ -1,4 +1,4 @@
-"""A script to make the vizualization figure of the DASCore paper."""
+"""A script to make the visualization figure of the DASCore paper."""
 
 import matplotlib.pyplot as plt
 

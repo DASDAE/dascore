@@ -105,7 +105,7 @@ class _MethodNameSpace(metaclass=_NameSpaceMeta):
         """Wrap all public methods."""
         super().__init_subclass__(**kwargs)
         for key, val in vars(cls).items():
-            if callable(val):  # passes to _NameSpaceMeta settattr
+            if callable(val):  # passes to _NameSpaceMeta setattr
                 setattr(cls, key, val)
         # Register all subclasses.
         if cls.name is not None:

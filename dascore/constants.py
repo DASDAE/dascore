@@ -1,4 +1,4 @@
-"""Constants used throughout obsplus."""
+"""Constants used throughout DASCore."""
 
 from __future__ import annotations
 
@@ -24,13 +24,11 @@ SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 class ExecutorType(Protocol):
     """Protocol for Executors that DASCore can use."""
 
-    # Two positional-only parameters, which is exactly what DASCore calls
-    # this with. A named `iterables` plus a **kwargs catch-all excluded
-    # ThreadPoolExecutor and ProcessPoolExecutor, which provide neither;
-    # spelling the second parameter as *iterables instead would demand
-    # arbitrarily many iterables and so exclude single-iterable clients.
-    # The annotations are what stop a map() of the wrong shape (say one
-    # taking an int) from satisfying this and failing at runtime.
+    # Two positional-only parameters, which is how DASCore calls this.
+    # A named `iterables` plus **kwargs excluded ThreadPoolExecutor and
+    # ProcessPoolExecutor, and *iterables would exclude single-iterable
+    # clients. The annotations are what stop a map() of the wrong shape
+    # from satisfying this and failing at runtime.
     def map(self, fn: Callable, iterable: Iterable, /) -> Iterable:
         """Map function for applying concurrency of some flavor."""
 

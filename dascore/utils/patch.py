@@ -598,7 +598,7 @@ def get_patch_names(
 
     The second is when a column called "source_path" exists. In this case, the
     output will be the file name with the extension removed (if
-    strip_extension). The path must use '/' as a delinater.
+    strip_extension). The path must use '/' as a delimiter.
 
     See Also
     --------
@@ -1124,7 +1124,7 @@ def check_dims(
         'warn' will provide a warning, None will do nothing.
     intersection
         If True, allow any intersection of dimensions to pass. This is useful
-        when only broad-castablity needs to be checked. If false require dims
+        when only broadcastability needs to be checked. If false require dims
         to be equal.
     """
     dims1, dims2 = patch1.dims, patch2.dims

@@ -153,7 +153,7 @@ def broadcast_for_index(
 
 def all_close(ar1, ar2):
     """
-    Return True if ar1 is allcose to ar2.
+    Return True if ar1 is all close to ar2.
 
     Just uses numpy.allclose unless ar1 is a datetime, in which case
     strict equality is used.
@@ -826,7 +826,7 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     Parameters
     ----------
     spool
-        The spool object ot apply func to
+        The spool object to apply func to
     size
         The number of patches for each spool (ie chunksize)
     client

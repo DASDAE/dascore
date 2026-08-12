@@ -1805,7 +1805,7 @@ def write(
 
     Raises
     ------
-    [`UnkownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
+    [`UnknownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
         - Could not determine the fiber format.
 
     Examples

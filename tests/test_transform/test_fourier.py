@@ -147,7 +147,7 @@ class TestDiscreteFourierTransform:
         new_coords = set(out.coords.coord_map)
         assert coord_to_drop.isdisjoint(new_coords)
         assert coords_to_keep.issubset(new_coords)
-        # make sure time has no dimsensions
+        # make sure time has no dimensions
         assert out.coords.dim_map["time"] == ()
 
     def test_real_fft(self, sin_patch):

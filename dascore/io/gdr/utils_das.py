@@ -77,7 +77,7 @@ def _get_coord_manager(resource, snap=True):
         # Note: There is not enough info to correctly infer the start of
         # distance coordinate since Channels are often not included. In this
         # case we just assume the distance starts at 0 since the location of
-        # each channel must be attached alter anyway. This at least includes
+        # each channel must be attached later anyway. This at least includes
         # correct dx information.
         group = resource["DasMetadata/Interrogator/Acquisition"]
         dx = float(unbyte(group.attrs["SpatialSamplingInterval"]))

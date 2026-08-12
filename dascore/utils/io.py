@@ -72,10 +72,9 @@ def _resolve_resource(resource, required_type):
 def _annotate_handle_path(handle, resource):
     """Attach lightweight source-path metadata to a remote handle when absent."""
     path_str = str(resource)
-    # This is intentionally a small compatibility hack for readers that still
-    # inspect handle.name/path metadata. Some remote text handles come back as
-    # TextIOWrapper(name=None), and that name attribute may not be writable, so
-    # we keep a private fallback for downstream format sniffers.
+    # Compatibility hack for readers which inspect handle.name/path. Remote
+    # text handles can come back as TextIOWrapper(name=None) whose name is
+    # not writable, so keep a private fallback for format sniffers.
     for attr_name in ("_dascore_source_path",):
         with suppress(AttributeError, TypeError):
             setattr(handle, attr_name, path_str)

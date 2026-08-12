@@ -802,7 +802,7 @@ class CoordManager(DascoreBaseModel):
 
     @property
     def ndim(self):
-        """Return the number of dimensions in the coordinage manager."""
+        """Return the number of dimensions in the coordinate manager."""
         return len(self.dims)
 
     def validate_data(self, data):
