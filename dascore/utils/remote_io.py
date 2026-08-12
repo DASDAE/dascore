@@ -37,14 +37,64 @@ _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
+_SUPPRESS_GC_PAUSE_WARNING: ContextVar[bool] = ContextVar(
+    "suppress_gc_pause_warning", default=False
+)
 
 _gc_pause_lock = threading.Lock()
 _gc_pause_depth = 0
 _gc_was_enabled = False
 _gc_collect_after = 0.0
+_gc_pause_warned = False
 # Seconds between safety-valve collections; a full collect is O(live objects),
 # measured at 7-160 ms here, so it must not run on every remote open.
 _GC_COLLECT_INTERVAL = 10.0
+
+
+@contextmanager
+def suppress_gc_pause_warning():
+    """
+    Do not announce the gc pause for the duration of the block.
+
+    Wrapped around format detection. There the warning is both wrong and
+    dangerous: it claims an HDF5 read before h5py has decided the resource
+    is HDF5, and a filter which turns warnings into errors would make the
+    probe read as "wrong format", silently skipping the right reader.
+    """
+    token = _SUPPRESS_GC_PAUSE_WARNING.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESS_GC_PAUSE_WARNING.reset(token)
+
+
+def _warn_gc_pause_once() -> None:
+    """
+    Say once per process that a remote read is pausing collection.
+
+    The pause is process-global and invisible otherwise, so a program whose
+    memory grows, or which finds ``gc.isenabled()`` False, has no way to
+    connect either to a remote read. Warning once keeps a spool over many
+    remote files from repeating it.
+    """
+    global _gc_pause_warned
+    if _SUPPRESS_GC_PAUSE_WARNING.get():
+        return
+    # Claimed under the lock so two openers cannot both warn.
+    with _gc_pause_lock:
+        if _gc_pause_warned or not get_config().warn_on_gc_pause:
+            return
+        _gc_pause_warned = True
+    # Warned outside it: a filter turning this into an error must not
+    # propagate while the lock is held.
+    msg = (
+        "Reading remote HDF5 pauses Python's automatic garbage collection "
+        "until the last such handle closes, which avoids a deadlock between "
+        "h5py's global lock and collection on fsspec's event-loop thread. "
+        "Reference counting is unaffected, but cyclic garbage accumulates "
+        "meanwhile. Set `warn_on_gc_pause=False` to silence this warning."
+    )
+    warnings.warn(msg, UserWarning, stacklevel=4)
 
 
 def _claim_safety_collect() -> bool:
@@ -103,6 +153,10 @@ def pause_gc() -> None:
                 gc.disable()
         finally:
             _gc_pause_depth += 1
+    # Last, so a warning filter which raises cannot escape before the pause is
+    # accounted for. The caller resumes on any failure, and would otherwise
+    # release a pause this call never took -- stranding another live handle.
+    _warn_gc_pause_once()
 
 
 def resume_gc() -> None:
@@ -125,13 +179,15 @@ def _reset_gc_pause_state():
     Handles inherited by the child record the pid that paused for them, so
     closing one there cannot resume a pause this child never took.
     """
-    global _gc_pause_depth, _gc_pause_lock, _gc_collect_after
+    global _gc_pause_depth, _gc_pause_lock, _gc_collect_after, _gc_pause_warned
     _gc_pause_lock = threading.Lock()
     if _gc_pause_depth and _gc_was_enabled:
         gc.enable()
     _gc_pause_depth = 0
-    # The parent's rate limit does not describe this process.
+    # Neither the parent's rate limit nor its warning describes this process;
+    # a pool worker which pauses collection should say so itself.
     _gc_collect_after = 0.0
+    _gc_pause_warned = False
 
 
 @_reinit_after_fork

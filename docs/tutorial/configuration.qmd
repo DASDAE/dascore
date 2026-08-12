@@ -48,6 +48,7 @@ with config_context(patch_history="disabled"):
 ```
 
 For remote IO settings such as `allow_remote_cache`,
-`allow_remote_cache_for_metadata`, and `warn_on_remote_cache`, plus examples
-of metadata-only vs read-time behavior, see
+`allow_remote_cache_for_metadata`, `warn_on_remote_cache`,
+`remote_hdf5_block_size`, `remote_hdf5_max_blocks`, and `warn_on_gc_pause`,
+plus examples of metadata-only vs read-time behavior, see
 [Working with Remote Patches](remote_patches.qmd).
