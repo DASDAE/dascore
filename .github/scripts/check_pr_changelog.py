@@ -37,12 +37,11 @@ _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _ANY_BULLET = re.compile(r"^[-*+]\s+")
 
 _HELP = (
-    "The Changelog section must hold one bullet per user-facing change, each "
-    f"starting with a category ({', '.join(CATEGORIES)}), or the single word "
-    "'none' when the change is internal. Mark an entry '**breaking**' when it "
-    "can break code written against the last released version. Example:\n"
-    "    - added: `Patch.enrich` copies inventory metadata onto a patch.\n"
-    "    - changed **breaking**: `dc.set_config` is no longer a context manager."
+    f"Each bullet must start with a category ({', '.join(CATEGORIES)}), "
+    "optionally followed by '**breaking**', or the section must be the single "
+    "word 'none'. Example:\n"
+    "    - changed **breaking**: `dc.set_config` is no longer a context manager.\n"
+    "See https://dascore.org/contributing/general_guidelines.html#changelog-entries"
 )
 
 

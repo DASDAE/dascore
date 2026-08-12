@@ -18,30 +18,14 @@ pound sign, e.g. `#12` without the backticks)
 
 ## Changelog
 
-<!--
-Required, and checked by CI. DASCore keeps no changelog file; the release notes are assembled from
-merged pull requests, so these bullets are this PR's changelog entry.
-
-Write one bullet per user-facing change, each starting with a category:
-
-    added, changed, deprecated, removed, fixed, security
-
-Add **breaking** after the category when the change can break code written against the last released
-version. Breaking only against unreleased work on dev does not count, since users never saw it.
-
-Describe what changes for the reader and what to do about it; leave implementation detail to the diff.
-Write the single word "none" if nothing user-facing changes (refactors, CI, typing, tests).
-
-    - added: `Patch.enrich` copies inventory metadata onto a patch.
-    - changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
-    - fixed: chunking a coordinate in feet no longer drops samples.
--->
+<!-- Required, checked by CI. One bullet per user-facing change, or "none".
+     See https://dascore.org/contributing/general_guidelines.html#changelog-entries -->
 
 ## Checklist
 
 I have:
 
-- [ ] filled in the Changelog section above, writing "none" if nothing user-facing changes, since release notes are assembled from PRs.
+- [ ] filled in the [Changelog](https://dascore.org/contributing/general_guidelines.html#changelog-entries) section above.
 
 I have (if applicable):
 
