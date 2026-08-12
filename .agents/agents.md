@@ -102,7 +102,7 @@ Important: if changing site structure, edit `scripts/_templates/_quarto.yml` (no
 
 ### Changelog
 
-DASCore does not maintain a changelog in the repository. Do not create one — not `CHANGELOG.md`, not a `changelog.d/` fragment directory — and do not add "unreleased changes" sections to any page. Release notes are written at release time from the pull requests merged since the last tag (see the `draft-release` skill), so a checked-in changelog is a second copy of that information which conflicts on every PR and drifts from what shipped. `docs/changelog.qmd` still exists, but only as a stub preserving a published URL: it points at the releases page and must never accumulate entries again.
+DASCore does not maintain a changelog in the repository. Do not create one — not `CHANGELOG.md`, not a `changelog.d/` fragment directory — and do not add "unreleased changes" sections to any page. Release notes are written at release time from the pull requests merged since the last tag (see the `draft-release` skill), so a checked-in changelog is a second copy of that information which conflicts on every PR and drifts from what shipped. `docs/changelog.qmd` still exists, but only as a stub preserving a published URL: it points at the releases page and must never accumulate entries again. This is enforced, not merely conventional — `tests/test_changelog.py` fails if the page gains a list item, a section, or much prose.
 
 Put the user-facing summary in the pull request description instead, under its `User-facing changes` and `Breaking changes` headings. Write for the person reading the release notes: what changed for them and what they should do about it, a sentence or two per item, with the reasoning and implementation detail left to the diff.
 
