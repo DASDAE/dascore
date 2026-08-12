@@ -591,9 +591,9 @@ class TestUnselect:
         cuts every patch into the pieces outside it -- one patch becoming
         two -- rather than choosing between patches.
         """
-        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+        with pytest.raises(InvalidSpoolQueryError, match="unselect cannot take"):
             diverse_spool.unselect(time=("2020-01-03", None))
-        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+        with pytest.raises(InvalidSpoolQueryError, match="unselect cannot take"):
             diverse_spool.unselect(_coords={"time": ("2020-01-03", None)})
 
     def test_unknown_name_raises(self, diverse_spool):
@@ -653,7 +653,7 @@ class TestUnselect:
 
     def test_coords_tag_form_raises(self, diverse_spool):
         """The tag form names bare kwargs, and is refused the same way."""
-        with pytest.raises(InvalidSpoolQueryError, match="cannot take yet"):
+        with pytest.raises(InvalidSpoolQueryError, match="unselect cannot take"):
             diverse_spool.unselect(_coords="time", time=("2020-01-03", None))
 
     def test_base_spool_unselect_raises(self, random_spool):

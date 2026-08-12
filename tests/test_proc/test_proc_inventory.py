@@ -722,11 +722,11 @@ class TestOnUnresolved:
 class TestInventoryQueryError:
     """An attached inventory changes what an unknown query name means."""
 
-    def test_inventory_field_names_the_inventory(self, patch, inventory):
+    def test_inventory_field_is_answered_by_the_inventory(self, patch, inventory):
         """The index's 'no such attribute' would deny a field which exists."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(coupling="cement")
+        # No channel is coupled in cement, so the field answers with none.
+        assert len(spool.select(coupling="cement")) == 0
 
     def test_plain_spool_keeps_its_message(self, patch):
         """With no inventory there is nothing to add."""
@@ -1456,18 +1456,24 @@ class TestInventorySelect:
         spool.select(gauge_length=99.0)
         assert len(spool) == 2
 
-    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
+    def test_channel_level_name_trims_channels(self, two_patch_spool, inventory):
         """
-        A track name is a real inventory name which select cannot use yet.
+        A track name selects channels rather than whole patches.
 
-        Saying which of the two it is takes the names accessor, and this
-        is what it was added for.
+        Telling one from an attr takes the names accessor, and this is
+        what it was added for.
         """
         spool = two_patch_spool.attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(coupling="trench")
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(zone="east")
+        out = spool.select(coupling="trench")
+        assert len(out) == 2
+        assert set(out.get_contents()["distance_max"]) == {150.0}
+
+    def test_a_channel_level_name_nothing_matches_keeps_nothing(
+        self, two_patch_spool, inventory
+    ):
+        """A value no channel holds selects no channel, so no patch."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(zone="east")) == 0
 
     def test_unknown_name_still_raises(self, two_patch_spool, inventory):
         """A name neither side knows is a misspelling, and says so."""
@@ -1556,11 +1562,18 @@ class TestInventoryUnselect:
             "random"
         ]
 
-    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
-        """A track name is as unsupported here as it is in select."""
+    def test_channel_level_name_removes_channels(self, two_patch_spool, inventory):
+        """
+        A track name removes channels rather than whole patches.
+
+        Which is the one thing `unselect` refuses a real coordinate for:
+        a coordinate range would leave a hole in every patch, while a
+        channel query chooses which channels a patch holds.
+        """
         spool = two_patch_spool.attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.unselect(coupling="trench")
+        out = spool.unselect(coupling="trench")
+        assert len(out) == 2
+        assert set(out.get_contents()["distance_min"]) == {151.0}
 
 
 class TestInventorySelectCoverage:
@@ -1858,7 +1871,7 @@ class TestConnectorReviewFindings:
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the
-        group, which is the channel-level half and not supported yet.
+        group, which trims channels rather than choosing patches.
         """
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
         clash = inventory.replace(
@@ -1880,11 +1893,13 @@ class TestConnectorReviewFindings:
         spool = dc.spool([patch]).attach_inventory(clash)
         assert len(spool.select(gauge_length=10.0)) == 1
         assert len(spool.select(_attrs={"gauge_length": 10.0})) == 1
-        for form in ({"gauge_length": 10.0}, "gauge_length", ["gauge_length"]):
+        # The group covers the first metre of the path, which is the
+        # patch's first channel and nothing else.
+        for form in ({"gauge_length": "odd"}, "gauge_length", ["gauge_length"]):
             # The mapping form and both tag forms all name the coordinate.
-            kwargs = {} if isinstance(form, Mapping) else {"gauge_length": 10.0}
-            with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-                spool.select(_coords=form, **kwargs)
+            kwargs = {} if isinstance(form, Mapping) else {"gauge_length": "odd"}
+            out = spool.select(_coords=form, **kwargs)
+            assert out.get_contents()["distance_max"].tolist() == [0.0]
 
     def test_a_field_scalar_on_another_path_is_kept(self):
         """
