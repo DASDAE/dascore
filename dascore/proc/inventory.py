@@ -19,6 +19,7 @@ from dascore.constants import (
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
+    TRACK_IDENTITY_FIELDS,
     VALID_COORDINATE_LABELS,
     Interrogator,
     Inventory,
@@ -55,8 +56,9 @@ _COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 OnMissing = Literal["raise", "null", "ignore"]
 _VALID_ON_MISSING = get_args(OnMissing)
 
-# Tracks whose fields enrich can project, and where their intervals live.
-_TRACK_NAMES = ("optical_components", "geometry", "coupling")
+# Tracks whose fields enrich can project. The inventory names them, so a
+# track enrich can project and one selection can ask about are the same set.
+_TRACK_NAMES = tuple(TRACK_IDENTITY_FIELDS)
 
 # Track fields whose units the inventory documents.
 _TRACK_FIELD_UNITS = {

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import get_args, get_origin
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
@@ -1753,3 +1756,110 @@ class TestDistanceMapAxisAgreement:
         dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
         with pytest.raises(InvalidInventoryError, match="not a DistanceMap input"):
             dmap.map_to_distance([0.5], axis="distance")
+
+
+class TestGetNames:
+    """The names an inventory could contribute to a patch."""
+
+    @pytest.fixture(scope="class")
+    def names(self):
+        """The names of the shared test inventory."""
+        return build_inventory().get_names()
+
+    def test_attrs_match_the_reader_vocabulary(self, names):
+        """
+        The names read off the models are the ones readers write.
+
+        INVENTORY_ATTRS is what a reader puts in patch attrs and this is
+        what enrichment could copy there; the two being one vocabulary is
+        what keeps a header value and an enriched value one attr. The
+        data-state trio is the only difference: enrichment copies it when
+        asked by name rather than in the blanket form.
+        """
+        data_state = {"data_type", "data_category", "data_units"}
+        assert set(names.attrs) == set(INVENTORY_ATTRS) | data_state
+
+    def test_attrs_are_model_fields(self, names):
+        """Every attr name is a field of the model it is read from."""
+        for name in names.attrs:
+            prefix, _, field = name.rpartition(".")
+            model = inv.Interrogator if prefix == "interrogator" else inv.Acquisition
+            assert not prefix or prefix == "interrogator", name
+            assert field in model.model_fields, name
+
+    def test_attrs_exclude_structure(self, names):
+        """
+        What locates an entry is not a fact about the system.
+
+        The codes and epoch bounds resolve a patch to its acquisition, and
+        the distance map and interrogator hold whole records rather than
+        values; none of them is something a patch could carry as an attr.
+        """
+        excluded = {"code", "location_code", "start_time", "end_time"}
+        excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
+        assert not set(names.attrs) & excluded
+
+    def test_track_identity_fields_exist(self):
+        """
+        Each blessed track name maps to a real field of that track's model.
+
+        The map is the one hand-written piece of the vocabulary, so it is
+        the one piece which can drift away from the models.
+        """
+        path_fields = inv.OpticalPath.model_fields
+        for track, field in inv.TRACK_IDENTITY_FIELDS.items():
+            assert track in path_fields, track
+            members = inv._annotation_members(path_fields[track].annotation)
+            (item,) = [x for x in members if get_origin(x) is tuple]
+            for model in inv._annotation_members(get_args(item)[0]):
+                if isinstance(model, type) and issubclass(model, inv.InventoryModel):
+                    assert field in model.model_fields, (track, model)
+
+    def test_coords_hold_the_tracks_and_groups(self, names):
+        """The path's tracks, their fields, and its annotation groups."""
+        assert "coupling" in names.coords  # bare: the identity field
+        assert "coupling.medium" in names.coords
+        assert "geometry" in names.coords
+        assert "optical_components.fiber_type" in names.coords
+        assert "zone" in names.coords  # the annotation group
+
+    def test_coords_hold_both_axis_spellings(self, names):
+        """A CRS axis is selectable as stored and as this CRS reads it."""
+        crs = build_inventory().coordinate_reference_system
+        assert set("xyz") <= set(names.coords)
+        assert set(crs.coordinate_labels) <= set(names.coords)
+
+    def test_coords_hold_optical_distance(self, names):
+        """Optical distance is a coordinate enrich can be asked for."""
+        assert "distance" in names.coords
+
+    def test_coords_exclude_track_structure(self, names):
+        """
+        A track's placement is not a value its channels take.
+
+        The interval bounds say where a coupling condition applies, and a
+        geometry's control points are the segment itself; neither is a
+        number a channel inside it carries.
+        """
+        excluded = {"coupling.start_distance", "coupling.end_distance"}
+        excluded |= {"geometry.distance", "geometry.coordinates"}
+        assert not set(names.coords) & excluded
+
+    def test_coords_omit_absent_tracks(self):
+        """An inventory with no coupling has no coupling to select on."""
+        base = build_inventory()
+        path = base.networks[0].fiber_arrays[0].optical_paths[0]
+        bare = base.replace(path, path.new(coupling=(), annotations=()))
+        coords = set(bare.get_names().coords)
+        assert not {x for x in coords if x.startswith("coupling")}
+        assert "zone" not in coords
+        assert "geometry" in coords  # the tracks it does have remain
+
+    def test_names_are_unique(self, names):
+        """A name means one thing, so it is listed once."""
+        assert len(set(names.attrs)) == len(names.attrs)
+        assert len(set(names.coords)) == len(names.coords)
+
+    def test_attrs_do_not_depend_on_contents(self):
+        """The models decide the attrs, so every inventory has the same."""
+        assert Inventory().get_names().attrs == build_inventory().get_names().attrs
