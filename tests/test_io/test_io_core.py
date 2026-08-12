@@ -1599,6 +1599,32 @@ class TestCastType:
         out = dc.read(dummy_text_file, name, version)
         assert out == Path(dummy_text_file).read_text()
 
+    def test_handle_closed_when_method_raises(self, dummy_text_file, monkeypatch):
+        """A handle opened by the caster must close when the method raises."""
+
+        class _Recorder:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            "dascore.io.core.get_handle_from_resource",
+            lambda resource, required_type: recorder,
+        )
+
+        class _Exploder(FiberIO):
+            name = "_ExploderIO"
+            version = "1"
+
+            def read(self, resource: BinaryReader, **kwargs):
+                raise ValueError("mid-read failure")
+
+        with pytest.raises(ValueError, match="mid-read failure"):
+            _Exploder().read(dummy_text_file)
+        assert recorder.closed
+
 
 class TestGetSupportedIOTable:
     """A test for creating the supported io table."""

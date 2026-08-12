@@ -18,7 +18,7 @@ from h5py import File as H5pyFile
 
 from dascore.compat import UPath
 from dascore.config import get_config
-from dascore.constants import remote_hdf5_tuned_protocols
+from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
@@ -31,6 +31,8 @@ from dascore.utils.remote_io import (
     ensure_local_file,
     get_local_handle,
     is_no_range_http_error,
+    pause_gc,
+    resume_gc,
 )
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
@@ -59,22 +61,38 @@ class _ManagedH5pyFile:
     therefore the point where DASCore tears down the entire HDF5 access stack.
     """
 
-    def __init__(self, handle: H5pyFile, owned_fileobj=None):
+    def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
         self._handle = handle
         self._owned_fileobj = owned_fileobj
+        # The pid that paused, so a handle inherited through a fork cannot
+        # resume a pause the child never took.
+        self._gc_paused_pid = os.getpid() if gc_paused else None
         self._closed = False
 
     def close(self):
         """Close the h5py file and, when present, the owned file object."""
         if self._closed:
             return
+        self._closed = True
         try:
             self._handle.close()
         finally:
-            if self._owned_fileobj is not None:
-                with suppress(Exception):
-                    self._owned_fileobj.close()
-            self._closed = True
+            # Nested so nothing raised by the teardown, including a
+            # BaseException, can skip the resume and strand the pause.
+            try:
+                if self._owned_fileobj is not None:
+                    with suppress(Exception):
+                        self._owned_fileobj.close()
+            finally:
+                # dict.pop is atomic, so racing closes resume exactly once.
+                pid = self.__dict__.pop("_gc_paused_pid", None)
+                if pid == os.getpid():
+                    resume_gc()
+
+    def __del__(self):
+        """Backstop close so a leaked handle cannot pause collection forever."""
+        with suppress(Exception):
+            self.close()
 
     def __enter__(self):
         return self
@@ -99,6 +117,43 @@ class _ManagedH5pyFile:
 
     def __getattr__(self, item):
         return getattr(self._handle, item)
+
+
+def _is_loop_backed_fileobj(resource) -> bool:
+    """
+    Return True when a file object's filesystem serves reads via a loop thread.
+
+    fsspec async filesystems (http, s3, ...) bridge each read onto a shared
+    event-loop thread and mark themselves with ``async_impl``; duck-typing it
+    avoids importing fsspec here. Buffering wrappers hide the filesystem, so
+    unwrap a few levels: missing one would leave the deadlock window open.
+    """
+    for _ in range(4):
+        if getattr(getattr(resource, "fs", None), "async_impl", False):
+            return True
+        wrapped = getattr(resource, "raw", None) or getattr(resource, "buffer", None)
+        if wrapped is None or wrapped is resource:
+            return False
+        resource = wrapped
+    return False
+
+
+def _open_h5_paused(fileobj, constructor, mode) -> _ManagedH5pyFile:
+    """
+    Open a loop-backed file object with h5py while automatic gc is paused.
+
+    The returned wrapper owns the pause and releases it on close; if the open
+    fails, both the pause and the file object are released here.
+    """
+    pause_gc()
+    try:
+        handle = constructor(fileobj, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, fileobj, gc_paused=True)
+    except BaseException:
+        with suppress(Exception):
+            fileobj.close()
+        resume_gc()
+        raise
 
 
 def get_h5py_file(handle) -> H5pyFile:
@@ -148,6 +203,11 @@ def open_h5_resource(
     if isinstance(resource, H5pyFile):
         return _ManagedH5pyFile(resource)
     if isinstance(resource, io.IOBase):
+        # A user-supplied fsspec file object delegates reads to the same
+        # event-loop thread as the UPath branch below and needs the same
+        # GC pause; plain local/in-memory streams do not.
+        if _is_loop_backed_fileobj(resource):
+            return _open_h5_paused(resource, constructor, mode)
         handle = constructor(resource, mode=mode, driver="fileobj")
         return _ManagedH5pyFile(handle, resource)
     if isinstance(resource, UPath):
@@ -160,19 +220,20 @@ def open_h5_resource(
                 constructor=constructor,
                 open_kwargs_getter=open_kwargs_getter,
             )
+        # Note: only mode == "r" is a supported remote path here; H5Writer
+        # intercepts UPath targets with its temp-file write-back handle.
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
+        # h5py holds its global lock while blocking on fsspec's event-loop
+        # thread for remote fetches; an automatic garbage collection on that
+        # thread deallocating h5py objects then deadlocks on the same lock.
+        # Pause collection for the handle's lifetime (resumed in close()).
         handle = _FallbackFileObj(
             remote_opener=lambda: resource.open(file_mode, **open_kwargs),
             local_opener=lambda: ensure_local_file(resource).open(file_mode),
             error_predicate=is_no_range_http_error,
         )
-        try:
-            h5_handle = constructor(handle, mode=mode, driver="fileobj")
-            return _ManagedH5pyFile(h5_handle, handle)
-        except Exception:
-            handle.close()
-            raise
+        return _open_h5_paused(handle, constructor, mode)
     try:
         if mode != "r":
             _maybe_make_parent_directory(resource)
@@ -209,6 +270,17 @@ class H5Reader(_H5CasterBase):
             # h5py performs many small seeks while opening HDF5 metadata.
             # s3fs defaults to 50 MB readahead blocks, which can pull most of
             # a large remote file just to satisfy metadata probes.
+            # HTTP needs a block LRU cache instead: the metadata probe
+            # alternates between the file header and footer, and fsspec's
+            # default single-window cache refetches a full block (or the whole
+            # file on range-less servers) on every jump.
+            if protocol in http_protocols:
+                # Bound retained memory: 8 blocks of the configured size.
+                return {
+                    "block_size": get_config().remote_hdf5_block_size,
+                    "cache_type": "blockcache",
+                    "cache_options": {"maxblocks": 8},
+                }
             return {
                 "block_size": get_config().remote_hdf5_block_size,
                 "cache_type": "readahead",

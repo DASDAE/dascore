@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from urllib.request import Request, urlopen
 
 import pytest
@@ -13,20 +12,14 @@ from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError, RemoteCacheError
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
-from tests.test_io._common_io_test_utils import skip_on_timeout
 
-# The localhost HTTP + fsspec/aiohttp streaming path intermittently deadlocks on
-# Windows (the async read stalls while h5py probes remote HDF5 metadata, which
-# pytest-timeout then aborts). This is a known Windows flakiness in that fallback
-# path, not a DASCore logic issue. Skip the localhost-HTTP tests on Windows to
-# keep CI deterministic; Linux and macOS still exercise them fully.
+# The intermittent stall formerly attributed to Windows was a platform-agnostic
+# deadlock between h5py's global lock and garbage collection on fsspec's
+# event-loop thread, fixed by pausing collection around remote h5py handles
+# (see dascore.utils.remote_io.pause_gc), so these tests run on all platforms.
 pytestmark = [
     pytest.mark.network,
     pytest.mark.timeout(30),
-    pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Flaky localhost-HTTP fsspec/aiohttp streaming on Windows.",
-    ),
 ]
 
 
@@ -181,11 +174,12 @@ class TestHTTPFormatAndSpool:
         path = http_range_das_path / "prodml_2.1.h5"
         fmt = dc.get_format(path)
         assert fmt == ("PRODML", "2.1")
-        # Note: this path is intermittently hanging in CI/local repro during
-        # the live ranged HDF5 read, so keep the skip narrowly scoped here.
-        # TODO: root-cause the ranged HTTP/fsspec/h5py stall and remove this.
-        with skip_on_timeout(15, "http_range_hdf5_read_succeeds dc.read"):
-            spool = dc.read(path)
+        # This read used to deadlock: h5py holds its global lock while
+        # delegating fetches to fsspec's event-loop thread, and a garbage
+        # collection on that thread deallocating h5py objects needed the same
+        # lock. Remote h5py handles now pause automatic collection, see
+        # dascore.utils.remote_io.pause_gc.
+        spool = dc.read(path)
         assert spool
         cached = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
         assert not cached
