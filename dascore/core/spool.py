@@ -825,10 +825,17 @@ class Spool(BaseSpool):
                 "it) or none of it, so it says neither."
             )
             raise ParameterError(msg)
-        self._check_channel_level(requested)
+        known_attrs, known_coords = self._index_names()
+        selectable = set()
+        if self._inventory is not None:
+            names = self._inventory.get_names()
+            self._check_channel_level(
+                requested, set(names.coords), known_attrs | known_coords
+            )
+            selectable = set(names.attrs) - known_coords
         attrs, coords = resolve_selector_namespaces(
-            set(self._catalog.backend.attr_names()) | self._inventory_attr_names(),
-            self._catalog.backend.coord_names(),
+            known_attrs | selectable,
+            known_coords,
             _attrs=_attrs,
             _coords=_coords,
             kwargs=kwargs,
@@ -849,23 +856,13 @@ class Spool(BaseSpool):
         keep = ~np.isin(ids, np.asarray(removed, dtype=np.int64))
         return self._new_from_catalog(self._catalog.restrict(keep))
 
-    def _inventory_attr_names(self) -> set[str]:
-        """The attrs an attached inventory adds to what this spool selects on."""
-        if self._inventory is None:
-            return set()
-        # A name the index already uses for a coordinate keeps its meaning;
-        # bare names resolve to attrs first, and an inventory must not
-        # quietly move one out of the namespace it has always been in.
-        names = set(self._inventory.get_names().attrs)
-        return names - set(self._catalog.backend.coord_names())
-
-    def _check_channel_level(self, requested: set[str]) -> None:
-        """Raise for a name the inventory defines along the fiber."""
-        if self._inventory is None:
-            return
+    def _index_names(self) -> tuple[set[str], set[str]]:
+        """The attr and coord names the index knows, read once per call."""
         backend = self._catalog.backend
-        known = set(backend.attr_names()) | set(backend.coord_names())
-        coords = set(self._inventory.get_names().coords)
+        return set(backend.attr_names()), set(backend.coord_names())
+
+    def _check_channel_level(self, requested, coords, known) -> None:
+        """Raise for a name the inventory defines along the fiber."""
         if channel_level := sorted(requested & coords - known):
             msg = (
                 f"{channel_level} name coordinates the attached inventory "
@@ -885,21 +882,34 @@ class Spool(BaseSpool):
         if self._inventory is None:
             return {}, _attrs, _coords, kwargs
         requested = _requested_names(_attrs, _coords, kwargs)
-        self._check_channel_level(requested)
+        known_attrs, known_coords = self._index_names()
+        names = self._inventory.get_names()
+        self._check_channel_level(
+            requested, set(names.coords), known_attrs | known_coords
+        )
+        # A name the index already uses for a coordinate keeps its meaning;
+        # bare names resolve to attrs first, and an inventory must not
+        # quietly move one out of the namespace it has always been in.
+        selectable = set(names.attrs) - known_coords
         # samples=True selections are coordinate-only, so an attr among
         # them is an error the index states better than this can.
-        selectable = self._inventory_attr_names()
         if samples or not requested & selectable:
             return {}, _attrs, _coords, kwargs
-        backend = self._catalog.backend
         attrs, coords = resolve_selector_namespaces(
-            set(backend.attr_names()) | selectable,
-            backend.coord_names(),
+            known_attrs | selectable,
+            known_coords,
             _attrs=_attrs,
             _coords=_coords,
             kwargs=kwargs,
         )
-        query = {x: attrs.pop(x) for x in list(attrs) if x in selectable}
+        query = {}
+        for name in list(attrs):
+            if name not in selectable:
+                continue
+            value = attrs.pop(name)
+            # A bare None or ... selects everything, here as everywhere.
+            if value is not None and value is not Ellipsis:
+                query[name] = value
         return query, attrs, coords, {}
 
     def _select_from_inventory(self, query: dict) -> Self:
@@ -918,33 +928,32 @@ class Spool(BaseSpool):
         """
         from dascore.proc.inventory import get_attr_values  # noqa: PLC0415
 
-        df = self._df
-        if not len(df):
+        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        if not len(ids):
             return self
-        ids = df["_patch_id"].to_numpy()
+        backend = self._catalog.backend
         contexts = None
-        mask = np.ones(len(df), dtype=bool)
+        mask = np.ones(len(ids), dtype=bool)
         for name, selector in query.items():
-            stated = (
-                ~_unstated(df[name])
-                if name in df.columns
-                else np.zeros(len(df), dtype=bool)
-            )
+            # Which rows state the name is asked of the index rather than
+            # read off the relation, so a spool whose headers state it
+            # everywhere is never realized: the index alone answers.
+            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
             # SQL never matches a row which states nothing, so this is the
             # verdict for the stated rows and False everywhere else.
             matched = np.isin(ids, self._index_matches(name, selector))
             if not stated.all():
                 if contexts is None:
-                    contexts = self._resolve_rows(df)
+                    contexts = self._resolve_rows(ids)
                 matched[~stated] = _match_resolved(
                     get_attr_values(self._inventory, contexts[~stated], name),
                     name,
                     selector,
                 )
             mask &= matched
-        return self._new_from_catalog(self._catalog.restrict(mask))
+        return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
 
-    def _resolve_rows(self, df) -> np.ndarray:
+    def _resolve_rows(self, ids) -> np.ndarray:
         """
         Resolve each presented row to its inventory context, or to None.
 
@@ -953,9 +962,15 @@ class Spool(BaseSpool):
         offer, and one whose time axis is not physical — lag times from a
         correlation, say — has no instants, which is the same thing
         `Patch.enrich` refuses to guess at.
+
+        This is where the relation is realized, which is why it is only
+        reached for a name the index does not state for every row.
         """
         from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
 
+        df = self._df
+        # The relation and the id list are one presentation of one view.
+        assert np.array_equal(df["_patch_id"].to_numpy(), ids)
         columns = [df.get(x) for x in ("acquisition_key", "time_min", "time_max")]
         physical = all(column is not None for column in columns) and all(
             np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]

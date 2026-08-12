@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pickle
 import re
+import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,7 @@ import pytest
 import dascore as dc
 from dascore.io.index import PatchCatalog
 from dascore.io.index.catalog import _adjust_unit_segments
-from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
 from dascore.utils.misc import _canonical_range, _CanonicalRange
 
@@ -402,3 +403,88 @@ class TestCatalogConcurrency:
         rebuilt = pickle.loads(pickle.dumps(live_catalog))
         assert rebuilt._revision.lock is not live_catalog._revision.lock
         assert len(rebuilt) == len(live_catalog)
+
+
+class TestSelectingWithinAMembership:
+    """A view whose membership is fixed still applies later predicates."""
+
+    def test_select_after_a_window(self):
+        """
+        A window says which rows are present, not that they all match.
+
+        The membership was already the answer to the predicates composed
+        before it, so returning it unfiltered would ignore every one
+        composed after.
+        """
+        spool = dc.get_example_spool("diverse_das")
+        window = spool[2:8]
+        tags = window.get_contents()["tag"].tolist()
+        for tag in set(tags):
+            expected = sum(x == tag for x in tags)
+            assert len(window.select(tag=tag)) == expected
+
+    def test_window_after_a_window(self):
+        """Windowing a windowed selection narrows rather than empties."""
+        spool = dc.get_example_spool("diverse_das")
+        assert len(spool[2:8].select(tag="big_gaps")[0:1]) == 1
+
+    def test_membership_order_survives_a_predicate(self):
+        """
+        An integer array arranges the rows, and a predicate filters it.
+
+        The arrangement is the presentation order, so re-deriving the
+        order from SQL would quietly undo it.
+        """
+        spool = dc.get_example_spool("diverse_das")
+        picked = spool[np.array([3, 1, 0])]
+        before = picked.get_contents()["_patch_id"].tolist()
+        assert picked.select(tag="*").get_contents()["_patch_id"].tolist() == before
+
+
+class TestGlobTranslation:
+    """The in-memory glob has to mean what the index's GLOB means."""
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            "a*",
+            "a?c",
+            "*",
+            "?",
+            "v[^x]*",
+            "v[!x]*",
+            "[abc]d",
+            "[]]x",
+            "a[b-d]e",
+            "[^]]a",
+            "x\\y*",
+            "no_meta",
+            "a[",
+            "[]",
+        ],
+    )
+    def test_agrees_with_sqlite(self, pattern):
+        """
+        SQLite decides what a glob means, since it is what answers one.
+
+        Reaching for fnmatch instead made `[!x]` and `[^x]` each select
+        the half of a spool the other did not.
+        """
+        values = ["abc", "a1c", "vax", "vxx", "ad", "]x", "ace", "", "a", "a["]
+        values += ["x\\yz", "!a", "^a", "]a", "no_meta", "[]"]
+        with sqlite3.connect(":memory:") as connection:
+            regex = glob_to_regex(pattern)
+            for value in values:
+                expected = connection.execute(
+                    "SELECT ? GLOB ?", (value, pattern)
+                ).fetchone()[0]
+                assert bool(expected) == bool(regex.match(value)), (pattern, value)
+
+    def test_a_pattern_no_regex_can_express_matches_nothing(self):
+        """
+        SQLite reads a reversed range more leniently than a regex can.
+
+        There is no honest translation, so the pattern selects nothing
+        rather than being guessed at; the docstring says so.
+        """
+        assert glob_to_regex("[b-a]").match("b") is None

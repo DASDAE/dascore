@@ -602,9 +602,26 @@ class TestUnselect:
 
     def test_composes(self, diverse_spool):
         """A spool with patches removed is a spool."""
+        tags = diverse_spool.get_contents()["tag"].tolist()
+        removed = {"some_tag", "random"}
         out = diverse_spool.unselect(tag="some_tag").unselect(tag="random")
+        assert len(out) == sum(x not in removed for x in tags)
         for patch in out:
-            assert patch.attrs["tag"] not in {"some_tag", "random"}
+            assert patch.attrs["tag"] not in removed
+
+    def test_complements_within_a_window(self, diverse_spool):
+        """
+        A window fixes which rows are present, not which ones match.
+
+        The complement of a selection over a windowed spool is the rest
+        of the window, not nothing.
+        """
+        window = diverse_spool[2:8]
+        tags = window.get_contents()["tag"].tolist()
+        for tag in set(tags):
+            expected = sum(x != tag for x in tags)
+            assert len(window.unselect(tag=tag)) == expected
+        assert len(window.unselect(tag="not_a_tag")) == len(window)
 
     def test_original_is_unchanged(self, diverse_spool):
         """As everywhere else, the spool it came from is left alone."""

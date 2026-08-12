@@ -17,6 +17,7 @@ from __future__ import annotations
 import itertools
 import os
 from collections.abc import Mapping, Sized
+from functools import cache
 from types import MappingProxyType, UnionType
 from typing import (
     Annotated,
@@ -1722,15 +1723,21 @@ def _is_multi_valued(item, field: str) -> bool:
     return isinstance(value, Sized) and not isinstance(value, str)
 
 
-def _value_field_names(model) -> list[str]:
-    """Return the fields of a model which state a fact about one thing."""
+@cache
+def _value_field_names(model) -> tuple[str, ...]:
+    """
+    Return the fields of a model which state a fact about one thing.
+
+    Cached on the class: the answer is a property of the model, and an
+    inventory asked for its names walks every item of every track.
+    """
     structural = frozenset(TimeRangedModel.model_fields) | _IDENTITY_FIELDS
     structural |= _EXTENT_FIELDS
-    return [
+    return tuple(
         name
         for name, info in model.model_fields.items()
         if name not in structural and _is_value_field(info)
-    ]
+    )
 
 
 # The observing-system facts, read off the models rather than listed, so a
@@ -1739,7 +1746,7 @@ def _value_field_names(model) -> list[str]:
 # vocabulary, and a new field has to reach the readers as well.
 _SYSTEM_FACT_NAMES = tuple(
     sorted(
-        _value_field_names(Acquisition)
+        list(_value_field_names(Acquisition))
         + [f"interrogator.{x}" for x in _value_field_names(Interrogator)]
     )
 )

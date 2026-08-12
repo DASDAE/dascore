@@ -742,15 +742,16 @@ class PatchCatalog:
         ids = self._ordered_ids()[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
-    def restrict(self, indices) -> PatchCatalog:
+    def restrict(self, indices, ids=None) -> PatchCatalog:
         """
         Return a view keeping the presented rows an array selects.
 
         ``indices`` is a boolean mask over rows or an array of integer
         positions (order-preserving; duplicate positions collapse to
-        one row, matching the spool's set semantics).
+        one row, matching the spool's set semantics). ``ids`` is this
+        view's presented ids, for a caller which has just read them.
         """
-        ids = np.asarray(self._ordered_ids())
+        ids = np.asarray(self._ordered_ids() if ids is None else ids)
         picked = ids[np.asarray(indices)]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)

@@ -403,3 +403,40 @@ class TestHiveAcquisitionKey:
             spool = self._write(tmp_path, f"acquisition_key={value}").update()
         assert "acquisition_key" not in spool.get_contents().columns
         assert spool[0].attrs.acquisition_key == ""
+
+
+class TestOverrideComparesMeaning:
+    """The warning is about a disagreement, not about a spelling."""
+
+    def _index(self, tmp_path, segment, **attrs):
+        """Index one patch stating attrs under a hive segment."""
+        sub = tmp_path / segment
+        sub.mkdir()
+        dc.get_example_patch().update_attrs(**attrs).io.write(sub / "f.h5", "dasdae")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            spool = Spool.from_directory(tmp_path).update(progress=None)
+        spool.indexer.close()
+        return [x for x in caught if "override attrs" in str(x.message)]
+
+    def test_a_number_restated_differently_is_silent(self, tmp_path):
+        """`10` and `10.0` are the same gauge length."""
+        assert not self._index(tmp_path, "gauge_length=10", gauge_length=10.0)
+
+    def test_a_different_number_warns(self, tmp_path):
+        """A path stating another value is the disagreement to report."""
+        assert self._index(tmp_path, "gauge_length=20", gauge_length=10.0)
+
+    def test_an_unreadable_number_warns(self, tmp_path):
+        """A path which is not a number at all changes what the attr says."""
+        assert self._index(tmp_path, "gauge_length=ten", gauge_length=10.0)
+
+    def test_a_bool_restated_differently_is_silent(self, tmp_path):
+        """Hive spells a flag in lower case; it is still the same flag."""
+        segment = "closed_fiber_loop=true"
+        assert not self._index(tmp_path, segment, closed_fiber_loop=True)
+
+    def test_a_flipped_bool_warns(self, tmp_path):
+        """And the opposite flag is a disagreement."""
+        segment = "closed_fiber_loop=false"
+        assert self._index(tmp_path, segment, closed_fiber_loop=True)

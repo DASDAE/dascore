@@ -1939,7 +1939,7 @@ class TestGetNamesRoundTrip:
             wavelengths: tuple[float, ...] | None = None
             plain: float | None = None
 
-        assert inv._value_field_names(_Probe) == ["plain"]
+        assert inv._value_field_names(_Probe) == ("plain",)
 
     def test_annotated_unions_are_transparent(self):
         """
@@ -1955,4 +1955,4 @@ class TestGetNamesRoundTrip:
             resource: inv._Resource | None = None
             plain: float | None = None
 
-        assert inv._value_field_names(_Probe) == ["plain"]
+        assert inv._value_field_names(_Probe) == ("plain",)
