@@ -365,8 +365,8 @@ def terra15_das_patch(terra15_das_example_path) -> Patch:
     """Read the terra15 data, return contained DataArray."""
     out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.summary.get_coord_summary("time").max
-    coortime_step = out.coords.coord_map["time"].max()
-    assert attr_time == coortime_step
+    coord_time_max = out.coords.coord_map["time"].max()
+    assert attr_time == coord_time_max
     return out
 
 
@@ -578,9 +578,9 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
 
     pa3 = pa2.new(coords=pa2.coords.update(time_min=t3 + time_step))
 
-    expectetime_step = pa3.get_coord("time").max() - pa1.get_coord("time").min()
+    expected_time = pa3.get_coord("time").max() - pa1.get_coord("time").min()
     actual_time = pa3.coords.max("time") - pa1.coords.min("time")
-    assert expectetime_step == actual_time
+    assert expected_time == actual_time
     return dc.spool([pa2, pa1, pa3])
 
 
