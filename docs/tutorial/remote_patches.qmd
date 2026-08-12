@@ -164,38 +164,37 @@ Opening an HDF5 file over HTTP is dominated by h5py's metadata probe, which alte
 - `remote_hdf5_block_size` — bytes fetched per block (5 MiB by default)
 - `remote_hdf5_max_blocks` — blocks one open handle may keep (8 by default)
 
-Their product is roughly the memory an open remote HDF5 handle retains, so ~40 MiB by default. The cache fetches one block per request, so the block size trades bytes against round trips: smaller blocks move less data but ask for it more often.
-
-The defaults are a compromise. Which way to move them depends on what you are doing, because scanning and reading have opposite access patterns.
+Their product is roughly the memory one open handle retains, so ~40 MiB by default. The cache fetches one block per request, so the block size trades bytes against round trips. Which way to move it depends on what you are doing, because scanning and reading pull in opposite directions.
 
 ### Scanning many files
 
-Scanning reads only metadata — kilobytes, but from two distant regions of each file. A large block spends megabytes to deliver kilobytes, and the file is closed before the cache is reused. Prefer small blocks, and only enough of them to hold both ends of the file:
+Scanning reads only metadata — kilobytes, from two distant regions of each file, which is then closed before the cache is reused. Big blocks spend megabytes to deliver kilobytes, so shrink both:
 
 ```python
 import dascore as dc
 from dascore.config import config_context
 
+urls = [f"http://example.com/data/file_{i}.h5" for i in range(100)]
+
 with config_context(remote_hdf5_block_size=262_144, remote_hdf5_max_blocks=4):
-    spool = dc.spool("http://example.com/data/").update()
-    contents = spool.get_contents()
+    df = dc.scan_to_df(urls)
 ```
 
-That is 1 MiB retained per handle instead of 40 MiB, which matters most when a spool holds several files open at once. Do not shrink the block size too far: each block is a request, and on a high-latency link the round trips will cost more than the bytes saved.
+That retains 1 MiB per handle rather than 40 MiB. Do not shrink too far: on a high-latency link the extra round trips cost more than the bytes saved.
 
 ### Reading whole patches
 
-Reading pulls large contiguous ranges, and the cache issues one request per block. Here big blocks win, because they cut the number of requests for the same bytes. The LRU buys little on a streaming read, so trade blocks for size and keep the product in hand:
+Reading pulls large contiguous ranges, so bigger blocks mean fewer requests for the same bytes. The LRU earns little on a single pass, so trade blocks for size:
 
 ```python
 with config_context(remote_hdf5_block_size=16_777_216, remote_hdf5_max_blocks=2):
     patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
 ```
 
-If you are reading whole files, and especially reading them more than once, consider letting DASCore materialize them locally instead — see [Remote Cache Settings](#remote-cache-settings). A single sequential download beats any block-cached streaming pattern.
+If you read whole files, especially more than once, let DASCore materialize them locally instead — see [Remote Cache Settings](#remote-cache-settings). One sequential download beats any streaming pattern.
 
 ### Many handles at once
 
-The memory figure is per *open* handle, so concurrent reads multiply it. A spool reading eight remote files in parallel at the defaults holds ~320 MiB of cache. Lower `remote_hdf5_max_blocks` first: it costs refetches only if the access pattern revisits an evicted block, which a scan or a sequential read does not.
+The figure is per *open* handle, so concurrent reads multiply it: eight files in parallel at the defaults holds ~320 MiB. Lower `remote_hdf5_max_blocks` first, since evictions cost nothing for a scan or a single pass.
 
-These settings apply to the protocols DASCore tunes (HTTP, HTTPS, and S3-like). `remote_hdf5_max_blocks` applies to HTTP and HTTPS, the ones using the block cache; S3 uses a read-ahead cache and takes only the block size.
+Both settings apply to the protocols DASCore tunes; `remote_hdf5_max_blocks` reaches only HTTP and HTTPS, as S3 uses a read-ahead cache which takes the block size alone.

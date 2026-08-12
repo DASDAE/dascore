@@ -79,7 +79,11 @@ from dascore.utils.misc import (
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
-from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
+from dascore.utils.remote_io import (
+    get_remote_cache_scope,
+    remote_cache_scope,
+    suppress_gc_pause_warning,
+)
 
 # What the scan dispatchers accept: one resource or patch, or an
 # iterable of them (`_iterate_scan_inputs` flattens its input with
@@ -749,7 +753,11 @@ class _FiberIOManager:
         See [`dascore.io.core.get_format`](`dascore.io.core.get_format`)
         for docs.
         """
-        with IOResourceManager(path) as man:
+        # Probing must not announce a remote gc pause: the resource is not
+        # known to be HDF5 yet, and under warnings-as-errors the warning
+        # would be caught by the robustness handler below and read as
+        # "wrong format", silently skipping the reader which does match.
+        with IOResourceManager(path) as man, suppress_gc_pause_warning():
             path = man.source
             if isinstance(path, UPath):
                 exists = path.exists()

@@ -37,6 +37,9 @@ _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
+_SUPPRESS_GC_PAUSE_WARNING: ContextVar[bool] = ContextVar(
+    "suppress_gc_pause_warning", default=False
+)
 
 _gc_pause_lock = threading.Lock()
 _gc_pause_depth = 0
@@ -46,6 +49,23 @@ _gc_pause_warned = False
 # Seconds between safety-valve collections; a full collect is O(live objects),
 # measured at 7-160 ms here, so it must not run on every remote open.
 _GC_COLLECT_INTERVAL = 10.0
+
+
+@contextmanager
+def suppress_gc_pause_warning():
+    """
+    Do not announce the gc pause for the duration of the block.
+
+    Wrapped around format detection. There the warning is both wrong and
+    dangerous: it claims an HDF5 read before h5py has decided the resource
+    is HDF5, and a filter which turns warnings into errors would make the
+    probe read as "wrong format", silently skipping the right reader.
+    """
+    token = _SUPPRESS_GC_PAUSE_WARNING.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESS_GC_PAUSE_WARNING.reset(token)
 
 
 def _warn_gc_pause_once() -> None:
@@ -58,6 +78,8 @@ def _warn_gc_pause_once() -> None:
     remote files from repeating it.
     """
     global _gc_pause_warned
+    if _SUPPRESS_GC_PAUSE_WARNING.get():
+        return
     # Claimed under the lock so two openers cannot both warn.
     with _gc_pause_lock:
         if _gc_pause_warned or not get_config().warn_on_gc_pause:

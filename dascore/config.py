@@ -137,7 +137,12 @@ class DascoreConfig(BaseModel):
     )
     remote_hdf5_block_size: int = Field(
         default=5_242_880,
-        description="Block size in bytes for remote HDF5 access on tuned protocols.",
+        gt=0,
+        description=(
+            "Block size in bytes for remote HDF5 access on tuned protocols. "
+            "Zero would make fsspec return a non-seekable streaming file and "
+            "download the whole thing, so it is rejected."
+        ),
     )
     remote_hdf5_max_blocks: int = Field(
         default=8,

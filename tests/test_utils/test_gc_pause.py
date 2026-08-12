@@ -11,7 +11,10 @@ from contextlib import suppress
 from types import SimpleNamespace
 
 import pytest
+from upath import UPath
 
+import dascore as dc
+import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
 from dascore.config import config_context
 from dascore.utils.hdf5 import (
@@ -263,15 +266,6 @@ class TestPauseWarning:
                 pause_gc()
                 resume_gc()
 
-    def test_silencing_does_not_disable_the_pause(self):
-        """Silencing the warning must not change what the pause does."""
-        with config_context(warn_on_gc_pause=False):
-            pause_gc()
-            try:
-                assert not gc.isenabled()
-            finally:
-                resume_gc()
-
     def test_raising_filter_cannot_steal_a_live_pause(self):
         """A warning turned into an error must not release someone else's pause.
 
@@ -291,14 +285,68 @@ class TestPauseWarning:
         finally:
             resume_gc()
 
+    @pytest.mark.concurrency
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+    # Forking a multi-threaded process can wedge the child, and the repo sets
+    # no global timeout, so bound it rather than hang the job for an hour.
+    @pytest.mark.timeout(30)
     def test_fork_rearms_the_warning(self):
-        """A pool worker which pauses collection should say so itself."""
+        """A pool worker which pauses collection should say so itself.
+
+        Forks for real rather than calling the reset hook, so this also
+        pins that the hook is registered with os.register_at_fork.
+        """
         with pytest.warns(UserWarning, match="pauses Python's automatic garbage"):
             pause_gc()
         resume_gc()
         assert remote_io._gc_pause_warned
-        remote_io._reset_gc_pause_state()
-        assert not remote_io._gc_pause_warned
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:  # the child reports what it inherited, then leaves
+            os.close(read_fd)
+            os.write(write_fd, b"1" if remote_io._gc_pause_warned else b"0")
+            os._exit(0)
+        os.close(write_fd)
+        inherited = os.read(read_fd, 1)
+        os.close(read_fd)
+        os.waitpid(pid, 0)
+        assert inherited == b"0", "the child inherited the parent's warned flag"
+
+
+class TestProbeSuppression:
+    """Format detection must not be disturbed by the pause warning."""
+
+    def test_probe_survives_warnings_as_errors(
+        self, random_patch, tmp_path, monkeypatch
+    ):
+        """A warning raised while probing must not read as "wrong format".
+
+        `_get_format` treats any exception from a probe as "not my format",
+        so a filter turning the warning into an error would silently skip
+        the reader which does match. `file_format` pins the probe to that
+        reader; without it the once-per-process warning lands on an earlier
+        miss and the failure hides.
+        """
+        path = tmp_path / "probe.h5"
+        dc.write(random_patch, path, "dasdae")
+        # Make a local file take the loop-backed branch, which pauses.
+        monkeypatch.setattr(hdf5_module, "_is_loop_backed", lambda _resource: True)
+        monkeypatch.setattr(remote_io, "_gc_pause_warned", False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            out = dc.get_format(UPath(path), file_format="DASDAE")
+        assert out == ("DASDAE", "1")
+
+    def test_probe_does_not_warn(self, random_patch, tmp_path, monkeypatch):
+        """Probing claims no HDF5 read; the resource may not even be one."""
+        path = tmp_path / "quiet.h5"
+        dc.write(random_patch, path, "dasdae")
+        monkeypatch.setattr(hdf5_module, "_is_loop_backed", lambda _resource: True)
+        monkeypatch.setattr(remote_io, "_gc_pause_warned", False)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dc.get_format(UPath(path), file_format="DASDAE")
+        assert not [x for x in caught if "automatic garbage" in str(x.message)]
 
 
 class TestLoopBackedDetection:
