@@ -868,19 +868,17 @@ def _type_caster(func, sig, required_type, arg_name):
             # kwargs is included in bound arguments, need to re-attach
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
-        except BaseException as e:  # get_format can't raise; must return false.
+        except BaseException as e:
             # A handle created here must close even on failure, including on
             # KeyboardInterrupt; leaking a remote handle would leave garbage
             # collection paused for as long as the traceback is retained.
             if new_resource is not None and new_resource is not resource:
                 with suppress(Exception):
                     getattr(new_resource, "close", lambda: None)()
-            if not isinstance(e, Exception):
+            # get_format can't raise; it must return False instead.
+            if fun_name != "get_format" or not isinstance(e, Exception):
                 raise
-            if fun_name == "get_format":
-                out = False
-            else:
-                raise e
+            out = False
         else:
             # if a new file handle was created we need to close it now. But it
             # shouldn't close any passed in, that should happen up the stack.

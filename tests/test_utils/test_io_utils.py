@@ -10,6 +10,7 @@ from pathlib import Path
 
 import h5py
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from upath import UPath
 
 import dascore as dc
@@ -56,21 +57,17 @@ class _DummyHandle:
         self.closed = True
 
 
+class _FakeAsyncFS(AsyncFileSystem):
+    """A stand-in async fsspec filesystem which needs no event loop."""
+
+    def __init__(self):
+        pass
+
+
 class _FakeRemoteFile(BytesIO):
     """A file object whose fsspec filesystem serves reads on a loop thread."""
 
-
-def _make_loop_backed_file() -> _FakeRemoteFile:
-    """Return a file object that takes the loop-backed (GC-paused) branch."""
-    from fsspec.asyn import AsyncFileSystem
-
-    class _FakeAsyncFS(AsyncFileSystem):
-        def __init__(self):
-            pass
-
-    out = _FakeRemoteFile()
-    out.fs = _FakeAsyncFS()
-    return out
+    fs = _FakeAsyncFS()
 
 
 class _BadType:
@@ -462,6 +459,25 @@ class TestGetHandleFromResource:
         handle.close()
         assert gc.isenabled()
 
+    def test_failed_open_leaves_caller_fileobj_usable(self):
+        """A caller's file object must survive a failed HDF5 open.
+
+        get_format hands the same object to every FiberIO in turn, so an
+        HDF5 miss cannot close it out from under the next one.
+        """
+        buffer = BytesIO(b"not an hdf5 file")
+        with pytest.raises(OSError):
+            H5Reader.get_handle(buffer)
+        assert not buffer.closed
+
+    def test_local_upath_does_not_pause_gc(self, generic_hdf5):
+        """A synchronous backend has no loop thread, so it must not pause gc."""
+        handle = H5Reader.get_handle(UPath(generic_hdf5))
+        try:
+            assert gc.isenabled()
+        finally:
+            handle.close()
+
     def test_loop_backed_fileobj_pauses_gc(self, monkeypatch):
         """User-supplied fsspec async file objects need the GC pause too."""
         monkeypatch.setattr(
@@ -470,7 +486,7 @@ class TestGetHandleFromResource:
             staticmethod(lambda *args, **kwargs: BytesIO()),
         )
         assert gc.isenabled()
-        handle = H5Reader.get_handle(_make_loop_backed_file())
+        handle = H5Reader.get_handle(_FakeRemoteFile())
         try:
             assert not gc.isenabled()
         finally:
@@ -486,7 +502,7 @@ class TestGetHandleFromResource:
         monkeypatch.setattr(H5Reader, "constructor", staticmethod(_explode))
         assert gc.isenabled()
         with pytest.raises(ValueError, match="not an hdf5 fileobj"):
-            H5Reader.get_handle(_make_loop_backed_file())
+            H5Reader.get_handle(_FakeRemoteFile())
         assert gc.isenabled()
 
     def test_h5_writer_to_remote_upath(self):

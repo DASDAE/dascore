@@ -119,13 +119,14 @@ class _ManagedH5pyFile:
         return getattr(self._handle, item)
 
 
-def _is_loop_backed_fileobj(resource) -> bool:
+def _is_loop_backed(resource) -> bool:
     """
-    Return True when a file object's filesystem serves reads via a loop thread.
+    Return True when reads on a resource are served by an event-loop thread.
 
     fsspec async filesystems (http, s3, ...) bridge each read onto a shared
     event-loop thread and mark themselves with ``async_impl``; duck-typing it
-    avoids importing fsspec here. Buffering wrappers hide the filesystem, so
+    avoids importing fsspec here. Local, memory, and other synchronous
+    backends need no GC pause. Buffering wrappers hide the filesystem, so
     unwrap a few levels: missing one would leave the deadlock window open.
     """
     for _ in range(4):
@@ -138,22 +139,33 @@ def _is_loop_backed_fileobj(resource) -> bool:
     return False
 
 
-def _open_h5_paused(fileobj, constructor, mode) -> _ManagedH5pyFile:
+def _open_h5_fileobj(
+    fileobj, constructor, mode, *, pause: bool, close_on_error: bool
+) -> _ManagedH5pyFile:
     """
-    Open a loop-backed file object with h5py while automatic gc is paused.
+    Open a file object with h5py through the fileobj driver.
 
-    The returned wrapper owns the pause and releases it on close; if the open
-    fails, both the pause and the file object are released here.
+    Loop-backed resources pause automatic collection first; the returned
+    wrapper owns that pause and releases it on close, and a failed open
+    releases it here.
+
+    ``close_on_error`` is set only for file objects DASCore created. A
+    caller-supplied one must survive a failed open: ``get_format`` offers the
+    same object to every FiberIO in turn, and an HDF5 miss is the expected
+    outcome for most of them.
     """
-    pause_gc()
+    if pause:
+        pause_gc()
     try:
         handle = constructor(fileobj, mode=mode, driver="fileobj")
-        return _ManagedH5pyFile(handle, fileobj, gc_paused=True)
     except BaseException:
-        with suppress(Exception):
-            fileobj.close()
-        resume_gc()
+        if close_on_error:
+            with suppress(Exception):
+                fileobj.close()
+        if pause:
+            resume_gc()
         raise
+    return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
 
 
 def get_h5py_file(handle) -> H5pyFile:
@@ -206,10 +218,13 @@ def open_h5_resource(
         # A user-supplied fsspec file object delegates reads to the same
         # event-loop thread as the UPath branch below and needs the same
         # GC pause; plain local/in-memory streams do not.
-        if _is_loop_backed_fileobj(resource):
-            return _open_h5_paused(resource, constructor, mode)
-        handle = constructor(resource, mode=mode, driver="fileobj")
-        return _ManagedH5pyFile(handle, resource)
+        return _open_h5_fileobj(
+            resource,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=False,
+        )
     if isinstance(resource, UPath):
         # Reuse an already-materialized local artifact when present so later
         # HDF5 reads do not re-enter the remote fallback path unnecessarily.
@@ -224,16 +239,22 @@ def open_h5_resource(
         # intercepts UPath targets with its temp-file write-back handle.
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
-        # h5py holds its global lock while blocking on fsspec's event-loop
-        # thread for remote fetches; an automatic garbage collection on that
-        # thread deallocating h5py objects then deadlocks on the same lock.
-        # Pause collection for the handle's lifetime (resumed in close()).
         handle = _FallbackFileObj(
             remote_opener=lambda: resource.open(file_mode, **open_kwargs),
             local_opener=lambda: ensure_local_file(resource).open(file_mode),
             error_predicate=is_no_range_http_error,
         )
-        return _open_h5_paused(handle, constructor, mode)
+        # h5py holds its global lock while blocking on fsspec's event-loop
+        # thread for remote fetches; an automatic garbage collection on that
+        # thread deallocating h5py objects then deadlocks on the same lock.
+        # Pause collection for the handle's lifetime (resumed in close()).
+        return _open_h5_fileobj(
+            handle,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=True,
+        )
     try:
         if mode != "r":
             _maybe_make_parent_directory(resource)
@@ -266,26 +287,19 @@ class H5Reader(_H5CasterBase):
     def _get_open_kwargs(resource: UPath) -> dict[str, object]:
         """Return backend-specific kwargs for remote HDF5 file objects."""
         protocol = getattr(resource, "protocol", None)
-        if protocol in remote_hdf5_tuned_protocols:
-            # h5py performs many small seeks while opening HDF5 metadata.
-            # s3fs defaults to 50 MB readahead blocks, which can pull most of
-            # a large remote file just to satisfy metadata probes.
-            # HTTP needs a block LRU cache instead: the metadata probe
-            # alternates between the file header and footer, and fsspec's
-            # default single-window cache refetches a full block (or the whole
-            # file on range-less servers) on every jump.
-            if protocol in http_protocols:
-                # Bound retained memory: 8 blocks of the configured size.
-                return {
-                    "block_size": get_config().remote_hdf5_block_size,
-                    "cache_type": "blockcache",
-                    "cache_options": {"maxblocks": 8},
-                }
-            return {
-                "block_size": get_config().remote_hdf5_block_size,
-                "cache_type": "readahead",
-            }
-        return {}
+        if protocol not in remote_hdf5_tuned_protocols:
+            return {}
+        # h5py performs many small seeks while opening HDF5 metadata, and
+        # remote backends default to large readahead blocks (s3fs uses 50 MB)
+        # which can pull most of a file just to satisfy those probes.
+        out = {"block_size": get_config().remote_hdf5_block_size}
+        if protocol not in http_protocols:
+            return out | {"cache_type": "readahead"}
+        # HTTP needs a block LRU instead: the probe alternates between the
+        # file header and footer, and fsspec's default single-window cache
+        # refetches a full block (or the whole file on range-less servers) on
+        # every jump. Eight blocks keeps both ends resident and bounds memory.
+        return out | {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}}
 
     @classmethod
     def get_handle(cls, resource):

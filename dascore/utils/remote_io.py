@@ -28,6 +28,7 @@ _NO_RANGE_HTTP_PATTERNS = (
     "doesn't appear to support range requests",
     "only reading this file from the beginning is supported",
 )
+_NO_SIZE_HTTP_PATTERN = "cannot seek streaming http file"
 _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
 # One lock per cached resource, so two threads never download the same
 # file at once while unrelated downloads still run together. Entries are
@@ -41,6 +42,9 @@ _gc_pause_lock = threading.Lock()
 _gc_pause_depth = 0
 _gc_was_enabled = False
 _gc_collect_after = 0.0
+# Seconds between safety-valve collections; a full collect is O(live objects),
+# measured at 7-160 ms here, so it must not run on every remote open.
+_GC_COLLECT_INTERVAL = 10.0
 
 
 def pause_gc() -> None:
@@ -62,7 +66,6 @@ def pause_gc() -> None:
     recovered by the collection below, on the next remote open.
     """
     global _gc_pause_depth, _gc_was_enabled, _gc_collect_after
-    now = time.monotonic()
     with _gc_pause_lock:
         # Count first: an interrupt before ``disable`` leaves a pending resume
         # (harmless); the reverse order could leave gc off with none pending.
@@ -71,9 +74,10 @@ def pause_gc() -> None:
             _gc_was_enabled = gc.isenabled()
             gc.disable()
         # Claim the valve here so concurrent openers cannot each run it.
+        now = time.monotonic()
         collect = now >= _gc_collect_after
         if collect:
-            _gc_collect_after = now + 10.0
+            _gc_collect_after = now + _GC_COLLECT_INTERVAL
     # Safety valve: finalize cyclic garbage, including a handle leaked by an
     # earlier session, so a stranded pause cannot disable collection forever.
     # Must run outside the lock, since finalizing such a handle calls
@@ -325,12 +329,12 @@ def get_local_handle(resource, opener):
 
 def is_no_range_http_error(exc: Exception) -> bool:
     """Return True when an exception indicates no-range HTTP random access."""
-    message = str(exc).lower()
     if not isinstance(exc, ValueError):
         return False
-    # Servers with no reported size stream instead of ranging; seeking such
-    # a streaming file needs the same local-file fallback as no-range access.
-    if "cannot seek streaming http file" in message:
+    message = str(exc).lower()
+    # A server reporting no size streams instead of ranging; seeking such a
+    # file needs the same local-file fallback as an outright no-range server.
+    if _NO_SIZE_HTTP_PATTERN in message:
         return True
     return all(pattern in message for pattern in _NO_RANGE_HTTP_PATTERNS)
 

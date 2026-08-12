@@ -12,9 +12,9 @@ import pytest
 
 import dascore.utils.remote_io as remote_io
 from dascore.utils.hdf5 import (
-    _is_loop_backed_fileobj,
+    _is_loop_backed,
     _ManagedH5pyFile,
-    _open_h5_paused,
+    _open_h5_fileobj,
 )
 from dascore.utils.remote_io import pause_gc, resume_gc
 
@@ -43,6 +43,11 @@ class _FakeRemoteFile(io.RawIOBase):
 
     def readable(self):
         return True
+
+
+def _open_paused(fileobj, constructor=lambda fileobj, **kwargs: object()):
+    """Open a fake loop-backed file object the way the UPath branch does."""
+    return _open_h5_fileobj(fileobj, constructor, "r", pause=True, close_on_error=True)
 
 
 class TestDeadlockProperty:
@@ -130,14 +135,14 @@ class TestPauseAccounting:
 
     def test_leaked_handle_resumes(self):
         """Dropping a handle without closing it releases the pause."""
-        _open_h5_paused(_FakeRemoteFile(), lambda fileobj, **kw: object(), "r")
+        _open_paused(_FakeRemoteFile())
         gc.collect()
         assert gc.isenabled()
 
     def test_stranded_cyclic_handle_is_recovered(self):
         """A handle leaked inside a cycle is healed by the next remote open."""
         holder = {}
-        handle = _open_h5_paused(_FakeRemoteFile(), lambda fileobj, **kw: object(), "r")
+        handle = _open_paused(_FakeRemoteFile())
         holder["handle"], holder["self"] = handle, holder  # unreachable cycle
         del handle, holder
         assert not gc.isenabled()
@@ -154,7 +159,7 @@ class TestPauseAccounting:
             raise ValueError("no")
 
         with pytest.raises(ValueError):
-            _open_h5_paused(fileobj, _raise, "r")
+            _open_paused(fileobj, _raise)
         assert gc.isenabled()
         assert fileobj.closed
 
@@ -194,13 +199,9 @@ class TestPauseAccounting:
     def test_fork_reset_clears_inherited_pause(self):
         """The fork hook drops a pause no child close can rebalance."""
         pause_gc()
-        try:
-            remote_io._reset_gc_pause_state()
-            assert gc.isenabled()
-            assert remote_io._gc_pause_depth == 0
-        except BaseException:  # pragma: no cover - only on failure
-            resume_gc()
-            raise
+        remote_io._reset_gc_pause_state()
+        assert gc.isenabled()
+        assert remote_io._gc_pause_depth == 0
 
 
 class TestLoopBackedDetection:
@@ -208,16 +209,16 @@ class TestLoopBackedDetection:
 
     def test_async_filesystem_detected(self):
         """A file object over an async filesystem is loop backed."""
-        assert _is_loop_backed_fileobj(_FakeRemoteFile())
+        assert _is_loop_backed(_FakeRemoteFile())
 
     def test_wrapped_async_filesystem_detected(self):
         """Buffering wrappers hide the filesystem but not the loop thread."""
         wrapped = io.BufferedReader(_FakeRemoteFile())
-        assert _is_loop_backed_fileobj(wrapped)
+        assert _is_loop_backed(wrapped)
 
     def test_plain_stream_is_not_loop_backed(self):
         """Local and in-memory streams must not pause collection."""
-        assert not _is_loop_backed_fileobj(io.BytesIO(b"abc"))
+        assert not _is_loop_backed(io.BytesIO(b"abc"))
 
     def test_sync_filesystem_is_not_loop_backed(self):
         """A synchronous fsspec filesystem needs no pause."""
@@ -225,4 +226,4 @@ class TestLoopBackedDetection:
         class _SyncFile:
             fs = _FakeFS(False)
 
-        assert not _is_loop_backed_fileobj(_SyncFile())
+        assert not _is_loop_backed(_SyncFile())
