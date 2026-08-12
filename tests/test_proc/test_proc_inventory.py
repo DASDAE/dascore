@@ -35,7 +35,7 @@ from dascore.core.inventory import (
     OpticalPath,
     OpticalPathAnnotation,
 )
-from dascore.examples import inventory_patch_pair
+from dascore.examples import get_example_patch, inventory_patch_pair
 from dascore.exceptions import (
     CoordMergeError,
     InvalidInventoryError,
@@ -3256,6 +3256,57 @@ class TestChannelSelectAlignment:
             assert np.array_equal(piece.data, source.data[rows])
 
 
+def _float_grid_pair(distance, span):
+    """A patch on a given float grid, and an inventory annotating its middle."""
+    time = get_example_patch().get_array("time")
+    data = np.random.default_rng(0).random((len(distance), len(time)))
+    patch = dc.Patch(
+        data=data,
+        coords={"distance": distance, "time": time},
+        dims=("distance", "time"),
+        attrs={"acquisition_key": "DAS.R2D1..RAW", "category": "DAS"},
+    )
+    acquisition = Acquisition(
+        code="RAW",
+        location_code="",
+        data_type="velocity",
+        data_category="DAS",
+        gauge_length=10.0,
+        sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
+        distance_map=DistanceMap(
+            instrument_distance=(float(distance.min()), float(distance.max())),
+            distance=(0.0, span),
+        ),
+    )
+    path = OpticalPath(
+        name="main",
+        location_code="",
+        optical_components=(FiberSegment(name="c", optical_length=span + 10),),
+        annotations=(
+            OpticalPathAnnotation(
+                start_distance=span * 0.23,
+                end_distance=span * 0.61,
+                group="zone",
+                value="mid",
+            ),
+        ),
+    )
+    return patch, Inventory(
+        networks=(
+            Network(
+                code="DAS",
+                fiber_arrays=(
+                    FiberArray(
+                        code="R2D1",
+                        acquisitions=(acquisition,),
+                        optical_paths=(path,),
+                    ),
+                ),
+            ),
+        )
+    ).check()
+
+
 class TestChannelReviewFindings:
     """Defects the review pipeline found, each with its own scenario."""
 
@@ -3433,3 +3484,36 @@ class TestChannelReviewFindings:
         degrees = get_quantity("degree")
         assert len(spool.select(y=stated)) == 1
         assert len(spool.select(y=stated * degrees)) == 1
+
+    @pytest.mark.parametrize(
+        ("start", "step", "size"),
+        [
+            (1.0, 0.1, 300),
+            (0.1, 0.25, 500),
+            (-1234.5678, 0.037, 400),
+            (0.0, 1 / 3, 350),
+        ],
+    )
+    def test_the_index_selects_what_enrichment_projects(self, start, step, size):
+        """
+        A rebuilt grid must name the same channels the patch's own does.
+
+        The grid is reconstructed from the index envelope rather than
+        read off the patch, and `Patch.select` does not snap an interior
+        bound to the nearest sample — so a float grid which drifted from
+        the patch's own values could trim one channel too many. Compared
+        by count and position rather than by value, since a trimmed
+        CoordRange regenerates its values from the piece's own start and
+        so differs in the last ulp for any trim, inventory or not.
+        """
+        distance = start + np.arange(size) * step
+        span = float(distance.max() - distance.min())
+        patch, inventory = _float_grid_pair(distance, span)
+        spool = dc.spool(patch).attach_inventory(inventory)
+        selected = spool.select(zone="mid")
+        got = np.concatenate([x.get_array("distance") for x in selected])
+        projected = patch.enrich(inventory, coords=("zone",), attrs=False)
+        wanted = distance[projected.get_array("zone") == "mid"]
+        assert len(wanted)  # the group really does cover part of this fiber
+        assert len(got) == len(wanted)
+        assert np.allclose(np.sort(got), np.sort(wanted), rtol=0, atol=1e-9)
