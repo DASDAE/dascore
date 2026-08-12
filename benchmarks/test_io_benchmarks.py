@@ -42,7 +42,10 @@ def test_file_paths():
 @pytest.fixture(scope="session", params=SINGLE_FILE_BENCHMARKS)
 def single_file_path(request):
     """Path to one registry file, parametrized for per-format benchmarks."""
-    return get_test_file_paths()[request.param]
+    # Fetched by name rather than through get_test_file_paths, so running
+    # only these benchmarks does not pull the whole registry, and an
+    # unrelated file failing to fetch cannot take them down with it.
+    return fetch(request.param)
 
 
 @pytest.fixture(scope="module", autouse=True)

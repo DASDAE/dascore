@@ -11,6 +11,7 @@ test_io_core.py
 from __future__ import annotations
 
 import inspect
+from collections import Counter
 from contextlib import suppress
 from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
@@ -289,10 +290,20 @@ class _CountingHandle(BufferedIOBase):
     the budget is a quarter of a megabyte-plus file, and it cannot hide the
     failure this guards: a scan that walks every sample consumes every sample.
 
-    fileno is left unsupported on purpose. A reader handed the descriptor can
-    map the file and read all of it without this seeing a byte, so it should
-    fail loudly here and be named in IGNORE_SCAN_CHECK.
+    Anything handing back the file underneath is refused, since reads through
+    it would not be counted: fileno, which also allows the whole file to be
+    mapped, plus raw, peek, and detach. No current reader needs any of them,
+    so one that does belongs in IGNORE_SCAN_CHECK.
+
+    The name attribute is the exception, and stays available: TDMS, sentek,
+    and Sintela_Binary consult it while scanning. They only stat the file
+    through it rather than read it, which is visible in their totals -- each
+    stays within a buffer fill of what /proc charges the whole scan.
     """
+
+    # Attributes which hand back the wrapped file, so reads through them
+    # would not reach the counter. fileno is refused by BufferedIOBase.
+    _refused = frozenset({"raw", "peek", "detach"})
 
     def __init__(self, fileobj):
         self._fileobj = fileobj
@@ -337,7 +348,9 @@ class _CountingHandle(BufferedIOBase):
         return True
 
     def __getattr__(self, name):
-        """Defer anything not counted here to the wrapped file."""
+        """Defer to the wrapped file, except where that would evade counting."""
+        if name in self._refused:
+            raise UnsupportedOperation(name)
         return getattr(self._fileobj, name)
 
 
@@ -662,14 +675,19 @@ class TestScan:
         """
         FiberIO.manager.load_plugins()
         # Other test modules register FiberIO subclasses globally on import,
-        # so only DASCore's own formats are considered here. Collected as
-        # classes rather than by name, so two formats sharing a class name
-        # cannot stand in for each other.
+        # so only DASCore's own formats are considered here.
         registered = {
             type(fiber_io)
             for fiber_io in FiberIO.manager.yield_fiberio()
             if type(fiber_io).__module__.startswith("dascore.io.")
         }
+        # Formats are compared by class name below, which is only meaningful
+        # while those names are unique; two classes sharing one could
+        # otherwise stand in for each other.
+        by_name = Counter(fiber_io_class.__name__ for fiber_io_class in registered)
+        assert not (shared := [k for k, v in by_name.items() if v > 1]), (
+            f"format class names are no longer unique: {sorted(shared)}"
+        )
         # None of the expected formats has an optional dependency, so all of
         # them load in every environment. Checking that first matters: paring
         # the expectation down to whatever registered would turn a formatter
