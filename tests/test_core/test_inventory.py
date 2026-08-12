@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import pickle
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -11,6 +14,7 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.models import values_equal
 
 
@@ -1174,6 +1178,121 @@ class TestUniformAttachments:
         loaded = inv.Inventory.from_yaml(inventory.to_yaml())
         got = loaded.networks[0].fiber_arrays[0].acquisitions[0]
         assert got.extra_fields == {"vendor_flag": ""}
+
+
+class TestImmutability:
+    """Inventory fields cannot be written to."""
+
+    @staticmethod
+    def _stocked_inventory(resource_id="fixed"):
+        """An inventory whose frozen mappings both carry contents."""
+        cable = inv.Cable(resource_id="cable-01", name="c")
+        segment = inv.FiberSegment(optical_length=100.0, container=cable)
+        array = inv.FiberArray(
+            code="L001",
+            optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
+        )
+        return inv.Inventory(
+            resource_id=resource_id,
+            extra_fields={"vendor": "x", "gain": 1.5},
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
+        )
+
+    def test_extra_fields_refuses_writes(self):
+        """extra_fields rejects item assignment."""
+        acquisition = inv.Acquisition(code="RAW", extra_fields={"vendor": "x"})
+        with pytest.raises(TypeError, match="item assignment"):
+            acquisition.extra_fields["vendor"] = "y"
+
+    def test_nested_extra_fields_refuses_writes(self):
+        """The refusal holds everywhere in the tree, not just at the top."""
+        inventory = build_inventory()
+        nested = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        with pytest.raises(TypeError, match="item assignment"):
+            nested.extra_fields["vendor"] = "y"
+
+    def test_extra_fields_still_checks_value_types(self):
+        """AfterValidator keeps the declared value types enforced."""
+        with pytest.raises(ValidationError):
+            inv.Acquisition(code="RAW", extra_fields={"vendor": [1, 2]})
+
+    def test_resource_pool_refuses_writes(self):
+        """Inventory.resources rejects item assignment."""
+        inventory = inv.Inventory(resources=[inv.Cable(resource_id="cable_01")])
+        with pytest.raises(TypeError, match="item assignment"):
+            inventory.resources["cable_02"] = inv.Cable(resource_id="cable_02")
+
+    def test_pool_built_by_validation_is_frozen(self):
+        """Inline resources hoisted into the pool land in a frozen mapping."""
+        # Exercises _normalize_resources, which bypasses the field validator.
+        inventory = self._stocked_inventory()
+        assert list(inventory.resources) == ["cable-01"]
+        with pytest.raises(TypeError, match="item assignment"):
+            inventory.resources["anything"] = None
+
+    def test_frozen_pool_accepted_as_input(self):
+        """A FrozenDict pool is keyed, not iterated."""
+        first = inv.Inventory(resources=[inv.Cable(resource_id="cable_01")])
+        second = inv.Inventory(resources=first.resources)
+        assert isinstance(second.resources["cable_01"], inv.Cable)
+        assert second.resources == first.resources
+
+    def test_frozen_record_disagreeing_with_its_key_is_refused(self):
+        """A record is read as a record whatever kind of mapping it is."""
+        # Read as an object instead, its resource_id goes unseen and the
+        # mismatch only surfaces on the next load.
+        record = FrozenDict({"type": "Cable", "resource_id": "elsewhere"})
+        with pytest.raises(ValidationError, match="disagrees with resource_id"):
+            inv.Inventory(resources={"cable-01": record})
+
+    def test_equal_inventories_hash_equally(self):
+        """Equality and hashing agree, so an inventory works as a dict key."""
+        # resource_id is pinned; it otherwise defaults to a fresh uuid.
+        first, second = self._stocked_inventory(), self._stocked_inventory()
+        assert first == second
+        assert hash(first) == hash(second)
+        assert {first: "found"}[second] == "found"
+
+    def test_hash_survives_a_pickle_round_trip(self):
+        """Pickle restores fields without validating, and spools are pickled."""
+        inventory = self._stocked_inventory()
+        loaded = pickle.loads(pickle.dumps(inventory))
+        assert loaded == inventory
+        assert hash(loaded) == hash(inventory)
+
+    def test_hash_survives_a_yaml_round_trip(self):
+        """Serializing and reloading does not move an inventory's hash."""
+        pytest.importorskip("yaml")
+        inventory = self._stocked_inventory()
+        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        assert loaded == inventory
+        assert hash(loaded) == hash(inventory)
+
+    def test_dumps_are_ordinary_dicts(self):
+        """Frozen mappings serialize back to plain dicts at every depth."""
+        inventory = inv.Inventory(
+            resources=[inv.Cable(resource_id="cable_01", description="a cable")],
+            extra_fields={"vendor": "x"},
+        )
+        dumped = inventory.model_dump()
+        assert type(dumped["extra_fields"]) is dict
+        assert type(dumped["resources"]) is dict
+        assert type(dumped["resources"]["cable_01"]) is dict
+
+    def test_json_mode_still_reaches_pooled_resources(self):
+        """The pool's own serializer does not shadow what it holds."""
+        run = inv.OpticalMeasurement(resource_id="otdr-1", time="2020-01-01")
+        segment = inv.FiberSegment(optical_length=10.0, loss_measurement=run)
+        array = inv.FiberArray(
+            code="L001",
+            optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
+        )
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        dumped = inventory.model_dump(mode="json")
+        assert dumped["resources"]["otdr-1"]["time"].startswith("2020-01-01")
+        assert json.dumps(dumped)
 
 
 class TestStationXmlAlignment:
