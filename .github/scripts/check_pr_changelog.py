@@ -16,10 +16,17 @@ import sys
 CATEGORIES = ("added", "changed", "deprecated", "removed", "fixed", "security")
 
 # "- <category>: text", optionally marked "- <category> **breaking**: text".
+# The category is matched case-insensitively; a capitalized one is a harmless
+# slip, unlike a misplaced marker.
 ENTRY = re.compile(
     rf"^-\s+(?P<category>{'|'.join(CATEGORIES)})"
-    r"(?P<breaking>\s+\*\*breaking\*\*)?:\s+(?P<text>\S.*)$"
+    r"(?P<breaking>\s+\*\*breaking\*\*)?:\s+(?P<text>\S.*)$",
+    re.IGNORECASE,
 )
+
+# A marker anywhere but right after the category parses as ordinary text, so the
+# entry would pass while its breaking status went unrecorded. Reject it instead.
+_STRAY_MARKER = re.compile(r"\*\*\s*breaking\s*\*\*", re.IGNORECASE)
 
 # The section this script validates, and the start of whatever section follows.
 _HEADING = re.compile(r"^##\s+changelog\s*$", re.IGNORECASE)
@@ -73,6 +80,19 @@ def validate(body: str | None) -> list[str]:
     if problems:
         listed = "\n".join(f"    {x}" for x in problems)
         return [f"These Changelog entries are malformed:\n{listed}", _HELP]
+    misplaced = [
+        x.strip()
+        for x in bullets
+        if _STRAY_MARKER.search(ENTRY.match(x.strip()).group("text"))
+    ]
+    if misplaced:
+        listed = "\n".join(f"    {x}" for x in misplaced)
+        return [
+            "These entries carry '**breaking**' in their text, where it is read "
+            f"as prose rather than as the marker:\n{listed}\n"
+            "Put it directly after the category, before the colon, e.g. "
+            "'- changed **breaking**: ...'.",
+        ]
     return []
 
 

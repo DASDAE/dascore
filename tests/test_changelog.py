@@ -92,6 +92,8 @@ class TestChangelogSectionChecker:
             "none",
             "None",
             "- deprecated: an aging thing.\n- removed: a gone thing.",
+            "- Added: a capitalized category is a harmless slip.",
+            "- Changed **breaking**: capitalized, with a marker.",
         ],
     )
     def test_accepts_valid_sections(self, checker, section):
@@ -102,7 +104,6 @@ class TestChangelogSectionChecker:
         "section",
         [
             "- a bullet with no category.",
-            "- Added: capitalized category.",
             "- breaking: not a category.",
             "- added a new thing.",
             "- added:",
@@ -112,6 +113,19 @@ class TestChangelogSectionChecker:
     def test_rejects_invalid_sections(self, checker, section):
         """Malformed or empty sections are reported rather than passed."""
         assert checker.validate(_body(section))
+
+    @pytest.mark.parametrize(
+        "section",
+        [
+            "- changed: **breaking** the marker is in the text.",
+            "- added: a thing, which is **breaking** for callers.",
+            "- fixed: **BREAKING** shouting does not help either.",
+        ],
+    )
+    def test_rejects_a_misplaced_breaking_marker(self, checker, section):
+        """A marker in the text would pass while going unrecorded."""
+        problems = checker.validate(_body(section))
+        assert problems and "read as prose" in problems[0]
 
     def test_rejects_missing_section(self, checker):
         """A body with no Changelog heading fails."""
