@@ -30,6 +30,7 @@ from dascore.io.index.catalog import (
     CompositeResolver,
     PatchCatalog,
     PatchResolver,
+    _adjust_unit_segments,
     _row_source_patch_id,
     apply_exact_residuals,
 )
@@ -40,8 +41,9 @@ from dascore.io.index.ingest import (
     _coord_record,
     typed_value,
 )
+from dascore.units import get_quantity
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
-from dascore.utils.misc import is_range
+from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_patches
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
@@ -53,6 +55,41 @@ _READ_KWARGS = ("path", "file_format", "file_version")
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
+
+
+def _stated_units(value) -> str | None:
+    """Return a unit string, or None when the row states none.
+
+    Row values arrive from dataframes, so an absent unit is NaN rather
+    than None — and NaN never equals itself, which would make an unstated
+    unit look like a mismatch.
+    """
+    if value is None or value == "" or pd.isnull(value):
+        return None
+    return str(value)
+
+
+def _source_units_column(name: str) -> str:
+    """Return the private column recording a member's own unit spelling.
+
+    Deliberately not ``_{name}_source_units``: a coordinate may be named
+    ``{name}_source``, whose own unit column has exactly that spelling.
+    Every coordinate unit column ends in ``_units``, so a name ending in
+    ``_source`` instead can never be one.
+    """
+    return f"_{name}_units_source"
+
+
+def _def_key_fingerprint(key) -> str | None:
+    """Recover the semantic fingerprint from a stored def key.
+
+    Fingerprinted keys are ``fp:{hash}`` with the unit spelling riding
+    after ``|`` (see CoordRecord.def_key); the spelling belongs to
+    storage deduplication only, never to value identity.
+    """
+    if not (isinstance(key, str) and key.startswith("fp:")):
+        return None
+    return key[3:].split("|", maxsplit=1)[0]
 
 
 def _ns(value) -> int | None:
@@ -98,9 +135,7 @@ def _coord_record_from_row(
         # string coords have no range representation; store the
         # lexicographic envelope directly
         key = row.get(f"_{name}_def_key")
-        fingerprint = (
-            key[3:] if isinstance(key, str) and key.startswith("fp:") else None
-        )
+        fingerprint = _def_key_fingerprint(key)
         return CoordRecord(
             coord_name=name,
             value_kind="str",
@@ -134,10 +169,9 @@ def _coord_record_from_row(
         # a degenerate (zero) step is not a range; drop it rather than
         # letting range reconstruction divide by it
         step = None
-    # numeric envelope values are stored canonical-SI, so only the
-    # canonical (base) unit carried by the pivot may be attached —
-    # ingest's re-conversion is then the identity (time kinds attach
-    # without conversion)
+    # envelope values and the units column are both the coordinate's
+    # ORIGINAL spelling, never converted, so reattaching the pivot's
+    # unit reconstructs exactly what was ingested
     units = row.get(f"_{name}_units")
     if units == "" or (units is not None and pd.isnull(units)):
         units = None
@@ -147,9 +181,7 @@ def _coord_record_from_row(
         # ty unions the branch types and rejects the mixed combinations.
         length = round((hi - lo) / step) + 1  # ty: ignore[unsupported-operator]
     key = row.get(f"_{name}_def_key")
-    fingerprint = None
-    if isinstance(key, str) and key.startswith("fp:"):
-        fingerprint = key[3:]
+    fingerprint = _def_key_fingerprint(key)
     summary = CoordSummary(
         dtype=dtype,
         min=lo,
@@ -379,8 +411,46 @@ class PlanResolver(PatchResolver):
                 and k not in _SOURCE_COLUMNS
                 and k not in _READ_KWARGS
             }
+            # Trim magnitudes are in the plan's unit; when the source file
+            # spells the coordinate differently, a bare read hint would
+            # trim the wrong physical interval, so it is dropped (hints
+            # are optional — slower, never wrong) and the exact trim is
+            # applied above in plan units.
+            plan_units = _stated_units(kwargs.get(f"_{self.dim}_units"))
+            source_units = _stated_units(
+                kwargs.get(_source_units_column(self.dim), plan_units)
+            )
+            if plan_units is not None and source_units != plan_units:
+                for suffix in ("_min", "_max", "_step"):
+                    trim.pop(f"{self.dim}{suffix}", None)
         patch = self.loader.resolve(kwargs, **trim)
-        return apply_exact_residuals(patch, self.parent_residuals)
+        patch = apply_exact_residuals(patch, self.parent_residuals)
+        return self._in_plan_units(patch, kwargs)
+
+    def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
+        """
+        Re-express the chunked dimension in the unit the plan advertises.
+
+        A partition mixing compatible spellings is planned in one of
+        them, and the output rows say so, so a member kept in its own
+        spelling would make the catalog describe an envelope no patch it
+        yields actually has. Merging already converted its members; this
+        covers the single-member outputs merging never visits.
+        Identity mode is exempt: it promises the untouched patch.
+        """
+        if self.mode == "identity":
+            return patch
+        plan_units = _stated_units(kwargs.get(f"_{self.dim}_units"))
+        if plan_units is None:
+            return patch
+        coord = patch.coords.coord_map.get(self.dim)
+        current = getattr(coord, "units", None) if coord is not None else None
+        if current is None or get_quantity(current) == get_quantity(plan_units):
+            return patch
+        # raw_function: the conversion serves the plan's own bookkeeping,
+        # and a history entry on some members but not others would make
+        # otherwise-mergeable members conflict on attrs.
+        return dc.proc.units.convert_units.raw_function(patch, **{self.dim: plan_units})
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
@@ -407,15 +477,19 @@ class PlanResolver(PatchResolver):
 
 
 def _residual_ranges(residuals) -> dict:
-    """Envelope-applicable value ranges from a residual tuple."""
+    """Envelope-applicable value ranges from a residual tuple.
+
+    Bare ranges apply to the native envelope columns directly; a
+    `_CanonicalRange` passes through whole so the caller can convert it
+    per row unit.
+    """
     out = {}
     for coords, samples in residuals:
         if samples:
             continue
         for name, value in coords.items():
-            magnitudes = getattr(value, "magnitudes", None)
-            if magnitudes is not None:
-                out[name] = magnitudes
+            if getattr(value, "magnitudes", None) is not None:
+                out[name] = value
             elif is_range(value) and not any(
                 hasattr(b, "units") for b in value if b is not None
             ):
@@ -449,6 +523,21 @@ def derived_catalog(
     sources = source_rows.copy(deep=False)
     if "_patch_id" not in sources.columns:
         sources = _ensure_patch_id(sources)
+    # Trim magnitudes are in the plan's (partition-normalized) unit; the
+    # source's own spelling survives under a renamed column so member
+    # loading can tell when a bare read hint would mean the wrong unit.
+    unit_col = f"_{name}_units"
+    source_unit_col = _source_units_column(name)
+    if unit_col in trim_cols and unit_col in sources.columns:
+        if source_unit_col in sources.columns:
+            # Re-chunking a derived view: these rows already record the
+            # file's own spelling, and that — not the previous plan's
+            # unit — is what the loader will meet. Renaming again would
+            # also duplicate the column, which silently drops one of the
+            # two when the rows become load kwargs.
+            sources = sources.drop(columns=[unit_col])
+        else:
+            sources = sources.rename(columns={unit_col: source_unit_col})
     member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_id",
@@ -530,6 +619,14 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
         members = members[members["output_id"].isin(present)]
     ranges = _residual_ranges(catalog._residuals)
     working = members.drop(columns=["output_id", "_modified"], errors="ignore")
-    if ranges:
-        working = adjust_segments(working, ignore_bad_kwargs=True, **ranges)
+    bare = {
+        name: value
+        for name, value in ranges.items()
+        if not isinstance(value, _CanonicalRange)
+    }
+    if bare:
+        working = adjust_segments(working, ignore_bad_kwargs=True, **bare)
+    for name, canonical in ranges.items():
+        if isinstance(canonical, _CanonicalRange):
+            working = _adjust_unit_segments(working, name, canonical)
     return working.reset_index(drop=True)

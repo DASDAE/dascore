@@ -287,13 +287,48 @@ class TestExistingBehaviorKept:
         assert len(out) == 1
 
 
-class TestUnitCanonicalSelection:
-    """Coordinate selection on non-SI patches (review P1).
+class TestOriginalUnitsPresentation:
+    """The index stores and presents envelopes in original units (#863)."""
 
-    The index stores numeric coordinate summaries in canonical SI, so
-    range bounds are interpreted as SI end to end: bare numbers mean
-    canonical SI, quantities convert, and the exact per-patch residual
-    converts back to each patch's native units.
+    def test_get_contents_shows_units_beside_native_values(self):
+        """Envelope columns are native and carry their unit column."""
+        spool = dc.spool([dc.get_example_patch().convert_units(distance="ft")])
+        df = spool.get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+        coord = spool[0].get_coord("distance")
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(float(coord.min()))
+        assert float(df["distance_max"].iloc[0]) == pytest.approx(float(coord.max()))
+
+    def test_quantity_select_presents_converted_envelopes(self):
+        """A metre range shows as the feet interval it selects."""
+        spool = dc.spool([dc.get_example_patch().convert_units(distance="ft")])
+        df = spool.select(distance=(20 * m, 60 * m)).get_contents()
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(65.6, abs=0.1)
+        assert float(df["distance_max"].iloc[0]) == pytest.approx(196.9, abs=0.1)
+
+    def test_degree_coordinate_stays_degrees(self):
+        """The motivating case: geographic degrees never show as radians."""
+        patch = dc.get_example_patch()
+        values = np.linspace(-117.05, -116.9, patch.coord_shapes["distance"][0])
+        patch = patch.update_coords(distance=values).set_units(distance="degrees")
+        spool = dc.spool([patch])
+        df = spool.get_contents()
+        assert str(df["distance_units"].iloc[0]) == "deg"
+        assert float(df["distance_min"].iloc[0]) == pytest.approx(-117.05)
+        # a bare geographic range selects, matching Patch.select
+        got = spool.select(distance=(-117.0, -116.95))
+        assert len(got) == 1
+        direct = patch.select(distance=(-117.0, -116.95))
+        assert got[0].get_coord("distance") == direct.get_coord("distance")
+
+
+class TestUnitCanonicalSelection:
+    """Coordinate selection on non-SI patches (#863).
+
+    The index stores numeric coordinate envelopes in each coordinate's
+    original units, so a bare range means native units — exactly what
+    `Patch.select` means by it — while quantities convert themselves to
+    whatever units each stored definition uses.
     """
 
     @pytest.fixture(scope="class")
@@ -301,11 +336,14 @@ class TestUnitCanonicalSelection:
         """An example patch with distance in feet (0..~984 ft)."""
         return dc.get_example_patch().convert_units(distance="ft")
 
-    def test_bare_numbers_are_canonical_si(self, ft_patch):
-        """(20, 60) means 20-60 m even on a feet-coordinate patch."""
-        coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
-        assert float(coord.min()) >= 65  # 20 m == 65.6 ft
-        assert float(coord.max()) <= 197  # 60 m == 196.9 ft
+    def test_bare_numbers_are_native_units(self, ft_patch):
+        """(20, 60) means 20-60 ft on a feet patch, as Patch.select does."""
+        spooled = dc.spool([ft_patch]).select(distance=(20, 60))[0]
+        direct = ft_patch.select(distance=(20, 60))
+        assert spooled.get_coord("distance") == direct.get_coord("distance")
+        coord = spooled.get_coord("distance")
+        assert float(coord.min()) >= 20
+        assert float(coord.max()) <= 60
 
     def test_quantity_selector(self, ft_patch):
         """Quantity bounds select the same physical interval."""
@@ -341,21 +379,21 @@ class TestUnitCanonicalSelection:
         assert float(coord.max()) <= 197
 
     def test_mixed_unitless_and_feet_bare(self, ft_patch):
-        """A bare range trims each patch in its own units (SI meaning)."""
+        """A bare range trims each patch in its own native units."""
         plain = dc.get_example_patch()  # unitless distance 0..~300
         plain = plain.update_coords(
             distance=plain.get_coord("distance").set_units(None)
         )
         got = dc.spool([plain, ft_patch]).select(distance=(20, 60))
         materialized = [p.get_coord("distance") for p in got]
-        assert len(materialized) == 2  # both overlap 20..60 m
+        assert len(materialized) == 2  # both overlap their own 20..60
         by_units = {str(c.units): c for c in materialized}
         # unitless patch: bare magnitudes applied directly
         assert float(by_units["None"].min()) >= 20
         assert float(by_units["None"].max()) <= 60
-        # feet patch: 20..60 m == 65.6..196.9 ft
-        assert float(by_units["1 ft"].min()) >= 65
-        assert float(by_units["1 ft"].max()) <= 197
+        # feet patch: 20..60 means 20..60 ft
+        assert float(by_units["1 ft"].min()) >= 20
+        assert float(by_units["1 ft"].max()) <= 60
 
     def test_mixed_unitless_and_feet_quantity(self, ft_patch):
         """A metre quantity range works across a mixed population."""
@@ -365,6 +403,16 @@ class TestUnitCanonicalSelection:
         )
         got = dc.spool([plain, ft_patch]).select(distance=(20 * m, 60 * m))
         assert len(got.get_contents()) == 2  # no UnitError on the unitless row
+        # materializing applies the residual: the unitless coordinate reads
+        # the canonical SI magnitudes bare (documented policy), the feet
+        # coordinate converts.
+        by_units = {str(p.get_coord("distance").units): p for p in got}
+        plain_coord = by_units["None"].get_coord("distance")
+        assert float(plain_coord.min()) >= 20
+        assert float(plain_coord.max()) <= 60
+        ft_coord = by_units["1 ft"].get_coord("distance")
+        assert float(ft_coord.min()) >= 65  # 20 m == 65.6 ft
+        assert float(ft_coord.max()) <= 197
 
     def test_scalar_coord_rejected(self, ft_patch):
         """A scalar coordinate selector is rejected eagerly, clearly."""
@@ -377,15 +425,86 @@ class TestUnitCanonicalSelection:
             dc.spool([ft_patch]).select(distance=[10, 20, 50])
 
     def test_chained_views(self, ft_patch):
-        """Canonicalization holds across chained selections."""
+        """Native reading holds across chained selections."""
         coord = (
             dc.spool([ft_patch])
             .select(distance=(0 * m, 90 * m))
             .select(distance=(20, 60))[0]
             .get_coord("distance")
         )
-        assert float(coord.min()) >= 65
-        assert float(coord.max()) <= 197
+        # the quantity view keeps 0..295 ft; the bare view means feet
+        assert float(coord.min()) >= 20
+        assert float(coord.max()) <= 60
+
+    def test_mixed_bare_and_quantity_bounds(self, ft_patch):
+        """A bare bound stays feet beside a metre bound, as on the patch."""
+        mixed = (20, 60 * m)
+        direct = ft_patch.select(distance=mixed)
+        via = dc.spool([ft_patch]).select(distance=mixed)[0]
+        assert via.get_coord("distance") == direct.get_coord("distance")
+
+    def test_mixed_bound_ordering_is_checked_after_conversion(self, ft_patch):
+        """(100, 50*m) is a valid interval once both bounds speak feet.
+
+        The bare bound means the coordinate's units and the quantity
+        means its own, so comparing their raw magnitudes rejects a range
+        the patch accepts.
+        """
+        value = (100, 50 * m)
+        direct = ft_patch.select(distance=value)
+        via = dc.spool([ft_patch]).select(distance=value)[0]
+        assert via.get_coord("distance") == direct.get_coord("distance")
+
+    def test_reversed_ranges_still_raise(self, ft_patch):
+        """Bounds in one frame of reference keep their ordering check."""
+        for value in ((60, 20), (60 * m, 20 * m)):
+            with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
+                len(dc.spool([ft_patch]).select(distance=value))
+
+    def test_chunk_of_selected_view_converts_plan(self, ft_patch):
+        """Chunking after a quantity select trims the converted interval."""
+        sel = dc.spool([ft_patch]).select(distance=(20 * m, 60 * m))
+        out = sel.chunk(distance=None)
+        coord = out[0].get_coord("distance")
+        assert float(coord.min()) >= 65.5  # 20 m in ft
+        assert float(coord.max()) <= 197.0  # 60 m in ft
+
+    def test_chunked_spool_keeps_units(self, ft_patch):
+        """A derived (chunked) view still reports original units."""
+        df = dc.spool([ft_patch]).chunk(distance=None).get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+
+    def test_directory_spool_units_column(self, ft_patch, tmp_path):
+        """The persisted directory index presents units too."""
+        dc.write(ft_patch, tmp_path / "ft.h5", "dasdae")
+        df = dc.spool(tmp_path).update().get_contents()
+        assert str(df["distance_units"].iloc[0]) == "ft"
+
+    def test_union_of_mixed_unit_spools(self):
+        """A union keeps each member's native units and semantics."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        pf = pm.convert_units(distance="ft")
+        union = dc.spool([pm]) + dc.spool([pf])
+        units = set(union.get_contents()["distance_units"])
+        assert units == {"m", "ft"}
+        for patch in union.select(distance=(20, 60)):
+            coord = patch.get_coord("distance")
+            assert float(coord.min()) >= 20
+            assert float(coord.max()) <= 60
+
+    def test_mixed_unit_archive(self):
+        """Bare selects per-file native intervals; a quantity selects one."""
+        pm = dc.get_example_patch().set_units(distance="m")
+        pf = pm.convert_units(distance="ft")
+        sp = dc.spool([pm, pf])
+        for patch in sp.select(distance=(20, 60)):
+            coord = patch.get_coord("distance")
+            assert float(coord.min()) >= 20
+            assert float(coord.max()) <= 60
+        for patch in sp.select(distance=(20 * m, 60 * m)):
+            coord = patch.get_coord("distance").convert_units("m")
+            assert float(coord.min()) >= 19.9
+            assert float(coord.max()) <= 60.1
 
     def test_boolean_mask_selectors_rejected(self, ft_patch):
         """Sample masks are patch-level only; the spool points at map()."""

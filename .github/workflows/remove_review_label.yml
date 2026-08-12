@@ -1,0 +1,29 @@
+# Remove the ready_for_review label once a PR is closed or merged.
+name: RemoveReviewLabel
+# pull_request_target is needed so the token can write labels on fork PRs.
+# It is safe here: no PR code is checked out and no PR content is interpolated.
+on: # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
+    types:
+      - closed
+
+permissions:
+  contents: read
+
+jobs:
+  remove_label:
+    runs-on: ubuntu-latest
+
+    # Only do the API call if the label is actually there.
+    if: contains(github.event.pull_request.labels.*.name, 'ready_for_review')
+
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: remove ready_for_review label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/{owner}/{repo}/issues/$PR_NUMBER/labels/ready_for_review"
