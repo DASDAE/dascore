@@ -18,7 +18,7 @@ from h5py import File as H5pyFile
 
 from dascore.compat import UPath
 from dascore.config import get_config
-from dascore.constants import remote_hdf5_tuned_protocols
+from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
@@ -31,6 +31,8 @@ from dascore.utils.remote_io import (
     ensure_local_file,
     get_local_handle,
     is_no_range_http_error,
+    pause_gc,
+    resume_gc,
 )
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
@@ -55,26 +57,56 @@ class _ManagedH5pyFile:
 
     For path-backed opens, this wrapper owns only the h5py handle. For
     ``h5py.File(..., driver="fileobj")`` paths, it also owns the Python
-    file-like object DASCore created on behalf of the caller. ``close()`` is
-    therefore the point where DASCore tears down the entire HDF5 access stack.
+    file-like object underneath, whether DASCore created it or the caller
+    supplied it. ``close()`` is therefore the point where DASCore tears down
+    the entire HDF5 access stack.
     """
 
-    def __init__(self, handle: H5pyFile, owned_fileobj=None):
+    # Class defaults, so a half-built instance is still closeable rather than
+    # falling through __getattr__ to a handle that may not be set yet.
+    _closed = False
+    _gc_paused_pid = None
+
+    def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
         self._handle = handle
         self._owned_fileobj = owned_fileobj
-        self._closed = False
+        if gc_paused:
+            # The pid that paused, so a handle inherited through a fork
+            # cannot resume a pause the child never took.
+            self._gc_paused_pid = os.getpid()
 
     def close(self):
         """Close the h5py file and, when present, the owned file object."""
         if self._closed:
             return
+        self._closed = True
         try:
             self._handle.close()
         finally:
-            if self._owned_fileobj is not None:
-                with suppress(Exception):
-                    self._owned_fileobj.close()
-            self._closed = True
+            # Nested so nothing raised by the teardown, including a
+            # BaseException, can skip the resume and strand the pause.
+            try:
+                if self._owned_fileobj is not None:
+                    with suppress(Exception):
+                        self._owned_fileobj.close()
+            finally:
+                # dict.pop is atomic, so racing closes resume exactly once.
+                pid = self.__dict__.pop("_gc_paused_pid", None)
+                if pid == os.getpid():
+                    resume_gc()
+
+    def __del__(self):
+        """
+        Release a leaked handle's pause so it cannot stop collection forever.
+
+        Only the pause: closing here would also close a caller-supplied h5py
+        file or stream that this wrapper never had permission to close.
+        Reference counting still tears the underlying handles down.
+        """
+        pid = self.__dict__.pop("_gc_paused_pid", None)
+        if pid == os.getpid():
+            with suppress(Exception):
+                resume_gc()
 
     def __enter__(self):
         return self
@@ -99,6 +131,68 @@ class _ManagedH5pyFile:
 
     def __getattr__(self, item):
         return getattr(self._handle, item)
+
+
+def _is_loop_backed(resource) -> bool:
+    """
+    Return True when reads on a resource are served by an event-loop thread.
+
+    fsspec async filesystems (http, s3, ...) bridge each read onto a shared
+    event-loop thread and mark themselves with ``async_impl``; duck-typing it
+    avoids importing fsspec here. Local, memory, and other synchronous
+    backends need no GC pause. A buffered reader hides the filesystem behind
+    ``raw``, so unwrap it: missing it would leave the deadlock window open.
+    """
+    while resource is not None:
+        try:
+            if getattr(getattr(resource, "fs", None), "async_impl", False):
+                return True
+            wrapped = getattr(resource, "raw", None)
+        except Exception:
+            # Probing can fail rather than return nothing: a UPath whose
+            # backend is not installed raises from ``fs``, and a wrapper
+            # can refuse an attribute with something other than
+            # AttributeError. Either way the open below reports it.
+            return False
+        resource = None if wrapped is resource else wrapped
+    return False
+
+
+def _open_h5_fileobj(
+    fileobj, constructor, mode, *, pause: bool, close_on_error: bool
+) -> _ManagedH5pyFile:
+    """
+    Open a file object with h5py through the fileobj driver.
+
+    Loop-backed resources pause automatic collection first; the returned
+    wrapper owns that pause and releases it on close, and a failed open
+    releases it here.
+
+    ``close_on_error`` is set only for file objects DASCore created. A
+    caller-supplied one must survive a failed open: ``get_format`` offers the
+    same object to every FiberIO in turn, and an HDF5 miss is the expected
+    outcome for most of them.
+    """
+    try:
+        if pause:
+            # Inside the try, and paired unconditionally below, because
+            # pause_gc always leaves the depth consistent with the pauses it
+            # took -- even when interrupted partway.
+            pause_gc()
+        handle = constructor(fileobj, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
+    except BaseException:
+        # Everything the pause covers runs in here, so an interrupt at any
+        # point still rebalances. Nested so nothing raised while closing,
+        # including a BaseException, can skip the resume.
+        try:
+            if close_on_error:
+                with suppress(Exception):
+                    fileobj.close()
+        finally:
+            if pause:
+                resume_gc()
+        raise
 
 
 def get_h5py_file(handle) -> H5pyFile:
@@ -148,8 +242,16 @@ def open_h5_resource(
     if isinstance(resource, H5pyFile):
         return _ManagedH5pyFile(resource)
     if isinstance(resource, io.IOBase):
-        handle = constructor(resource, mode=mode, driver="fileobj")
-        return _ManagedH5pyFile(handle, resource)
+        # A user-supplied fsspec file object delegates reads to the same
+        # event-loop thread as the UPath branch below and needs the same
+        # GC pause; plain local/in-memory streams do not.
+        return _open_h5_fileobj(
+            resource,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=False,
+        )
     if isinstance(resource, UPath):
         # Reuse an already-materialized local artifact when present so later
         # HDF5 reads do not re-enter the remote fallback path unnecessarily.
@@ -160,6 +262,8 @@ def open_h5_resource(
                 constructor=constructor,
                 open_kwargs_getter=open_kwargs_getter,
             )
+        # Note: only mode == "r" is a supported remote path here; H5Writer
+        # intercepts UPath targets with its temp-file write-back handle.
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
         handle = _FallbackFileObj(
@@ -167,12 +271,17 @@ def open_h5_resource(
             local_opener=lambda: ensure_local_file(resource).open(file_mode),
             error_predicate=is_no_range_http_error,
         )
-        try:
-            h5_handle = constructor(handle, mode=mode, driver="fileobj")
-            return _ManagedH5pyFile(h5_handle, handle)
-        except Exception:
-            handle.close()
-            raise
+        # h5py holds its global lock while blocking on fsspec's event-loop
+        # thread for remote fetches; an automatic garbage collection on that
+        # thread deallocating h5py objects then deadlocks on the same lock.
+        # Pause collection for the handle's lifetime (resumed in close()).
+        return _open_h5_fileobj(
+            handle,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=True,
+        )
     try:
         if mode != "r":
             _maybe_make_parent_directory(resource)
@@ -205,15 +314,19 @@ class H5Reader(_H5CasterBase):
     def _get_open_kwargs(resource: UPath) -> dict[str, object]:
         """Return backend-specific kwargs for remote HDF5 file objects."""
         protocol = getattr(resource, "protocol", None)
-        if protocol in remote_hdf5_tuned_protocols:
-            # h5py performs many small seeks while opening HDF5 metadata.
-            # s3fs defaults to 50 MB readahead blocks, which can pull most of
-            # a large remote file just to satisfy metadata probes.
-            return {
-                "block_size": get_config().remote_hdf5_block_size,
-                "cache_type": "readahead",
-            }
-        return {}
+        if protocol not in remote_hdf5_tuned_protocols:
+            return {}
+        # h5py performs many small seeks while opening HDF5 metadata, and
+        # remote backends default to large readahead blocks (s3fs uses 50 MB)
+        # which can pull most of a file just to satisfy those probes.
+        out = {"block_size": get_config().remote_hdf5_block_size}
+        if protocol not in http_protocols:
+            return out | {"cache_type": "readahead"}
+        # HTTP needs a block LRU instead: the probe alternates between the
+        # file header and footer, and fsspec's default single-window cache
+        # refetches a full block (or the whole file on range-less servers) on
+        # every jump. Eight blocks keeps both ends resident and bounds memory.
+        return out | {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}}
 
     @classmethod
     def get_handle(cls, resource):

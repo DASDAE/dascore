@@ -17,6 +17,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import suppress
 from functools import cached_property, wraps
 from numbers import Integral
 from pathlib import Path
@@ -59,7 +60,11 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
-from dascore.utils.io import IOResourceManager, get_handle_from_resource
+from dascore.utils.io import (
+    IOResourceManager,
+    get_handle_from_resource,
+    release_handle,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _get_install_message,
@@ -860,22 +865,35 @@ def _type_caster(func, sig, required_type, arg_name):
         bound = sig.bind(*args, **kwargs)
         new_kw = bound.arguments
         resource = new_kw.pop(arg_name)
+        new_resource = None
         try:
             new_resource = get_handle_from_resource(resource, required_type)
             new_kw[arg_name] = new_resource
             # kwargs is included in bound arguments, need to re-attach
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
-        except Exception as e:  # get_format can't raise; must return false.
-            if fun_name == "get_format":
-                out = False
-            else:
-                raise e
+        except BaseException as e:
+            # A handle created here must be released even on failure,
+            # including on KeyboardInterrupt: leaking a remote handle leaves
+            # garbage collection paused for as long as the traceback is
+            # retained. Abort rather than close, so a failed remote write
+            # discards its temp file instead of uploading a partial one.
+            if new_resource is not None and new_resource is not resource:
+                with suppress(Exception):
+                    release_handle(new_resource, abort=True)
+            # get_format reports "not my format" by returning False rather
+            # than raising, so an ordinary Exception becomes False here.
+            # Everything else propagates, including a BaseException raised
+            # inside get_format: the catch is only this wide so the cleanup
+            # above runs on a KeyboardInterrupt, not to swallow one.
+            if fun_name != "get_format" or not isinstance(e, Exception):
+                raise
+            out = False
         else:
             # if a new file handle was created we need to close it now. But it
             # shouldn't close any passed in, that should happen up the stack.
-            if new_resource is not resource and hasattr(new_resource, "close"):
-                new_resource.close()
+            if new_resource is not resource:
+                release_handle(new_resource)
         return out
 
     # attach the function and required type for later use

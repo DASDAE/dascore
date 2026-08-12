@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import h5py
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from upath import UPath
 
 import dascore as dc
@@ -44,6 +46,28 @@ from dascore.utils.remote_io import (
     is_no_range_http_error,
     remote_cache_scope,
 )
+
+
+class _DummyHandle:
+    """A file-like stand-in that only records being closed."""
+
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeAsyncFS(AsyncFileSystem):
+    """A stand-in async fsspec filesystem which needs no event loop."""
+
+    def __init__(self):
+        pass
+
+
+class _FakeRemoteFile(BytesIO):
+    """A file object whose fsspec filesystem serves reads on a loop thread."""
+
+    fs = _FakeAsyncFS()
 
 
 class _BadType:
@@ -359,13 +383,6 @@ class TestGetHandleFromResource:
         self, tmp_path, monkeypatch
     ):
         """Ensure constructor failures close UPath-opened file handles."""
-
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
         handle = _DummyHandle()
         path = UPath(tmp_path / "error.h5")
         path.write_bytes(b"not an hdf5")
@@ -381,33 +398,132 @@ class TestGetHandleFromResource:
             H5Reader.get_handle(path)
         assert handle.closed
 
-    def test_h5_reader_uses_small_blocks_for_s3_upath(self, monkeypatch):
-        """S3-backed HDF5 readers should override s3fs's large default block."""
+    @pytest.mark.parametrize(
+        ("url", "options", "expected"),
+        [
+            (
+                "s3://example-bucket/example.h5",
+                {"anon": True},
+                {"cache_type": "readahead"},
+            ),
+            (
+                "http://example.com/example.h5",
+                {},
+                {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}},
+            ),
+            (
+                "https://example.com/example.h5",
+                {},
+                {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}},
+            ),
+        ],
+    )
+    def test_remote_h5_open_kwargs_are_tuned(self, monkeypatch, url, options, expected):
+        """Remote HDF5 opens must override backend defaults that overfetch.
 
-        class _DummyHandle:
-            closed = False
-
-            def close(self):
-                self.closed = True
-
+        s3fs defaults to 50 MB readahead blocks. HTTP instead needs a block
+        LRU: the h5py metadata probe alternates between the file header and
+        footer, and a single-window cache refetches on every jump.
+        """
         opened = {}
-        handle = _DummyHandle()
-        path = UPath("s3://example-bucket/example.h5", anon=True)
+        path = UPath(url, **options)
 
         def _open(_self, _mode, **kwargs):
             opened.update(kwargs)
-            return handle
+            return _DummyHandle()
 
         monkeypatch.setattr(type(path), "open", _open)
         monkeypatch.setattr(
             H5Reader,
             "constructor",
-            staticmethod(lambda *args, **kwargs: object()),
+            staticmethod(lambda *args, **kwargs: _DummyHandle()),
         )
         with config_context(remote_hdf5_block_size=1234):
-            H5Reader.get_handle(path)
+            H5Reader.get_handle(path).close()
         assert opened["block_size"] == 1234
-        assert opened["cache_type"] == "readahead"
+        for key, value in expected.items():
+            assert opened[key] == value
+
+    def test_remote_h5_handle_pauses_gc(self, monkeypatch):
+        """Automatic collection stays paused while a remote handle is open."""
+        path = UPath("http://example.com/gc-pause.h5")
+        # Stand in for the real filesystem, which needs aiohttp; some
+        # platforms DASCore supports (wasm, free-threaded) do not have it.
+        monkeypatch.setattr(type(path), "fs", property(lambda _self: _FakeAsyncFS()))
+        monkeypatch.setattr(type(path), "open", lambda *a, **k: _DummyHandle())
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(lambda *args, **kwargs: _DummyHandle()),
+        )
+        assert gc.isenabled()
+        handle = H5Reader.get_handle(path)
+        try:
+            assert not gc.isenabled()
+        finally:
+            handle.close()
+        assert gc.isenabled()
+        # Closing twice must not unbalance the pause bookkeeping.
+        handle.close()
+        assert gc.isenabled()
+
+    def test_dropped_wrapper_leaves_caller_handle_open(self, generic_hdf5):
+        """Collecting a wrapper must not close the handle its caller owns."""
+        file = h5py.File(generic_hdf5, "r")
+        try:
+            wrapper = H5Reader.get_handle(file)
+            assert wrapper is not file
+            del wrapper
+            gc.collect()
+            assert file  # h5py files are falsey once closed
+        finally:
+            file.close()
+
+    def test_failed_open_leaves_caller_fileobj_usable(self):
+        """A caller's file object must survive a failed HDF5 open.
+
+        get_format hands the same object to every FiberIO in turn, so an
+        HDF5 miss cannot close it out from under the next one.
+        """
+        buffer = BytesIO(b"not an hdf5 file")
+        with pytest.raises(OSError):
+            H5Reader.get_handle(buffer)
+        assert not buffer.closed
+
+    def test_local_upath_does_not_pause_gc(self, generic_hdf5):
+        """A synchronous backend has no loop thread, so it must not pause gc."""
+        handle = H5Reader.get_handle(UPath(generic_hdf5))
+        try:
+            assert gc.isenabled()
+        finally:
+            handle.close()
+
+    def test_loop_backed_fileobj_pauses_gc(self, monkeypatch):
+        """User-supplied fsspec async file objects need the GC pause too."""
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(lambda *args, **kwargs: BytesIO()),
+        )
+        assert gc.isenabled()
+        handle = H5Reader.get_handle(_FakeRemoteFile())
+        try:
+            assert not gc.isenabled()
+        finally:
+            handle.close()
+        assert gc.isenabled()
+
+    def test_loop_backed_fileobj_constructor_error_resumes_gc(self, monkeypatch):
+        """A failed h5py construction must rebalance the GC pause."""
+
+        def _explode(*args, **kwargs):
+            raise ValueError("not an hdf5 fileobj")
+
+        monkeypatch.setattr(H5Reader, "constructor", staticmethod(_explode))
+        assert gc.isenabled()
+        with pytest.raises(ValueError, match="not an hdf5 fileobj"):
+            H5Reader.get_handle(_FakeRemoteFile())
+        assert gc.isenabled()
 
     def test_h5_writer_to_remote_upath(self):
         """HDF5 writers should create remote UPath files via write-back."""
@@ -533,6 +649,71 @@ class TestIOResourceManager:
         source = object()
         with IOResourceManager(source) as man:
             assert man.get_resource(None) is source
+
+    def test_error_in_context_aborts_handles(self):
+        """An exception inside the context must abort, not commit, handles."""
+
+        class _Recorder:
+            aborted = False
+            closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        man = IOResourceManager("unused")
+        man._cache["key"] = recorder
+        with pytest.raises(ValueError, match="boom"):
+            with man:
+                raise ValueError("boom")
+        assert recorder.aborted
+        assert not recorder.closed
+        # A clean exit closes normally.
+        recorder2 = _Recorder()
+        man2 = IOResourceManager("unused")
+        man2._cache["key"] = recorder2
+        with man2:
+            pass
+        assert recorder2.closed
+        assert not recorder2.aborted
+
+    def test_failed_abort_does_not_mask_original_error(self):
+        """A cleanup failure must not replace the error which caused it."""
+
+        class _BadAbort:
+            def abort(self):
+                raise OSError("abort failed")
+
+        man = IOResourceManager("unused")
+        man._cache["key"] = _BadAbort()
+        with pytest.raises(ValueError, match="boom") as exc_info:
+            with man:
+                raise ValueError("boom")
+        assert any("abort failed" in note for note in exc_info.value.__notes__)
+
+    def test_close_all_survives_failing_handle(self):
+        """One handle raising must not skip cleanup of the others."""
+
+        class _Exploder:
+            def close(self):
+                raise OSError("close failed")
+
+        class _Recorder:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        recorder = _Recorder()
+        man = IOResourceManager("unused")
+        man._cache["bad"] = _Exploder()
+        man._cache["good"] = recorder
+        with pytest.raises(OSError, match="close failed"):
+            man.close_all()
+        assert recorder.closed
 
     def test_non_pathlike_resource_passthrough(self):
         """Non-pathlike resources should bypass path coercion entirely."""
@@ -921,6 +1102,12 @@ class TestRemoteIOFallback:
         assert is_no_range_http_error(exc)
         assert not is_no_range_http_error(ValueError("different error"))
         assert not is_no_range_http_error(RuntimeError("range requests"))
+
+    def test_no_range_error_predicate_matches_streaming_seek(self):
+        """Seeking a streaming (size-less) HTTP file needs the same fallback."""
+        exc = ValueError("Cannot seek streaming HTTP file")
+        assert is_no_range_http_error(exc)
+        assert not is_no_range_http_error(RuntimeError(str(exc)))
 
 
 class TestFallbackFileObj:

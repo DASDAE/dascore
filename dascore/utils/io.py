@@ -209,6 +209,20 @@ def get_handle_from_resource(uri, required_type):
     return uri
 
 
+def release_handle(handle, abort: bool = False):
+    """
+    Release a file handle, closing it or discarding its uncommitted work.
+
+    Only a few handles can ``abort``; a remote HDF5 writer does, because
+    closing it uploads whatever was written so far. Everything else is
+    closed, and a handle with no ``close`` needs no release at all.
+    """
+    if abort and hasattr(handle, "abort"):
+        handle.abort()
+    else:
+        getattr(handle, "close", lambda: None)()
+
+
 class IOResourceManager:
     """
     A class for managing opening/closing files.
@@ -254,28 +268,54 @@ class IOResourceManager:
                 self._cache[required_type] = out
             return self._cache[required_type]
 
-    def close_all(self):
-        """Close any open file handles."""
+    def close_all(self, abort: bool = False):
+        """
+        Close any open file handles.
+
+        With ``abort=True``, handles that support it discard uncommitted
+        work (e.g. remote writers skip uploading a partial file). One
+        handle failing must not skip cleanup of the others (remote handles
+        resume garbage collection in close), so the first error is
+        re-raised only after every handle was attempted. BaseException is
+        caught for that reason too: a Ctrl-C mid-close would otherwise
+        strand the GC pause of every handle after it.
+        """
+        first_exc = None
         with self._lock:
             for handle in self._cache.values():
-                getattr(handle, "close", lambda: None)()
+                try:
+                    release_handle(handle, abort=abort)
+                except BaseException as exc:
+                    first_exc = first_exc if first_exc is not None else exc
+        if first_exc is not None:
+            raise first_exc
 
     def clear_cache(self):
         """Close and forget any cached resources so they can be reopened fresh."""
         with self._lock:
-            self.close_all()
-            self._cache.clear()
+            try:
+                self.close_all()
+            finally:
+                self._cache.clear()
 
     def __enter__(self):
         """Entering context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Simply ensure all file handles are closed."""
-        self.close_all()
+        """Close all handles; on error, abort uncommitted writes instead."""
+        if exc_type is None:
+            self.close_all()
+            return
+        try:
+            self.close_all(abort=True)
+        except Exception as cleanup_error:
+            # A cleanup failure must not replace the error which caused it.
+            exc_val.add_note(f"Aborting IO resources also failed: {cleanup_error!r}")
 
     def __del__(self):
-        self.close_all()
+        with suppress(Exception):
+            self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):

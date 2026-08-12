@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import shutil
 import threading
@@ -17,6 +18,7 @@ import pytest
 
 import dascore as dc
 import dascore.examples as ex
+import dascore.utils.remote_io as remote_io
 from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
@@ -154,6 +156,32 @@ def use_test_config():
     """Run tests with debug mode enabled unless overridden locally."""
     with _permanent_config(debug=True):
         yield
+
+
+@pytest.fixture(autouse=True)
+def gc_pause_is_not_leaked():
+    """
+    Blame the test which strands the remote-read gc pause, and repair it.
+
+    Remote HDF5 handles disable automatic collection process-wide (see
+    `dascore.utils.remote_io.pause_gc`). Repairing here keeps one leak from
+    cascading into every later test, which would bury the real failure.
+    """
+    was_enabled = gc.isenabled()
+    yield
+    depth = remote_io._gc_pause_depth
+    is_enabled = gc.isenabled()
+    if not depth and is_enabled == was_enabled:
+        return
+    remote_io._gc_pause_depth = 0
+    if was_enabled:
+        gc.enable()
+    else:
+        gc.disable()
+    pytest.fail(
+        f"test changed collection state: pause depth={depth}, "
+        f"gc enabled={is_enabled}, expected={was_enabled}"
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -154,7 +154,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
 
     # Keep remote-IO coverage visible without blocking unrelated changes.
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')

@@ -136,3 +136,13 @@ The same distinction applies to spools:
 - `spool.get_contents()` relies on summary metadata
 - `spool[0]` or iteration loads patch data
 - if a remote backend cannot answer the metadata side without a download, use `allow_remote_cache_for_metadata=True`
+
+## Garbage Collection During Remote HDF5 Reads
+
+While a remote HDF5 handle is open, DASCore pauses Python's automatic garbage collection for the whole process, then restores it when the last such handle closes.
+
+This avoids a deadlock which h5py documents under [Python file-like objects](https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects): h5py serializes its low-level calls behind a process-global lock, holds that lock while a file-like object services a read, and needs the same lock to deallocate a dead h5py object. A remote read is serviced by the event loop thread [fsspec](https://filesystem-spec.readthedocs.io/) runs for each async backend, so a cyclic collection landing on that thread waits for a lock the reader will not release until the read completes.
+
+Of the mitigations h5py suggests, DASCore takes the second: temporarily disabling collection. The first, avoiding reference cycles which keep h5py objects alive, is not something a library can guarantee, since the cycle may be anywhere in the process.
+
+Reference counting is unaffected, so most objects are still freed immediately; only cyclic garbage accumulates, and only until the handle closes. Reads of local files and of synchronous backends such as `memory://` are unaffected.
