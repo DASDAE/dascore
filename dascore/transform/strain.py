@@ -79,9 +79,9 @@ def velocity_to_strain_rate(
     [patch.differentiate](`dascore.transform.differentiate.differentiate`)
     under the hood to calculate spatial derivatives.
 
-    The output gauge length is equal to the step_multiple multuplied by the
+    The output gauge length is equal to the step_multiple multiplied by the
     spacing along the distance coordinate, although the concept of
-    gauge_length is more complex with higher oder filters. See
+    gauge_length is more complex with higher order filters. See
     @yang2022filtering for more info.
 
     See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)

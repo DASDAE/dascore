@@ -38,7 +38,7 @@ def _get_zone_time(feb):
     """
     Attempt to get time information for the current zone.
 
-    The files are very inconsistent accross versions, so, to try to support
+    The files are very inconsistent across versions, so, to try to support
     as many febus files as possible, this function does a lot of heavy lifting.
 
     Danger: Here be dragons.
@@ -70,7 +70,7 @@ def _get_zone_time(feb):
     # We need to determine if this a v1 file (no version in attrs). See # 589
     # and # 587. This could perhaps be made more robust in the future.
     has_version = "Version" in feb.zone.attrs
-    # When the file has a version, the spacing can be trusted, otherise
+    # When the file has a version, the spacing can be trusted, otherwise
     # use spatial sampling.
     if has_version:
         block_pad = 1 + extents[3] - extents[2]

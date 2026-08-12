@@ -552,7 +552,7 @@ def slope_filter(
     >>> filt = np.array([2e3,2.2e3,8e3,2e4]) * dc.get_unit("m/s")
     >>> patch_filtered = patch.slope_filter(filt=filt)
 
-    The [FK recipe](`docs/recipes/fk.qmd`) provides addtional examples.
+    The [FK recipe](`docs/recipes/fk.qmd`) provides additional examples.
     """
 
     def _check_inputs(patch, filt, dims):

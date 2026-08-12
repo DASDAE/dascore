@@ -461,7 +461,7 @@ def select(
         array can get gc'ed and memory freed.
     relative
         If True, select ranges are relative to the start of coordinate, if
-        possitive, or the end of the coordinate, if negative.
+        positive, or the end of the coordinate, if negative.
     samples
         If True, the query meaning is in samples.
     **kwargs
@@ -511,7 +511,7 @@ def select(
     Notes
     -----
     - It is important to remember select will not change the order of the
-      patch, only fiter values. If the order of the patch should change, or
+      patch, only filter values. If the order of the patch should change, or
       multiple rows/columns need to be repeated,
       See [`Patch.order`](`dascore.Patch.order`).
 
@@ -607,7 +607,7 @@ def order(
     -----
     - This function is similar to [`Patch.select`](`dascore.Patch.select`)
       but it will also change the patch order to match the inputs exactly.
-      If there are repeated values in the requsted values or in the patch
+      If there are repeated values in the requested values or in the patch
       coordinate arrays, the data will end up being repeated as well.
     """
     new_coords, data = patch.coords.order(
