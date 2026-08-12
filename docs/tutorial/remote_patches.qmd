@@ -146,3 +146,56 @@ This avoids a deadlock which h5py documents under [Python file-like objects](htt
 Of the mitigations h5py suggests, DASCore takes the second: temporarily disabling collection. The first, avoiding reference cycles which keep h5py objects alive, is not something a library can guarantee, since the cycle may be anywhere in the process.
 
 Reference counting is unaffected, so most objects are still freed immediately; only cyclic garbage accumulates, and only until the handle closes. Reads of local files and of synchronous backends such as `memory://` are unaffected.
+
+DASCore warns the first time it pauses collection in a process, since the effect is otherwise invisible. Silence it with `warn_on_gc_pause=False` once you know it applies to your workflow.
+
+```python
+import dascore as dc
+from dascore.config import config_context
+
+with config_context(warn_on_gc_pause=False):
+    patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
+```
+
+## Tuning Remote HDF5 Transfers
+
+Opening an HDF5 file over HTTP is dominated by h5py's metadata probe, which alternates between the file's header and footer. DASCore reads through a block cache so both ends stay resident rather than being refetched on every jump. Two settings control it:
+
+- `remote_hdf5_block_size` — bytes fetched per block (5 MiB by default)
+- `remote_hdf5_max_blocks` — blocks one open handle may keep (8 by default)
+
+Their product is roughly the memory an open remote HDF5 handle retains, so ~40 MiB by default. The cache fetches one block per request, so the block size trades bytes against round trips: smaller blocks move less data but ask for it more often.
+
+The defaults are a compromise. Which way to move them depends on what you are doing, because scanning and reading have opposite access patterns.
+
+### Scanning many files
+
+Scanning reads only metadata — kilobytes, but from two distant regions of each file. A large block spends megabytes to deliver kilobytes, and the file is closed before the cache is reused. Prefer small blocks, and only enough of them to hold both ends of the file:
+
+```python
+import dascore as dc
+from dascore.config import config_context
+
+with config_context(remote_hdf5_block_size=262_144, remote_hdf5_max_blocks=4):
+    spool = dc.spool("http://example.com/data/").update()
+    contents = spool.get_contents()
+```
+
+That is 1 MiB retained per handle instead of 40 MiB, which matters most when a spool holds several files open at once. Do not shrink the block size too far: each block is a request, and on a high-latency link the round trips will cost more than the bytes saved.
+
+### Reading whole patches
+
+Reading pulls large contiguous ranges, and the cache issues one request per block. Here big blocks win, because they cut the number of requests for the same bytes. The LRU buys little on a streaming read, so trade blocks for size and keep the product in hand:
+
+```python
+with config_context(remote_hdf5_block_size=16_777_216, remote_hdf5_max_blocks=2):
+    patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
+```
+
+If you are reading whole files, and especially reading them more than once, consider letting DASCore materialize them locally instead — see [Remote Cache Settings](#remote-cache-settings). A single sequential download beats any block-cached streaming pattern.
+
+### Many handles at once
+
+The memory figure is per *open* handle, so concurrent reads multiply it. A spool reading eight remote files in parallel at the defaults holds ~320 MiB of cache. Lower `remote_hdf5_max_blocks` first: it costs refetches only if the access pattern revisits an evicted block, which a scan or a sequential read does not.
+
+These settings apply to the protocols DASCore tunes (HTTP, HTTPS, and S3-like). `remote_hdf5_max_blocks` applies to HTTP and HTTPS, the ones using the block cache; S3 uses a read-ahead cache and takes only the block size.

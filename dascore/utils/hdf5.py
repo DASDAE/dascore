@@ -325,8 +325,13 @@ class H5Reader(_H5CasterBase):
         # HTTP needs a block LRU instead: the probe alternates between the
         # file header and footer, and fsspec's default single-window cache
         # refetches a full block (or the whole file on range-less servers) on
-        # every jump. Eight blocks keeps both ends resident and bounds memory.
-        return out | {"cache_type": "blockcache", "cache_options": {"maxblocks": 8}}
+        # every jump. A few blocks keep both ends resident; the cap bounds
+        # what one open handle retains.
+        max_blocks = get_config().remote_hdf5_max_blocks
+        return out | {
+            "cache_type": "blockcache",
+            "cache_options": {"maxblocks": max_blocks},
+        }
 
     @classmethod
     def get_handle(cls, resource):

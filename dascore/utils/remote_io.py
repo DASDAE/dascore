@@ -42,9 +42,33 @@ _gc_pause_lock = threading.Lock()
 _gc_pause_depth = 0
 _gc_was_enabled = False
 _gc_collect_after = 0.0
+_gc_pause_warned = False
 # Seconds between safety-valve collections; a full collect is O(live objects),
 # measured at 7-160 ms here, so it must not run on every remote open.
 _GC_COLLECT_INTERVAL = 10.0
+
+
+def _warn_gc_pause_once() -> None:
+    """
+    Say once per process that a remote read is pausing collection.
+
+    The pause is process-global and invisible otherwise, so a program whose
+    memory grows, or which finds ``gc.isenabled()`` False, has no way to
+    connect either to a remote read. Warning once keeps a spool over many
+    remote files from repeating it.
+    """
+    global _gc_pause_warned
+    if _gc_pause_warned or not get_config().warn_on_gc_pause:
+        return
+    _gc_pause_warned = True
+    msg = (
+        "Reading remote HDF5 pauses Python's automatic garbage collection "
+        "until the last such handle closes, which avoids a deadlock between "
+        "h5py's global lock and collection on fsspec's event-loop thread. "
+        "Reference counting is unaffected, but cyclic garbage accumulates "
+        "meanwhile. Set `warn_on_gc_pause=False` to silence this warning."
+    )
+    warnings.warn(msg, UserWarning, stacklevel=4)
 
 
 def _claim_safety_collect() -> bool:
@@ -86,6 +110,7 @@ def pause_gc() -> None:
     program makes one. Otherwise the pause outlives every remote read.
     """
     global _gc_pause_depth, _gc_was_enabled
+    _warn_gc_pause_once()
     # Safety valve: finalize cyclic garbage, including a handle leaked by an
     # earlier session, so a stranded pause cannot disable collection forever.
     # It runs before this pause is taken, so an interrupt during the collect

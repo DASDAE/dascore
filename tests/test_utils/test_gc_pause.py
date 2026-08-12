@@ -6,12 +6,14 @@ import gc
 import io
 import os
 import threading
+import warnings
 from contextlib import suppress
 from types import SimpleNamespace
 
 import pytest
 
 import dascore.utils.remote_io as remote_io
+from dascore.config import config_context
 from dascore.utils.hdf5 import (
     _is_loop_backed,
     _ManagedH5pyFile,
@@ -233,6 +235,42 @@ class TestPauseAccounting:
         run_in_threads(_pause_and_resume)
         assert remote_io._gc_pause_depth == 0
         assert gc.isenabled()
+
+
+class TestPauseWarning:
+    """The pause is invisible otherwise, so it must announce itself once."""
+
+    @pytest.fixture(autouse=True)
+    def _unwarned(self, monkeypatch):
+        """Start each test as though nothing had warned yet."""
+        monkeypatch.setattr(remote_io, "_gc_pause_warned", False)
+
+    def test_warns_once_per_process(self):
+        """A spool over many remote files must not repeat the warning."""
+        with pytest.warns(UserWarning, match="pauses Python's automatic garbage"):
+            pause_gc()
+        resume_gc()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # a second warning would raise
+            pause_gc()
+            resume_gc()
+
+    def test_can_be_silenced(self):
+        """`warn_on_gc_pause=False` turns the warning off."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with config_context(warn_on_gc_pause=False):
+                pause_gc()
+                resume_gc()
+
+    def test_silencing_does_not_disable_the_pause(self):
+        """Silencing the warning must not change what the pause does."""
+        with config_context(warn_on_gc_pause=False):
+            pause_gc()
+            try:
+                assert not gc.isenabled()
+            finally:
+                resume_gc()
 
 
 class TestLoopBackedDetection:

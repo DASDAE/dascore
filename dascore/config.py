@@ -139,6 +139,21 @@ class DascoreConfig(BaseModel):
         default=5_242_880,
         description="Block size in bytes for remote HDF5 access on tuned protocols.",
     )
+    remote_hdf5_max_blocks: int = Field(
+        default=8,
+        gt=0,
+        description=(
+            "Blocks each open HTTP HDF5 handle may keep cached. Retained memory "
+            "is this times `remote_hdf5_block_size`."
+        ),
+    )
+    warn_on_gc_pause: bool = Field(
+        default=True,
+        description=(
+            "Warn the first time DASCore pauses automatic garbage collection "
+            "for a remote HDF5 read."
+        ),
+    )
 
     @field_validator(
         "downloader_cache_dir",
