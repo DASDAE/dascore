@@ -447,6 +447,9 @@ class TestGetHandleFromResource:
     def test_remote_h5_handle_pauses_gc(self, monkeypatch):
         """Automatic collection stays paused while a remote handle is open."""
         path = UPath("http://example.com/gc-pause.h5")
+        # Stand in for the real filesystem, which needs aiohttp; some
+        # platforms DASCore supports (wasm, free-threaded) do not have it.
+        monkeypatch.setattr(type(path), "fs", property(lambda _self: _FakeAsyncFS()))
         monkeypatch.setattr(type(path), "open", lambda *a, **k: _DummyHandle())
         monkeypatch.setattr(
             H5Reader,

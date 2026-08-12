@@ -50,6 +50,7 @@ def _open_paused(fileobj, constructor=lambda fileobj, **kwargs: object()):
 class TestDeadlockProperty:
     """The pause must actually prevent the h5py/loop-thread deadlock."""
 
+    @pytest.mark.concurrency
     def test_pause_prevents_loop_thread_deadlock(self):
         """A collection on the loop thread cannot wedge a lock-holding reader.
 
