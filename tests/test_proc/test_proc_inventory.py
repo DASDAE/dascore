@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import pickle
 import warnings
 
@@ -10,6 +11,12 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import (
+    enrich_attrs_description,
+    enrich_conflicts_description,
+    enrich_coords_description,
+    enrich_on_missing_description,
+)
 from dascore.core.inventory import (
     Acquisition,
     CoordinateReferenceSystem,
@@ -405,7 +412,9 @@ class TestCoords:
 
     def test_missing_coord_ignore(self, patch, inventory):
         """Or omitted entirely."""
-        out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="ignore")
+        out = patch.enrich(
+            inventory, attrs=False, coords=("nope",), on_missing="ignore"
+        )
         assert "nope" not in set(out.coords.coord_map)
 
     def test_blanket_without_geometry(self, patch, inventory):
@@ -785,6 +794,33 @@ class TestSpoolEnrich:
         """The last call says what enrichment means."""
         spool = dc.spool(patch).enrich(inventory, coords=False).enrich(inventory)
         assert "zone" in set(spool[0].coords.coord_map)
+
+    def test_documents_the_arguments_it_forwards(self):
+        """
+        Spool.enrich documents the arguments it holds, from one source.
+
+        The two enrich methods take the same arguments and describing them
+        twice is how they drift, so both compose the same fragments.
+        """
+        spool_doc = dc.core.spool.Spool.enrich.__doc__
+        patch_doc = dc.Patch.enrich.__doc__
+        forwarded = set(inspect.signature(dc.Patch.enrich).parameters) - {
+            "patch",
+            "inventory",
+        }
+        for fragment in (
+            enrich_attrs_description,
+            enrich_coords_description,
+            enrich_on_missing_description,
+            enrich_conflicts_description,
+        ):
+            # Indentation differs between a function and a method body, so
+            # the shared text is compared with it removed.
+            body = " ".join(fragment.split())
+            assert body in " ".join(spool_doc.split())
+            assert body in " ".join(patch_doc.split())
+        for name in forwarded:
+            assert f"\n        {name}\n" in spool_doc
 
 
 class TestReviewFindings:

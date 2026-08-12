@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from pathlib import Path
@@ -250,6 +251,49 @@ check_behavior
     [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
     if any incompatible patches are found.
 """
+
+# Enrichment parameters, shared by Patch.enrich and Spool.enrich so the
+# two cannot describe the same arguments differently.
+
+enrich_attrs_description = """
+attrs
+    True (the default) to copy the observing-system facts the inventory
+    is authoritative for, a tuple of names to copy exactly those, or
+    False to copy none. The blanket form excludes `data_type`,
+    `data_category`, and `data_units`, which describe the data as it
+    now stands, and `sample_rate` and `spatial_interval`, which the
+    patch's own coordinates already state; naming one restores the
+    as-acquired value.
+""".strip()
+
+enrich_coords_description = """
+coords
+    True (the default) to add the geometry axes and annotation groups of
+    the resolved optical path, a tuple of names to add exactly those, or
+    False to add none. Names may be `distance` for optical distance, a
+    coordinate label the inventory's CRS defines, an annotation group, or
+    a qualified track field such as `coupling.medium`.
+""".strip()
+
+enrich_on_missing_description = """
+on_missing
+    What to do when an explicitly requested name is one the inventory does
+    not define: "raise" (the default), "null" to fill the dtype-appropriate
+    missing marker, or "ignore" to leave it off. Blanket requests copy what
+    is applicable and never trigger it, and per-channel coverage gaps are
+    always missing values rather than errors.
+""".strip()
+
+enrich_conflicts_description = f"""
+conflicts
+{textwrap.indent(attr_conflict_description.strip(), "    ")}
+
+    Enrichment combines the inventory's values with the patch's own, so
+    the default `keep_first` lets the inventory win and re-enriching is
+    a refresh. `raise` is the misresolution guard: a header disagreeing
+    with the resolved acquisition usually means the `acquisition_key`
+    resolved to the wrong place.
+""".strip()
 
 
 # Rich styles for various object displays.

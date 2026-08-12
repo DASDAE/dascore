@@ -23,6 +23,10 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    enrich_attrs_description,
+    enrich_conflicts_description,
+    enrich_coords_description,
+    enrich_on_missing_description,
     namespace_select_type,
     numeric_types,
     path_types,
@@ -789,6 +793,12 @@ class Spool(BaseSpool):
         new._enrich_kwargs = None
         return new
 
+    @compose_docstring(
+        attrs_desc=enrich_attrs_description,
+        coords_desc=enrich_coords_description,
+        on_missing_desc=enrich_on_missing_description,
+        conflicts_desc=enrich_conflicts_description,
+    )
     def enrich(
         self,
         inventory=None,
@@ -824,12 +834,27 @@ class Spool(BaseSpool):
             A patch which *straddles* two epochs is described twice rather
             than not at all, and raises regardless: it needs subdividing.
         **kwargs
-            Passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
-            each extracted patch, which documents them; the names accepted
-            here are read from its signature, so the two cannot disagree.
-            Only the names are checked at this point — the values each
-            patch's own enrichment checks as it is extracted. Calling
-            `enrich` again replaces these rather than adding to them.
+            Held and passed to
+            [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
+            extracted patch. The names accepted are read from its
+            signature, so the two cannot disagree, and only the names are
+            checked at this point — the values each patch's own enrichment
+            checks as it is extracted. Calling `enrich` again replaces
+            these rather than adding to them. They are:
+
+        Other Parameters
+        ----------------
+        {attrs_desc}
+        {coords_desc}
+        acquisition_key
+            The inventory identity to resolve, for patches which do not
+            carry one. Given both, each patch and this argument must agree.
+        time
+            The instant to resolve at, for patches whose time axis is not
+            physical. A patch with a real time coordinate resolves at its
+            own time and passing this raises.
+        {on_missing_desc}
+        {conflicts_desc}
 
         Examples
         --------

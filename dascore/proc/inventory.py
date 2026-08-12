@@ -8,7 +8,14 @@ from typing import Literal, get_args
 import numpy as np
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, PatchType, attr_conflict_description
+from dascore.constants import (
+    INVENTORY_ATTRS,
+    PatchType,
+    enrich_attrs_description,
+    enrich_conflicts_description,
+    enrich_coords_description,
+    enrich_on_missing_description,
+)
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
@@ -56,15 +63,6 @@ _TRACK_FIELD_UNITS = {
     "coupling.depth": "m",
     "optical_components.optical_length": "m",
 }
-
-on_missing_description = """
-on_missing
-    What to do when an explicitly requested name is one the inventory does
-    not define: "raise" (the default), "null" to fill the dtype-appropriate
-    missing marker, or "ignore" to leave it off. Blanket requests copy what is
-    applicable and never trigger it, and per-channel coverage gaps are always
-    missing values rather than errors.
-""".strip()
 
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
@@ -572,7 +570,10 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
 
 @patch_function()
 @compose_docstring(
-    conflict_desc=attr_conflict_description, on_missing_desc=on_missing_description
+    attrs_desc=enrich_attrs_description,
+    coords_desc=enrich_coords_description,
+    on_missing_desc=enrich_on_missing_description,
+    conflicts_desc=enrich_conflicts_description,
 )
 def enrich(
     patch: PatchType,
@@ -598,20 +599,8 @@ def enrich(
         The patch to enrich.
     inventory
         The inventory to resolve against.
-    attrs
-        True (the default) to copy the observing-system facts the inventory
-        is authoritative for, a tuple of names to copy exactly those, or
-        False to copy none. The blanket form excludes `data_type`,
-        `data_category`, and `data_units`, which describe the data as it
-        now stands, and `sample_rate` and `spatial_interval`, which the
-        patch's own coordinates already state; naming one restores the
-        as-acquired value.
-    coords
-        True (the default) to add the geometry axes and annotation groups of
-        the resolved optical path, a tuple of names to add exactly those, or
-        False to add none. Names may be `distance` for optical distance, a
-        coordinate label the inventory's CRS defines, an annotation group, or
-        a qualified track field such as `coupling.medium`.
+    {attrs_desc}
+    {coords_desc}
     acquisition_key
         The inventory identity to resolve, for a patch which does not carry
         one. Given both, the patch and this argument must agree.
@@ -620,13 +609,7 @@ def enrich(
         physical. A patch with a real time coordinate resolves at its own
         time and passing this raises.
     {on_missing_desc}
-    conflicts
-        {conflict_desc}
-        Enrichment combines the inventory's values with the patch's own, so
-        the default `keep_first` lets the inventory win and re-enriching is
-        a refresh. `raise` is the misresolution guard: a header disagreeing
-        with the resolved acquisition usually means the `acquisition_key`
-        resolved to the wrong place.
+    {conflicts_desc}
 
     Examples
     --------
