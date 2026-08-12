@@ -59,10 +59,16 @@ git fetch --tags origin
 - Include at minimum PR number, title, merge date, URL, labels, and body text.
 - Look at the git diffs to extract additional info if needed.
 
-4. Draft a changelog with these sections:
-- `New Features`
-- `Bug Fixes`
-- `Breaking Changes`
+4. Draft a changelog with these sections, in this order, omitting any that end
+   up empty:
+- `Breaking Changes` — every entry marked `**breaking**`, repeated here from the
+   category section it also belongs to, so an upgrader sees them first.
+- `Added`
+- `Changed`
+- `Deprecated`
+- `Removed`
+- `Fixed`
+- `Security`
 
 5. Drop reverted pairs first. If a PR in scope reverts another PR that is also
    in scope (revert PRs usually say "Revert ..." and name the reverted PR or
@@ -71,14 +77,32 @@ git fetch --tags origin
    `Reverted (no net change)` note at the end, so the reader knows why those PR
    numbers are absent.
 
-6. Classify the remaining PRs. The repository no longer maintains a changelog, so
-   the PR bodies are the primary record of user-facing intent. Start from the
-   `User-facing changes` and `Breaking changes` headings of the PR template.
-   Distinguish the two ways those can be uninformative: a literal "None" is the
-   author stating the PR has no user-facing effect and is trustworthy, while an
-   *empty* heading means the author skipped it — fall back to the title, body,
-   and diff there rather than dropping the PR. Older PRs predate the headings
-   entirely and always need the fallback.
+6. Collect the entries. The repository no longer maintains a changelog, so the
+   PR bodies are the primary record of user-facing intent. Each body carries a
+   `## Changelog` section whose bullets are already written and categorized by
+   the author, and CI rejects a PR whose section is missing or malformed. Read
+   them rather than re-deriving them:
+
+```text
+- <category>: <text>
+- <category> **breaking**: <text>
+```
+
+   where `<category>` is one of `added`, `changed`, `deprecated`, `removed`,
+   `fixed`, `security`. Take each bullet as one entry, place it in the section
+   named by its category, and additionally list every `**breaking**` entry under
+   `Breaking Changes`. Preserve the author's wording; tighten only for length.
+
+   `**breaking**` means the entry can break code written against the *last
+   released version*. Work that only ever existed on `dev` is not marked, so do
+   not add the marker yourself from the diff — a change that looks drastic may be
+   breaking nothing any user has.
+
+   The section is uninformative in two distinguishable ways: a literal `none` is
+   the author stating the PR has no user-facing effect and is trustworthy, while
+   an *empty* or absent section means it predates this policy (or slipped
+   through) — fall back to the title, body, and diff there rather than dropping
+   the PR, and classify it yourself using the guidance below.
 
    One-time note, applying only to the first release drafted once
    `docs/changelog.qmd` is a stub pointing at the releases page. Until then the
@@ -93,33 +117,28 @@ git log --oneline -- docs/changelog.qmd
 git show <commit-before-the-stub>:docs/changelog.qmd
 ```
 
-   This repo does not use conventional-commit markers, and its
-   labels are topical (`proc`, `viz`, `spool`, `IO`, `transform`, `bug`, ...)
-   rather than semantic, so labels alone are not enough — use judgment:
-- `Breaking Changes` if the change removes or alters existing public API,
-   defaults, or behavior in a way that can break callers — regardless of whether
-   any `!`, `breaking` label, or `BREAKING CHANGE` text is present. A signature
-   or keyword change to a documented `Patch`/`dc` method is breaking even when
-   unlabeled; when unsure, list it here with a one-line note on what changed.
-- Otherwise `New Features` if the PR adds a capability, option, or notable
-   performance improvement (judge from the title/body, not just a
-   `feature`/`enhancement` label, which is often missing).
-- Otherwise `Bug Fixes`.
+   For those fallback PRs only, this repo does not use conventional-commit
+   markers, and its labels are topical (`proc`, `viz`, `spool`, `IO`,
+   `transform`, `bug`, ...) rather than semantic, so labels alone are not enough
+   — use judgment, assigning the same categories the authors would have:
+- `Removed` for deleted public API, `Deprecated` for API marked for removal,
+   `Security` for a vulnerability fix.
+- `Added` if the PR introduces a capability or option, `Fixed` if it corrects
+   wrong behavior, `Changed` for anything else observable, including notable
+   performance changes.
+- Mark an entry `**breaking**` only if it breaks code written against the last
+   released version. Check the tag rather than guessing: an API introduced after
+   that tag cannot break anyone.
 - Prefer user-facing behavior over internal implementation when deciding and
    when summarizing.
 - A PR is not limited to one entry. Large PRs routinely carry several unrelated
-   user-facing changes spanning more than one section — split them into separate
-   entries under the sections they belong to rather than compressing the PR into
-   a single line. The `User-facing changes` and `Breaking changes` headings of
-   the PR body are usually already itemized this way.
-- Omit PRs with no user-facing effect: the author wrote "None" under *every*
-   heading, or the diff shows the change is purely internal (refactors, CI,
-   typing, tests, docs infrastructure). A "None" applies only to the heading it
-   sits under — an ordinary non-breaking feature writes a real `User-facing
-   changes` section and "None" under `Breaking changes`, and must still appear in
-   the notes. Omitted PRs belong in no section; do not let them fall through to
-   `Bug Fixes`. Judge an empty heading from the diff, not from the emptiness
-   itself.
+   user-facing changes spanning more than one category — split them into separate
+   entries rather than compressing the PR into a single line.
+- Omit PRs with no user-facing effect: the author wrote `none`, or the diff shows
+   the change is purely internal (refactors, CI, typing, tests, docs
+   infrastructure). Omitted PRs belong in no section; do not let them fall
+   through to `Fixed`. Judge an empty section from the diff, not from the
+   emptiness itself.
 - Sort entries within each section by PR number ascending.
 - Include a link to the PR in the changelog.
 
@@ -132,22 +151,28 @@ git show <commit-before-the-stub>:docs/changelog.qmd
 ```text
 Next Version: vX.Y.Z
 
-## New Features
-- #123: Short summary (https://github.com/OWNER/REPO/pull/123)
-
-## Bug Fixes
-- #124: Short summary (https://github.com/OWNER/REPO/pull/124)
-
 ## Breaking Changes
 - #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+
+## Added
+- #123: Short summary (https://github.com/OWNER/REPO/pull/123)
+
+## Changed
+- #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+
+## Fixed
+- #124: Short summary (https://github.com/OWNER/REPO/pull/124)
 
 Reverted (no net change): #126 reverted by #127
 ```
 
 ## Notes
 
-- If there are no items for a section, include the section with `- None`.
+- Omit a section entirely when it has no entries, rather than printing `- None`.
+  `Deprecated`, `Removed`, and `Security` are empty in most releases.
+- A `**breaking**` entry appears twice: under `Breaking Changes` and under its
+  own category, as #125 does above.
 - Prefer explicit, user-facing PR summaries over internal implementation details.
-- If no merged PRs are found in scope, still print the next version and include
-  all sections with `- None`.
+- If no merged PRs are found in scope, print the next version and say plainly
+  that no user-facing changes were found.
 - Omit the `Reverted (no net change)` line when no reverted pairs exist.

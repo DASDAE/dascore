@@ -12,11 +12,24 @@ Next, from the github interface navigate to DASCore's [release page](https://git
 
 ## Draft the release notes
 
-DASCore keeps no changelog in the repository; the release notes *are* the changelog, and they are written from the pull requests merged since the previous tag. Scope them to the branch the release is cut from, which is `dev` for a pre-release and for any work not yet merged down to `master`. Each PR carries its own summary under the `User-facing changes` and `Breaking changes` headings of the [pull request template](https://github.com/DASDAE/dascore/blob/dev/.github/pull_request_template.md), so drafting the notes mostly means collecting and grouping those. The release notes should usually include these sections:
+DASCore keeps no changelog in the repository; the release notes *are* the changelog, and they are written from the pull requests merged since the previous tag. Scope them to the branch the release is cut from, which is `dev` for a pre-release and for any work not yet merged down to `master`.
 
-- New Features
-- Bug Fixes
-- Breaking Changes
+Each PR carries its own entries under the required `## Changelog` heading of the [pull request template](https://github.com/DASDAE/dascore/blob/dev/.github/pull_request_template.md), already written and categorized by the author and checked by CI, so drafting the notes mostly means collecting and grouping them. Each bullet names one of six categories, and carries `**breaking**` when it can break code written against the last released version:
+
+```markdown
+- added: `Patch.enrich` copies inventory metadata onto a patch.
+- changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
+```
+
+Group the collected bullets under these sections, omitting any that end up empty:
+
+- Breaking Changes (every `**breaking**` entry, repeated from its own category so upgraders see them first)
+- Added
+- Changed
+- Deprecated
+- Removed
+- Fixed
+- Security
 
 One extra step applies to the first release drafted after this change. Work merged before the pull request template gained its release-note sections was instead described in `docs/changelog.qmd`, and that curated text is richer than those PR bodies alone. It remains in git history: find the commit that reduced the page to a stub, then read the revision before it.
 

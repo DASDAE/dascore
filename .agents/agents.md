@@ -104,7 +104,16 @@ Important: if changing site structure, edit `scripts/_templates/_quarto.yml` (no
 
 DASCore does not maintain a changelog in the repository. Do not create one — not `CHANGELOG.md`, not a `changelog.d/` fragment directory — and do not add "unreleased changes" sections to any page. Release notes are written at release time from the pull requests merged since the last tag (see the `draft-release` skill), so a checked-in changelog is a second copy of that information which conflicts on every PR and drifts from what shipped. `docs/changelog.qmd` still exists, but only as a stub preserving a published URL: it points at the releases page and must never accumulate entries again. This is enforced, not merely conventional — `tests/test_changelog.py` pins the page contents exactly and fails on any change to them.
 
-Put the user-facing summary in the pull request description instead, under its `User-facing changes` and `Breaking changes` headings. Write for the person reading the release notes: what changed for them and what they should do about it, a sentence or two per item, with the reasoning and implementation detail left to the diff.
+Put the user-facing summary in the pull request description instead, under its required `## Changelog` heading. One bullet per change, each starting with a category — `added`, `changed`, `deprecated`, `removed`, `fixed`, `security` — and marked `**breaking**` after the category when it can break code written against the *last released version*. Breaking only against unreleased work on `dev` does not count, since users never saw it. Write the single word `none` when nothing user-facing changes.
+
+```markdown
+## Changelog
+
+- added: `Patch.enrich` copies inventory metadata onto a patch.
+- changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
+```
+
+Write for the person reading the release notes: what changed for them and what they should do about it, a sentence or two per item, with the reasoning and implementation detail left to the diff. The `CheckPRChangelog` workflow rejects a pull request whose section is missing or malformed, and `.github/scripts/check_pr_changelog.py` is the parser it runs.
 
 ## Quality bar for agent changes
 

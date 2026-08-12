@@ -16,27 +16,32 @@ Also link any relevant issues/discussions (this can be done using the issue/disc
 pound sign, e.g. `#12` without the backticks)
 -->
 
-## User-facing changes
+## Changelog
 
 <!--
-DASCore keeps no changelog; release notes are drafted from merged pull requests, so this section is
-this PR's changelog entry. Summarize what changes for users, a sentence or two per item, and leave the
-implementation details to the diff. Write "None" for internal-only changes (refactors, CI, typos).
--->
+Required, and checked by CI. DASCore keeps no changelog file; the release notes are assembled from
+merged pull requests, so these bullets are this PR's changelog entry.
 
-## Breaking changes
+Write one bullet per user-facing change, each starting with a category:
 
-<!--
-List anything that can break existing user code: removed or renamed public API, changed defaults or
-return types, or stored formats (e.g. the index schema) that must be rebuilt. For each, say what users
-should do instead. Write "None" if nothing breaks.
+    added, changed, deprecated, removed, fixed, security
+
+Add **breaking** after the category when the change can break code written against the last released
+version. Breaking only against unreleased work on dev does not count, since users never saw it.
+
+Describe what changes for the reader and what to do about it; leave implementation detail to the diff.
+Write the single word "none" if nothing user-facing changes (refactors, CI, typing, tests).
+
+    - added: `Patch.enrich` copies inventory metadata onto a patch.
+    - changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
+    - fixed: chunking a coordinate in feet no longer drops samples.
 -->
 
 ## Checklist
 
 I have:
 
-- [ ] filled in the "User-facing changes" and "Breaking changes" sections above, writing "None" where nothing applies, since release notes are drafted from PRs.
+- [ ] filled in the Changelog section above, writing "none" if nothing user-facing changes, since release notes are assembled from PRs.
 
 I have (if applicable):
 
