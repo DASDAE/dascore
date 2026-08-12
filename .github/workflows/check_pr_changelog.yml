@@ -1,0 +1,32 @@
+# Check that a pull request describes its user-facing changes.
+# Release notes are assembled from merged pull requests, so the Changelog
+# section of the body is the only record of what a change means for users.
+name: CheckPRChangelog
+on:
+  pull_request:
+    types: [opened, edited, reopened, ready_for_review, synchronize]
+    branches:
+      - master
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  check_pr_changelog:
+    runs-on: ubuntu-latest
+
+    # only run if CI isn't turned off
+    if: "!contains(github.event.pull_request.labels.*.name, 'no_ci')"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The body is passed through the environment rather than interpolated
+      # into the script, which would let its contents run as shell.
+      - name: check the changelog section
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python .github/scripts/check_pr_changelog.py

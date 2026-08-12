@@ -83,7 +83,7 @@ website:
           href: supported_plugins.qmd
 
         - text: Changelog
-          href: changelog.qmd
+          href: https://github.com/DASDAE/dascore/releases
 
         - text: Contributors
           href: contributors.qmd

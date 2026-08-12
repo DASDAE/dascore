@@ -1,117 +1,58 @@
 # DASCore Agent Guide
 
-This file gives AI/code agents a practical checklist for contributing safely to DASCore.
+Checklist for contributing to DASCore. Also load `.agents/agents.local.md` if present.
 
-## User local specific instructions
-Also load .agents/agents.local.md if present.
+## Priorities
 
-## Scope and priorities
+Minimal, targeted, test-backed changes. Follow nearby patterns over personal preference, and prefer the simpler behavior-preserving option. State assumptions in the PR.
 
-1. Keep changes minimal, targeted, and test-backed.
-2. Preserve DASCore conventions over personal preferences.
-3. Prefer consistency with existing code/tests/docs in this repo.
+## Workflow
 
-## Development workflow
-
-1. Work on a feature/fix branch, not `master`.
-2. Create task worktrees under the repository root at `worktrees/{slug}`. Do not create task worktrees under `.agents/worktrees`, even if the current shell starts there.
-3. Keep commits focused (one logical change per commit where possible).
-4. Use pull requests to merge to `master`.
-
-## Environment setup
-
-Use an environment named after the current worktree slug. If it is unavailable, create it with mamba or uv before running checks. This keeps editable installs isolated between worktrees.
-
-Typical setup:
+- Branch, and work in a worktree at `worktrees/{slug}` — never `.agents/worktrees`. One logical change per commit.
+- Open PRs against `dev`; it merges to `master` at release time.
+- Use an environment named for the worktree slug (mamba or uv) so editable installs stay isolated.
 
 ```bash
-git pull origin master --tags
-pip install -e ".[dev]"
-pre-commit install -f
+pip install -e ".[dev]" && pre-commit install -f
 ```
 
-## Linting and formatting
+## Checks
 
-- Run pre-commit hooks before finalizing changes.
-
-```bash
-pre-commit run --all
-```
-
-Tip: running twice can apply auto-fixes on first pass.
-
-## Testing requirements
-
-Run targeted tests for changed behavior, then broader tests as needed:
+Not finished until these pass.
 
 ```bash
-pytest tests/path/to/affected_test.py
-pytest tests
-```
-
-For coverage checks:
-
-```bash
+pre-commit run --all                                    # twice; first pass auto-fixes
+pytest tests/path/to/affected_test.py                   # then: pytest tests
 pytest tests --cov dascore --cov-report term-missing
-```
-
-For doctests:
-
-```bash
 pytest dascore --doctest-modules
 ```
 
-Unless otherwise specified, a job is not finished until the tests pass.
+## Tests
 
-## Test authoring conventions
+- Under `tests/`, mirroring the package, grouped in classes.
+- Fixtures close to use: class, module, then `conftest.py`.
+- Test boundaries, not implementation. Short names, detail in the docstring.
 
-- Put tests under `tests/` mirroring package structure.
-- Group tests in classes.
-- Place fixtures as close as practical to usage (class, module, then `conftest.py`).
-- Write tests that focus on boundaries, not implementation details.
-- Keep test names short; put extra detail in the docstring when needed.
+## Code
 
+- Imports at module top, tests included; function-level only for optional dependencies (`dascore.utils.misc.optional_import`) or circular imports, with a comment saying which.
+- Dataframes: snake_case columns, getitem not getattr, non-inplace unless required.
+- Type hints on public functions. NumPy-style docstrings with short examples, short docstrings on private objects, comments only where intent is unclear.
+- Suppress warnings only through `dascore.utils.misc.suppress_warnings`.
 
-## Code conventions
+## Docs
 
-- Import stdlib modules and required dependencies at module top, never inside functions or methods (tests included). Function-level imports are reserved for optional dependencies (use `dascore.utils.misc.optional_import`) and genuine circular-import avoidance; when used, a brief comment should say which.
-- For dataframes, use snake_case column names and access via getitem, not getattr.
-- Prefer non-inplace dataframe operations unless inplace is explicitly required.
-- Add type hints for public functions/methods.
-- Use NumPy-style docstrings for public APIs. Strive for short, informative example sections.
-- Add a short explanatory docstring for private objects.
-- Add a short explanatory comment for private helpers when intent is not obvious.
-- Keep comments meaningful; do not restate obvious code.
-- Always use `dascore.utils.misc.suppress_warnings` to suppress warnings.
-
-## Documentation changes
-
-If behavior or API changes, update docs in the same PR.
-
-- Documentation source lives in `docs/` (`.qmd` files).
-- API docs are generated from docstrings.
-- Build docs workflow:
-- Don't add newlines to markdown prose; let editors wrap.
+- `.qmd` under `docs/`; API docs come from docstrings. Update with any behavior or API change. Do not hard-wrap prose.
+- Edit `scripts/_templates/_quarto.yml` for site structure; `docs/_quarto.yml` is generated.
 
 ```bash
-python scripts/build_api_docs.py
-quarto render docs
+python scripts/build_api_docs.py && quarto render docs
 ```
 
-Important: if changing site structure, edit `scripts/_templates/_quarto.yml` (not `docs/_quarto.yml`, which is generated/overwritten).
+### Changelog
 
-## Quality bar for agent changes
+No changelog file, and do not add one — no `CHANGELOG.md`, `changelog.d/`, or "unreleased" sections. `docs/changelog.qmd` is a stub pinned by `tests/test_changelog.py`. Put the summary in the PR's required `## Changelog` section, formatted per "Changelog entries" in `docs/contributing/general_guidelines.qmd`; `.github/scripts/check_pr_changelog.py` is the parser CI runs.
 
-Before handing off:
+## Before handing off
 
-1. Code compiles/runs for changed paths.
-2. Relevant tests pass locally.
-3. Lint/format checks pass.
-4. Docs updated for user-visible behavior changes.
-5. No unrelated refactors bundled with bug fixes.
-
-## When uncertain
-
-- Prefer existing patterns in nearby DASCore modules/tests.
-- Call out assumptions explicitly in PR notes.
-- Choose the simpler behavior-preserving implementation first.
+Changed paths run; tests and lint pass; docs cover user-visible changes; no unrelated refactors bundled in.
