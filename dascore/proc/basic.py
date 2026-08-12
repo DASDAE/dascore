@@ -478,7 +478,9 @@ def dropna(
     assert len(to_keep.shape) == 1
     assert to_keep.shape[0] == patch.data.shape[axis]
     # get slices for trimming data.
-    slices = [slice(None)] * len(patch.dims)
+    # Annotated because the entries are not all slices; ty reads the
+    # list as list[slice] from its initializer otherwise.
+    slices: list[Any] = [slice(None)] * len(patch.dims)
     slices[axis] = to_keep
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
