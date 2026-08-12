@@ -127,7 +127,7 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
 def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
-    """Convert an array of floating point timestamps to an array of np.datatime64."""
+    """Convert an array of floating point timestamps to an array of np.datetime64."""
     array = np.asarray(array)
     # 0-D arrays cannot be indexed or iterated, which the branches below do;
     # use the length-one array it stands for and unpack the scalar at the end.
@@ -310,7 +310,7 @@ def _timedelta_to_timedelta64(td):
 def _time_delta_from_str(time_delta_str: str):
     """Simply return the time delta."""
     match time_delta_str.split():
-        # Can split string into (hopefully) units an values. Standard case.
+        # Can split string into (hopefully) units and values. Standard case.
         case [val, units]:
             if units[-1] == "s":
                 units = units[:-1]
@@ -346,7 +346,7 @@ def _float_to_num(num: float | int) -> float | int:
 @_to_int.register(list)
 @_to_int.register(tuple)
 def _array_to_int(array: np.ndarray) -> np.ndarray:
-    """Convert an array of floating point timestamps to an array of np.datatime64."""
+    """Convert an array of possible dates to int64 nanoseconds."""
     array = np.asarray(array)
     if not len(array):
         return array.astype(np.int64)
@@ -449,7 +449,7 @@ def _quantity_to_float(quant: pint.Quantity) -> float | np.ndarray:
 @_to_float.register(list)
 @_to_float.register(tuple)
 def _array_to_float(array: np.ndarray) -> np.ndarray:
-    """Convert an array of floating point timestamps to an array of np.datatime64."""
+    """Convert an array of possible dates to floats (seconds)."""
     array = np.asarray(array)
     if not len(array):
         return array.astype(np.float64)

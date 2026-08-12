@@ -79,7 +79,7 @@ def taper(
             {taper_type}.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
-        of total length of the dimension (if a decimal or percente, see examples),
+        of total length of the dimension (if a decimal or percent, see examples),
         or absolute units. If a single value is passed, the taper will be applied
         to both ends. A length two tuple can specify different values for each
         end, or no taper on one end.
@@ -224,7 +224,7 @@ def taper_range(
         If True, the values specified by the kwargs indicate samples
         rather than values along the indicated dimension.
     relative
-        If True, the values specified in kwargs are relateive to the
+        If True, the values specified in kwargs are relative to the
         start (if positive) or end (if negative) of the indicated
         dimension.
     **kwargs

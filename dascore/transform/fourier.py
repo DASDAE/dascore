@@ -464,8 +464,8 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     # now unshift data and undo scaling
     ax_slice = slice(None, -1) if real else slice(None)
     scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
-    _preped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
-    data = func(_preped, s=sizes, axes=axes)
+    _prepped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
+    data = func(_prepped, s=sizes, axes=axes)
     attrs = _get_idft_attrs(patch, dims, coords)
     out = patch.new(data=data, attrs=attrs, coords=coords)
     if padding:

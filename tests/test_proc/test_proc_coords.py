@@ -807,7 +807,7 @@ class TestGetCoord:
 
 
 class TestMakeBroadcastable:
-    """Tests for making patches broadcastable to differnt shapes."""
+    """Tests for making patches broadcastable to different shapes."""
 
     def test_broadcast_non_coords(self, random_patch):
         """Ensure non-coords of length 1 can broadcast."""

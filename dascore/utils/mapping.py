@@ -29,12 +29,9 @@ class FrozenDict(ABCMap[K, V]):
     dict so that the hash doesn't break.
     """
 
-    # Declared rather than inferred. The constructor is overloaded in a way
-    # one untyped signature cannot express -- FrozenDict(**kwargs) can only
-    # produce str keys, FrozenDict(mapping) produces K keys -- which is why
-    # typeshed gives dict.__init__ five overloads. Given **kwargs, the
-    # checker picks the str-keyed one, and dict is invariant in its key, so
-    # the cast is the only way to say what the class actually holds.
+    # Declared rather than inferred: given **kwargs the checker infers str
+    # keys, and dict is invariant in its key, so the cast below is the only
+    # way to say what the class actually holds.
     _dict: dict[K, V]
 
     def __init__(self, *args, **kwargs):

@@ -104,13 +104,13 @@ def get_unit(value) -> Unit:
 
 
 @cache
-def _str_to_quant(qunat_str):
+def _str_to_quant(quant_str):
     """Get quantity from a string; cache output."""
     with _UNIT_LOCK:
-        if isinstance(qunat_str, Unit):
-            qunat_str = str(qunat_str)  # ensure unit is converted to quantity
+        if isinstance(quant_str, Unit):
+            quant_str = str(quant_str)  # ensure unit is converted to quantity
         ureg = get_registry()
-        return ureg.Quantity(qunat_str)
+        return ureg.Quantity(quant_str)
 
 
 # Anything get_quantity can resolve: a unit or quantity, a string naming

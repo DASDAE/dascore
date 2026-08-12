@@ -25,7 +25,7 @@ def tau_p(
     patch
         Patch to transform. Has to have dimensions of time and distance.
     velocities
-        NumPY array of velocities, in m/s if units are not attached,
+        NumPy array of velocities, in m/s if units are not attached,
         for which to compute slowness (p).
 
     Notes

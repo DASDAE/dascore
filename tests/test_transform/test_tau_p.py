@@ -12,7 +12,7 @@ from dascore.utils.time import to_timedelta64
 
 
 def linear_slope_patch(nch, nt, vel, t0, dist=[]):
-    """Returns the a patch with linear slope event"""
+    """Return a patch with a linear slope event."""
     # Create attributes, or metadata
     attrs = dict(category="DAS", id="linear_slope", data_units="um/(m * s)")
 

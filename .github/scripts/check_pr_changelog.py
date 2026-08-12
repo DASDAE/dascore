@@ -36,10 +36,15 @@ _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 _ANY_BULLET = re.compile(r"^[-*+]\s+")
 
+# "nothing user-facing changed", written either bare or as the lone bullet the
+# rest of the section is made of. Anchored at both ends, so a "none" sitting
+# among real entries still has to be a well-formed entry.
+_NOTHING = re.compile(r"^(?:[-*+]\s+)?none$", re.IGNORECASE)
+
 _HELP = (
     f"Each bullet must start with a category ({', '.join(CATEGORIES)}), "
-    "optionally followed by '**breaking**', or the section must be the single "
-    "word 'none'. Example:\n"
+    "optionally followed by '**breaking**', or the whole section must be the "
+    "single word 'none' (bulleted or bare). Example:\n"
     "    - changed **breaking**: `dc.set_config` is no longer a context manager.\n"
     "See docs/contributing/general_guidelines.qmd (#changelog-entries), published at\n"
     "    https://dascore.org/contributing/general_guidelines.html#changelog-entries"
@@ -71,7 +76,7 @@ def validate(body: str | None) -> list[str]:
     stripped = section.strip()
     if not stripped:
         return ["The Changelog section is empty.", _HELP]
-    if stripped.lower() == "none":
+    if _NOTHING.match(stripped):
         return []
     bullets = [x for x in section.splitlines() if _ANY_BULLET.match(x.strip())]
     if not bullets:

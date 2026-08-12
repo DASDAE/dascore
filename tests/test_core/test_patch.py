@@ -902,7 +902,7 @@ class TestUpdateAttrs:
         assert pa.summary.get_coord_summary("time").min == t1
         assert pa.coords.min("time") == t1
 
-    def test_update_startttime2(self, random_patch):
+    def test_update_starttime2(self, random_patch):
         """Updating start time should update end time as well."""
         time_coord = random_patch.get_coord("time")
         duration = time_coord.max() - time_coord.min()
@@ -1281,7 +1281,7 @@ class TestNumpyFuncs:
             assert isinstance(out, dc.Patch)
 
     def test_at_raises(self, random_patch):
-        """Ensure unupported ufuncs raise."""
+        """Ensure unsupported ufuncs raise."""
         msg = "ufuncs"
         with pytest.raises(ParameterError, match=msg):
             np.multiply.at(random_patch, [1, 20], random_patch)

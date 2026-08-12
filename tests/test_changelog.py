@@ -91,6 +91,9 @@ class TestChangelogSectionChecker:
             "- fixed: a wrong thing.\n- security: a scary thing.",
             "none",
             "None",
+            "- none",
+            "- None",
+            "* none",
             "- deprecated: an aging thing.\n- removed: a gone thing.",
             "- Added: a capitalized category is a harmless slip.",
             "- Changed **breaking**: capitalized, with a marker.",
@@ -108,6 +111,8 @@ class TestChangelogSectionChecker:
             "- added a new thing.",
             "- added:",
             "",
+            "- none\n- added: a real change, so 'none' is a lie.",
+            "- none of this is user facing.",
         ],
     )
     def test_rejects_invalid_sections(self, checker, section):

@@ -8,7 +8,7 @@ DASCore can work directly with remote resources exposed through [`UPath`](https:
 
 The main distinction is simple:
 
-- metadata operations such as [`dc.scan(...)`](`dascore.scan`) and public [`dc.get_format(...)`](`dascore.get_format`) stay conservative by default
+- metadata operations such as [`dc.scan(...)`](`dascore.scan`) and [`dc.get_format(...)`](`dascore.get_format`) stay conservative by default
 - [`dc.scan_payloads(...)`](`dascore.scan_payloads`) uses the metadata cache policy too, but may read complete coordinate arrays and retain more memory than `dc.scan(...)`
 - data-loading operations such as [`dc.read(...)`](`dascore.read`) and patch access through [`dc.spool(...)`](`dascore.spool`) are allowed to do heavier IO when needed
 

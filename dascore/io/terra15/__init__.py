@@ -20,7 +20,7 @@ min(gps_time) + len(gps_time) * dt ≈ max(gps_time).
 2. The time array returned by the parser is calculated by min(gps_time) +
 dt * np.arange(len(gps_time)) which insures it is monotonically increasing.
 The time is then cast to datetime64 with
-[to_datetime64](dascore.utils.time.to_datettime64).
+[to_datetime64](dascore.utils.time.to_datetime64).
 
 3. The start/end time returned by the scan function are gps_time[0] and
 gps_time[-1], cast to datetime64 objects.

@@ -28,8 +28,8 @@ class TestFormatDtypes:
         assert isinstance(out, str)
 
 
-class TestDocsting:
-    """tests for obsplus' simple docstring substitution function."""
+class TestDocstring:
+    """tests for DASCore's simple docstring substitution function."""
 
     def count_white_space(self, some_str):
         """Count the number of whitespace chars in a str."""

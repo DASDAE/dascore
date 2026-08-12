@@ -595,14 +595,14 @@ class _FiberIOManager:
     @_locked("_lock")
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
-        forma, ver = fiberio.name.upper(), fiberio.version
-        id_tuple = (forma, ver)
+        format_name, ver = fiberio.name.upper(), fiberio.version
+        id_tuple = (format_name, ver)
         if id_tuple in self._fiber_io_name_ver:
             return
         self._loaded_eps.add(fiberio.name)
         for ext in iter(fiberio.preferred_extensions):
             self._extension_list.setdefault(ext, []).append(fiberio)
-        self._format_version.setdefault(forma, {})[ver] = fiberio
+        self._format_version.setdefault(format_name, {})[ver] = fiberio
         self._fiber_io_by_input_type.setdefault(fiberio.input_type, set()).add(fiberio)
         self._fiber_io_name_ver.add(id_tuple)
         # Snapshots derived from the registry are now stale.
@@ -1805,7 +1805,7 @@ def write(
 
     Raises
     ------
-    [`UnkownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
+    [`UnknownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
         - Could not determine the fiber format.
 
     Examples

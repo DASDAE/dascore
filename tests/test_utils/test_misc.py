@@ -632,9 +632,9 @@ class TestCachedMethod:
 
 
 class TestMaybeGetItems:
-    """Tests for maybe_get_attrs."""
+    """Tests for maybe_get_items."""
 
-    def test_missed_itme(self):
+    def test_missed_item(self):
         """Ensure it still works when a key is missing."""
         data = {"bob": 1, "bill": 2}
         expected = {"bob": "sue", "lary": "who"}

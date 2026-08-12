@@ -358,7 +358,7 @@ def savgol_filter(
     **kwargs,
 ) -> PatchType:
     """
-    Applies Savgol filter along spenfied dimensions.
+    Applies Savgol filter along specified dimensions.
 
     The filter will be applied over each selected dimension sequentially.
 

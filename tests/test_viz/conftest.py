@@ -1,4 +1,4 @@
-"""Configuration for all vizualization tests."""
+"""Configuration for all visualization tests."""
 
 from __future__ import annotations
 

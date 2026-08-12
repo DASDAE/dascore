@@ -58,11 +58,11 @@ class RSFV1(FiberIO):
         Notes
         -----
         - Patch datatype is converted to float32 for compatibility with
-        Madagascar (may be able to keep dytpe in the future)
+        Madagascar (may be able to keep dtype in the future)
         """
         assert len(spool) == 1
         patch = spool[0]
-        axis_lengs = patch.shape
+        axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x).start) for x in patch.dims]
         axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
         axis_names = patch.dims
@@ -83,10 +83,10 @@ class RSFV1(FiberIO):
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
-        length = len(axis_lengs)
+        length = len(axis_lengths)
         hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
         for i in range(length):
-            hdr_info.append(f"n{i + 1}={axis_lengs[i]}")
+            hdr_info.append(f"n{i + 1}={axis_lengths[i]}")
             if axis_names[i] == "time":
                 hdr_info.append(f"o{i + 1}=0.0")
                 hdr_info.append(f"starttime={axis_origs[i]}")

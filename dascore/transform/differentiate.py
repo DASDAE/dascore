@@ -104,7 +104,7 @@ def differentiate(
     -----
     For order=2 (the default) numpy's gradient function is used. When
     order != 2, the optional package findiff must be installed in which case
-    order is interpreted as accuracy ("order" means order of differention
+    order is interpreted as accuracy ("order" means order of differentiation
     in that package).
 
     The second order first derivative, for an evenly spaced coordinate,
@@ -114,7 +114,7 @@ def differentiate(
     \hat{f}(x) = \frac{f(x + dx) - f(x - dx)}{2dx} + O({dx}^2)
     $$
 
-    Where $\hat{f}(x)$ is the estiamted derivative of $f$ at $x$, $dx$ is
+    Where $\hat{f}(x)$ is the estimated derivative of $f$ at $x$, $dx$ is
     the sample spacing, and $O$ is the error term.
 
     Examples

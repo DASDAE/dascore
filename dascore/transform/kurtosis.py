@@ -84,7 +84,7 @@ def kurtosis(
     >>> k = p.kurtosis(time=0.002)
     >>> ax = k.viz.waterfall(cmap = 'inferno')
 
-    2) To better understand how kutosis works, we replace the data with
+    2) To better understand how kurtosis works, we replace the data with
     normal-distributed random data. We then amplify a block of those
     data. The modified data has a broader tail, since more high-amplitude
     values are in the dataset. The kurtosis picks the onset accurately.
