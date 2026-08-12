@@ -1940,7 +1940,7 @@ def _split_epochs(inventory, when, *, acquisitions=False, second=None):
 def _pieces(spool):
     """The (min, max) time envelope of each patch a spool presents."""
     contents = spool.get_contents()
-    return list(zip(contents["time_min"], contents["time_max"]))
+    return list(zip(contents["time_min"], contents["time_max"], strict=True))
 
 
 @pytest.fixture(scope="module")
@@ -1957,7 +1957,12 @@ def path_epochs(inventory, off_grid_boundary):
 
 
 class TestConformBoundaryPolicy:
-    """Where a subdivided patch is cut, and which piece each sample joins."""
+    """
+    Where a subdivided patch is cut, and which piece each sample joins.
+
+    Including the rows which offer no usable boundary at all — no
+    instants to place one against, or no identity to look one up with.
+    """
 
     def test_split_is_lossless(self, patch, path_epochs):
         """

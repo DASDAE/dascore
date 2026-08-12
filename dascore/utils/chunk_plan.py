@@ -1067,7 +1067,10 @@ def _snapped_cuts(cuts, start, step) -> list:
         # between them covers no sample of this row.
         if (value := start + index * step) not in out:
             out.append(value)
-    return out
+    # Which cuts a row has is a set, not a sequence — but the pieces are
+    # read off consecutive pairs, so an unordered one would describe
+    # envelopes running backwards rather than an error.
+    return sorted(out)
 
 
 def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
@@ -1088,9 +1091,10 @@ def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
     cuts
         One sequence of cut values per row, in the row's own units, each
         above that row's minimum and no greater than its maximum — a cut
-        on the maximum yields a one-sample final piece. A cut opens a new
-        piece at the first sample at or after it, so a row with `n`
-        distinct cuts becomes at most `n + 1` outputs.
+        on the maximum yields a one-sample final piece. Order does not
+        matter. A cut opens a new piece at the first sample at or after
+        it, so a row with `n` distinct cuts becomes at most `n + 1`
+        outputs.
     name
         The dimension being subdivided.
 

@@ -325,7 +325,7 @@ def resolve_row_epochs(inventory, keys, starts, ends) -> list[RowEpochs]:
         # same nothing to resolve against, reached by a different route.
         undated = np.isnat(first) | np.isnat(last) | (last < first)
         contexts: dict[int, ResolvedContext | None] = {}
-        for position, (lo, hi) in enumerate(zip(starts_at, ends_at)):
+        for position, (lo, hi) in enumerate(zip(starts_at, ends_at, strict=True)):
             if undated[position]:
                 continue
             for epoch in range(int(lo), int(hi) + 1):
@@ -377,7 +377,11 @@ def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
     row crosses at all.
     """
     cuts = []
-    for previous, current, boundary in zip(resolved, resolved[1:], boundaries):
+    # One boundary between each consecutive pair, so the three walk in
+    # step -- `resolved[1:]` alone would leave the first sequence longer.
+    for previous, current, boundary in zip(
+        resolved[:-1], resolved[1:], boundaries, strict=True
+    ):
         if not _same(previous.acquisition, current.acquisition):
             return RowEpochs(tuple(cuts), boundary, resolved[0])
         if not _same(previous.optical_path, current.optical_path):
