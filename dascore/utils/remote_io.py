@@ -68,6 +68,12 @@ def pause_gc() -> None:
     threads deadlock. Disabling automatic collection for the handle's lifetime
     closes that window; reference counting still frees non-cyclic garbage.
 
+    h5py documents this deadlock, and disabling collection as one of its two
+    mitigations, under "Python file-like objects":
+    https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects
+    Its other mitigation, avoiding reference cycles which keep h5py objects
+    alive, is not available to us: the cycle can be anywhere in the process.
+
     Calls nest; every ``pause_gc`` needs one ``resume_gc``. ``_ManagedH5pyFile``
     pairs them with ``close``/``__del__``. An interrupted ``pause_gc`` still
     leaves the depth consistent with the pauses it took, so a caller which
