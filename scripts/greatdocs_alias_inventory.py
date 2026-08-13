@@ -49,7 +49,6 @@ MODULE_SECTIONS = {
     "dascore.proc.aggregate": "reference/index.html#patch-processing",
     "dascore.transform": "reference/index.html#transforms",
     "dascore.units": "reference/index.html#units-and-time",
-    "dascore.utils": "reference/index.html#utilities",
     "dascore.viz": "reference/index.html#visualization",
     "dascore.constants": "reference/index.html",
 }
@@ -112,6 +111,27 @@ def main() -> None:
     data = json.loads(OBJECTS_JSON.read_text())
     items = data["items"]
     known = {it["name"] for it in items}
+
+    # 0. Point uris at anchors the rendered pages actually emit. great-docs
+    #    records `Patch.html#dascore.Patch.data`, but quarto gives the member
+    #    section the short id `#data`; an object which owns its whole page
+    #    (write.html) has no anchor for itself and needs none. This runs first
+    #    so the aliases added below copy the corrected uris.
+    rewritten = 0
+    for item in items:
+        uri = item.get("uri", "")
+        page, sep, fragment = uri.partition("#")
+        if not sep or not page.startswith("reference/") or "." not in fragment:
+            continue
+        page_object = page[len("reference/") : -len(".html")]
+        qualname = fragment.removeprefix("dascore.")
+        if qualname == page_object:  # the object owns the page
+            new_uri = page
+        else:
+            new_uri = f"{page}#{qualname.split('.')[-1]}"
+        if new_uri != uri:
+            item["uri"] = new_uri
+            rewritten += 1
 
     # Map runtime object id -> best inventory item (prefer non-module roles,
     # e.g. proc.taper the function page over proc.taper the module).
@@ -199,6 +219,7 @@ def main() -> None:
     from dascore.utils.docs import get_doc_anchor, iter_public
 
     utils = importlib.import_module("dascore.utils")
+    add_alias("dascore.utils", {"role": "module", "uri": UTILITIES_PAGE})
     for info in pkgutil.walk_packages(utils.__path__, prefix="dascore.utils."):
         if any(part.startswith("_") for part in info.name.split(".")):
             continue
@@ -216,11 +237,14 @@ def main() -> None:
             role = "class" if inspect.isclass(obj) else "function"
             add_alias(dotted, {"role": role, "uri": uri, "dispname": "-"})
 
-    if new_items:
+    if new_items or rewritten:
         data["items"] = items + new_items
         data["count"] = len(data["items"])
         OBJECTS_JSON.write_text(json.dumps(data, indent=1))
-    print(f"greatdocs_alias_inventory: added {len(new_items)} alias entries")
+    print(
+        f"greatdocs_alias_inventory: added {len(new_items)} alias entries, "
+        f"repointed {rewritten} anchors"
+    )
 
 
 if __name__ == "__main__":
