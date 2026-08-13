@@ -18,6 +18,7 @@ from dascore.core.coords import get_coord
 from dascore.io.core import make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
 from dascore.io.utils import get_exact_coord
+from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -34,6 +35,10 @@ _ATTR_TYPE_PREFIX = "_attr_type_"
 # Root marker set on files whose patch attr namespace holds only true attrs.
 # Files without it may mix flat coord metadata into attrs (see _compat).
 _SEPARATE_ATTRS_KEY = "__attrs_coords_separate__"
+# Names the attrs class a patch group holds. A sibling of the attr
+# namespace rather than a member of it, since attrs allow extras and a
+# patch may carry one spelled like this key.
+_ATTRS_CLASS_KEY = "__attrs_class__"
 
 
 # --- Functions for writing DASDAE format
@@ -90,6 +95,9 @@ def _save_attrs_and_dims(patch, patch_group):
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
         if attr_type is not None:
             patch_group.attrs[f"{_ATTR_TYPE_PREFIX}{i}"] = attr_type
+    # Values are dumped one at a time rather than as one document, so the
+    # class is recorded beside them rather than injected into them.
+    patch_group.attrs[_ATTRS_CLASS_KEY] = get_model_tag(type(patch.attrs))
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
@@ -168,6 +176,20 @@ def _get_attrs(patch_group):
             val = np.asarray([val])[0]
         out[key] = val
     return out
+
+
+def _get_attrs_class(patch_group) -> type[PatchAttrs]:
+    """
+    Return the attrs class a patch group names, or the base class.
+
+    A file written before the class was recorded names nothing, and one
+    written by a format which is no longer installed names something
+    unresolvable; both read as plain attrs, which is what such a file
+    always used to give.
+    """
+    tag = unbyte(patch_group.attrs.get(_ATTRS_CLASS_KEY, None))
+    data = {TAG_FIELD: tag} if tag else {}
+    return resolve_tagged_model(data, default=PatchAttrs, source=patch_group.name)
 
 
 def _read_array(table_array):
@@ -299,7 +321,7 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
         coords = _get_coords(patch_group, dims, {})
         attr_info = attrs
     attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
-    attrs = PatchAttrs.from_dict(attr_info)
+    attrs = _get_attrs_class(patch_group).from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
@@ -361,7 +383,7 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     dtype = str(data_node.dtype) if data_node is not None else ""
     shape = tuple(data_node.shape) if data_node is not None else ()
     return make_scan_payload(
-        attrs=PatchAttrs.from_dict(attr_info),
+        attrs=_get_attrs_class(group).from_dict(attr_info),
         coords=coords,
         dims=dims,
         shape=shape,
