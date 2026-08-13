@@ -24,6 +24,7 @@ from dascore.constants import (
 from dascore.core.inventory import (
     Acquisition,
     CoordinateReferenceSystem,
+    CouplingCondition,
     DistanceMap,
     FiberArray,
     FiberSegment,
@@ -34,7 +35,7 @@ from dascore.core.inventory import (
     OpticalPath,
     OpticalPathAnnotation,
 )
-from dascore.examples import inventory_patch_pair
+from dascore.examples import get_example_patch, inventory_patch_pair
 from dascore.exceptions import (
     CoordMergeError,
     InvalidInventoryError,
@@ -46,6 +47,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.proc.inventory import resolve_row_epochs
+from dascore.units import cm, get_quantity, m
 
 
 @pytest.fixture(scope="module")
@@ -722,11 +724,11 @@ class TestOnUnresolved:
 class TestInventoryQueryError:
     """An attached inventory changes what an unknown query name means."""
 
-    def test_inventory_field_names_the_inventory(self, patch, inventory):
+    def test_inventory_field_is_answered_by_the_inventory(self, patch, inventory):
         """The index's 'no such attribute' would deny a field which exists."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(coupling="cement")
+        # No channel is coupled in cement, so the field answers with none.
+        assert len(spool.select(coupling="cement")) == 0
 
     def test_plain_spool_keeps_its_message(self, patch):
         """With no inventory there is nothing to add."""
@@ -1456,18 +1458,24 @@ class TestInventorySelect:
         spool.select(gauge_length=99.0)
         assert len(spool) == 2
 
-    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
+    def test_channel_level_name_trims_channels(self, two_patch_spool, inventory):
         """
-        A track name is a real inventory name which select cannot use yet.
+        A track name selects channels rather than whole patches.
 
-        Saying which of the two it is takes the names accessor, and this
-        is what it was added for.
+        Telling one from an attr takes the names accessor, and this is
+        what it was added for.
         """
         spool = two_patch_spool.attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(coupling="trench")
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.select(zone="east")
+        out = spool.select(coupling="trench")
+        assert len(out) == 2
+        assert set(out.get_contents()["distance_max"]) == {150.0}
+
+    def test_a_channel_level_name_nothing_matches_keeps_nothing(
+        self, two_patch_spool, inventory
+    ):
+        """A value no channel holds selects no channel, so no patch."""
+        spool = two_patch_spool.attach_inventory(inventory)
+        assert len(spool.select(zone="east")) == 0
 
     def test_unknown_name_still_raises(self, two_patch_spool, inventory):
         """A name neither side knows is a misspelling, and says so."""
@@ -1556,11 +1564,18 @@ class TestInventoryUnselect:
             "random"
         ]
 
-    def test_channel_level_name_says_so(self, two_patch_spool, inventory):
-        """A track name is as unsupported here as it is in select."""
+    def test_channel_level_name_removes_channels(self, two_patch_spool, inventory):
+        """
+        A track name removes channels rather than whole patches.
+
+        Which is the one thing `unselect` refuses a real coordinate for:
+        a coordinate range would leave a hole in every patch, while a
+        channel query chooses which channels a patch holds.
+        """
         spool = two_patch_spool.attach_inventory(inventory)
-        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-            spool.unselect(coupling="trench")
+        out = spool.unselect(coupling="trench")
+        assert len(out) == 2
+        assert set(out.get_contents()["distance_min"]) == {151.0}
 
 
 class TestInventorySelectCoverage:
@@ -1858,7 +1873,7 @@ class TestConnectorReviewFindings:
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the
-        group, which is the channel-level half and not supported yet.
+        group, which trims channels rather than choosing patches.
         """
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
         clash = inventory.replace(
@@ -1880,11 +1895,13 @@ class TestConnectorReviewFindings:
         spool = dc.spool([patch]).attach_inventory(clash)
         assert len(spool.select(gauge_length=10.0)) == 1
         assert len(spool.select(_attrs={"gauge_length": 10.0})) == 1
-        for form in ({"gauge_length": 10.0}, "gauge_length", ["gauge_length"]):
+        # The group covers the first metre of the path, which is the
+        # patch's first channel and nothing else.
+        for form in ({"gauge_length": "odd"}, "gauge_length", ["gauge_length"]):
             # The mapping form and both tag forms all name the coordinate.
-            kwargs = {} if isinstance(form, Mapping) else {"gauge_length": 10.0}
-            with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
-                spool.select(_coords=form, **kwargs)
+            kwargs = {} if isinstance(form, Mapping) else {"gauge_length": "odd"}
+            out = spool.select(_coords=form, **kwargs)
+            assert out.get_contents()["distance_max"].tolist() == [0.0]
 
     def test_a_field_scalar_on_another_path_is_kept(self):
         """
@@ -2358,7 +2375,7 @@ class TestConformSubdivision:
         named = re.escape(spool.get_contents()["source_path"].iloc[0])
         for policy in ("raise", "warn", "drop"):
             with pytest.raises(
-                PatchError, match=f"change of acquisition.*{named} at .*"
+                PatchError, match=f"change of acquisition.*{named} \\(at .*"
             ):
                 spool.conform_to_inventory(on_unresolved=policy)
 
@@ -2527,3 +2544,976 @@ class TestConformAndEnrichment:
         out = spool.conform_to_inventory(path_epochs)
         assert out._enrich_kwargs is None
         assert "gauge_length" not in dict(out[0].attrs)
+
+
+@pytest.fixture(scope="module")
+def two_zones(inventory):
+    """The example inventory, with a group covering two separate stretches."""
+    path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+    return inventory.replace(
+        path,
+        path.new(
+            annotations=(
+                *path.annotations,
+                OpticalPathAnnotation(
+                    start_distance=110.0, end_distance=150.0, group="hole", value="a"
+                ),
+                OpticalPathAnnotation(
+                    start_distance=300.0, end_distance=340.0, group="hole", value="a"
+                ),
+            )
+        ),
+    )
+
+
+def _channels(spool):
+    """Every channel a spool holds, gathered from its patches."""
+    return np.concatenate([x.get_array("distance") for x in spool])
+
+
+class TestChannelSelect:
+    """Selecting on the coordinates an inventory defines along the fiber."""
+
+    def test_trims_to_the_matching_channels(self, patch, inventory):
+        """
+        A track name keeps the channels it covers and no others.
+
+        The example path is coupled from 100 to 250 m along the fiber and
+        the patch's channels start at 100, so the trench runs from the
+        patch's channel 0 to its channel 150.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(coupling="trench")
+        assert len(out) == 1
+        assert out[0].get_coord("distance").min() == 0
+        assert out[0].get_coord("distance").max() == 150
+
+    def test_the_data_is_the_channels_it_names(self, patch, inventory):
+        """
+        The rows kept are the rows the coordinate names.
+
+        Trimming the envelope without trimming the same rows out of the
+        array is the one failure which would not show up in the contents.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(coupling="trench")[0]
+        whole = patch.get_array("distance")
+        rows = np.searchsorted(whole, out.get_array("distance"))
+        assert np.array_equal(out.data, patch.data[rows])
+
+    def test_a_disjoint_match_subdivides(self, patch, two_zones):
+        """
+        A group covering two stretches gives two patches, not one span.
+
+        This is why selection builds a plan: `len` grows, and the hole
+        between the two runs belongs to neither.
+        """
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        out = spool.select(hole="a")
+        assert len(out) == 2
+        contents = out.get_contents()
+        assert contents["distance_min"].tolist() == [10.0, 200.0]
+        assert contents["distance_max"].tolist() == [50.0, 240.0]
+
+    def test_a_disjoint_match_keeps_each_piece_whole(self, patch, two_zones):
+        """Each piece holds exactly the rows its own envelope names."""
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        whole = patch.get_array("distance")
+        pieces = list(spool.select(hole="a"))
+        assert len(pieces) == 2
+        for piece in pieces:
+            rows = np.searchsorted(whole, piece.get_array("distance"))
+            assert np.array_equal(piece.data, patch.data[rows])
+
+    def test_selection_agrees_with_enrichment(self, patch, two_zones):
+        """
+        Every channel kept really does hold the value asked for.
+
+        The two run on one projection, so this is the property which
+        makes that worth doing rather than a coincidence to maintain.
+        """
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        pieces = list(spool.select(hole="a").enrich())
+        assert len(pieces) == 2
+        for piece in pieces:
+            assert len(piece.get_array("hole"))
+            assert set(piece.get_array("hole")) == {"a"}
+
+    def test_a_value_nothing_holds_keeps_nothing(self, patch, inventory):
+        """
+        A patch with no matching channel is no more selected than one
+        which lacks the attr entirely.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert len(spool.select(coupling="cement")) == 0
+
+    def test_an_undescribed_patch_is_silently_not_selected(self, patch, inventory):
+        """The one agreed exception to loud-by-default."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert len(spool.select(coupling="trench")) == 1
+
+    def test_a_straddling_patch_is_not_selected(self, patch, inventory):
+        """
+        Described twice is not one answer, so it is not selected.
+
+        `conform_to_inventory` is what turns such a row into rows which
+        each resolve; select is a filter and says nothing about it.
+        """
+        coord = patch.get_coord("time")
+        middle = coord.min() + (coord.max() - coord.min()) / 2
+        assert coord.min() < middle <= coord.max()
+        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        spool = dc.spool(patch).attach_inventory(split)
+        assert len(spool.select(coupling="trench")) == 0
+
+    def test_conforming_first_makes_it_selectable(self, patch, inventory):
+        """The pieces each resolve, so each is judged on its own."""
+        coord = patch.get_coord("time")
+        middle = coord.min() + (coord.max() - coord.min()) / 2
+        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        spool = dc.spool(patch).attach_inventory(split)
+        out = spool.conform_to_inventory().select(coupling="trench")
+        assert len(out) == 2
+        assert set(out.get_contents()["distance_max"]) == {150.0}
+
+    def test_composes_with_a_time_split(self, patch, inventory):
+        """Both subdivisions hold, and the pieces still hold their own data."""
+        coord = patch.get_coord("time")
+        middle = coord.min() + (coord.max() - coord.min()) / 2
+        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        spool = dc.spool(patch).attach_inventory(split)
+        out = spool.conform_to_inventory().select(coupling="trench")
+        assert len(out) == 2
+        times, dists = patch.get_array("time"), patch.get_array("distance")
+        for piece in out:
+            rows = np.searchsorted(dists, piece.get_array("distance"))
+            cols = np.searchsorted(times, piece.get_array("time"))
+            assert np.array_equal(piece.data, patch.data[np.ix_(rows, cols)])
+
+    def test_two_selections_are_both_applied(self, patch, two_zones):
+        """
+        Selecting twice narrows; it does not re-plan from the source.
+
+        Chunking the same dimension twice replaces the first plan, which
+        is right for chunk and would silently undo a selection here.
+        """
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        out = spool.select(hole="a").select(zone="north")
+        assert len(out) == 1
+        assert out.get_contents()["distance_max"].tolist() == [50.0]
+
+    def test_kwargs_are_and(self, patch, two_zones):
+        """Two names in one call are judged together, as the index does."""
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        both = spool.select(hole="a", zone="north")
+        chained = spool.select(hole="a").select(zone="north")
+        assert both.get_contents()["distance_max"].tolist() == (
+            chained.get_contents()["distance_max"].tolist()
+        )
+
+    def test_a_whole_match_changes_nothing(self, patch, inventory):
+        """Keeping every channel needs no plan, so the spool is unchanged."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(geometry="trench")
+        # The same resolver, not merely an equal spool: building a plan
+        # whose single piece covered its row would load the same patch
+        # and pass every other assertion here.
+        assert out._catalog.resolver is spool._catalog.resolver
+        assert len(out) == 1
+        assert out[0].shape == patch.shape
+
+    def test_selector_shapes_match_the_attr_side(self, patch, inventory):
+        """A glob, a sequence, and a scalar all mean what they mean there."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        scalar = spool.select(coupling="trench").get_contents()["distance_max"]
+        for selector in ("tren*", "trenc?", ["trench", "conduit"]):
+            got = spool.select(coupling=selector).get_contents()["distance_max"]
+            assert got.tolist() == scalar.tolist()
+
+    def test_a_numeric_range_selects_a_stretch(self, patch, inventory):
+        """A qualified numeric field takes a range, as a coordinate does."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(**{"optical_components.optical_length": (400.0, 600.0)})
+        assert len(out) == 1
+
+    def test_none_matches_the_undefined_channels(self, patch, inventory):
+        """
+        `None` is how a query spells the marker absence is stored as.
+
+        The path is coupled only to 250 m, so the channels past it hold
+        the empty string a string coordinate has instead of a null.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(coupling=None)
+        assert len(out) == 1
+        assert out.get_contents()["distance_min"].tolist() == [151.0]
+
+    def test_a_membership_group_takes_a_boolean(self, patch, inventory):
+        """A membership group is False where nothing includes it."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        noisy = spool.select(noisy=True).get_contents()
+        assert noisy["distance_min"].tolist() == [50.0]
+        assert len(spool.select(noisy=False)) == 2
+
+    def test_a_name_this_path_defines_nowhere_matches_nothing(self, patch, inventory):
+        """
+        Listing a name is not promising a value for it.
+
+        One path recording a track makes the name selectable for the
+        whole inventory, so a patch whose own path records none must
+        answer with no channel rather than with an error.
+        """
+        array = inventory.networks[0].fiber_arrays[0]
+        acquisition, path = array.acquisitions[0], array.optical_paths[0]
+        both = inventory.replace(
+            array,
+            array.new(
+                acquisitions=(acquisition, acquisition.new(location_code="01")),
+                optical_paths=(path, path.new(location_code="01", coupling=())),
+            ),
+        )
+        assert "coupling" in both.get_names().coords
+        other = patch.update_attrs(acquisition_key="DAS.R2D1.01.RAW", tag="second")
+        spool = dc.spool([patch, other]).attach_inventory(both)
+        # The first patch's path is coupled; the second's records none.
+        out = spool.select(coupling="trench")
+        assert out.get_contents()["tag"].tolist() == ["random"]
+
+    def test_the_patch_axis_keeps_its_own_meaning(self, patch, inventory):
+        """
+        `distance` is the patch's axis, inventory attached or not.
+
+        The inventory could also place it on the fiber — its channels
+        start at 100 m along the path — so a name the index already uses
+        for a coordinate has to keep it, or attaching would move a name
+        out of the namespace it has always been in.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        for form in ({}, {"_coords": {"distance": (0, 100)}}):
+            kwargs = {"distance": (0, 100)} if not form else {}
+            out = spool.select(**form, **kwargs)
+            assert out.get_contents()["distance_max"].tolist() == [100.0]
+
+    @pytest.mark.parametrize("flag", ["samples", "relative"])
+    def test_axis_keywords_with_a_channel_name_raise(self, patch, inventory, flag):
+        """
+        Neither keyword has anything to say about a fiber coordinate.
+
+        Both describe the patch's own axis, while these say what is
+        attached to each channel of it. Ignoring one quietly would answer
+        a different question than the caller asked.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match=f"{flag}=True cannot"):
+            spool.select(coupling="trench", **{flag: True})
+
+    def test_a_channel_name_through_attrs_raises(self, patch, inventory):
+        """It describes channels, so the attrs namespace is the wrong one."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="along the fiber"):
+            spool.select(_attrs={"coupling": "trench"})
+
+    def test_an_acquisition_with_no_map_refuses(self, patch, inventory):
+        """Its channels cannot be placed, and guessing would trim wrongly."""
+        without = _replace_acquisition(inventory, distance_map=None)
+        spool = dc.spool(patch).attach_inventory(without)
+        with pytest.raises(PatchError, match="no distance_map"):
+            spool.select(coupling="trench")
+
+    def test_a_patch_without_the_axis_refuses(self, inventory, patch):
+        """A patch carrying no dimension the map places channels by."""
+        lag = patch.rename_coords(distance="offset")
+        spool = dc.spool(lag).attach_inventory(inventory)
+        with pytest.raises(PatchError, match="places channels by"):
+            spool.select(coupling="trench")
+
+
+class TestChannelUnselect:
+    """Removing the channels a selection would have kept."""
+
+    def test_complements_the_selection(self, patch, two_zones):
+        """Together the two hold every channel, and share none."""
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        kept = _channels(spool.select(hole="a"))
+        dropped = _channels(spool.unselect(hole="a"))
+        # Stated rather than merely complementary: kept=nothing and
+        # dropped=everything satisfies a partition too, and is exactly
+        # what the complement plumbing could produce by mistake.
+        assert len(kept) == 82  # 10-50 and 200-240 inclusive
+        assert not set(kept) & set(dropped)
+        assert sorted([*kept, *dropped]) == sorted(patch.get_array("distance"))
+
+    def test_removes_the_undefined_channels(self, patch, inventory):
+        """The spec's own example: drop the channels with no coupling."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.unselect(coupling=None)
+        assert out.get_contents()["distance_max"].tolist() == [150.0]
+
+    def test_an_undescribed_patch_is_kept_whole(self, patch, inventory):
+        """The selection never held it, so its complement keeps all of it."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        out = spool.unselect(coupling="trench")
+        assert len(out) == 2
+        assert sorted(out.get_contents()["distance_min"]) == [0.0, 151.0]
+
+    def test_attrs_and_channels_stay_one_complement(self, patch, inventory):
+        """
+        A patch the attrs never matched keeps every channel.
+
+        Complementing the two halves apart would drop it, since the
+        selection it is the complement of never held it.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.unselect(gauge_length=99.0, coupling="trench")
+        assert len(out) == 1
+        assert out[0].shape == patch.shape
+
+    def test_attrs_and_channels_trim_the_matched_patch(self, patch, inventory):
+        """And one the attrs did match loses the channels which matched."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.unselect(gauge_length=10.0, coupling="trench")
+        assert out.get_contents()["distance_min"].tolist() == [151.0]
+
+    def test_a_patch_coordinate_still_raises(self, patch, inventory):
+        """A real coordinate range is a trim, and unselect is not one."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="unselect cannot take"):
+            spool.unselect(_coords={"distance": (0, 100)})
+
+
+class TestSplitBy:
+    """Expanding a spool into one patch per value along the fiber."""
+
+    def test_one_patch_per_value(self, patch, inventory):
+        """The example path annotates two zones, so two patches come out."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone")
+        assert len(out) == 2
+        assert out.get_contents()["zone"].tolist() == ["north", "south"]
+
+    def test_the_pieces_hold_their_own_channels(self, patch, inventory):
+        """Each output holds the rows its value covers, and no others."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        whole = patch.get_array("distance")
+        pieces = list(spool.split_by("zone"))
+        assert len(pieces) == 2
+        for piece in pieces:
+            rows = np.searchsorted(whole, piece.get_array("distance"))
+            assert np.array_equal(piece.data, patch.data[rows])
+
+    def test_the_value_is_stamped_on_the_patch(self, patch, inventory):
+        """So overlapping siblings stay apart once they are patches."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert [x.attrs.zone for x in spool.split_by("zone")] == ["north", "south"]
+
+    def test_stamp_false_leaves_the_attrs_alone(self, patch, inventory):
+        """Which is what a nested split wants of the second one."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone", stamp=False)
+        assert len(out) == 2  # the split still happened; only the stamp is off
+        assert "zone" not in out.get_contents().columns
+        assert not any(dict(x.attrs).get("zone") for x in out)
+
+    def test_the_stamp_shadows_the_inventory_name(self, patch, inventory):
+        """
+        A stamped value is an ordinary attr, and attrs win over the fiber.
+
+        Both paths would keep one patch here, so the patch's shape is
+        what tells them apart: the attr path keeps the north piece whole,
+        while resolving `zone` along the fiber again would trim it.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone")
+        north = out.select(zone="north")
+        assert len(north) == 1
+        assert north[0].shape == out[0].shape
+
+    def test_a_membership_group_splits_in_two(self, patch, inventory):
+        """Both sides come out: the channels included and those not."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("noisy")
+        assert sorted(out.get_contents()["noisy"].tolist()) == [False, False, True]
+
+    def test_one_split_partitions_the_channels(self, patch, inventory):
+        """
+        A channel holds one value of a group, so one split cannot share it.
+
+        Overlapping intervals of a group resolve to a single value per
+        channel — the projection `Patch.enrich` uses — so the outputs of
+        one call divide the fiber rather than covering it twice. Two
+        *different* groups may still cut it differently, which is what
+        makes a nested split worth doing.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        for group in ("zone", "noisy"):
+            channels = _channels(spool.split_by(group))
+            assert sorted(channels) == sorted(patch.get_array("distance"))
+            assert len(channels) == len(set(channels.tolist()))
+        # The two groups do not agree about where the fiber divides.
+        zoned = {tuple(x.get_array("distance")) for x in spool.split_by("zone")}
+        noisy = {tuple(x.get_array("distance")) for x in spool.split_by("noisy")}
+        assert zoned != noisy
+
+    def test_a_disjoint_value_becomes_several_patches(self, patch, two_zones):
+        """One value covering two stretches keeps them apart."""
+        spool = dc.spool(patch).attach_inventory(two_zones)
+        out = spool.split_by("hole")
+        assert len(out) == 2
+        assert out.get_contents()["hole"].tolist() == ["a", "a"]
+
+    def test_include_keeps_only_what_it_names(self, patch, inventory):
+        """The globs read the value written as a string."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone", include="nor*")
+        assert out.get_contents()["zone"].tolist() == ["north"]
+
+    def test_exclude_wins_over_include(self, patch, inventory):
+        """So naming a family and carving one out of it reads either way."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone", include=("nor*", "sou*"), exclude="north")
+        assert out.get_contents()["zone"].tolist() == ["south"]
+
+    def test_a_name_the_inventory_lacks_raises(self, patch, inventory):
+        """
+        A misspelling has no values to split into, so it says so.
+
+        Returning an empty spool would be indistinguishable from a group
+        which happens to cover nothing, and selection refuses a name it
+        does not know for the same reason.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):
+            spool.split_by("not_a_group")
+
+    def test_needs_an_inventory(self, patch):
+        """The values it expands into are ones an inventory states."""
+        with pytest.raises(ParameterError, match="needs an inventory"):
+            dc.spool(patch).split_by("zone")
+
+    def test_a_nested_split_keeps_the_first_stamp(self, patch, inventory):
+        """Which is what `stamp=False` is for."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.split_by("zone").split_by("noisy", stamp=False)
+        assert set(out.get_contents()["zone"]) == {"north", "south"}
+
+
+class TestChannelSelectEdges:
+    """Rows a fiber query cannot answer for, and the ways it says so."""
+
+    def test_a_lag_time_patch_has_no_epoch_to_resolve_at(self, patch, inventory):
+        """
+        Without instants there is no context, so nothing is selected.
+
+        The same thing `Patch.enrich` refuses to guess at: a correlation's
+        lag times are not the moments the fiber was in some state.
+        """
+        lags = patch.get_coord("time").values - patch.get_coord("time").min()
+        spool = dc.spool(patch.update_coords(time=lags)).attach_inventory(inventory)
+        assert len(spool.select(coupling="trench")) == 0
+
+    def test_an_empty_spool_stays_empty(self, patch, inventory):
+        """With no rows there is nothing to resolve, and no work to do."""
+        spool = dc.spool(patch).attach_inventory(inventory).select(tag="nope")
+        assert len(spool) == 0
+        assert len(spool.select(coupling="trench")) == 0
+
+    def test_an_unevenly_sampled_patch_refuses(self, patch, inventory):
+        """
+        Which channels match is decided on the sample grid.
+
+        A patch with a hole in its distance coordinate records no
+        spacing, so the grid cannot be rebuilt; trimming the wrong
+        channels quietly is worse than saying so.
+        """
+        holed = patch.unselect(distance=(50, 200))
+        assert holed.get_coord("distance").step is None
+        spool = dc.spool(holed).attach_inventory(inventory)
+        with pytest.raises(PatchError, match="no channel spacing"):
+            spool.select(coupling="trench")
+
+    def test_patches_on_different_channel_dimensions_refuse(self, patch, inventory):
+        """
+        One spool, one dimension to trim: two is no answer at all.
+
+        The patch-level twin refuses the same shape, where one patch
+        carries two coordinates the map could be read on.
+        """
+        distance = patch.get_coord("distance")
+        both_axes = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(float(distance.min()), float(distance.max())),
+                instrument_distance=(float(distance.min()), float(distance.max())),
+                distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+            ),
+        )
+        channels = dc.Patch(
+            data=patch.data,
+            coords={
+                "channel": patch.get_array("distance"),
+                "time": patch.get_array("time"),
+            },
+            dims=("channel", "time"),
+            attrs=patch.attrs,
+        )
+        spool = dc.spool([patch, channels]).attach_inventory(both_axes)
+        with pytest.raises(InvalidSpoolQueryError, match="different"):
+            spool.select(coupling="trench")
+
+    def test_none_on_a_membership_group(self, patch, inventory):
+        """A membership group says something about every channel: False."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        # noisy runs from 150 to 300 m, which is patch distance 50 to 200,
+        # so the channels it says nothing about are those on either side.
+        undefined = spool.select(noisy=None).get_contents()
+        assert undefined["distance_min"].tolist() == [0.0, 201.0]
+        assert undefined["distance_max"].tolist() == [49.0, 299.0]
+        assert undefined["distance_min"].tolist() == (
+            spool.select(noisy=False).get_contents()["distance_min"].tolist()
+        )
+
+    def test_none_on_a_numeric_group(self, patch, inventory):
+        """A numeric group spells absence NaN, which no range matches."""
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        numeric = inventory.replace(
+            path,
+            path.new(
+                annotations=(
+                    *path.annotations,
+                    OpticalPathAnnotation(
+                        start_distance=100.0,
+                        end_distance=200.0,
+                        group="frost_depth",
+                        value=1.5,
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(numeric)
+        # The group covers the first hundred channels, so the rest are NaN.
+        assert spool.select(frost_depth=None).get_contents()[
+            "distance_min"
+        ].tolist() == [101.0]
+        assert spool.select(frost_depth=(1.0, 2.0)).get_contents()[
+            "distance_max"
+        ].tolist() == [100.0]
+
+    def test_splitting_an_undescribed_spool_yields_nothing(self, patch, inventory):
+        """No fiber to split on means no output, not an error."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool(other).attach_inventory(inventory)
+        assert len(spool.split_by("zone")) == 0
+
+    def test_splitting_skips_a_row_it_cannot_place(self, patch, inventory):
+        """A described patch splits; one the inventory is silent about does not."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="second")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        out = spool.split_by("zone")
+        assert out.get_contents()["zone"].tolist() == ["north", "south"]
+
+    def test_splitting_an_unevenly_sampled_patch_refuses(self, patch, inventory):
+        """The grid is what values are read on here too."""
+        holed = patch.unselect(distance=(50, 200))
+        spool = dc.spool(holed).attach_inventory(inventory)
+        with pytest.raises(PatchError, match="no channel spacing"):
+            spool.split_by("zone")
+
+    def test_one_patch_carrying_two_channel_axes_refuses(self, patch, inventory):
+        """
+        Both are dimensions, so neither is obviously the channel one.
+
+        The patch-level resolver settles this by projecting each and
+        checking they agree; two *dimensions* are different axes rather
+        than two spellings of one, so there is nothing to check.
+        """
+        distance = patch.get_coord("distance")
+        both_axes = _replace_acquisition(
+            inventory,
+            distance_map=DistanceMap(
+                channel=(float(distance.min()), float(distance.max())),
+                instrument_distance=(float(distance.min()), float(distance.max())),
+                distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+            ),
+        )
+        stacked = patch.data[:3][..., np.newaxis]
+        cube = dc.Patch(
+            data=np.broadcast_to(stacked, (3, patch.shape[1], 2)).copy(),
+            coords={
+                "channel": np.arange(3.0),
+                "time": patch.get_array("time"),
+                "distance": np.arange(2.0),
+            },
+            dims=("channel", "time", "distance"),
+            attrs=patch.attrs,
+        )
+        spool = dc.spool(cube).attach_inventory(both_axes)
+        with pytest.raises(PatchError, match="ambiguous"):
+            spool.select(coupling="trench")
+
+    def test_splitting_a_lag_time_patch_yields_nothing(self, patch, inventory):
+        """Without instants there is no context to read a group from."""
+        lags = patch.get_coord("time").values - patch.get_coord("time").min()
+        spool = dc.spool(patch.update_coords(time=lags)).attach_inventory(inventory)
+        assert len(spool.split_by("zone")) == 0
+
+
+@pytest.fixture(scope="module")
+def uneven_spool(patch, inventory):
+    """
+    Three patches whose fiber answers differ, in one spool.
+
+    The first resolves to a path putting one group in two stretches, the
+    second to a path putting it in one, and the third to nothing at all.
+    """
+    array = inventory.networks[0].fiber_arrays[0]
+    acquisition, path = array.acquisitions[0], array.optical_paths[0]
+    holes = (
+        OpticalPathAnnotation(
+            start_distance=110.0, end_distance=150.0, group="hole", value="a"
+        ),
+        OpticalPathAnnotation(
+            start_distance=300.0, end_distance=340.0, group="hole", value="a"
+        ),
+    )
+    both = inventory.replace(
+        array,
+        array.new(
+            acquisitions=(acquisition, acquisition.new(location_code="01")),
+            optical_paths=(
+                path.new(annotations=(*path.annotations, *holes)),
+                path.new(location_code="01", annotations=(*path.annotations, holes[0])),
+            ),
+        ),
+    )
+    patches = [
+        patch.update_attrs(tag="split"),
+        patch.update_attrs(acquisition_key="DAS.R2D1.01.RAW", tag="solid"),
+        patch.update_attrs(acquisition_key="DAS.R2D1..NOPE", tag="unknown"),
+    ]
+    return dc.spool(patches).attach_inventory(both), patches
+
+
+class TestChannelSelectAlignment:
+    """
+    Rows subdividing by different amounts must not swap answers.
+
+    One patch becoming two while its neighbour becomes one and a third
+    leaves entirely is where a plan built by position rather than by
+    identity would quietly hand a patch someone else's envelope.
+    """
+
+    def test_each_patch_keeps_its_own_pieces(self, uneven_spool):
+        """The split patch gets two, the solid one gets one, the third none."""
+        spool, _ = uneven_spool
+        contents = spool.select(hole="a").get_contents()
+        by_tag = contents.groupby("tag")["distance_min"].apply(sorted)
+        assert by_tag["split"] == [10.0, 200.0]
+        assert by_tag["solid"] == [10.0]
+        assert "unknown" not in by_tag
+
+    def test_each_piece_holds_its_own_patch_data(self, uneven_spool):
+        """And the array behind each envelope is that patch's, not a neighbour's."""
+        spool, patches = uneven_spool
+        sources = {x.attrs.tag: x for x in patches}
+        whole = patches[0].get_array("distance")
+        for piece in spool.select(hole="a"):
+            source = sources[piece.attrs.tag]
+            rows = np.searchsorted(whole, piece.get_array("distance"))
+            assert np.array_equal(piece.data, source.data[rows])
+
+    def test_the_complement_is_exact_for_every_patch(self, uneven_spool):
+        """Including the one the inventory says nothing about, kept whole."""
+        spool, patches = uneven_spool
+        whole = sorted(patches[0].get_array("distance"))
+        kept, dropped = {}, {}
+        for store, out in (
+            (kept, spool.select(hole="a")),
+            (dropped, spool.unselect(hole="a")),
+        ):
+            for piece in out:
+                store.setdefault(piece.attrs.tag, []).extend(
+                    piece.get_array("distance")
+                )
+        for tag in ("split", "solid"):
+            assert not set(kept[tag]) & set(dropped[tag])
+            assert sorted([*kept[tag], *dropped[tag]]) == whole
+        assert sorted(dropped["unknown"]) == whole
+
+    def test_splitting_keeps_each_patch_with_its_value(self, uneven_spool):
+        """split_by builds the same plan, so it aligns the same way."""
+        spool, patches = uneven_spool
+        sources = {x.attrs.tag: x for x in patches}
+        whole = patches[0].get_array("distance")
+        out = spool.split_by("hole")
+        assert out.get_contents()["hole"].tolist() == ["a", "a", "a"]
+        for piece in out:
+            source = sources[piece.attrs.tag]
+            rows = np.searchsorted(whole, piece.get_array("distance"))
+            assert np.array_equal(piece.data, source.data[rows])
+
+
+def _float_grid_pair(distance, span):
+    """A patch on a given float grid, and an inventory annotating its middle."""
+    time = get_example_patch().get_array("time")
+    data = np.random.default_rng(0).random((len(distance), len(time)))
+    patch = dc.Patch(
+        data=data,
+        coords={"distance": distance, "time": time},
+        dims=("distance", "time"),
+        attrs={"acquisition_key": "DAS.R2D1..RAW", "category": "DAS"},
+    )
+    acquisition = Acquisition(
+        code="RAW",
+        location_code="",
+        data_type="velocity",
+        data_category="DAS",
+        gauge_length=10.0,
+        sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
+        distance_map=DistanceMap(
+            instrument_distance=(float(distance.min()), float(distance.max())),
+            distance=(0.0, span),
+        ),
+    )
+    path = OpticalPath(
+        name="main",
+        location_code="",
+        optical_components=(FiberSegment(name="c", optical_length=span + 10),),
+        annotations=(
+            OpticalPathAnnotation(
+                start_distance=span * 0.23,
+                end_distance=span * 0.61,
+                group="zone",
+                value="mid",
+            ),
+        ),
+    )
+    return patch, Inventory(
+        networks=(
+            Network(
+                code="DAS",
+                fiber_arrays=(
+                    FiberArray(
+                        code="R2D1",
+                        acquisitions=(acquisition,),
+                        optical_paths=(path,),
+                    ),
+                ),
+            ),
+        )
+    ).check()
+
+
+class TestChannelReviewFindings:
+    """Defects the review pipeline found, each with its own scenario."""
+
+    def test_a_reverse_sorted_patch_is_still_placed(self, patch, inventory):
+        """
+        A descending coordinate states a negative step, and envelopes
+        do not: counting samples with the signed one gives none at all,
+        so every fiber query would silently drop the patch.
+        """
+        reversed_patch = patch.sort_coords("distance", reverse=True)
+        spool = dc.spool(reversed_patch).attach_inventory(inventory)
+        assert spool.get_contents()["distance_step"].iloc[0] < 0
+        out = spool.select(coupling="trench")
+        assert len(out) == 1
+        assert out.get_contents()["distance_max"].tolist() == [150.0]
+        assert out[0].shape == (151, patch.shape[1])
+
+    def test_an_acquisition_without_a_path_states_nothing(self, patch, inventory):
+        """
+        A pathless acquisition is valid, and simply projects nothing.
+
+        The CRS labels stay listed whatever the paths say, so a geometry
+        axis is still a name a query may use — and must answer with no
+        channel rather than by dereferencing the absent path.
+        """
+        array = inventory.networks[0].fiber_arrays[0]
+        pathless = inventory.replace(array, array.new(optical_paths=()))
+        spool = dc.spool(patch).attach_inventory(pathless)
+        assert "x" in pathless.get_names().coords
+        assert len(spool.select(x=(-1e9, 1e9))) == 0
+        assert len(spool.split_by("x")) == 0
+
+    def test_a_unit_bearing_selector_is_converted(self, patch, inventory):
+        """
+        The inventory documents the units of the fields it projects, so
+        dropping them would refuse selectors the index accepts against a
+        stated attr of the same kind.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        deep = inventory.replace(
+            path,
+            path.new(
+                coupling=(
+                    CouplingCondition(
+                        start_distance=100.0,
+                        end_distance=250.0,
+                        coupling_type="trench",
+                        medium="soil",
+                        depth=2.0,
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(deep)
+        bare = spool.select(**{"coupling.depth": (1.0, 3.0)})
+        assert bare.get_contents()["distance_max"].tolist() == [150.0]
+        for equivalent in ((1 * m, 3 * m), (100 * cm, 300 * cm)):
+            out = spool.select(**{"coupling.depth": equivalent})
+            assert out.get_contents()["distance_max"].tolist() == [150.0]
+
+    def test_a_bare_ellipsis_selects_everything(self, patch, inventory):
+        """
+        As it does everywhere else, so attaching an inventory does not
+        turn a no-op selector into an error. `None` is the exception,
+        and means the undefined marker rather than "everything".
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert len(spool.select(coupling=...)) == 1
+        assert spool.select(coupling=...)[0].shape == patch.shape
+
+    def test_unselect_takes_a_channel_name_through_coords(self, patch, inventory):
+        """
+        Both spellings `select` accepts, since `_coords` is the only way
+        to name a group which shares an acquisition field's name.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        expected = [151.0]
+        assert (
+            spool.unselect(coupling="trench").get_contents()["distance_min"].tolist()
+            == expected
+        )
+        assert (
+            spool.unselect(_coords={"coupling": "trench"})
+            .get_contents()["distance_min"]
+            .tolist()
+            == expected
+        )
+        assert (
+            spool.unselect(_coords="coupling", coupling="trench")
+            .get_contents()["distance_min"]
+            .tolist()
+            == expected
+        )
+
+    def test_rechunking_a_selection_keeps_it(self, patch, inventory):
+        """
+        Re-planning the same dimension collapses onto the sources, which
+        is sound only while the plan's pieces cover them. A selection's
+        do not, so collapsing would load back the channels it removed —
+        and the contents would go on describing the ones it kept.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        selected = spool.select(coupling="trench")
+        assert selected[0].shape == (151, patch.shape[1])
+        rechunked = selected.chunk(distance=None)
+        assert rechunked.get_contents()["distance_max"].tolist() == [150.0]
+        assert rechunked[0].shape == (151, patch.shape[1])
+
+    def test_only_a_plan_which_drops_samples_is_lossy(
+        self, patch, inventory, path_epochs
+    ):
+        """
+        The other side of it: conform's pieces do cover their row, so it
+        stays collapsible and only a selection does not.
+
+        Checked on the plans themselves rather than by re-chunking each,
+        because chunking a derived catalog is broken on dev already
+        (#871) and would fail here for a reason of its own.
+        """
+        conformed = dc.spool(patch).conform_to_inventory(path_epochs)
+        assert len(conformed) == 2
+        assert not conformed._catalog.resolver.lossy
+        selected = dc.spool(patch).attach_inventory(inventory).select(coupling="trench")
+        assert selected._catalog.resolver.lossy
+
+    def test_a_stamp_cannot_overwrite_the_plan(self, patch, inventory):
+        """
+        A group may be named anything the inventory does not reserve,
+        and the stamp is assigned onto the plan's outputs — so a group
+        called `output_id` would replace what binds each output to the
+        data it came from, and the catalog would be built from nonsense.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        clash = inventory.replace(
+            path,
+            path.new(
+                annotations=(
+                    OpticalPathAnnotation(
+                        start_distance=100.0,
+                        end_distance=200.0,
+                        group="output_id",
+                        value="a",
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(clash)
+        with pytest.raises(InvalidSpoolQueryError, match="overwrite"):
+            spool.split_by("output_id")
+        # Splitting on it is still legal; only recording the value is not.
+        assert len(spool.split_by("output_id", stamp=False)) == 1
+
+    def test_a_no_op_channel_selector_does_not_veto_a_flag(self, patch, inventory):
+        """
+        `...` names a fiber coordinate without asking anything of it, so
+        it must not refuse a `samples` the rest of the query needs.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        out = spool.select(distance=(0, 10), coupling=..., samples=True)
+        assert len(out) == 1
+        assert out[0].shape == (10, patch.shape[1])
+        # A selector which does ask something still refuses it.
+        with pytest.raises(InvalidSpoolQueryError, match="samples=True cannot"):
+            spool.select(coupling="trench", samples=True)
+
+    def test_a_scalar_quantity_selector_is_converted(self, patch, inventory):
+        """
+        A geometry axis is stored in the CRS's own units while a quantity
+        selector is typed in its base unit, so comparing the magnitudes
+        unconverted matched nothing — where the range form matched.
+        """
+        spool = dc.spool(patch).attach_inventory(inventory)
+        enriched = patch.enrich(inventory, coords=("y",), attrs=False)
+        stated = float(enriched.get_array("y")[0])
+        degrees = get_quantity("degree")
+        assert len(spool.select(y=stated)) == 1
+        assert len(spool.select(y=stated * degrees)) == 1
+
+    @pytest.mark.parametrize(
+        ("start", "step", "size"),
+        [
+            (1.0, 0.1, 300),
+            (0.1, 0.25, 500),
+            (-1234.5678, 0.037, 400),
+            (0.0, 1 / 3, 350),
+        ],
+    )
+    def test_the_index_selects_what_enrichment_projects(self, start, step, size):
+        """
+        A rebuilt grid must name the same channels the patch's own does.
+
+        The grid is reconstructed from the index envelope rather than
+        read off the patch, and `Patch.select` does not snap an interior
+        bound to the nearest sample — so a float grid which drifted from
+        the patch's own values could trim one channel too many. Compared
+        by count and position rather than by value, since a trimmed
+        CoordRange regenerates its values from the piece's own start and
+        so differs in the last ulp for any trim, inventory or not.
+        """
+        distance = start + np.arange(size) * step
+        span = float(distance.max() - distance.min())
+        patch, inventory = _float_grid_pair(distance, span)
+        spool = dc.spool(patch).attach_inventory(inventory)
+        selected = spool.select(zone="mid")
+        got = np.concatenate([x.get_array("distance") for x in selected])
+        projected = patch.enrich(inventory, coords=("zone",), attrs=False)
+        wanted = distance[projected.get_array("zone") == "mid"]
+        assert len(wanted)  # the group really does cover part of this fiber
+        assert len(got) == len(wanted)
+        assert np.allclose(np.sort(got), np.sort(wanted), rtol=0, atol=1e-9)

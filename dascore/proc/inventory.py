@@ -30,6 +30,7 @@ from dascore.core.inventory import (
 )
 from dascore.exceptions import (
     InvalidInventoryError,
+    InvalidSpoolQueryError,
     ParameterError,
     PatchError,
     UnresolvedPatchError,
@@ -542,14 +543,34 @@ _AXIS_COORDS = {
 assert set(_AXIS_COORDS) == set(DISTANCE_MAP_AXES)
 
 
-def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+def _map_axis_coords(dist_map, names) -> list[tuple[str, str]]:
     """
-    Return every map axis the patch can be read on, with its coordinate.
+    Return each map axis paired with the name it can be read on.
 
-    The map states its control points in whichever coordinates were
-    measured, so the patch decides which of them is read. Guessing instead
-    would be wrong by the channel spacing, silently.
+    One name per axis, the first of them present: the map states its
+    control points in whichever coordinates were measured, so what is
+    carried decides which is read. Guessing instead would be wrong by the
+    channel spacing, silently. Stated once because a patch and an index
+    row must agree about it — selection answering differently than
+    enrichment would is the failure this whole path exists to avoid. No
+    two axes share a name in `_AXIS_COORDS`, so a name appears once.
     """
+    out = []
+    for axis in dist_map.axes:
+        for name in _AXIS_COORDS[axis]:
+            if name in names:
+                out.append((axis, name))
+                break
+    return out
+
+
+def _readable_on(dist_map) -> list[str]:
+    """The names a map could be read on, whichever axis answers."""
+    return sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
+
+
+def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+    """Return every map axis the patch can be read on, with its coordinate."""
     dist_map = acquisition.distance_map
     if dist_map is None:
         msg = (
@@ -557,22 +578,15 @@ def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
             "its channels cannot be placed on the optical path."
         )
         raise PatchError(msg)
-    out = []
-    for axis in dist_map.axes:
-        for name in _AXIS_COORDS[axis]:
-            if name in patch.coords.coord_map:
-                out.append((axis, name))
-                break
-    if out:
+    if out := _map_axis_coords(dist_map, patch.coords.coord_map):
         return out
-    wanted = sorted({x for axis in dist_map.axes for x in _AXIS_COORDS[axis]})
     msg = (
         f"Acquisition {acquisition.code!r} maps {list(dist_map.axes)} onto "
-        f"path distance, so it needs one of the {wanted} coordinates, and "
-        f"this patch has {sorted(patch.coords.coord_map)}. An acquisition "
-        "whose patches carry interrogator meters is calibrated with a "
-        "distance_map on the instrument_distance axis, one control point "
-        "being enough to state an origin."
+        f"path distance, so it needs one of the {_readable_on(dist_map)} "
+        f"coordinates, and this patch has {sorted(patch.coords.coord_map)}. "
+        "An acquisition whose patches carry interrogator meters is "
+        "calibrated with a distance_map on the instrument_distance axis, "
+        "one control point being enough to state an origin."
     )
     raise PatchError(msg)
 
@@ -768,6 +782,345 @@ def _get_coord_values(inventory, path, name, distances):
     if name in VALID_COORDINATE_LABELS:
         return _get_geometry_coord(inventory, path, name, distances)
     return _get_annotation_coord(path, name, distances)
+
+
+# --- channel selection over index rows --------------------------------
+
+
+def _channel_placement(dims: set[str], acquisition) -> tuple:
+    """
+    Return the dimension a row's channels are placed along, and its axis.
+
+    The patch-level twin, `_get_channel_axes`, reads the map's axes off
+    whichever of the patch's coordinates state them, dimensional or not.
+    Here only a dimension will do: a plan trims a dimension, and what a
+    non-dimensional coordinate says about the one it runs along is not in
+    the index. Refusing rather than guessing is what keeps selection from
+    answering differently than enrichment would.
+
+    Returns
+    -------
+    A `(name, axis)` pair, or `(None, reason)` naming why there is none.
+    """
+    dist_map = acquisition.distance_map
+    if dist_map is None:
+        return None, (
+            f"{acquisition.code!r} defines no distance_map, so its channels "
+            "cannot be placed on the optical path"
+        )
+    found = _map_axis_coords(dist_map, dims)
+    if not found:
+        return None, (
+            f"has dimensions {sorted(dims)}, and {acquisition.code!r} places "
+            f"channels by one of {_readable_on(dist_map)}"
+        )
+    if len({name for _, name in found}) > 1:
+        return None, (
+            f"carries {sorted(name for _, name in found)} as separate "
+            f"dimensions, so which of them {acquisition.code!r} places its "
+            "channels by is ambiguous"
+        )
+    axis, name = found[0]
+    return name, axis
+
+
+def _undefined_mask(values) -> np.ndarray:
+    """
+    Return the channels an interval track states nothing about.
+
+    `None` is how a query spells absence, and `_fill_from_intervals`
+    decides how absence is stored: a string array has no null, so it is
+    the empty string there, NaN in a numeric one, and a membership group
+    is simply False where nothing includes it. The two must agree, which
+    is why this reads as that function's mirror.
+    """
+    array = np.asarray(values)
+    if array.dtype == bool:
+        return ~array
+    if np.issubdtype(array.dtype, np.number):
+        return np.isnan(array)
+    return array == ""
+
+
+def _mask_pieces(mask: np.ndarray, grid: np.ndarray, low, high) -> list[tuple]:
+    """
+    Return the inclusive envelope of each run of kept channels.
+
+    The row's own bounds are used at its ends rather than the grid's
+    rebuilt ones. They are the same channel, but a float grid can land an
+    ulp off, and a piece which does not compare equal to the row it
+    covers would be trimmed on load instead of passing through.
+    """
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.view(np.int8), [0]])))
+    last = len(grid) - 1
+    return [
+        (
+            low if start == 0 else grid[start],
+            high if stop - 1 == last else grid[stop - 1],
+        )
+        for start, stop in zip(edges[::2], edges[1::2], strict=True)
+    ]
+
+
+def resolve_channel_pieces(
+    inventory, contexts, frame, query, *, complement: bool = False
+) -> tuple:
+    """
+    Return the channel dimension, each row's kept pieces, and refusals.
+
+    The pieces are what a selection along the fiber keeps: one per
+    contiguous run of matching channels, so a query a path answers in two
+    places subdivides the row into two. A row with no context keeps
+    nothing and says nothing about it — an inventory-backed selector
+    silently does not match a patch the inventory is silent about, just
+    as a patch lacking an attr is not selected on it.
+
+    Every value is projected onto the channels the way `Patch.enrich`
+    projects it and judged by the predicate the index applies to a stated
+    attr, so a selector cannot mean one thing here and another in either.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    contexts
+        Each row's resolved context, or None where it has none.
+    frame
+        The relation being selected; one row per patch.
+    query
+        The channel-level selectors, by inventory name.
+    complement
+        Keep the channels the query does *not* match. The mask runs along
+        one dimension, so unlike a patch's rectangle its complement is
+        exactly expressible; a row with no context keeps everything,
+        being a row the selection never held.
+
+    Returns
+    -------
+    A `(name, pieces, reasons)` triple. `reasons` holds a refusal per row
+    and None elsewhere; when any row is refused `pieces` is None, since
+    the caller raises rather than selecting, and `name` is whatever the
+    rows which placed fine agreed on — possibly None.
+    """
+    name, placements, reasons = channel_placements(contexts, frame)
+    if any(x is not None for x in reasons) or name is None:
+        # Nothing was judged -- either a row must be refused, or no row
+        # has a fiber at all -- so there are no pieces to report; the
+        # caller reads which of the two off `reasons` and `name`.
+        return name, None, reasons
+    out, unusable = [], []
+    for row in _placed_rows(contexts, placements, frame, name):
+        unusable.append(row.reason)
+        if row.grid is None:
+            # A row the inventory is silent about is not selected, and so
+            # its complement keeps it whole; one it cannot place is refused
+            # above rather than answered for.
+            out.append([(row.low, row.high)] if complement and not row.reason else [])
+            continue
+        mask = np.ones(len(row.grid), dtype=bool)
+        for wanted, selector in query.items():
+            mask &= _channel_matches(
+                inventory, row.context.optical_path, wanted, selector, row.distances
+            )
+        out.append(_mask_pieces(~mask if complement else mask, *row.grid_bounds))
+    return name, out, [x or y for x, y in zip(reasons, unusable, strict=True)]
+
+
+def channel_placements(contexts, frame) -> tuple:
+    """
+    Return the one dimension a relation's channels run along, and per row
+    how each is placed on it, or why it cannot be.
+    """
+    placements, reasons = [], []
+    for context, dims in zip(contexts, frame["dims"], strict=True):
+        placement = (None, None)
+        if context is not None:
+            placement = _channel_placement(set(dims.split(",")), context.acquisition)
+        placements.append(placement)
+        # The second half of a placement is the axis when there is one and
+        # the reason there is not, so only a nameless one carries a reason.
+        placed = context is not None and not placement[0]
+        reasons.append(placement[1] if placed else None)
+    named = {x for x, _ in placements if x is not None}
+    if len(named) > 1:
+        joined = ", ".join(sorted(named))
+        msg = (
+            "The patches of this spool place their channels along different "
+            f"dimensions ({joined}), so an operation along the fiber has no "
+            "one dimension to work on. Select them apart first."
+        )
+        raise InvalidSpoolQueryError(msg)
+    return next(iter(named), None), placements, reasons
+
+
+class PlacedRow(NamedTuple):
+    """One index row's channels, placed on its optical path."""
+
+    context: Any
+    low: Any
+    high: Any
+    grid: np.ndarray | None
+    distances: np.ndarray | None
+    reason: str | None
+
+    @property
+    def grid_bounds(self) -> tuple:
+        """The arguments `_mask_pieces` reads a mask against."""
+        return self.grid, self.low, self.high
+
+
+def _placed_rows(contexts, placements, frame, name: str):
+    """
+    Yield each row's channel grid and where it lands on the optical path.
+
+    A row with no context, or no usable step to rebuild its grid with,
+    yields no grid; the two are different answers, so only the second
+    carries a reason to refuse it with.
+    """
+    steps = frame[f"{name}_step"].to_numpy()
+    bounds = zip(frame[f"{name}_min"], frame[f"{name}_max"], strict=True)
+    # Keyed by identity because that is what is cheap: sibling epochs
+    # resolve to one shared context object, and `__eq__` on an inventory
+    # model dumps the whole subtree. A miss only recomputes.
+    cache: dict[tuple, tuple] = {}
+    for context, (dim, axis), (low, high), step in zip(
+        contexts, placements, bounds, steps, strict=True
+    ):
+        if context is None or dim is None:
+            yield PlacedRow(context, low, high, None, None, None)
+            continue
+        if pd.isnull(step) or not step:
+            # Which channels are which is decided on the sample grid, and
+            # the step is its only description. Guessing would trim the
+            # wrong channels silently, which is worse than saying so.
+            reason = "states no channel spacing to place its channels on"
+            yield PlacedRow(context, low, high, None, None, reason)
+            continue
+        # Envelopes are value-ordered whatever the coordinate's orientation,
+        # so the grid is walked by the step's magnitude -- a reverse-sorted
+        # patch states a negative one, and counting samples with it would
+        # give none at all.
+        step = abs(step)
+        key = (id(context), axis, low, high, step)
+        if (placed := cache.get(key)) is None:
+            grid = np.arange(round((high - low) / step) + 1) * step + low
+            placed = (grid, context.acquisition.channel_to_distance(grid, axis=axis))
+            cache[key] = placed
+        grid, distances = placed
+        yield PlacedRow(context, low, high, grid, distances, None)
+
+
+def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
+    """
+    Return the channel dimension, each row's pieces by value, and refusals.
+
+    Splitting expands the spool into one patch per value a group takes
+    along each row, so a row is answered with a list of `(value, piece)`
+    pairs rather than pieces alone. A value the group states in two
+    places gives that value two pieces, so a row's pieces are disjoint
+    but neither contiguous nor in envelope order — they arrive grouped by
+    value, and the values are sorted rather than the envelopes.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to resolve against.
+    contexts
+        Each row's resolved context, or None where it has none.
+    frame
+        The relation being split; one row per patch.
+    name
+        The inventory-derived coordinate to split on.
+    keep
+        Decides which values to emit, by the value itself.
+
+    Returns
+    -------
+    A `(dim, rows, reasons)` triple, `rows` holding the `(value, piece)`
+    pairs of each row in value order.
+    """
+    dim, placements, reasons = channel_placements(contexts, frame)
+    if any(x is not None for x in reasons) or dim is None:
+        return dim, None, reasons
+    out, unusable = [], []
+    for row in _placed_rows(contexts, placements, frame, dim):
+        unusable.append(row.reason)
+        out.append([])
+        if row.grid is None:
+            continue
+        path = row.context.optical_path
+        values, _ = _channel_values(inventory, path, name, row.distances)
+        if values is None:
+            # A group this path defines nowhere puts none of its channels
+            # anywhere, so the row contributes no output at all.
+            continue
+        for value in _split_values(values):
+            if not keep(value):
+                continue
+            pieces = _mask_pieces(np.asarray(values) == value, *row.grid_bounds)
+            out[-1].extend((value, piece) for piece in pieces)
+    return dim, out, [x or y for x, y in zip(reasons, unusable, strict=True)]
+
+
+def _split_values(values) -> list:
+    """
+    Return the distinct values a group takes, in a stable order.
+
+    Every kind splits, one output per value: a categorical group by its
+    strings, a membership group into the channels it includes and those
+    it does not, and a numeric one by each distinct measurement. Sorted
+    so the outputs of a spool do not depend on which channel came first.
+
+    Absence is not a value, so the channels a group says nothing about
+    make no output of their own — with the one exception a membership
+    group is: `False` there means "not in this group", which is a
+    statement about every channel rather than the absence of one.
+    """
+    array = np.asarray(values)
+    if array.dtype == bool:
+        return sorted(set(array.tolist()))
+    return sorted(set(array[~_undefined_mask(array)].tolist()))
+
+
+def _channel_values(inventory, path, name, distances) -> tuple:
+    """
+    Return one name's value per channel, with the units it carries.
+
+    A path is what states anything along the fiber, so an acquisition
+    without one -- a valid inventory, describing a system which simply
+    projects nothing -- has no values, exactly as a path which defines
+    the name nowhere has none.
+    """
+    values = (
+        None if path is None else _get_coord_values(inventory, path, name, distances)
+    )
+    if values is None:
+        return None, None
+    if not isinstance(values, BaseCoord):
+        return values, None
+    # The projection carries the units the inventory documents for the
+    # field, and dropping them would refuse the unit-bearing selectors
+    # the index accepts against a stated attr of the same kind.
+    units = None if values.units is None else {"num": get_quantity_str(values.units)}
+    return values.values, units
+
+
+def _channel_matches(inventory, path, name, selector, distances) -> np.ndarray:
+    """Return the channels one selector matches, as the index would."""
+    from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
+
+    values, units = _channel_values(inventory, path, name, distances)
+    if values is None:
+        # A name this path defines nowhere states nothing about any of its
+        # channels, so it matches none of them -- listing a name is not
+        # promising a value for it.
+        return np.zeros(len(distances), dtype=bool)
+    if selector is None:
+        # `None` is the query spelling of the undefined marker, which is a
+        # value here rather than the "select everything" a bare None means
+        # of an attr: a channel the track says nothing about is a channel.
+        return _undefined_mask(values)
+    return evaluate_attr_predicate(list(values), name, selector, units)
 
 
 def _coords_equal(existing, values) -> bool:

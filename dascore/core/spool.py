@@ -6,7 +6,9 @@ import abc
 import inspect
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from dataclasses import replace
 from functools import singledispatch
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
 
@@ -49,12 +51,14 @@ from dascore.utils.chunk_plan import (
     build_chunk_plan,
     build_subdivision_plan,
     samples_adjusted_envelopes,
+    subdivision_pieces,
 )
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
+    iterate,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
@@ -94,6 +98,13 @@ _VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
 # is "ignore" -- leave the patch as it was -- conform's is "drop": every
 # policy here removes the patch, and only the noise differs.
 _VALID_ON_UNRESOLVED_CONFORM = ("raise", "warn", "drop")
+
+# Written once because both fiber verbs refuse for it, and two spellings
+# would let them start explaining the same refusal differently.
+_UNPLACEABLE = (
+    "are described by the inventory but cannot have their channels placed "
+    "along the fiber"
+)
 
 _UNRESOLVED_WARNING = (
     "The attached inventory does not describe every patch in this spool, and "
@@ -154,56 +165,55 @@ def _report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
     warnings.warn(msg, UserWarning, stacklevel=3)
 
 
-def _check_one_acquisition(source_rows: pd.DataFrame, epochs) -> None:
+def _refuse_rows(source_rows: pd.DataFrame, reasons, summary: str) -> None:
     """
-    Refuse the patches whose acquisition changes partway through.
+    Raise naming the patches an inventory verb cannot handle, and why.
+
+    Every refusal these verbs make has the same shape — a few patches out
+    of an archive, each with its own particular; naming them is the whole
+    value, since the fix is nearly always to one file or one inventory
+    entry. `reasons` holds a particular per row and None where the row is
+    fine, so a caller judges rows without also formatting them.
+    """
+    named = [
+        f"{path} ({reason})"
+        for path, reason in zip(source_rows["source_path"], reasons, strict=True)
+        if reason is not None
+    ]
+    if not named:
+        return
+    msg = f"{len(named)} patch(es) {summary}: {_first_few(named)}."
+    raise PatchError(msg)
+
+
+def _acquisition_conflicts(epochs) -> list:
+    """
+    Name the patches whose acquisition changes partway through.
 
     Subdividing cannot reconcile these the way it reconciles a change of
     optical path — see `RowEpochs.conflict` for why. `on_unresolved` does
     not wave them through either: the inventory describes such a patch
     twice rather than not at all.
     """
-    conflicted = [
-        f"{path} at {row.conflict}"
-        for path, row in zip(source_rows["source_path"], epochs, strict=True)
-        if row.conflict is not None
-    ]
-    if not conflicted:
-        return
-    msg = (
-        f"{len(conflicted)} patch(es) span a change of acquisition, which "
-        f"subdividing cannot reconcile: {_first_few(conflicted)}. Select the "
-        "side you want, or correct the inventory."
-    )
-    raise PatchError(msg)
+    return [None if x.conflict is None else f"at {x.conflict}" for x in epochs]
 
 
-def _check_subdividable(source_rows: pd.DataFrame, rows: pd.DataFrame, cuts) -> None:
+def _unsubdividable(rows: pd.DataFrame, pieces, name: str) -> list:
     """
-    Refuse a patch which must be split but states no sampling interval.
+    Name the patches which must be split but state no sampling interval.
 
-    The pieces are found on the patch's own sample grid, which its time
-    step is the only description of: a piece ends one step short of
-    where the next begins. Without a step both pieces would have to
-    claim the boundary instant, and envelopes are inclusive, so a sample
-    landing there would appear in both. Duplicating a sample is a worse
-    answer than saying so — the caller asked for metadata
-    reconciliation, not for the data to be restructured.
+    The pieces are found on the patch's own sample grid, which its step
+    is the only description of: a piece ends one step short of where the
+    next begins. Without a step both pieces would have to claim the
+    boundary value, and envelopes are inclusive, so a sample landing
+    there would appear in both. Duplicating a sample is a worse answer
+    than saying so — the caller asked for the metadata to be reconciled,
+    not for the data to be restructured.
     """
-    bad = [
-        f"{path} at {row_cuts[0]}"
-        for path, step, row_cuts in zip(
-            source_rows["source_path"], rows["time_step"], cuts, strict=True
-        )
-        if row_cuts and (pd.isnull(step) or not step)
+    return [
+        f"at {row_pieces[0]}" if row_pieces and (pd.isnull(step) or not step) else None
+        for step, row_pieces in zip(rows[f"{name}_step"], pieces, strict=True)
     ]
-    if not bad:
-        return
-    msg = (
-        f"{len(bad)} patch(es) must be subdivided at an epoch boundary but "
-        f"state no time step to find their samples with: {_first_few(bad)}."
-    )
-    raise PatchError(msg)
 
 
 def _unstated(values) -> np.ndarray:
@@ -230,6 +240,125 @@ def _requested_names(_attrs, _coords, kwargs) -> set[str]:
         if isinstance(spec, Mapping):
             out |= set(spec)
     return out
+
+
+def _drops_samples(rows: pd.DataFrame, pieces, name: str) -> bool:
+    """
+    Return whether any row keeps less than the whole of itself.
+
+    Read off the pieces rather than taken on trust, because getting it
+    wrong is silent either way: a plan wrongly called lossless loads back
+    the samples it dropped, and one wrongly called lossy only forgoes a
+    collapse. Conform's pieces always cover their row, so it answers
+    False here without the caller having to say so.
+    """
+    lows = rows[f"{name}_min"].to_numpy()
+    highs = rows[f"{name}_max"].to_numpy()
+    steps = rows[f"{name}_step"].to_numpy()
+    for row_pieces, low, high, step in zip(pieces, lows, highs, steps, strict=True):
+        if not row_pieces:
+            continue  # a row kept out entirely leaves no outputs to collapse
+        if row_pieces[0][0] != low or row_pieces[-1][1] != high:
+            return True
+        # Conform's pieces meet exactly one step apart, so they cover the
+        # row between them; a selection's have the channels it dropped in
+        # the gaps, which is the whole difference.
+        gap = abs(step)
+        if any(b[0] != a[1] + gap for a, b in pairwise(row_pieces)):
+            return True
+    return False
+
+
+def _check_stampable(name: str, rows: pd.DataFrame) -> None:
+    """
+    Refuse a stamp which would overwrite the plan's own bookkeeping.
+
+    An annotation group may be named anything the inventory does not
+    reserve, and the stamp is assigned onto the outputs — so a group
+    called `output_id` would replace the column binding each output to
+    its members, and one called `time_min` an envelope. Overwriting a
+    carried attr is fine and is how re-splitting restamps; these are not
+    attrs.
+    """
+    envelopes = {
+        x for x in rows.columns if x.rsplit("_", 1)[-1] in {"min", "max", "step"}
+    }
+    if name not in {"output_id", "dims", *envelopes} and not name.startswith("_"):
+        return
+    msg = (
+        f"{name!r} is how the spool itself describes a patch, so stamping "
+        "it would overwrite what binds each output to the data it came "
+        "from. Rename the group, or pass stamp=False to split on it "
+        "without recording the value."
+    )
+    raise InvalidSpoolQueryError(msg)
+
+
+def _stated_channels(channels: dict) -> dict:
+    """
+    Return the channel selectors which actually select something.
+
+    A bare `...` selects everything here as everywhere, so it asks for no
+    trimming at all — but the name still had to be recognized as the
+    inventory's, or the index would be left to complain that it has never
+    heard of it. `None` is not dropped beside it: on a coordinate the
+    fiber defines it spells the undefined marker, which is a statement
+    about which channels to keep rather than the absence of one.
+    """
+    return {name: value for name, value in channels.items() if value is not Ellipsis}
+
+
+def _glob_filter(include, exclude):
+    """
+    Return a predicate deciding which split values to keep.
+
+    The patterns are matched against each value written as a string, so
+    one vocabulary covers every kind a group can hold: `"hole_*"` reads a
+    categorical group, and a membership group is `"True"` and `"False"`.
+    Globs mean what they mean everywhere else here, which is what SQLite
+    means by them rather than what `fnmatch` does.
+    """
+    from dascore.io.index.query import glob_to_regex  # noqa: PLC0415
+
+    patterns = tuple(
+        None if spec is None else [glob_to_regex(str(x)) for x in iterate(spec)]
+        for spec in (include, exclude)
+    )
+
+    def keep(value) -> bool:
+        wanted, unwanted = patterns
+        text = str(value)
+        if unwanted is not None and any(x.match(text) for x in unwanted):
+            # Excluding wins, so naming a family and carving one out of it
+            # reads in either order.
+            return False
+        return wanted is None or any(x.match(text) for x in wanted)
+
+    return keep
+
+
+def _without_keys(mapping: Mapping, names) -> dict:
+    """Return the mapping without the named keys."""
+    return {str(k): v for k, v in mapping.items() if k not in names}
+
+
+def _without_names(spec: namespace_select_type, names) -> namespace_select_type:
+    """
+    Return an `_attrs`/`_coords` argument with some names taken out.
+
+    A channel-level name is answered by the inventory rather than the
+    index, so it has to leave the spec before the index sees it — and the
+    tag form as well as the mapping one, since a tag left behind
+    designates a bare keyword which went with it.
+    """
+    if not names or spec is None:
+        return spec
+    if isinstance(spec, Mapping):
+        return _without_keys(spec, names)
+    if isinstance(spec, str):
+        return None if spec in names else spec
+    kept = [x for x in spec if x not in names]
+    return kept or None
 
 
 def _namespace_names(spec: namespace_select_type) -> set[str]:
@@ -607,12 +736,17 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         one bad tag, an instrument being serviced — without spelling the
         rest of the archive as a selection.
 
-        Coordinates are not accepted yet. Selecting on one trims each
-        patch to the range rather than choosing between patches, so the
-        complement is every patch cut into the pieces outside it — one
-        patch becoming two. That is subdivision rather than filtering,
-        and it needs machinery this does not have; until it does, select
-        the ranges to keep.
+        The patches' own coordinates are not accepted. Selecting on one
+        trims each patch to the range rather than choosing between
+        patches, so the complement is every patch cut into the pieces
+        outside it — one patch becoming two. Select the ranges to keep
+        instead, or use [`Patch.unselect`](`dascore.Patch.unselect`) on
+        each patch, which can take samples out of its middle.
+
+        The coordinates an attached inventory defines along the fiber are
+        different, and are accepted: removing one of those chooses which
+        channels a patch holds. A patch may then be cut into the pieces
+        the query did not match, so `len` can grow here as well.
 
         Naming nothing raises, and so does naming only no-op selectors
         (`None`, `...`). `select()` with no selection is the whole spool,
@@ -626,7 +760,9 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             Attribute selections, in the forms
             [`select`](`dascore.core.spool.Spool.select`) accepts.
         _coords
-            Accepted only to say so; see above.
+            The patches' own coordinates only to say they are refused; a
+            coordinate an attached inventory defines along the fiber is
+            accepted and chooses channels. See above.
         **kwargs
             The selection whose matches are removed.
 
@@ -919,8 +1055,8 @@ class Spool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}."""
-        inventory_query, _attrs, _coords, kwargs = self._split_inventory_query(
-            _attrs, _coords, kwargs, samples
+        attr_query, channel_query, _attrs, _coords, kwargs = (
+            self._split_inventory_query(_attrs, _coords, kwargs, samples, relative)
         )
         catalog = self._catalog.select(
             _attrs=_attrs,
@@ -930,8 +1066,10 @@ class Spool(BaseSpool):
             **kwargs,
         )
         out = self._new_from_catalog(catalog)
-        if inventory_query:
-            out = out._select_from_inventory(inventory_query)
+        if attr_query:
+            out = out._select_from_inventory(attr_query)
+        if channel_query := _stated_channels(channel_query):
+            out = out._select_channels(channel_query)
         return out
 
     @compose_docstring(doc=get_docstring(BaseSpool.unselect))
@@ -945,36 +1083,35 @@ class Spool(BaseSpool):
         """{doc}."""
         requested = _requested_names(_attrs, _coords, kwargs)
         known_attrs, known_coords = self._index_names()
-        selectable = set()
+        selectable, channels = set(), {}
         if self._inventory is not None:
             names = self._inventory.get_names()
-            self._check_channel_level(
-                requested,
-                set(names.coords),
-                known_attrs | known_coords | set(names.attrs),
-                _namespace_names(_coords),
+            channels = self._channel_query(
+                requested, names, known_attrs, known_coords, _coords, kwargs
             )
             selectable = set(names.attrs) - known_coords
         attrs, coords = resolve_selector_namespaces(
             known_attrs | selectable,
             known_coords,
             _attrs=_attrs,
-            _coords=_coords,
-            kwargs=kwargs,
+            _coords=_without_names(_coords, channels),
+            kwargs=_without_keys(kwargs, channels),
         )
         if coords:
             msg = (
-                f"{sorted(coords)} name coordinates, which unselect cannot "
-                "take yet: selecting on one trims each patch, so removing "
-                "a range means cutting every patch into the pieces outside "
-                "it rather than choosing between patches. Select the ranges "
-                "to keep instead."
+                f"{sorted(coords)} name coordinates of the patches "
+                "themselves, which unselect cannot take: removing a range "
+                "means cutting every patch into the pieces outside it "
+                "rather than choosing between patches. Select the ranges "
+                "to keep instead, or use Patch.unselect on each patch. The "
+                "coordinates an inventory defines along the fiber are "
+                "different -- removing one of those chooses channels."
             )
             raise InvalidSpoolQueryError(msg)
         # A no-op selector selects everything, so its complement is an
         # empty spool -- and "remove nothing" reads just as naturally.
         stated = {k: v for k, v in attrs.items() if v is not None and v is not Ellipsis}
-        if not stated:
+        if not stated and not _stated_channels(channels):
             msg = (
                 "unselect needs something to remove; "
                 f"{sorted(requested) or 'nothing'} names no selection. "
@@ -984,33 +1121,65 @@ class Spool(BaseSpool):
             raise ParameterError(msg)
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
-        removed = self.select(_attrs=stated)._catalog._ordered_ids()
-        return self._restrict_to_rows(removed, keep=False)
+        if not channels:
+            removed = self.select(_attrs=stated)._catalog._ordered_ids()
+            return self._restrict_to_rows(removed, keep=False)
+        # With both, the complement is still one set: a patch keeps every
+        # channel unless the attrs matched it, and the channels the fiber
+        # query did not match when they did. Complementing the two halves
+        # apart would drop a patch the whole selection never held.
+        matched = self if not stated else self.select(_attrs=stated)
+        return self._select_channels(
+            _stated_channels(channels),
+            complement=True,
+            applies_to=matched._catalog._ordered_ids(),
+        )
 
     def _index_names(self) -> tuple[set[str], set[str]]:
         """The attr and coord names the index knows, read once per call."""
         backend = self._catalog.backend
         return set(backend.attr_names()), set(backend.coord_names())
 
-    def _check_channel_level(self, requested, coords, known, wanted_coords) -> None:
+    def _channel_query(
+        self, requested, names, known_attrs, known_coords, _coords, kwargs
+    ) -> dict:
         """
-        Raise for a name the inventory defines along the fiber.
+        Return the selectors naming coordinates the inventory runs along
+        the fiber.
 
         A name which is also an attr resolves to the attr, as bare names
         always do, so only one the caller put in `_coords` is read as the
         coordinate — an annotation group may share an acquisition field's
-        name, and selecting on the field must keep working.
+        name, and selecting on the field must keep working. A name the
+        index already uses for a coordinate keeps that meaning outright:
+        `distance` is the patch's own axis whether or not an inventory
+        could also place it on the fiber, and an inventory must not
+        quietly move a name out of the namespace it has always been in.
         """
-        candidates = (requested - known) | (wanted_coords & coords)
-        if channel_level := sorted(candidates & coords):
+        coords = set(names.coords) - known_coords
+        known = known_attrs | known_coords | set(names.attrs)
+        candidates = (requested - known) | (_namespace_names(_coords) & coords)
+        wanted = candidates & coords
+        if not wanted:
+            return {}
+        # The tag form of `_coords` designates bare kwargs, so the selector
+        # is among them; only the mapping form carries one itself.
+        mapped = _coords if isinstance(_coords, Mapping) else {}
+        stated = {**mapped, **kwargs}
+        if named := sorted(wanted - set(stated)):
             msg = (
-                f"{channel_level} name coordinates the attached inventory "
-                "defines along the fiber, which selection cannot trim to "
-                "yet. Enrich the patches and select on each one instead."
+                f"{named} name coordinates the attached inventory defines "
+                "along the fiber. They are selected as ordinary keywords or "
+                "through _coords, not through _attrs, since they describe "
+                "channels rather than whole patches."
             )
             raise InvalidSpoolQueryError(msg)
+        # Sorted so a query built from a set does not order itself by hash:
+        # the masks are combined with AND either way, but which selector a
+        # message complains about first should not move between runs.
+        return {name: stated[name] for name in sorted(wanted)}
 
-    def _split_inventory_query(self, _attrs, _coords, kwargs, samples):
+    def _split_inventory_query(self, _attrs, _coords, kwargs, samples, relative=False):
         """
         Split selectors into the ones the index answers and the rest.
 
@@ -1019,16 +1188,34 @@ class Spool(BaseSpool):
         and the inventory only fills in the others.
         """
         if self._inventory is None:
-            return {}, _attrs, _coords, kwargs
+            return {}, {}, _attrs, _coords, kwargs
         requested = _requested_names(_attrs, _coords, kwargs)
         known_attrs, known_coords = self._index_names()
         names = self._inventory.get_names()
-        self._check_channel_level(
-            requested,
-            set(names.coords),
-            known_attrs | known_coords | set(names.attrs),
-            _namespace_names(_coords),
+        channels = self._channel_query(
+            requested, names, known_attrs, known_coords, _coords, kwargs
         )
+        # Neither keyword has anything to mean about a value the fiber
+        # states: it has no sample numbering of its own -- the channels it
+        # describes are the patch's -- and no endpoints to be relative to,
+        # since what it says varies from one acquisition to the next.
+        # Ignoring either quietly would answer a question nobody asked.
+        # Judged against the selectors which actually select something: a
+        # bare `...` names a fiber coordinate without asking anything of
+        # it, so it must not veto a flag the rest of the query needs.
+        stated_channels = _stated_channels(channels)
+        for flag, label in ((samples, "samples"), (relative, "relative")):
+            if not (stated_channels and flag):
+                continue
+            msg = (
+                f"{sorted(stated_channels)} name coordinates the inventory "
+                f"defines along the fiber, which {label}=True cannot describe: it "
+                "asks about the patch's own axis, and these say what is "
+                "attached to each channel of it."
+            )
+            raise InvalidSpoolQueryError(msg)
+        kwargs = _without_keys(kwargs, channels)
+        _coords = _without_names(_coords, channels)
         # A name the index already uses for a coordinate keeps its meaning;
         # bare names resolve to attrs first, and an inventory must not
         # quietly move one out of the namespace it has always been in.
@@ -1036,7 +1223,7 @@ class Spool(BaseSpool):
         # samples=True selections are coordinate-only, so an attr among
         # them is an error the index states better than this can.
         if samples or not requested & selectable:
-            return {}, _attrs, _coords, kwargs
+            return {}, channels, _attrs, _coords, kwargs
         attrs, coords = resolve_selector_namespaces(
             known_attrs | selectable,
             known_coords,
@@ -1052,7 +1239,64 @@ class Spool(BaseSpool):
             # A bare None or ... selects everything, here as everywhere.
             if value is not None and value is not Ellipsis:
                 query[name] = value
-        return query, attrs, coords, {}
+        return query, channels, attrs, coords, {}
+
+    def _select_channels(self, query: dict, *, complement=False, applies_to=None):
+        """
+        Trim each patch to the channels the inventory says match.
+
+        Where the matching region is disjoint along the fiber — a track
+        which passes in and out of the selection, or an uncovered zone in
+        the middle of a path — the patch is subdivided so each contiguous
+        run becomes its own patch. Selection therefore changes both the
+        shape and the number of patches, which is why it builds a plan
+        rather than filtering rows.
+
+        Parameters
+        ----------
+        query
+            The channel-level selectors, by inventory name.
+        complement
+            Keep the channels the query does *not* match. The mask is one
+            dimensional, so unlike a patch's rectangle its complement is
+            exactly expressible.
+        applies_to
+            The rows the query judges; any other row keeps every channel.
+            `unselect` uses it to leave a patch its attrs never matched
+            whole, which is what makes the two halves one complement.
+        """
+        from dascore.proc.inventory import resolve_channel_pieces  # noqa: PLC0415
+
+        source_rows, working = self._plan_frames()
+        if not len(working):
+            return self
+        contexts = self._plan_contexts(working)
+        if applies_to is not None:
+            # A row the attrs did not match is a row the selection never
+            # held, so it is left unjudged rather than judged and kept.
+            judged = np.isin(working["_patch_id"].to_numpy(), np.asarray(applies_to))
+            contexts[~judged] = None
+        name, pieces, reasons = resolve_channel_pieces(
+            self._inventory, contexts, working, query, complement=complement
+        )
+        _refuse_rows(source_rows, reasons, _UNPLACEABLE)
+        if name is None:
+            # No row has a fiber to be judged along, so the query matched
+            # nothing: an empty spool, or the whole of it complemented.
+            return self if complement else self._restrict_to_rows([])
+        bounds = list(zip(working[f"{name}_min"], working[f"{name}_max"], strict=True))
+        whole = [
+            len(row) == 1 and tuple(row[0]) == pair
+            for row, pair in zip(pieces, bounds, strict=True)
+        ]
+        if all(whole):  # every patch kept entire: nothing to plan
+            return self
+        if all(keep or not row for keep, row in zip(whole, pieces, strict=True)):
+            # Every patch is kept whole or dropped, so this is a filter and
+            # the relation it presents need not be rebuilt.
+            kept = working["_patch_id"].to_numpy()[[bool(x) for x in pieces]]
+            return self._restrict_to_rows(kept)
+        return self._subdivided(source_rows, working, pieces, name)
 
     def _select_from_inventory(self, query: dict) -> Self:
         """
@@ -1174,8 +1418,10 @@ class Spool(BaseSpool):
         Attaching promises nothing about the spool matching the
         inventory;
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
-        is what makes it so. Selecting on the coordinates an inventory
-        defines along the fiber is not implemented yet.
+        is what makes it so. Once attached, the coordinates the
+        inventory defines along the fiber become selectable, and
+        [`split_by`](`dascore.core.spool.Spool.split_by`) can expand the
+        spool by the values of one.
         """
         if not isinstance(inventory, Inventory):
             msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
@@ -1297,6 +1543,107 @@ class Spool(BaseSpool):
         new._on_unresolved = on_unresolved
         return new
 
+    def split_by(
+        self,
+        name: str,
+        *,
+        include: str | Sequence[str] | None = None,
+        exclude: str | Sequence[str] | None = None,
+        stamp: bool = True,
+    ) -> Self:
+        """
+        Expand the spool into one patch per value of an inventory coordinate.
+
+        Most often an annotation group. Every kind of group splits: a
+        categorical one by each of its strings, a membership group into
+        the channels it includes and those it does not, and a numeric one
+        by each distinct measurement. Intervals of one group may overlap,
+        but a channel still holds only one of its values, so the outputs
+        of one call divide the fiber rather than share it. A patch whose
+        channels take several values becomes several patches — this can
+        greatly expand the spool.
+
+        Parameters
+        ----------
+        name
+            The inventory-derived coordinate to split on.
+        include, exclude
+            Glob patterns matched against each value *written as a
+            string*, which is what lets one spelling cover all three
+            kinds of group: `"hole_*"` reads a categorical one, `"Tru*"`
+            a membership one, and `"1.*"` a numeric one. Selecting on the
+            stamp afterwards compares typed values instead, so the two
+            are not interchangeable. With `include`, only values matching
+            one of them are kept; `exclude` drops the values it matches,
+            and wins where both match.
+        stamp
+            Whether to record the value on each output patch as an attr
+            named after the coordinate, so overlapping siblings stay
+            distinguishable and later operations can select on it. Pass
+            False for a nested split, where the second should not
+            overwrite the first.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.examples import inventory_patch_pair
+        >>>
+        >>> patch, inventory = inventory_patch_pair()
+        >>> spool = dc.spool(patch).attach_inventory(inventory)
+        >>>
+        >>> # The example path annotates two zones along the fiber.
+        >>> zones = spool.split_by("zone")
+        >>> assert len(zones) == 2
+        >>> assert set(zones.get_contents()["zone"]) == {"north", "south"}
+        >>>
+        >>> # Which can be narrowed by a glob over the values.
+        >>> assert len(spool.split_by("zone", include="nor*")) == 1
+        """
+        from dascore.proc.inventory import resolve_split_pieces  # noqa: PLC0415
+
+        if self._inventory is None:
+            msg = (
+                "Spool.split_by needs an inventory to split on: the values "
+                "it expands into are the ones an inventory states along the "
+                "fiber. Attach one with Spool.attach_inventory."
+            )
+            raise ParameterError(msg)
+        # A name the inventory could not contribute has no values to split
+        # into, so it would quietly give an empty spool. Selection refuses
+        # a name it does not know, and a misspelling is no more meaningful
+        # here than it is there.
+        if name not in set(self._inventory.get_names().coords):
+            msg = (
+                f"{name!r} is not a coordinate the attached inventory defines "
+                "along the fiber, so there is nothing to split on. "
+                "Inventory.get_names().coords lists the names it could."
+            )
+            raise InvalidSpoolQueryError(msg)
+        source_rows, working = self._plan_frames()
+        if stamp:
+            _check_stampable(name, working)
+        contexts = self._plan_contexts(working)
+        dim, rows, reasons = resolve_split_pieces(
+            self._inventory, contexts, working, name, _glob_filter(include, exclude)
+        )
+        _refuse_rows(source_rows, reasons, _UNPLACEABLE)
+        if dim is None:  # nothing to split: no row has a fiber to split on
+            return self._restrict_to_rows([])
+        pieces = [[piece for _, piece in row] for row in rows]
+        marks = None
+        if stamp:
+            marks = (name, [value for row in rows for value, _ in row])
+        return self._subdivided(source_rows, working, pieces, dim, marks)
+
+    def _plan_contexts(self, working) -> np.ndarray:
+        """Resolve each row of a planning frame to its inventory context."""
+        from dascore.proc.inventory import resolve_contexts  # noqa: PLC0415
+
+        columns = _resolution_columns(working)
+        if columns is None:
+            return np.full(len(working), None, dtype=object)
+        return resolve_contexts(self._inventory, *columns)
+
     def conform_to_inventory(
         self,
         inventory=None,
@@ -1364,7 +1711,6 @@ class Spool(BaseSpool):
         >>> mixed = dc.spool([patch, other]).attach_inventory(inventory)
         >>> assert len(mixed.conform_to_inventory(on_unresolved="drop")) == 1
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
         from dascore.proc.inventory import (  # noqa: PLC0415
             _NO_EPOCHS,
             resolve_row_epochs,
@@ -1387,7 +1733,12 @@ class Spool(BaseSpool):
             if columns is None
             else resolve_row_epochs(new._inventory, *columns)
         )
-        _check_one_acquisition(source_rows, epochs)
+        _refuse_rows(
+            source_rows,
+            _acquisition_conflicts(epochs),
+            "span a change of acquisition, which subdividing cannot "
+            "reconcile; select the side you want, or correct the inventory",
+        )
         described = np.array([x.described for x in epochs], dtype=bool)
         if not described.all():
             _report_unconformed(source_rows[~described], on_unresolved)
@@ -1396,16 +1747,50 @@ class Spool(BaseSpool):
         if not any(cuts):  # nothing to subdivide: a filter is the whole job
             return new._restrict_to_rows(kept["_patch_id"].to_numpy())
         sources = source_rows[described].reset_index(drop=True)
-        _check_subdividable(sources, kept, cuts)
+        _refuse_rows(
+            sources,
+            _unsubdividable(kept, cuts, "time"),
+            "must be subdivided at an epoch boundary but state no time step "
+            "to find their samples with",
+        )
+        return new._subdivided(
+            sources, kept, subdivision_pieces(kept, cuts, "time"), "time"
+        )
+
+    def _subdivided(self, sources, rows, pieces, name: str, stamp=None) -> Self:
+        """
+        Return the spool whose patches are the given pieces of these rows.
+
+        The pieces are a plan rather than a rewritten relation, so the
+        outputs *are* the contents rows — `len` and `get_contents` stay
+        exact — and loading goes through the machinery which already
+        trims a member on extraction. `stamp` names an attr to record on
+        each output, in the order the pieces were given.
+
+        A plan whose pieces do not cover their rows is marked lossy, so
+        that re-planning the same dimension nests rather than collapsing
+        onto the sources — which would load back the samples the pieces
+        left out.
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+
+        plan = build_subdivision_plan(rows, pieces, name)
+        stamped = ()
+        if stamp is not None:
+            stamp_name, values = stamp
+            plan = replace(plan, outputs=plan.outputs.assign(**{stamp_name: values}))
+            stamped = (stamp_name,)
         catalog = derived_catalog(
             source_rows=sources,
-            plan=build_subdivision_plan(kept, cuts, "time"),
-            parent=new._catalog,
+            plan=plan,
+            parent=self._catalog,
             merge_kwargs={},
             mode="chunk",
-            origin_path=new.spool_path,
+            origin_path=self.spool_path,
+            stamped=stamped,
+            lossy=_drops_samples(rows, pieces, name),
         )
-        return new._new_from_catalog(catalog)
+        return self._new_from_catalog(catalog)
 
     def _with_inventory(self, inventory, on_unresolved, valid, method) -> Self:
         """

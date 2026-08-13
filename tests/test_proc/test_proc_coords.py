@@ -644,6 +644,103 @@ class TestSelect:
         assert time.step == orig.step
 
 
+class TestUnselect:
+    """Keeping what a selection would have removed."""
+
+    def test_complements_select(self, random_patch):
+        """Together the two account for every sample, and share none."""
+        selector = (50, 200)
+        kept = random_patch.select(distance=selector).get_array("distance")
+        dropped = random_patch.unselect(distance=selector).get_array("distance")
+        whole = random_patch.get_array("distance")
+        assert not set(kept) & set(dropped)
+        assert sorted([*kept, *dropped]) == sorted(whole)
+
+    def test_interior_range_leaves_a_hole(self, random_patch):
+        """
+        The property which makes a range complement wrong for a spool.
+
+        A patch can have samples removed from its middle; a spool would
+        have to cut every patch into the pieces on either side.
+        """
+        out = random_patch.unselect(distance=(50, 200))
+        coord = out.get_coord("distance")
+        assert coord.step is None
+        values = out.get_array("distance")
+        assert not ((values >= 50) & (values <= 200)).any()
+        assert values.min() < 50 < 200 < values.max()
+
+    def test_data_follows_the_coordinate(self, random_patch):
+        """The rows removed are the rows the selection would have kept."""
+        axis = random_patch.dims.index("distance")
+        values = random_patch.get_array("distance")
+        out = random_patch.unselect(distance=(50, 200))
+        wanted = random_patch.data.take(
+            np.flatnonzero(~((values >= 50) & (values <= 200))), axis=axis
+        )
+        assert np.array_equal(out.data, wanted)
+
+    def test_samples(self, random_patch):
+        """A sample range is complemented in samples too."""
+        out = random_patch.unselect(distance=(..., 10), samples=True)
+        whole = random_patch.get_array("distance")
+        assert np.array_equal(out.get_array("distance"), whole[10:])
+
+    def test_relative(self, random_patch):
+        """Relative selectors mean what they mean in select."""
+        kept = random_patch.select(time=(1, None), relative=True)
+        dropped = random_patch.unselect(time=(1, None), relative=True)
+        assert len(kept.get_array("time")) + len(dropped.get_array("time")) == len(
+            random_patch.get_array("time")
+        )
+
+    def test_unselecting_everything_empties_the_dimension(self, random_patch):
+        """Removing the whole span is legal, and says so with a shape."""
+        coord = random_patch.get_coord("distance")
+        out = random_patch.unselect(distance=(coord.min(), coord.max()))
+        assert out.shape[random_patch.dims.index("distance")] == 0
+
+    def test_each_named_coordinate_is_complemented(self, random_patch):
+        """
+        Two names remove two ranges rather than the one intersection.
+
+        The complement of a block is a frame around it, which no array
+        can hold, so unselect removes the part which is expressible.
+        """
+        time = random_patch.get_array("time")
+        window = (time[0], time[4])
+        out = random_patch.unselect(distance=(50, 60), time=window)
+        assert len(out.get_array("distance")) == len(
+            random_patch.get_array("distance")
+        ) - len(random_patch.select(distance=(50, 60)).get_array("distance"))
+        assert len(out.get_array("time")) == len(time) - 5
+
+    def test_unknown_coordinate_raises(self, random_patch):
+        """A misspelled name is the error it is in select."""
+        with pytest.raises(PatchCoordinateError, match="not found in patch"):
+            random_patch.unselect(not_a_coord=(1, 2))
+
+    def test_a_multidimensional_coordinate_raises(self, random_patch):
+        """
+        A range of one names no samples of a single dimension to drop.
+
+        Its complement is a shape spanning both, which is the same reason
+        two coordinates cannot be complemented jointly.
+        """
+        size = random_patch.shape
+        grid = np.arange(size[0] * size[1]).reshape(size)
+        patch = random_patch.update_coords(quality=(("distance", "time"), grid))
+        with pytest.raises(PatchCoordinateError, match="spans"):
+            patch.unselect(quality=(0, 10))
+
+    def test_non_dimensional_coordinate(self, random_patch):
+        """A coordinate along a dimension trims that dimension."""
+        size = random_patch.coord_shapes["distance"][0]
+        patch = random_patch.update_coords(quality=("distance", np.arange(size)))
+        out = patch.unselect(quality=(0, 9))
+        assert len(out.get_array("quality")) == size - 10
+
+
 class TestOrder:
     """Tests for ordering Patches."""
 

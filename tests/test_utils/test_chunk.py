@@ -15,6 +15,7 @@ from dascore.utils.chunk_plan import (
     _normalize_chunk_units,
     build_chunk_plan,
     build_subdivision_plan,
+    subdivision_pieces,
 )
 from dascore.utils.time import to_timedelta64
 
@@ -539,25 +540,30 @@ class TestSizeChunkPlanDF:
         assert plan.params["size"]["partitions"][0]["dtype"] == "float64"
 
 
-def _one_row_df(start, step, samples):
-    """A one-row relation over an evenly sampled time dimension."""
+def _one_row_df(start, step, samples, name="time"):
+    """A one-row relation over one evenly sampled dimension."""
     return pd.DataFrame(
         {
-            "time_min": [start],
-            "time_max": [start + step * (samples - 1)],
-            "time_step": [step],
+            f"{name}_min": [start],
+            f"{name}_max": [start + step * (samples - 1)],
+            f"{name}_step": [step],
             "_patch_id": [0],
         }
     )
 
 
-class TestBuildSubdivisionPlan:
-    """Splitting each row of a relation at its own cut values."""
+def _cut_plan(df, cuts, name="time"):
+    """The plan a relation's per-row cuts produce, through both helpers."""
+    return build_subdivision_plan(df, subdivision_pieces(df, cuts, name), name)
+
+
+class TestSubdivisionPieces:
+    """Turning each row's cut values into pieces of its sample grid."""
 
     def test_uncut_rows_pass_through(self, contiguous_df):
         """A row with no cuts is one unmodified output of the same span."""
         df = contiguous_df.assign(_patch_id=np.arange(len(contiguous_df)))
-        plan = build_subdivision_plan(df, [()] * len(df), "time")
+        plan = _cut_plan(df, [()] * len(df))
         assert len(plan.outputs) == len(df)
         assert not plan.members["_modified"].any()
         assert (plan.outputs["time_min"].values == df["time_min"].values).all()
@@ -567,7 +573,7 @@ class TestBuildSubdivisionPlan:
         start, step = STARTTIME, np.timedelta64(10, "ms")
         df = _one_row_df(start, step, 100)
         cut = start + step * 40
-        plan = build_subdivision_plan(df, [(cut,)], "time")
+        plan = _cut_plan(df, [(cut,)])
         assert len(plan.outputs) == 2
         first, second = plan.outputs.iloc[0], plan.outputs.iloc[1]
         assert second["time_min"] == cut
@@ -579,15 +585,17 @@ class TestBuildSubdivisionPlan:
         """
         A cut sitting exactly on a sample opens the piece at that sample.
 
-        The index is found by a float division, which is inexact — at
-        these step and index combinations the naive quotient rounds just
-        above the integer — so an unchecked `ceil` puts the boundary
-        sample one piece too early. Only a grid comparison settles it.
+        Dividing the native types rounds once — datetime64 arithmetic
+        is integer nanoseconds, so only the quotient rounds — where
+        converting each operand to float seconds first rounds three times
+        and puts the boundary sample one piece too early at these step
+        and index combinations. The grid comparison settles it either
+        way, which is what these pin.
         """
         start, step = STARTTIME, np.timedelta64(17060962, "ns")
         df = _one_row_df(start, step, index + 10)
         cut = start + step * index
-        plan = build_subdivision_plan(df, [(cut,)], "time")
+        plan = _cut_plan(df, [(cut,)])
         assert plan.outputs["time_min"].iloc[1] == cut
 
     def test_a_cut_a_hair_past_a_sample_opens_at_the_next(self):
@@ -602,15 +610,48 @@ class TestBuildSubdivisionPlan:
         start, step = STARTTIME, np.timedelta64(1, "D").astype("timedelta64[ns]")
         df = _one_row_df(start, step, 1100)
         cut = start + step * 1000 + np.timedelta64(1, "ns")
-        plan = build_subdivision_plan(df, [(cut,)], "time")
+        plan = _cut_plan(df, [(cut,)])
         assert plan.outputs["time_min"].iloc[1] == start + step * 1001
+
+    def test_an_on_grid_float_cut_is_not_pushed_past_its_sample(self):
+        """
+        A float grid rounds where a datetime one cannot, and both ways.
+
+        `1.0 + 0.1` is the textbook case: the difference back out is
+        `0.10000000000000009`, so the ratio is a hair above 1 and `ceil`
+        answers 2 — the sample the cut lands exactly on would be left in
+        the piece *before* the cut instead of opening the one after it.
+        Comparing against the grid is what settles it, and a distance
+        axis makes this the ordinary case rather than the exotic one.
+        """
+        start, step = 1.0, 0.1
+        df = _one_row_df(start, step, 10, name="distance")
+        cut = start + step
+        assert (cut - start) / step > 1  # the misleading ratio itself
+        plan = _cut_plan(df, [(cut,)], name="distance")
+        assert plan.outputs["distance_min"].iloc[1] == cut
+
+    def test_a_float_cut_past_a_sample_still_opens_at_the_next(self):
+        """
+        The increment, on a float grid: a cut one ulp past a sample.
+
+        The subtraction cannot represent the gap, so the ratio says the
+        cut sits exactly on the sample. It does not — the sample is
+        behind it, and belongs to the piece before the cut.
+        """
+        start, step = 0.1, 0.25
+        df = _one_row_df(start, step, 10, name="distance")
+        cut = np.nextafter(start + step, np.inf)
+        assert (cut - start) / step == 1  # the ratio cannot see the gap
+        plan = _cut_plan(df, [(cut,)], name="distance")
+        assert plan.outputs["distance_min"].iloc[1] == start + 2 * step
 
     def test_a_cut_on_the_maximum_yields_one_sample(self):
         """A row ending exactly on a boundary keeps its last sample apart."""
         start, step = STARTTIME, np.timedelta64(10, "ms")
         df = _one_row_df(start, step, 50)
         cut = df["time_max"].iloc[0]
-        plan = build_subdivision_plan(df, [(cut,)], "time")
+        plan = _cut_plan(df, [(cut,)])
         assert len(plan.outputs) == 2
         assert plan.outputs["time_min"].iloc[1] == plan.outputs["time_max"].iloc[1]
 
@@ -618,4 +659,83 @@ class TestBuildSubdivisionPlan:
         """A short sequence would silently drop rows from the plan."""
         df = _one_row_df(STARTTIME, np.timedelta64(10, "ms"), 10)
         with pytest.raises(AssertionError):
-            build_subdivision_plan(pd.concat([df, df]), [()], "time")
+            subdivision_pieces(pd.concat([df, df]), [()], "time")
+
+
+class TestBuildSubdivisionPlan:
+    """Building a plan from pieces given directly, as a selection does."""
+
+    def test_a_row_given_no_pieces_leaves(self):
+        """A selection drops a patch this way when it keeps no sample."""
+        df = _one_row_df(0.0, 1.0, 10, name="distance")
+        plan = build_subdivision_plan(df, [[]], "distance")
+        assert not len(plan.outputs)
+        assert not len(plan.members)
+
+    def test_a_whole_row_piece_is_unmodified(self):
+        """A piece which *is* its row loads without a trim."""
+        df = _one_row_df(0.0, 1.0, 10, name="distance")
+        whole = (df["distance_min"].iloc[0], df["distance_max"].iloc[0])
+        plan = build_subdivision_plan(df, [[whole]], "distance")
+        assert len(plan.outputs) == 1
+        assert not plan.members["_modified"].any()
+
+    def test_disjoint_pieces_become_separate_outputs(self):
+        """Two runs of kept channels are two patches, with a hole between."""
+        df = _one_row_df(0.0, 1.0, 10, name="distance")
+        plan = build_subdivision_plan(df, [[(0.0, 2.0), (7.0, 9.0)]], "distance")
+        assert len(plan.outputs) == 2
+        assert plan.outputs["distance_max"].iloc[0] == 2.0
+        assert plan.outputs["distance_min"].iloc[1] == 7.0
+        assert plan.members["_modified"].all()
+
+    def test_one_piece_sequence_per_row(self):
+        """A short sequence would silently drop rows from the plan."""
+        df = _one_row_df(0.0, 1.0, 10, name="distance")
+        with pytest.raises(AssertionError):
+            build_subdivision_plan(pd.concat([df, df]), [[]], "distance")
+
+
+class TestSnappedCutExactness:
+    """The property the two correction loops exist to guarantee."""
+
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_an_on_grid_cut_always_lands_on_its_own_sample(self, seed):
+        """
+        Over many float grids, a cut on a sample opens the piece there.
+
+        The ratio alone gets this wrong on a few percent of inputs in
+        either direction, and which few depends on the values, so a
+        handful of hand-picked cases cannot stand for it. The pieces are
+        read straight off `subdivision_pieces` rather than a plan so the
+        grid arithmetic is what is under test.
+        """
+        rng = np.random.default_rng(seed)
+        for _ in range(300):
+            start = float(rng.uniform(-1e4, 1e4))
+            step = float(rng.uniform(1e-6, 10))
+            index = int(rng.integers(1, 200_000))
+            cut = start + index * step
+            df = _one_row_df(start, step, index + 2, name="distance")
+            pieces = subdivision_pieces(df, [(cut,)], "distance")[0]
+            assert len(pieces) == 2
+            # The second piece opens exactly on the cut, and the first
+            # ends one step short of it, whichever way the ratio erred.
+            assert pieces[1][0] == cut
+            assert pieces[0][1] == cut - step
+
+    def test_a_cut_between_samples_opens_at_the_next(self):
+        """The other direction, over the same spread of grids."""
+        rng = np.random.default_rng(3)
+        for _ in range(300):
+            start = float(rng.uniform(-1e4, 1e4))
+            step = float(rng.uniform(1e-6, 10))
+            index = int(rng.integers(1, 200_000))
+            on_grid = start + index * step
+            cut = np.nextafter(on_grid, np.inf)
+            df = _one_row_df(start, step, index + 2, name="distance")
+            pieces = subdivision_pieces(df, [(cut,)], "distance")[0]
+            # A cut past a sample leaves that sample behind, so the piece
+            # it opens starts at the next one.
+            assert pieces[1][0] > on_grid
+            assert pieces[1][0] >= cut

@@ -14,7 +14,7 @@ import json
 import operator
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 
 import numpy as np
@@ -435,10 +435,17 @@ def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     units = units or {}
 
     def selector(item):
-        """Type one selector value the way the index would."""
+        """
+        Type one selector value the way the index would, in its units.
+
+        The converted value is what the comparison needs, not just the
+        check that it converts: a stored coordinate in degrees against a
+        selector pint bases in radians would otherwise match nothing,
+        where the range form — which keeps its converted bounds — does.
+        """
         out = _coerce_scalar(item, kinds)
-        _to_target_unit(out, units.get(out.kind), name)
-        return out
+        value = _to_target_unit(out, units.get(out.kind), name)
+        return replace(out, value=value)
 
     def each(func) -> np.ndarray:
         return np.array([x is not None and bool(func(x)) for x in typed], dtype=bool)

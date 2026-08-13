@@ -1044,18 +1044,15 @@ def _snapped_cuts(cuts, start, step) -> list:
     exactly on opens the piece that cut opens, and a cut falling between
     two samples leaves the earlier one behind.
     """
-    span = to_float(step)
     out = []
     for cut in cuts:
-        # The ratio is inexact — `to_float` rounds both operands and then
-        # the quotient — so it only starts the search, and the grid it
-        # describes settles it. `CoordRange._get_index`'s fudge factor is
-        # not enough here: at a million samples the error outgrows any
-        # fixed tolerance, and an index one too high puts the boundary
-        # sample in the epoch *before* the boundary, which is the one
-        # place it must not go. Comparing the values themselves is exact,
-        # and each loop steps at most once for any plausible error.
-        index = math.ceil(to_float(cut - start) / span)
+        # Dividing the native types rounds once, where converting each to
+        # float seconds first would round three times — enough to lift an
+        # on-grid cut above its own index, putting the boundary sample in
+        # the piece before the boundary. One rounding is still a rounding,
+        # so the ratio only starts the search and comparing values on the
+        # grid settles it; each loop steps at most once.
+        index = math.ceil((cut - start) / step)
         while start + (index - 1) * step >= cut:
             index -= 1
         while start + index * step < cut:
@@ -1073,28 +1070,32 @@ def _snapped_cuts(cuts, start, step) -> list:
     return sorted(out)
 
 
-def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
-    """
-    Build a plan splitting each row of a relation at its own cut values.
+def _dim_columns(df: pd.DataFrame, name: str) -> tuple[str, str, str]:
+    """Return the envelope columns of one dimension, checked present."""
+    columns = (f"{name}_min", f"{name}_max", f"{name}_step")
+    assert set(columns).issubset(df.columns)
+    return columns
 
-    Unlike a chunk plan, no row ever meets another: each output is one
-    contiguous piece of exactly one source row, so the pieces of a row
-    partition its samples — none is dropped, none is duplicated, and a
-    row with no cuts passes through as a single unmodified output. This
-    is what an operation which must re-describe patches rather than
-    restructure them (`Spool.conform_to_inventory`) needs.
+
+def subdivision_pieces(df: pd.DataFrame, cuts, name: str) -> list[list[tuple]]:
+    """
+    Return the inclusive pieces each row's cuts divide it into.
+
+    The pieces of a row partition its samples: none is dropped and none
+    is duplicated, whatever instant a cut falls on, because each piece
+    ends one step short of where the next begins.
 
     Parameters
     ----------
     df
-        The relation to subdivide; one row per patch.
+        The relation being subdivided; one row per patch.
     cuts
         One sequence of cut values per row, in the row's own units, each
         above that row's minimum and no greater than its maximum — a cut
         on the maximum yields a one-sample final piece. Order does not
         matter. A cut opens a new piece at the first sample at or after
         it, so a row with `n` distinct cuts becomes at most `n + 1`
-        outputs.
+        pieces.
     name
         The dimension being subdivided.
 
@@ -1104,28 +1105,68 @@ def build_subdivision_plan(df: pd.DataFrame, cuts, name: str) -> ChunkPlan:
     callers must reject a null or zero step themselves — they are the
     ones which can name the file it came from.
     """
-    min_name, max_name = f"{name}_min", f"{name}_max"
-    step_name = f"{name}_step"
-    assert {min_name, max_name, step_name}.issubset(df.columns)
-    # One entry per row, even where it is empty: a short sequence would
-    # drop the rows past its end from the plan, and so from the spool.
+    min_name, max_name, step_name = _dim_columns(df, name)
     assert len(cuts) == len(df)
-    df = _ensure_patch_id(df).reset_index(drop=True)
-    positions, lows, highs, modified = [], [], [], []
+    df = df.reset_index(drop=True)
+    out = []
     for position, row_cuts in enumerate(cuts):
         start, stop = df.at[position, min_name], df.at[position, max_name]
         # Envelopes are value-ordered whatever the coordinate's
         # orientation, so the grid is walked by the step's magnitude.
         step = abs(df.at[position, step_name])
         assert not len(row_cuts) or (not pd.isnull(step) and step)
-        grid = _snapped_cuts(row_cuts, start, step)
-        bounds = [start, *grid]
-        for index, low in enumerate(bounds):
-            high = bounds[index + 1] - step if index + 1 < len(bounds) else stop
+        bounds = [start, *_snapped_cuts(row_cuts, start, step)]
+        out.append(
+            [
+                (low, bounds[index + 1] - step if index + 1 < len(bounds) else stop)
+                for index, low in enumerate(bounds)
+            ]
+        )
+    return out
+
+
+def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
+    """
+    Build a plan cutting each row of a relation into its own pieces.
+
+    Unlike a chunk plan, no row ever meets another: each output is one
+    contiguous piece of exactly one source row. A row handed the whole of
+    its own envelope passes through as a single unmodified output, and
+    one handed no pieces at all leaves the relation — which is how a
+    selection along the dimension drops a patch none of whose samples it
+    keeps. This is what operations which re-describe patches rather than
+    restructure them (`Spool.conform_to_inventory`, inventory-backed
+    channel selection) need.
+
+    Parameters
+    ----------
+    df
+        The relation to subdivide; one row per patch.
+    pieces
+        One sequence of inclusive `(low, high)` envelopes per row, in the
+        row's own units and already on its sample grid. They must be
+        disjoint within a row but need not be in envelope order —
+        `Spool.split_by` emits them grouped by value. `subdivision_pieces`
+        builds them from cut values, and a mask over the row's samples
+        gives them directly.
+    name
+        The dimension being subdivided.
+    """
+    min_name, max_name, step_name = _dim_columns(df, name)
+    # One entry per row, even where it is empty: a short sequence would
+    # drop the rows past its end from the plan, and so from the spool.
+    assert len(pieces) == len(df)
+    df = _ensure_patch_id(df).reset_index(drop=True)
+    positions, lows, highs, modified = [], [], [], []
+    for position, row_pieces in enumerate(pieces):
+        whole = (df.at[position, min_name], df.at[position, max_name])
+        for piece in row_pieces:
             positions.append(position)
-            lows.append(low)
-            highs.append(high)
-            modified.append(bool(grid))
+            lows.append(piece[0])
+            highs.append(piece[1])
+            # A piece covering its whole row *is* the row, and saying so
+            # is what lets it load without a trim.
+            modified.append(tuple(piece) != whole)
     ids = np.arange(len(positions), dtype=np.int64)
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
