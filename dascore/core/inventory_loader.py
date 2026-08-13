@@ -84,6 +84,11 @@ class _Container(NamedTuple):
     # _ADDRESS_LEVELS naming the entity which contains it.
     identity: tuple[str, ...]
 
+    @property
+    def epochs(self) -> bool:
+        """Whether names here may carry an epoch, which needs a time range."""
+        return all(issubclass(x, TimeRangedModel) for x in self.models)
+
 
 _CONTAINERS: Mapping[str, _Container] = {
     "resources": _Container(
@@ -370,7 +375,7 @@ def _load_entry(entry: Path, data_source: Path, container: _Container) -> _Entry
     """Load one entry of a container from its object file."""
     data = _read_object(data_source)
     model = _pick_model(data, container, data_source)
-    name, epoch = _split_epoch(entry, issubclass(model, TimeRangedModel))
+    name, epoch = _split_epoch(entry, container.epochs)
     address = _apply_identity(data, container, name, data_source)
     if epoch is not None and "start_time" not in data:
         data["start_time"] = epoch
@@ -541,7 +546,7 @@ def _outlives(child, parent) -> bool:
 
 def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     """
-    Group children by the parent epoch each one falls in.
+    Group children by the parent epoch each one falls in, parents-aligned.
 
     An epoch is chosen the way every other resolution chooses one, by
     time. A child falling in no epoch of its container is misfiled, and
@@ -555,7 +560,7 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     not hold the child. That is a contradiction in the directory rather
     than a choice to make on the author's behalf.
     """
-    out = defaultdict(list)
+    out: list[list[_Entry]] = [[] for _ in parents]
     for child in children:
         matches = [
             index
@@ -585,11 +590,30 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     return out
 
 
-def _group(entries: list[_Entry]) -> dict[tuple, list[_Entry]]:
-    """Group entries by the address which names their container."""
+def _full_address(entry: _Entry) -> tuple[str, ...]:
+    """
+    Return the address naming this entry's own entity.
+
+    A child's ``address`` is exactly its parent's full address, and that is
+    what lets a flat directory nest: an acquisition addressed ``DAS.L001``
+    belongs to the fiber array whose own address is ``DAS.L001``.
+    """
+    return (*entry.address, entry.model.code)
+
+
+def _by_parent(entries: list[_Entry]) -> dict[tuple, list[_Entry]]:
+    """Group entries under the full address of the entity containing them."""
     out = defaultdict(list)
     for entry in entries:
         out[entry.address].append(entry)
+    return out
+
+
+def _by_self(entries: list[_Entry]) -> dict[tuple, list[_Entry]]:
+    """Group entries, which may be epochs of one entity, by their own address."""
+    out = defaultdict(list)
+    for entry in entries:
+        out[_full_address(entry)].append(entry)
     return out
 
 
@@ -601,26 +625,23 @@ def _fill_arrays(arrays: list[_Entry], acquisitions: list[_Entry]) -> list[_Entr
     network named only by an array's address does; the hierarchy is never
     built by nesting.
     """
-    # An acquisition's address names its array, so an array is grouped by the
-    # address it answers to rather than by the one which contains it.
-    by_address = _group(acquisitions)
-    grouped = defaultdict(list)
-    for entry in arrays:
-        grouped[(*entry.address, entry.model.code)].append(entry)
+    by_parent = _by_parent(acquisitions)
     out = []
-    for address, entries in grouped.items():
-        placed = _place(by_address.pop(address, []), entries, "fiber array")
-        for index, entry in enumerate(entries):
-            if not (acqs := placed.get(index)):
+    for address, entries in _by_self(arrays).items():
+        placed = _place(by_parent.pop(address, []), entries, "fiber array")
+        for entry, acqs in zip(entries, placed, strict=True):
+            if not acqs:
                 out.append(entry)
                 continue
             models = tuple(x.model for x in acqs)
             out.append(entry._replace(model=entry.model.new(acquisitions=models)))
-    for address, entries in by_address.items():
+    # Whatever is left is addressed to an array no file declares, which the
+    # address itself brings into being.
+    for address, entries in by_parent.items():
         model = FiberArray(
-            code=address[1], acquisitions=tuple(x.model for x in entries)
+            code=address[-1], acquisitions=tuple(x.model for x in entries)
         )
-        out.append(_Entry(model, entries[0].source, address[:1]))
+        out.append(_Entry(model, entries[0].source, address[:-1]))
     return out
 
 
@@ -632,29 +653,28 @@ def _assemble(entries: Mapping[str, list[_Entry]]) -> tuple[Network, ...]:
     network mentioned by an address exists whether or not a file declares
     it.
     """
-    arrays = _fill_arrays(
-        entries.get("fiber_arrays", []), entries.get("acquisitions", [])
+    arrays = _by_parent(
+        _fill_arrays(entries.get("fiber_arrays", []), entries.get("acquisitions", []))
     )
-    stations = entries.get("stations", [])
-    by_code = defaultdict(list)
-    for entry in entries.get("networks", []):
-        by_code[entry.model.code].append(entry)
-    for entry in (*arrays, *stations):
-        by_code.setdefault(entry.address[0], [])
+    stations = _by_parent(entries.get("stations", []))
+    networks = _by_self(entries.get("networks", []))
+    for address in (*arrays, *stations):
+        networks.setdefault(address, [])
     out = []
-    for code, network_entries in by_code.items():
+    for address, network_entries in networks.items():
         if not network_entries:
             # A network named only by an address is an undated container.
+            code = address[-1]
             network_entries = [_Entry(Network(code=code), Path(code), ())]
-        arrays_here = [x for x in arrays if x.address[0] == code]
-        stations_here = [x for x in stations if x.address[0] == code]
-        by_array = _place(arrays_here, network_entries, "network")
-        by_station = _place(stations_here, network_entries, "network")
-        for index, entry in enumerate(network_entries):
+        by_array = _place(arrays.get(address, []), network_entries, "network")
+        by_station = _place(stations.get(address, []), network_entries, "network")
+        for entry, arrays_here, stations_here in zip(
+            network_entries, by_array, by_station, strict=True
+        ):
             out.append(
                 entry.model.new(
-                    fiber_arrays=tuple(x.model for x in by_array.get(index, [])),
-                    stations=tuple(x.model for x in by_station.get(index, [])),
+                    fiber_arrays=tuple(x.model for x in arrays_here),
+                    stations=tuple(x.model for x in stations_here),
                 )
             )
     return tuple(out)
@@ -766,8 +786,9 @@ def load_directory(path) -> Inventory:
         if (root / name).is_dir()
     }
     _check_strays(root)
-    for name in ("networks", "fiber_arrays", "stations", "acquisitions"):
-        _check_epoch_duplicates(entries.get(name, []))
+    for name, container in _CONTAINERS.items():
+        if container.epochs:
+            _check_epoch_duplicates(entries.get(name, []))
     resources = {x.model.resource_id: x.model for x in entries.get("resources", [])}
     networks = _assemble(entries)
     return Inventory(**envelope, resources=resources, networks=networks).check()

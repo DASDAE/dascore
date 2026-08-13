@@ -796,7 +796,9 @@ class TestModelAssumptions:
         checked = []
         for name, container in loader._CONTAINERS.items():
             ranged = all(issubclass(x, TimeRangedModel) for x in container.models)
-            assert ranged == (name != "resources")
+            # The property decides both who may be named with an @ and who
+            # is checked for two names of one epoch, so pin it to the models.
+            assert container.epochs == ranged == (name != "resources")
             checked.append(name)
         assert len(checked) == len(loader._CONTAINERS) == 5
 
