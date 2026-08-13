@@ -31,9 +31,13 @@ local function read_file(path)
   return content
 end
 
+-- `markdown-smart`, not `markdown`: smart typography would rewrite the very
+-- text the diagram exists to reproduce, turning the `...` of every
+-- `tuple[X, ...]` into an ellipsis and every apostrophe curly. The spec
+-- holds source text and field documentation, not prose to typeset.
 local function parse_yaml(path)
   local content = read_file(path)
-  return pandoc.read("---\n" .. content .. "\n---\n", "markdown").meta
+  return pandoc.read("---\n" .. content .. "\n---\n", "markdown-smart").meta
 end
 
 local function escape_html(value)
@@ -52,6 +56,10 @@ local function json_escape(value)
     :gsub("\t", "\\t")
 end
 
+-- Encoded by hand rather than with `quarto.json.encode`, for two properties
+-- that matter here: object keys come out sorted, so the same spec always
+-- produces the same page, and an empty table encodes as `[]` rather than
+-- `{}`, which is what the reader of an attribute-less node iterates.
 local function is_array(table_value)
   if type(table_value) ~= "table" then
     return false
@@ -142,7 +150,7 @@ end
 local function used_style_classes(spec)
   local used = {}
   for _, node in pairs(spec.nodes or {}) do
-    local style_class = stringify(node.style_class or node.class)
+    local style_class = stringify(node.style_class)
     if style_class ~= "" then
       used[style_class] = true
     end
@@ -150,25 +158,10 @@ local function used_style_classes(spec)
   return used
 end
 
-local function resolved_style(item, styles)
-  local style_class = stringify(item.style_class or item.class)
-  local inherited = styles[style_class] or {}
-  local inline = item.style or {}
-  local resolved = {}
-
-  for key, value in pairs(inherited) do
-    resolved[key] = value
-  end
-  for key, value in pairs(inline) do
-    resolved[key] = value
-  end
-
-  return resolved
-end
-
-local function style_value(item, name, styles)
-  local style = resolved_style(item, styles or {})
-  return stringify(style[name] or item[name])
+-- A node wears the colors of its style group; the generator checks that
+-- the group it names is one the spec defines.
+local function resolved_style(node, styles)
+  return styles[stringify(node.style_class)] or {}
 end
 
 -- The generator writes each node's API page as a site-absolute qmd path,
@@ -198,7 +191,7 @@ local function graph_node_map(spec, styles, root)
       summary = stringify(node.summary),
       attributes = attrs_from_meta(node.attributes),
       children = stringify(node.children or "open"),
-      style_class = stringify(node.style_class or node.class),
+      style_class = stringify(node.style_class),
       fill = stringify(style.fill or "#ffffff"),
       stroke = stringify(style.stroke or "#b9c4cc"),
       color = stringify(style.color or "#243036"),
@@ -235,9 +228,6 @@ local function build_graph(spec, root)
   for _, edge in ipairs(spec.references or {}) do
     edge_index = edge_index + 1
     local from, to, label = edge_from_meta(edge)
-    if label == "" then
-      label = stringify(spec.reference_label or "references")
-    end
     table.insert(elements, {
       group = "edges",
       data = {
@@ -273,18 +263,14 @@ end
 
 local function build_legend(spec)
   local source_items = legend_items(spec)
-  if source_items == nil then
-    return ""
-  end
-
-  local styles = styles_from_spec(spec)
   local items = {}
   for _, item in ipairs(source_items) do
     local label = stringify(item.label)
     if label ~= "" then
-      local fill = style_value(item, "fill", styles)
-      local stroke = style_value(item, "stroke", styles)
-      local color = style_value(item, "color", styles)
+      -- A legend entry is a style itself, so it states its own colors.
+      local fill = stringify(item.fill)
+      local stroke = stringify(item.stroke)
+      local color = stringify(item.color)
       local description = stringify(item.description)
       local swatch_style = {}
       if fill ~= "" then

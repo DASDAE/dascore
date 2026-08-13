@@ -203,6 +203,7 @@ def _inventory_models(module=inventory_module) -> dict[str, type]:
 def _check_nodes(nodes: tuple[Node, ...] = NODES) -> None:
     """Refuse a node list the models cannot back, or which leaves one out."""
     seen: set[type] = set()
+    drawn_as: set[str] = set()
     for node in nodes:
         model = node.model
         if not (inspect.isclass(model) and hasattr(model, "model_fields")):
@@ -212,6 +213,13 @@ def _check_nodes(nodes: tuple[Node, ...] = NODES) -> None:
             msg = f"{model.__name__} is drawn more than once."
             raise ValueError(msg)
         seen.add(model)
+        # Nodes and edges are both keyed by the drawn name, so two classes
+        # sharing one would silently collapse into a single box and leave
+        # the other's edges pointing at nothing.
+        if node.name in drawn_as:
+            msg = f"Two classes are both drawn as {node.name!r}."
+            raise ValueError(msg)
+        drawn_as.add(node.name)
         if node.label and not model.__name__.startswith("_"):
             msg = (
                 f"{model.__name__} is public, so it must be drawn under its own "
@@ -232,6 +240,15 @@ def _check_nodes(nodes: tuple[Node, ...] = NODES) -> None:
         raise ValueError(msg)
 
 
+def _declaring_class(model: type, name: str) -> type:
+    """Return the class in the mro which declares a field."""
+    for base in model.__mro__:
+        if name in vars(base).get("__annotations__", {}):
+            return base
+    msg = f"{model.__name__} has no annotation for field {name!r}."
+    raise AttributeError(msg)
+
+
 def _raw_annotation(model: type, name: str) -> str:
     """
     Return the annotation of a field as its source text.
@@ -242,33 +259,16 @@ def _raw_annotation(model: type, name: str) -> str:
     diagram shows, so a reader of the diagram and a reader of the model see
     the same thing.
     """
-    for base in model.__mro__:
-        annotations = vars(base).get("__annotations__", {})
-        if (found := annotations.get(name)) is not None:
-            if not isinstance(found, str):
-                msg = (
-                    f"{model.__name__}.{name} is annotated with an object rather "
-                    "than text; dascore.core.inventory must keep its "
-                    "'from __future__ import annotations'."
-                )
-                raise TypeError(msg)
-            return found
-    msg = f"{model.__name__} has no annotation for field {name!r}."
-    raise AttributeError(msg)
-
-
-def _declaring_class(model: type, name: str) -> type:
-    """Return the class in the mro which declares a field."""
-    for base in model.__mro__:
-        if name in vars(base).get("__annotations__", {}):
-            return base
-    msg = f"{model.__name__} has no annotation for field {name!r}."
-    raise AttributeError(msg)
-
-
-def _defining_depth(model: type, name: str) -> int:
-    """Return how far up the mro a field is defined; 0 means on the class."""
-    return model.__mro__.index(_declaring_class(model, name))
+    declared_by = _declaring_class(model, name)
+    found = vars(declared_by)["__annotations__"][name]
+    if not isinstance(found, str):
+        msg = (
+            f"{model.__name__}.{name} is annotated with an object rather "
+            "than text; dascore.core.inventory must keep its "
+            "'from __future__ import annotations'."
+        )
+        raise TypeError(msg)
+    return found
 
 
 def _render_type(annotation) -> str:
@@ -294,8 +294,15 @@ def _alias_expansions(module=inventory_module) -> dict[str, str]:
     for name, value in vars(module).items():
         if not name.startswith("_") or name.startswith("__"):
             continue
-        if get_origin(value) is Annotated:
+        # Written with the discriminator wrapper or without it: a bare
+        # `_Component: TypeAlias = FiberSegment | Connector` must expand too,
+        # or its private name is printed into the type column of every field
+        # which uses it, naming a symbol the reader cannot look up.
+        origin = get_origin(value)
+        if origin is Annotated:
             out[name] = _render_type(get_args(value)[0])
+        elif origin in (Union, types.UnionType):
+            out[name] = _render_type(value)
     return out
 
 
@@ -308,7 +315,8 @@ def _shown_fields(model: type) -> list[str]:
     detail rather than something a user writes.
     """
     names = [name for name, info in model.model_fields.items() if info.repr]
-    return sorted(names, key=lambda name: _defining_depth(model, name))
+    depth = model.__mro__.index
+    return sorted(names, key=lambda name: depth(_declaring_class(model, name)))
 
 
 def _attributes(model: type, expansions: dict[str, str]) -> list[dict[str, str]]:
@@ -357,8 +365,10 @@ def _walk_types(annotation, resource_id_accepted: bool = False):
         for arg in args:
             yield from _walk_types(arg, accepted)
     elif origin is not None:
+        # The flag carries into a container: `tuple[Interrogator, ...] | str`
+        # offers a resource_id for the things in the tuple.
         for arg in get_args(annotation):
-            yield from _walk_types(arg)
+            yield from _walk_types(arg, resource_id_accepted)
     elif isinstance(annotation, type):
         yield annotation, resource_id_accepted
 
@@ -404,10 +414,15 @@ def _edges(nodes: tuple[Node, ...] = NODES) -> tuple[list, list]:
         into.append([source, target, label] if label else [source, target])
 
     for node in nodes:
-        # A drawn subclass hangs off the node its base is drawn as.
-        for base in node.model.__bases__:
+        # A drawn subclass hangs off its nearest drawn ancestor, which need
+        # not be a direct base: this module already puts private classes
+        # (_IntervalModel) between a model and the one it is drawn under,
+        # and a subclass whose parent went undrawn would otherwise become an
+        # island no amount of expanding could reach.
+        for base in node.model.__mro__[1:]:
             if (parent := by_model.get(base)) is not None:
                 _add(containment, parent.name, node.name, "")
+                break
         for reference in _references(node.model):
             # A field inherited from another drawn class is that class's to
             # draw, so four component classes do not each redraw the base's

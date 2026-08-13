@@ -94,7 +94,7 @@ A few rules make that directory readable without a schema in front of you:
 
 - **The file declares what it is.** Every object file states its `object_type`, and its container checks that statement rather than supplying it.
 - **The name states the identity.** `acquisitions/DAS.R2D1..RAW.yaml` *is* the acquisition `DAS.R2D1..RAW` — network `DAS`, fiber array `R2D1`, blank location code, code `RAW`. Restating a part of it inside the file is allowed, as long as the two agree; there is never a precedence rule between two spellings of one fact.
-- **`path` is the one reserved name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path".
+- **`path` is the one reserved *container* name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path". (`attrs` and `inventory` are reserved as file stems — an entity's own object file, and the envelope — and the top-level directory names above are fixed.)
 - **Files that participate in no convention are ignored.** Photos, field notes, and deployment logs can live in the inventory directory undisturbed.
 
 Loading checks the document, so a directory that is not a valid inventory says so at the point it is read:
@@ -106,6 +106,8 @@ try:
     dc.inventory(inventory_path / "acquisitions")
 except InvalidInventoryError as error:
     print(error)
+else:
+    raise AssertionError("a directory of acquisitions is no inventory")
 ```
 
 Inventories can also be built in memory from the model classes directly, which is what the tests and the examples below do:
@@ -125,13 +127,19 @@ names = inventory.get_names()
 
 print("attrs:", names.attrs[:4], "...")
 print("coords:", [x for x in names.coords if "." not in x])
+
+# The annotation groups the CSV named are among them.
+assert {"zone", "noisy"} <= set(names.coords)
+assert "gauge_length" in names.attrs
 ```
 
-`zone` and `noisy` are there because the CSV named them: an annotation group becomes a coordinate under its own name. The rest come from the model — `distance` is where each channel sits on the optical path, and `latitude`/`longitude`/`elevation` are what the geometry track resolves to under the inventory's coordinate reference system.
+`zone` and `noisy` are there because the annotations CSV named them: an annotation group becomes a coordinate under its own name. `coupling` and `optical_components` are there for the same reason — a track contributes its name only where a path actually describes it. `distance` is where each channel sits on the optical path, and `x`/`y`/`z` and `longitude`/`latitude`/`elevation` are the two spellings of the axes the inventory's coordinate reference system declares, which a geometry track resolves to.
+
+Listing a name is not promising a value for it. This example states no geometry, so the spatial names resolve to nothing until it gets one.
 
 # Attaching an inventory to a spool
 
-[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and does nothing else. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for.
+[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and touches no data. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for. Attaching a *different* inventory does clear any enrichment set up from the old one, since applying the old instructions to new metadata would rewrite every patch behind your back.
 
 ```{python}
 spool = dc.spool(patch).attach_inventory(example_inventory)
@@ -152,7 +160,7 @@ assert len(zones) == 2
 assert set(zones.get_contents()["zone"]) == {"north", "south"}
 ```
 
-Selecting on an inventory coordinate trims channels rather than dropping patches, since the inventory is what says which channel is which.
+Selecting on an inventory coordinate trims channels rather than cutting the patch at the spool level, since the inventory is what says which channel is which. A patch left with no matching channels at all drops out, there being nothing to keep.
 
 # Enriching patches
 
@@ -168,7 +176,7 @@ assert "zone" in patch_out.coords.coord_map
 
 Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
 
-A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments:
+A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state:
 
 ```{python}
 one = patch.enrich(example_inventory)
@@ -177,16 +185,23 @@ assert one.attrs.gauge_length == 10.0
 
 # Conforming a spool
 
-[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, drops patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink.
+[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, refuses patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink. Pass `on_unresolved="drop"` (or `"warn"`) to drop the undescribed patches instead of raising, which is what an inventory deliberately covering part of an archive wants.
 
 ```{python}
-conformed = spool.conform_to_inventory()
-assert len(conformed) == len(spool)
+# A second patch this inventory says nothing about.
+stranger = dc.get_example_patch("random_das", acquisition_key="XX.NOPE..RAW")
+mixed = dc.spool([patch, stranger]).attach_inventory(example_inventory)
+assert len(mixed) == 2
+
+# Conforming keeps only what the inventory describes.
+conformed = mixed.conform_to_inventory(on_unresolved="drop")
+assert len(conformed) == 1
+assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
 ```
 
 Subdivision is exact: each piece begins at the first sample at or after the change that opens it, so together the pieces hold every sample the patch held and hold none of them twice. `len` and `get_contents` describe the pieces.
 
-This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, and raises when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
+This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, raises by default on a patch the inventory does not describe, and raises whatever the policy when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
 
 # An inventory a directory carries
 
@@ -209,14 +224,24 @@ The name is hidden for the same reason `.dascore_index.sqlite3` is: it is a comp
 
 Three things happen at three different times, and keeping them apart is the point:
 
-- **Discovery is eager.** Whether the directory carries an inventory is settled when the spool is opened, with one existence check.
-- **Reading is lazy.** The file is read at the first question only an inventory can answer — never for `len`, `get_contents`, `sort`, `chunk`, extracting a patch, or a selection on names the index already knows. A malformed inventory therefore cannot stop you loading data; only the inventory-backed calls fail, and they say which file they were reading and that the spool picked it up on opening.
+- **Discovery is eager.** Whether the directory carries an inventory is settled when the spool is opened, by a stat of each spelling and nothing more.
+- **Reading is lazy.** The file is read at the first question only an inventory can answer — never for `len`, `get_contents`, `sort`, `chunk`, extracting a patch, or a selection on names the index already knows. A malformed inventory therefore cannot stop you loading data; only the inventory-backed calls fail, and they name the directory the inventory came from and say that the spool picked it up on opening.
 - **Refreshing is explicit.** An inventory is an input, not a cache, so it is read once and held with no modification-time check. `attach_inventory()` with no argument means "the one this directory carries, read it again", which is the whole authoring loop:
 
 ```{python}
-# Edit .inventory.yaml on disk, then read it again:
+# Correct the gauge length in the file the directory carries.
+old_acquisition = example_inventory.networks[0].fiber_arrays[0].acquisitions[0]
+corrected = example_inventory.replace(
+    old_acquisition, old_acquisition.new(gauge_length=12.0)
+)
+corrected.to_yaml(data_path / ".inventory.yaml")
+
+# The spool which already read it still reports what it read.
+assert carrying.enrich()[0].attrs.gauge_length == 10.0
+
+# Asking again is what picks the correction up.
 refreshed = carrying.attach_inventory()
-assert refreshed.enrich()[0].attrs.gauge_length == 10.0
+assert refreshed.enrich()[0].attrs.gauge_length == 12.0
 ```
 
 `attach_inventory`, `enrich`, and `conform_to_inventory` all accept a path as well as an `Inventory`, read on the same terms.
@@ -235,4 +260,4 @@ json_path.write_text(inventory.model_dump_json())
 assert dc.inventory(json_path) == inventory
 ```
 
-A document that cannot be parsed, cannot be decoded, or names a field that is not a name raises `InvalidInventoryError` rather than whatever the parser happened to raise, wherever it is read from.
+A document that cannot be parsed, cannot be decoded, or keys a field with something that is not a name (`1: 2` is legal YAML) raises `InvalidInventoryError` rather than whatever the parser happened to raise, wherever it is read from.

@@ -321,11 +321,21 @@
         },
       },
       {
+        // Labelled with the field which makes the reference: two classes
+        // may refer to each other through more than one field, and unlabelled
+        // arcs between the same pair would be indistinguishable.
         selector: "edge[kind = 'reference']",
         style: {
+          "color": "#5f6d78",
+          "font-size": 11,
+          "label": "data(label)",
           "line-color": "#8a98a3",
           "line-style": "dashed",
           "target-arrow-color": "#8a98a3",
+          "text-background-color": "#ffffff",
+          "text-background-opacity": 0.85,
+          "text-background-padding": 2,
+          "text-rotation": "autorotate",
         },
       },
     ];
@@ -365,7 +375,9 @@
           setCollapsed(cy, node, !node.data("collapsed"));
         }
       });
-      runLayout(cy);
+      // Only applyInitialCollapse lays out: elk runs asynchronously, so a
+      // second layout started here would race it over a different set of
+      // visible nodes and whichever finished last would win.
       applyInitialCollapse(cy);
       attachTooltips(cy, target);
       addToolbar(container, cy);

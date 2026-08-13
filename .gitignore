@@ -73,11 +73,8 @@ target/
 docs/api/*
 # Written from the inventory models by scripts/_inventory_model.py.
 docs/_generated
-# quarto renders each page beside its source before collecting the site into
-# _site, so a local doc build leaves both behind.
+# Where a local `quarto render docs` puts the built site.
 docs/_site/
-docs/**/*.html
-docs/**/*_files/
 _autosummary
 .quarto/
 docs/site_libs

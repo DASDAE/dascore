@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import sys
 import typing
 from pathlib import Path
@@ -25,15 +26,20 @@ from dascore.core.inventory import (
     Acquisition,
     Cable,
     FiberSegment,
+    Geometry,
     Interrogator,
     Inventory,
     OpticalPath,
     Station,
+    _IntervalModel,
     _OpticalComponentBase,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _GENERATOR_PATH = _REPO_ROOT / "scripts" / "_inventory_model.py"
+# What scripts/_render_api.py writes the API cross references to. Stated
+# here so the two ends of the wiring are pinned independently.
+_CROSS_REF_NAME = ".cross_ref.json"
 
 # The generator is part of the documentation build, which an sdist does not
 # ship; skip rather than fail where the scripts directory is absent.
@@ -139,19 +145,18 @@ class TestNodesFollowTheModels:
             first_paragraph = inspect.getdoc(node.model).partition("\n\n")[0]
             assert summary == " ".join(first_paragraph.split())
 
-    def test_summaries_are_one_line(self, spec):
-        """A tooltip renders its summary as a single run of text."""
+    def test_every_node_has_a_summary(self, spec):
+        """A model with no docstring would leave a node saying nothing."""
         for node in spec["nodes"].values():
             assert node["summary"]
-            assert "\n" not in node["summary"]
 
-    def test_a_summary_is_the_purpose_not_the_rules(self, spec):
+    def test_a_summary_is_the_purpose_not_the_rules(self, generator, spec):
         """The rest of a docstring is the class's rules; they stay behind."""
-        assert spec["nodes"]["Acquisition"]["summary"] == (
-            "Time-aware, channel-like DFOS acquisition setup."
-        )
         # OpticalPath's docstring runs to several paragraphs of track rules.
-        assert len(spec["nodes"]["OpticalPath"]["summary"]) < 120
+        doc = inspect.getdoc(OpticalPath)
+        summary = spec["nodes"]["OpticalPath"]["summary"]
+        assert len(doc.split("\n\n")) > 1
+        assert len(summary) < len(doc) / 2
 
     def test_inherited_fields_are_listed_too(self, spec):
         """A component shows what it gets from its base as well as its own."""
@@ -159,9 +164,37 @@ class TestNodesFollowTheModels:
         assert {"fiber_number", "loss_db", "optical_length"} <= shown
 
     def test_own_fields_come_first(self, spec):
-        """The fields which distinguish a class lead its attribute list."""
+        """
+        The fields which distinguish a class lead its attribute list.
+
+        Pinned in full, not by a single pair: the order a reader compares
+        against the model source is the whole point of sorting, and any
+        rule which merely puts one own-field before one inherited field
+        would satisfy a spot check while scrambling everything else.
+        """
         shown = [x["name"] for x in spec["nodes"]["Acquisition"]["attributes"]]
-        assert shown.index("code") < shown.index("description")
+        assert shown == [
+            "code",
+            "location_code",
+            "data_type",
+            "data_category",
+            "data_units",
+            "interrogator",
+            "interrogator_port",
+            "firmware_version",
+            "software_version",
+            "gauge_length",
+            "pulse_rate",
+            "pulse_width",
+            "sample_rate",
+            "spatial_interval",
+            "distance_map",
+            "closed_fiber_loop",
+            "start_time",
+            "end_time",
+            "description",
+            "extra_fields",
+        ]
 
 
 class TestEdgesFollowTheModels:
@@ -210,7 +243,6 @@ class TestEdgesFollowTheModels:
 
     def test_an_inherited_field_is_drawn_once(self, references):
         """The base draws what it declares; subclasses draw their own."""
-        assert ("OpticalComponent", "OpticalMeasurement", "loss_db") not in references
         measurements = {x for x in references if x[1] == "OpticalMeasurement"}
         assert ("OpticalComponent", "OpticalMeasurement", "loss_measurement") in (
             measurements
@@ -266,6 +298,25 @@ class TestNodeListIsValidated:
         nodes = (*generator.NODES, generator.NODES[0])
         with pytest.raises(ValueError, match="more than once"):
             generator._check_nodes(nodes)
+
+    def test_a_repeated_drawn_name_is_refused(self, generator):
+        """
+        Two classes drawn under one name would silently become one box.
+
+        Nodes and edges are both keyed by the drawn name, so the survivor
+        would inherit edges pointing at the class which vanished, and
+        cytoscape would be handed an edge with a dangling endpoint --
+        which throws at page load rather than failing the build.
+        """
+        nodes = (*generator.NODES, generator.Node(_IntervalModel, "metadata"))
+        renamed = tuple(
+            generator.Node(node.model, node.style_class, label="OpticalComponent")
+            if node.model is _IntervalModel
+            else node
+            for node in nodes
+        )
+        with pytest.raises(ValueError, match="both drawn as"):
+            generator._check_nodes(renamed)
 
     def test_a_non_model_is_refused(self, generator):
         """Only pydantic models can be introspected into a node."""
@@ -326,6 +377,45 @@ class TestWrittenSpec:
         assert built["nodes"]["Acquisition"]["reference_href"] == "/api/acquisition.qmd"
         assert built["nodes"]["Cable"]["reference_href"] == ""
 
+    def test_the_cross_reference_file_is_found(self, generator, tmp_path):
+        """
+        The written spec picks up the API map the build step leaves.
+
+        Without this the wiring is untested end to end: renaming the file,
+        moving the spec a directory deeper, or generating before the API
+        docs are rendered each silently strips every link out of the
+        diagram, and a spec with no links at all still validates.
+        """
+        yaml = pytest.importorskip("yaml")
+        cross_refs = {"dascore.core.inventory.Cable": "/api/cable.qmd"}
+        # The literal name scripts/_render_api.py writes, deliberately not
+        # the generator's own constant: reading that back would make a
+        # renamed constant agree with itself and prove nothing.
+        (tmp_path / _CROSS_REF_NAME).write_text(
+            json.dumps(cross_refs), encoding="utf-8"
+        )
+        written = generator.write_model_spec(tmp_path)
+        spec = yaml.safe_load(written.read_text(encoding="utf-8"))
+        assert spec["nodes"]["Cable"]["reference_href"] == "/api/cable.qmd"
+
+    def test_the_real_build_resolves_its_links(self, generator):
+        """
+        Every drawn public class must have an API page to link to.
+
+        The names the generator looks up are the ones scripts/_render_api.py
+        writes, so a change to either side's key format shows up here.
+        """
+        docs = Path(generator.SPEC_PATH).parent
+        if not (docs / _CROSS_REF_NAME).is_file():
+            pytest.skip("the API docs have not been built in this checkout")
+        cross_refs = generator._load_cross_refs(docs)
+        assert cross_refs, "the API cross references were written but not found"
+        built = generator.build_spec(cross_refs=cross_refs)
+        for node in generator.NODES:
+            has_link = bool(built["nodes"][node.name]["reference_href"])
+            # A private base has no API page; every public class has one.
+            assert has_link is not node.model.__name__.startswith("_")
+
 
 class TestWalkTypes:
     """The rule which separates containing something from referring to it."""
@@ -340,13 +430,41 @@ class TestWalkTypes:
         """Nothing may stand in for a contained object."""
         hints = typing.get_type_hints(OpticalPath)
         found = dict(generator._walk_types(hints["geometry"]))
+        # Asserted before the all(), which an empty result would satisfy.
+        assert Geometry in found
         assert all(value is False for value in found.values())
+
+    def test_a_container_keeps_the_resource_id_offer(self, generator):
+        """A tuple of models beside a str still refers rather than contains."""
+        annotation = tuple[Interrogator, ...] | str | None
+        found = dict(generator._walk_types(annotation))
+        assert found[Interrogator] is True
 
     def test_a_str_elsewhere_does_not_carry(self, generator):
         """A mapping key is a str about which nothing follows."""
         hints = typing.get_type_hints(Inventory)
         found = dict(generator._walk_types(hints["resources"]))
         assert found[Interrogator] is False
+
+    def test_an_indirect_base_still_hangs_the_subclass(self, generator):
+        """
+        A drawn subclass finds its nearest drawn ancestor up the whole mro.
+
+        The models already put private classes between a model and the one
+        it is drawn under (_IntervalModel), so a subclass whose direct base
+        went undrawn would float free: unreachable by expanding anything,
+        and drawn as a second root beside Inventory.
+        """
+
+        class _Undrawn(_OpticalComponentBase):
+            """A private intermediate, of the kind the models already use."""
+
+        class _Leaf(_Undrawn):
+            """Drawn, but two steps from the class it is drawn beneath."""
+
+        nodes = (*generator.NODES, generator.Node(_Leaf, "path_detail"))
+        containment, _ = generator._edges(nodes)
+        assert ["OpticalComponent", "_Leaf"] in containment
 
     def test_the_drawn_ancestor_wins(self, generator):
         """A class is drawn as the most basal node it descends from."""
