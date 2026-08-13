@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import numpy as np
@@ -183,6 +183,28 @@ class TestToDateTime64:
         out = to_datetime64(dt)
         assert isinstance(out, np.datetime64)
         assert out == to_datetime64("2021-01-02")
+
+    def test_date(self):
+        """Ensure a date works, being the instant its day starts."""
+        out = to_datetime64(date.fromisoformat("2021-01-02"))
+        assert isinstance(out, np.datetime64)
+        assert out == to_datetime64("2021-01-02")
+
+    def test_date_does_not_shadow_datetime(self):
+        """A datetime is a date, so it must keep its own handler."""
+        stamp = datetime.fromisoformat("2021-01-02T03:04:05")
+        assert to_datetime64(stamp) == to_datetime64("2021-01-02T03:04:05")
+
+    @pytest.mark.parametrize("iso", ["2500-01-01", "1000-01-01"])
+    def test_date_outside_the_representable_range(self, iso):
+        """A datetime64 wraps silently, so such a date is refused."""
+        with pytest.raises(ValueError, match="outside the range"):
+            to_datetime64(date.fromisoformat(iso))
+
+    @pytest.mark.parametrize("iso", ["2262-04-11", "1677-09-22"])
+    def test_the_outermost_representable_days(self, iso):
+        """The check refuses what wraps without refusing what does not."""
+        assert to_datetime64(date.fromisoformat(iso)) == to_datetime64(iso)
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""

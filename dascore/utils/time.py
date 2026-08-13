@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import singledispatch
 from typing import Any, SupportsFloat, cast, overload
 
@@ -184,6 +184,31 @@ def _datetime_to_datetime64(dt: datetime):
     if pd.isnull(dt):
         return _NAT_DATETIME64
     return to_datetime64(np.datetime64(dt, "ns"))
+
+
+@to_datetime64.register(date)
+def _date_to_datetime64(value: date):
+    """
+    Convert a python date to the instant it starts.
+
+    YAML reads an unquoted ``2024-06-01`` as a date rather than a string,
+    so this is the ordinary spelling of a day in a hand-authored file, not
+    an exotic input. Registered after datetime, which is a subclass of
+    date and keeps its own more specific handler.
+    """
+    out = np.datetime64(value.isoformat(), "ns")
+    # A datetime64 spans about 1678 to 2262 and wraps silently past either
+    # end, so a day outside it would come back as one centuries away. Read
+    # back as text rather than through datetime64[D], which is itself
+    # unreliable at the boundary: 1677-09-22 is representable but converts
+    # to 2262-04-11. The other spellings of a time still wrap; see #890.
+    if not str(out).startswith(value.isoformat()):
+        msg = (
+            f"Date {value.isoformat()} is outside the range a nanosecond "
+            f"timestamp can represent; it would read as {out}."
+        )
+        raise ValueError(msg)
+    return out
 
 
 @to_datetime64.register(pd.Timestamp)

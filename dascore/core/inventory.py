@@ -2307,29 +2307,3 @@ class Inventory(InventoryModel):
             msg = f"Could not parse an inventory mapping from {source!r}."
             raise InvalidInventoryError(msg)
         return cls(**data).check()
-
-
-def inventory(source=None) -> Inventory:
-    """
-    Load or create a DASDAE inventory.
-
-    Parameters
-    ----------
-    source
-        An existing Inventory (returned as is), a YAML file path or YAML
-        text, or None for an empty inventory.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> empty = dc.inventory()
-    >>> assert dc.inventory(empty) is empty
-    """
-    if source is None:
-        return Inventory()
-    if isinstance(source, Inventory):
-        return source
-    if isinstance(source, str | os.PathLike):
-        return Inventory.from_yaml(source)
-    msg = f"Could not get an inventory from {source!r}."
-    raise InvalidInventoryError(msg)
