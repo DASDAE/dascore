@@ -599,6 +599,35 @@ class TestSkippedPartitionPolicing:
         with pytest.raises(CoordMergeError, match="note"):
             build_chunk_plan(df, time=dc.units.get_quantity("40 bytes"))
 
+    @staticmethod
+    def _one_partition_frame():
+        """Two contiguous rows forming a single active partition."""
+        return pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0],
+                "time_max": [9.0, 19.0],
+                "time_step": [1.0, 1.0],
+                "_patch_id": [0, 1],
+                "dims": ["time"] * 2,
+            }
+        )
+
+    def test_conflict_outranks_later_unhashable_column(self):
+        """An earlier column's conflict wins over a later unhashable one."""
+        df = self._one_partition_frame()
+        df["aaa"] = ["a", "b"]  # conflicts first (column order)
+        df["zzz"] = [[1], [1]]  # unhashable, but polices later
+        with pytest.raises(CoordMergeError, match="aaa"):
+            build_chunk_plan(df, time=...)
+
+    def test_unhashable_column_raises_at_its_place(self):
+        """An unhashable value met before any conflict raises TypeError."""
+        df = self._one_partition_frame()
+        df["aaa"] = [[1], [1]]  # unhashable polices first
+        df["zzz"] = ["a", "b"]  # would conflict, but is met later
+        with pytest.raises(TypeError, match="unhashable"):
+            build_chunk_plan(df, time=...)
+
 
 class TestDimlessFrames:
     """Plain planner frames without a dims column still plan."""

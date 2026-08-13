@@ -691,7 +691,7 @@ def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
         _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_id", "min")
     ).sort_values(["_min", "_pid"], kind="stable")
     rank = pd.Series(np.arange(len(stats)), index=stats.index)
-    codes = labels.map(rank).to_numpy(dtype=np.int64)
+    codes = labels.map(rank).to_numpy(dtype=np.intp)
     # last lexsort key is primary: partition, then envelope min, then id
     order = np.lexsort((df["_patch_id"].to_numpy(), df[min_name].to_numpy(), codes))
     sorted_df = df.iloc[order].reset_index(drop=True)
@@ -735,6 +735,44 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     return corrected, modified, keep
 
 
+def _conflict_message(name: str, col: str) -> str:
+    """The error message for a partition whose attr values conflict."""
+    return (
+        f"Cannot merge on dim {name} because all values for "
+        f"{col} are not equal. Consider using the `conflict` "
+        "argument to loosen this restriction."
+    )
+
+
+def _police_partition_major(
+    sorted_df: pd.DataFrame,
+    seg_starts: np.ndarray,
+    name: str,
+    conflict: str,
+    active: np.ndarray,
+    policed: list[str],
+    owned: np.ndarray,
+) -> None:
+    """
+    Replay conflict policing partition-major to surface the right error.
+
+    Reached only when the whole-frame aggregation hit an unhashable
+    value somewhere in an active partition. Per-partition policing met
+    values partition by partition, column by column, so whichever came
+    first — a conflict or the unhashable value itself — won; replaying
+    in that order raises the same error it would have.
+    """
+    seg_ends = np.r_[seg_starts[1:], len(sorted_df)]
+    for part in np.flatnonzero(active):
+        sub = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
+        for index, col in enumerate(policed):
+            values = sub[col].unique()  # raises the TypeError at its old spot
+            single = len(values) == 1 or (len(values) and pd.isnull(values).all())
+            if single or not (owned[part, index] or conflict == "raise"):
+                continue
+            raise CoordMergeError(_conflict_message(name, col))
+
+
 def _carried_columns(
     sorted_df: pd.DataFrame,
     codes: np.ndarray,
@@ -771,6 +809,14 @@ def _carried_columns(
     ]
     carried: dict[str, pd.Series] = {}
     if policed:
+        # ownership of each policed column under each partition's dims
+        owned = np.zeros((n_parts, len(policed)), dtype=bool)
+        for dims_str in set(police_dims):
+            coord_names = set(dims_str.split(",")) | {name}
+            rows = np.asarray([x == dims_str for x in police_dims], dtype=bool)
+            for index, col in enumerate(policed):
+                if _coord_owner(col, coord_names) is not None:
+                    owned[rows, index] = True
         # Aggregate only rows of active partitions: skipped partitions
         # were never policed (their values may not even be hashable),
         # and their carried values are never published.
@@ -778,10 +824,20 @@ def _carried_columns(
         grouped = sorted_df.loc[rows, policed].groupby(codes[rows], sort=True)
         group_size = grouped.size()
         part_index = group_size.index.to_numpy()
-        sizes = np.zeros(n_parts, dtype=np.int64)
+        sizes = np.zeros(n_parts, dtype=np.intp)
         sizes[part_index] = group_size.to_numpy()
-        nunique = np.zeros((n_parts, len(policed)), dtype=np.int64)
-        nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
+        nunique = np.zeros((n_parts, len(policed)), dtype=np.intp)
+        try:
+            nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
+        except TypeError:
+            # An unhashable value in an active partition. The old loop
+            # met these partition-major, so an earlier partition's
+            # conflict (or an earlier column's unhashable value)
+            # outranks this one; replay in that order.
+            _police_partition_major(
+                sorted_df, seg_starts, name, conflict, active, policed, owned
+            )
+            raise  # the replay found nothing earlier: surface the original
         counts = np.zeros_like(nunique)
         counts[part_index] = grouped.count().to_numpy()
         # single-valued: one distinct value with no nulls beside it, or
@@ -790,14 +846,6 @@ def _carried_columns(
         # object column as two, where unique-length logic calls a
         # partition holding only nulls single-valued)
         single = ((nunique == 1) & (counts == sizes[:, None])) | (counts == 0)
-        # ownership of each policed column under each partition's dims
-        owned = np.zeros_like(single)
-        for dims_str in set(police_dims):
-            coord_names = set(dims_str.split(",")) | {name}
-            rows = np.asarray([x == dims_str for x in police_dims])
-            for index, col in enumerate(policed):
-                if _coord_owner(col, coord_names) is not None:
-                    owned[rows, index] = True
         conflicted = ~single & active[:, None]
         # Group attrs and dims are partition keys, so they are always
         # single-valued and never reach the conflict policy here.
@@ -805,12 +853,7 @@ def _carried_columns(
         if raising.any():
             part = int(np.argmax(raising.any(axis=1)))
             col = policed[int(np.argmax(raising[part]))]
-            msg = (
-                f"Cannot merge on dim {name} because all values for "
-                f"{col} are not equal. Consider using the `conflict` "
-                "argument to loosen this restriction."
-            )
-            raise CoordMergeError(msg)
+            raise CoordMergeError(_conflict_message(name, col))
         keep_first = conflict == "keep_first"
         for index, col in enumerate(policed):
             # keep_first carries the first member's value; drop omits the
@@ -1020,7 +1063,7 @@ def build_chunk_plan(
         kdtypes = dtype_all[keep_row]
         dtype_cache: dict[str, str] = {}
     active = np.zeros(n_parts, dtype=bool)
-    fed_counts = np.zeros(n_parts, dtype=np.int64)
+    fed_counts = np.zeros(n_parts, dtype=np.intp)
     out_starts, out_stops, out_ids = [], [], []
     m_out_ids, m_src, m_lo, m_hi, m_parts, dtype_parts = [], [], [], [], [], []
     next_id = 0
@@ -1109,7 +1152,7 @@ def build_chunk_plan(
         m_src.append(rel_src + lo_k)
         m_lo.append(lo)
         m_hi.append(hi)
-        m_parts.append(np.full(total, part, dtype=np.int64))
+        m_parts.append(np.full(total, part, dtype=np.intp))
         if has_dtype:
             part_dtypes = dtype_all[seg_starts[part] : seg_ends[part]]
             if len(pd.unique(part_dtypes)) == 1:
