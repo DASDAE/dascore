@@ -1930,3 +1930,85 @@ class TestGapsMutationTestingFound:
         assert pd.isnull(first.start_time) and pd.isnull(second.start_time)
         with pytest.raises(InvalidInventoryError, match="two spellings of one epoch"):
             loader._close_lineages([first, second], sources)
+
+
+class TestPRReviewFindings:
+    """Regressions for what the review bots found on the pull request."""
+
+    def test_a_gap_names_the_line_it_is_on(self, make_inventory):
+        """The frame is sorted and split by then, so positions lie."""
+        files = {
+            "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
+            ),
+            # Sorted by distance these rows reverse, so a position within
+            # the sorted frame is not the line the author would open.
+            "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
+                "channel,instrument_distance,distance\n"
+                "1,10,300\n"  # line 2
+                "2,,100\n"  # line 3, the gap
+                "3,30,200\n"  # line 4
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match=r"row\(s\) 3") as info:
+            make_inventory(files)
+        # Counting within the sorted frame would have said row 2.
+        assert "row(s) 2" not in str(info.value)
+
+    def test_an_empty_single_object_table(self, make_inventory):
+        """A header and no rows describes no map, rather than raising bare."""
+        files = {
+            "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
+            ),
+            "acquisitions/DAS.L001.02.DEC/distance_map.csv": "channel,distance\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="describes no distance_map"):
+            make_inventory(files)
+
+    @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
+    def test_two_path_directories_differing_only_by_case(self, make_inventory):
+        """Two lineages here become one wherever the inventory is copied."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path.aa/attrs.yaml": (
+                "object_type: OpticalPath\nname: a\n"
+            ),
+            "fiber_arrays/DAS.L001/path.AA/attrs.yaml": (
+                "object_type: OpticalPath\nname: b\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="differ only by case"):
+            make_inventory(files)
+
+    def test_a_symlinked_path_directory(self, tmp_path):
+        """A symlink would read an epoch from outside the inventory."""
+        outside = tmp_path / "elsewhere" / "path"
+        outside.mkdir(parents=True)
+        (outside / "attrs.yaml").write_text("object_type: OpticalPath\nname: away\n")
+        root = write_inventory(
+            tmp_path / "linked",
+            {
+                **MINIMAL,
+                "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            },
+        )
+        os.symlink(outside, root / "fiber_arrays/DAS.L001/path")
+        # Not part of the format, so the array simply has no optical path.
+        assert not dc.inventory(root).networks[0].fiber_arrays[0].optical_paths
+
+    def test_a_large_table_is_not_held_twice(self, make_inventory):
+        """The width check streams, so only the frame stays resident."""
+        rows = "\n".join(f"S100,{x}.0,-117.0,40.0,687.0" for x in range(2000))
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "sequence,object_type,optical_length,name\n1,FiberSegment,3000.0,a\n"
+            ),
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                f"segment,distance,longitude,latitude,elevation\n{rows}\n"
+            ),
+        }
+        assert len(one_path(make_inventory(files)).geometry[0].distance) == 2000

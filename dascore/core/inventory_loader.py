@@ -502,24 +502,20 @@ def _read_table(path: Path) -> pd.DataFrame:
     # which would arrive before this one could say what was expected.
     try:
         with path.open(newline="", encoding="utf-8-sig") as stream:
-            header, *body = list(csv.reader(stream)) or [[]]
+            reader = csv.reader(stream)
+            header = next(reader, [])
+            if header:
+                # Streamed rather than listed: a track table is the part of
+                # this format meant to grow, and holding every cell as a
+                # python object beside the frame pandas builds would cost
+                # several times what the frame itself does.
+                _check_widths(reader, header, path)
     except (OSError, UnicodeDecodeError) as error:
         msg = f"Could not read {_quote(path)}: {error}."
         raise InvalidInventoryError(msg) from error
     if not header:
         msg = f"{_quote(path)} has no columns, so it states no track."
         raise InvalidInventoryError(msg)
-    # Pandas refuses neither a wide row nor a narrow one: by default the
-    # surplus cell pushes the first column into the index, so every value
-    # in the row shifts one field left and lands in its neighbour's
-    # meaning. A row states one cell per column or it is not a row.
-    for number, row in enumerate(body, start=2):
-        if row and len(row) != len(header):
-            msg = (
-                f"{_quote(path)} row {number} states {len(row)} cells where "
-                f"its header names {len(header)} columns."
-            )
-            raise InvalidInventoryError(msg)
     repeated = sorted({x for x in header if header.count(x) > 1})
     if repeated:
         msg = (
@@ -540,6 +536,24 @@ def _read_table(path: Path) -> pd.DataFrame:
         # pandas' UTF-8, and a byte order mark reaches only one of them.
         encoding="utf-8-sig",
     )
+
+
+def _check_widths(reader, header: list[str], path: Path) -> None:
+    """
+    Refuse a row which is not its header wide.
+
+    Pandas refuses neither a wide row nor a narrow one: by default the
+    surplus cell pushes the first column into the index, so every value in
+    the row shifts one field left and lands in its neighbour's meaning. A
+    row states one cell per column or it is not a row.
+    """
+    for number, row in enumerate(reader, start=2):
+        if row and len(row) != len(header):
+            msg = (
+                f"{_quote(path)} row {number} states {len(row)} cells where "
+                f"its header names {len(header)} columns."
+            )
+            raise InvalidInventoryError(msg)
 
 
 def _cells(row) -> dict[str, str]:
@@ -694,7 +708,14 @@ def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[di
             # shared a row: `5,` above `,100` would map channel 5 to a
             # distance the file never gave it.
             if not stated.all():
-                empty = [str(n) for n, ok in enumerate(stated, start=2) if not ok]
+                # rows.index, not the position in this group: the frame has
+                # been sorted and split by then, so counting here would name
+                # a line the reader would go and find something else on.
+                empty = [
+                    str(i + 2)
+                    for i, ok in zip(rows.index, stated, strict=True)
+                    if not ok
+                ]
                 msg = (
                     f"{_quote(path)} leaves {column} empty at row(s) "
                     f"{', '.join(empty)} while other rows state it; a column "
@@ -732,10 +753,34 @@ def _coordinates(rows: pd.DataFrame, axes: Mapping[str, int], path: Path):
 
 def _is_path_dir(child: Path) -> bool:
     """Return True if a directory name claims to be an optical path epoch."""
-    if not child.is_dir() or child.name.startswith("."):
+    # is_dir() follows a link, and the stray walk steps over one, so a
+    # symlinked `path` would be read from outside the inventory without
+    # anything having looked at what it holds.
+    if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
         return False
     stem = child.name.partition(_EPOCH_MARKER)[0].partition(".")[0]
     return stem.casefold() == _PATH_STEM
+
+
+def _check_one_spelling(directories: list[Path]) -> None:
+    """
+    Refuse two path directories a case-folding filesystem holds as one.
+
+    The same portability rule `_container_entries` applies to every
+    top-level identity: an inventory where `path.aa` and `path.AA` are two
+    lineages loses one of them the moment it is copied somewhere they are
+    the same directory.
+    """
+    seen: dict[str, Path] = {}
+    for directory in directories:
+        key = directory.name.casefold()
+        if (first := seen.get(key)) is not None:
+            msg = (
+                f"{_quote(first)} and {_quote(directory)} differ only by case, "
+                "which a case-insensitive filesystem cannot hold."
+            )
+            raise InvalidInventoryError(msg)
+        seen[key] = directory
 
 
 def _load_path(directory: Path, crs, begins):
@@ -836,6 +881,7 @@ def _merge_paths(data: dict, entity: Path, model, crs, attrs: Path, begins) -> N
     directories = [x for x in sorted(entity.iterdir()) if _is_path_dir(x)]
     if not directories:
         return
+    _check_one_spelling(directories)
     field = "optical_paths"
     if field not in model.model_fields:
         msg = (
@@ -904,6 +950,12 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
 def _load_table(path: Path, table: _Table, stem: str, crs):
     """Read one track table into whatever its attribute holds."""
     frame = _read_table(path)
+    # Refused here rather than left to the model: a header with nothing
+    # under it claims a track and states none, and for a single-object
+    # table it would otherwise build one object out of no points.
+    if frame.empty:
+        msg = f"{_quote(path)} states no rows, so it describes no {stem}."
+        raise InvalidInventoryError(msg)
     axes = _geometry_axes(frame, crs, path) if stem == "geometry" else {}
     if not table.points:
         rows = _object_rows(frame, table, path)
@@ -913,7 +965,7 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
     built = _point_rows(frame, table, path, axes)
     # A single object rather than a collection: the table has no grouping
     # column because every point belongs to the one map it describes.
-    return built[0] if table.group is None else built
+    return built if table.group is not None else built[0]
 
 
 def _geometry_axes(frame: pd.DataFrame, crs, path: Path) -> dict[str, int]:
