@@ -128,14 +128,16 @@ AnnotationValue = Annotated[
 ]
 
 
-def _type_tag(name: str):
+def _object_type_tag(name: str):
     """
-    Return the serialization-only type tag field for a tagged model class.
+    Return the serialization-only ``object_type`` field of a union member.
 
-    The tag drives union dispatch and the authoring format's type
-    declaration in serialized YAML/JSON. Users never set it: it defaults to
-    the class name, the Literal annotation rejects any other value, and it
-    is hidden from repr.
+    Every model states its class when serialized (see
+    [dascore.models.registry](`dascore.models.registry`)), but pydantic must
+    pick a class for these before an object exists, so the models sharing a
+    union declare the tag as a real field and the base class leaves them
+    alone. Users never set it: it defaults to the class name, the Literal
+    annotation rejects any other value, and it is hidden from repr.
     """
     return Field(default=name, repr=False)
 
@@ -253,7 +255,7 @@ class CoordinateReferenceSystem(InventoryModel):
 class ExternalResource(InventoryModel):
     """External resource identified but not otherwise modeled by DASCore."""
 
-    type: Literal["ExternalResource"] = _type_tag("ExternalResource")
+    object_type: Literal["ExternalResource"] = _object_type_tag("ExternalResource")
     resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
@@ -269,7 +271,7 @@ class OpticalMeasurement(InventoryModel):
     datasheet claim is a legitimate record (method="datasheet").
     """
 
-    type: Literal["OpticalMeasurement"] = _type_tag("OpticalMeasurement")
+    object_type: Literal["OpticalMeasurement"] = _object_type_tag("OpticalMeasurement")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable measurement name.")
     method: str = Field(
@@ -300,7 +302,7 @@ class OpticalMeasurement(InventoryModel):
 class Interrogator(InventoryModel):
     """DFOS interrogator unit used for data collection."""
 
-    type: Literal["Interrogator"] = _type_tag("Interrogator")
+    object_type: Literal["Interrogator"] = _object_type_tag("Interrogator")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
@@ -314,7 +316,7 @@ class Interrogator(InventoryModel):
 class Enclosure(InventoryModel):
     """Physical housing, pipe, duct, conduit, or carrier resource."""
 
-    type: Literal["Enclosure"] = _type_tag("Enclosure")
+    object_type: Literal["Enclosure"] = _object_type_tag("Enclosure")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     enclosure_type: str = Field(
@@ -339,7 +341,7 @@ class Enclosure(InventoryModel):
 class Cable(InventoryModel):
     """Physical cable containing one or more fiber segments."""
 
-    type: Literal["Cable"] = _type_tag("Cable")
+    object_type: Literal["Cable"] = _object_type_tag("Cable")
     resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
@@ -360,7 +362,7 @@ class Cable(InventoryModel):
 
 _Resource: TypeAlias = Annotated[
     Interrogator | Cable | Enclosure | ExternalResource | OpticalMeasurement,
-    Field(discriminator="type"),
+    Field(discriminator="object_type"),
 ]
 
 
@@ -431,7 +433,7 @@ class _OpticalComponentBase(InventoryModel):
 class FiberSegment(_OpticalComponentBase):
     """Length of optical fiber within a cable, patch cord, or other run."""
 
-    type: Literal["FiberSegment"] = _type_tag("FiberSegment")
+    object_type: Literal["FiberSegment"] = _object_type_tag("FiberSegment")
     container: Cable | str | None = Field(
         default=None, description="Cable containing this fiber."
     )
@@ -470,7 +472,7 @@ class FiberSegment(_OpticalComponentBase):
 class Connector(_OpticalComponentBase):
     """Optical connector in an optical path."""
 
-    type: Literal["Connector"] = _type_tag("Connector")
+    object_type: Literal["Connector"] = _object_type_tag("Connector")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this connector."
     )
@@ -480,7 +482,7 @@ class Connector(_OpticalComponentBase):
 class Splice(_OpticalComponentBase):
     """Optical splice in an optical path."""
 
-    type: Literal["Splice"] = _type_tag("Splice")
+    object_type: Literal["Splice"] = _object_type_tag("Splice")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this splice."
     )
@@ -490,7 +492,7 @@ class Splice(_OpticalComponentBase):
 class Terminator(_OpticalComponentBase):
     """Optical path terminator."""
 
-    type: Literal["Terminator"] = _type_tag("Terminator")
+    object_type: Literal["Terminator"] = _object_type_tag("Terminator")
     container: Enclosure | str | None = Field(
         default=None, description="Enclosure housing this terminator."
     )
@@ -501,7 +503,7 @@ class Terminator(_OpticalComponentBase):
 
 OpticalComponent: TypeAlias = Annotated[
     FiberSegment | Connector | Splice | Terminator,
-    Field(discriminator="type"),
+    Field(discriminator="object_type"),
 ]
 
 
@@ -1686,7 +1688,7 @@ class InventoryNames(NamedTuple):
 # Fields which name or tag a record rather than describe it: the type
 # discriminator and resource id a shareable record carries, and the codes
 # locating an acquisition (a patch's acquisition_key already states them).
-_IDENTITY_FIELDS = frozenset({"type", "resource_id", "code", "location_code"})
+_IDENTITY_FIELDS = frozenset({"object_type", "resource_id", "code", "location_code"})
 
 # What a distance-ranged track carries to place itself, which is its extent
 # rather than a value the channels inside it take.

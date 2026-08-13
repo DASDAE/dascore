@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import json
 import pickle
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 from pydantic import Field, ValidationError
 
 from dascore.core.attrs import PatchAttrs
+from dascore.core.inventory import Cable
+from dascore.exceptions import InvalidModelTagError
 from dascore.io.core import FiberIO
+from dascore.io.sintela.core import SintelaPatchAttrs
 from dascore.models import (
     DascoreBaseModel,
     DateTime64,
     FrozenDictType,
     TimeDelta64,
     UnitQuantity,
+    registry,
     sensible_model_equals,
 )
 from dascore.units import Quantity
@@ -25,6 +32,18 @@ class _TestModel(DascoreBaseModel):
     array: np.ndarray | None = None
     _private: int = 0
     some_str: str = "10"
+
+
+class _Inner(DascoreBaseModel):
+    """A nested model, which a document must also name."""
+
+    value: int = 1
+
+
+class _Outer(DascoreBaseModel):
+    """A model holding another."""
+
+    inner: _Inner = Field(default_factory=_Inner)
 
 
 class TestModelEquals:
@@ -227,3 +246,179 @@ class TestPatchAttrsSerialization:
                 assert np.isfinite(default), (
                     f"{attrs_class.__name__}.{name} defaults to {default}."
                 )
+
+
+@pytest.fixture
+def clean_registry():
+    """Undo whatever a test registers, so the real registry is untouched."""
+    before = registry.registered_models()
+    yield
+    registry._REGISTRY.clear()
+    registry._REGISTRY.update(before)
+
+
+def _model_in(module: str, name: str = "Square", base=DascoreBaseModel):
+    """Declare a model as though it lived in another package."""
+    return type(name, (base,), {"__module__": module, "__qualname__": name})
+
+
+class TestModelTagRegistry:
+    """A tag names one class, and the registry is what resolves it."""
+
+    def test_dascore_models_register_bare(self):
+        """A bare name means dascore, which keeps files hand-authorable."""
+        assert registry.registered_models()["PatchAttrs"] is PatchAttrs
+        assert registry.get_model_tag(PatchAttrs) == "PatchAttrs"
+
+    def test_out_of_tree_models_are_namespaced(self, clean_registry):
+        """A plugin's namespace is derived, so it needs no ceremony."""
+        cls = _model_in("myplugin.shapes")
+        assert registry.get_model_tag(cls) == "myplugin:Square"
+        assert registry.registered_models()["myplugin:Square"] is cls
+
+    def test_colliding_dascore_names_raise(self, clean_registry):
+        """Two of our own classes may not claim one tag; this is the pin."""
+        first = _model_in("dascore.somewhere", "Doubled")
+        with pytest.raises(InvalidModelTagError, match="claim the tag"):
+            _model_in("dascore.elsewhere", "Doubled")
+        # The collision does not replace what was there before it.
+        assert registry.registered_models()["Doubled"] is first
+
+    def test_colliding_plugin_names_warn(self, clean_registry):
+        """A user cannot rename another package's class, so this only warns."""
+        _model_in("myplugin.a", "Doubled")
+        with pytest.warns(UserWarning, match="claim the tag"):
+            second = _model_in("myplugin.b", "Doubled")
+        assert registry.registered_models()["myplugin:Doubled"] is second
+
+    def test_a_class_declared_in_a_function_is_not_registered(self, clean_registry):
+        """Nothing can resolve a name which exists only while a call runs."""
+
+        class Local(DascoreBaseModel):
+            """A model which cannot be addressed from a document."""
+
+        assert "Local" not in registry.registered_models()
+
+    def test_a_reimported_module_replaces_its_own_entry(self, clean_registry):
+        """Re-importing a module is not two classes claiming one tag."""
+        _model_in("myplugin.shapes")
+        second = _model_in("myplugin.shapes")
+        assert registry.registered_models()["myplugin:Square"] is second
+
+    @pytest.mark.parametrize(
+        "tag", ["Cable", "myplugin:Square", "my_plugin.sub:Square", "Cable-0.0.1"]
+    )
+    def test_legal_tags(self, tag):
+        """The grammar takes a name, a namespace and room for a version."""
+        assert registry.TAG_PATTERN.match(tag)
+
+    @pytest.mark.parametrize(
+        "tag", ["", "9Cable", "Cable-1", ":Cable", "dascore.core.inventory.Cable", 3]
+    )
+    def test_illegal_tags_are_refused(self, tag):
+        """A tag which is not a tag is a malformed document, not an unknown one."""
+        with pytest.raises(InvalidModelTagError, match="is not a legal"):
+            registry.resolve_model_tag(tag)
+
+    def test_an_unknown_tag_falls_back_with_a_warning(self):
+        """A document from an uninstalled package still reads as its base."""
+        data = {registry.TAG_FIELD: "absent:Whatever"}
+        with pytest.warns(UserWarning, match="Nothing registers"):
+            out = registry.resolve_tagged_model(data, default=PatchAttrs)
+        assert out is PatchAttrs
+
+    def test_an_unknown_tag_without_a_default_raises(self):
+        """A standalone document has no other class to fall back on."""
+        data = {registry.TAG_FIELD: "absent:Whatever"}
+        with pytest.raises(InvalidModelTagError, match="Nothing registers"):
+            registry.resolve_tagged_model(data)
+
+    def test_an_untagged_document_without_a_default_raises(self):
+        """Nothing but the document says what a standalone document holds."""
+        with pytest.raises(InvalidModelTagError, match="declares no"):
+            registry.resolve_tagged_model({"a": 1})
+
+    def test_an_untagged_document_takes_the_default(self):
+        """A caller which names the class does not need the document to."""
+        assert registry.resolve_tagged_model({}, default=PatchAttrs) is PatchAttrs
+
+    def test_a_model_in_an_unimported_module_is_found(self):
+        """
+        A format's models only exist once its module is imported.
+
+        Run in a fresh interpreter because the io modules are imported by
+        the time any other test runs, which is exactly what hides this.
+        """
+        code = (
+            "import dascore.models.registry as r\n"
+            "assert 'ODH4PatchAttrs' not in r.registered_models(), 'already there'\n"
+            "assert r.resolve_model_tag('ODH4PatchAttrs') is not None, 'not found'\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True
+        )
+        assert out.returncode == 0, out.stderr
+
+
+class TestObjectTypeSerialization:
+    """Every model names its class in a text document, and nowhere else."""
+
+    def test_json_states_the_class(self):
+        """A document says what it holds."""
+        dumped = json.loads(PatchAttrs(tag="a").model_dump_json())
+        assert dumped[registry.TAG_FIELD] == "PatchAttrs"
+
+    def test_a_python_dump_is_untagged(self):
+        """
+        The tag is not a field, and python dumps are not documents.
+
+        Equality compares them, `new` reconstructs from them and the spool
+        index ingests them; a key which is not a field belongs in none.
+        """
+        assert registry.TAG_FIELD not in PatchAttrs().model_dump()
+        assert registry.TAG_FIELD not in PatchAttrs().new(tag="a").model_dump()
+
+    def test_equality_is_unaffected(self, clean_registry):
+        """Two classes' instances are still told apart by their fields."""
+        assert PatchAttrs(tag="a") == PatchAttrs(tag="a")
+        assert PatchAttrs(tag="a") != PatchAttrs(tag="b")
+
+    def test_nested_models_state_their_class(self):
+        """Universal, so a nested object can be read on its own later."""
+        dumped = json.loads(_Outer(inner=_Inner()).model_dump_json())
+        assert dumped[registry.TAG_FIELD] == "tests:_Outer"
+        assert dumped["inner"][registry.TAG_FIELD] == "tests:_Inner"
+
+    def test_a_subclass_reads_back_through_its_base(self):
+        """The document holds everything the base declares, so this is fine."""
+        attrs = SintelaPatchAttrs(gauge_length=10.0)
+        out = PatchAttrs.model_validate_json(attrs.model_dump_json())
+        assert out.gauge_length == 10.0
+
+    def test_a_foreign_tag_is_refused(self):
+        """A document which names another class is misfiled, not reinterpreted."""
+        data = {registry.TAG_FIELD: "Cable"}
+        with pytest.raises(ValidationError, match="cannot be read as"):
+            PatchAttrs(**data)
+
+    def test_an_unknown_tag_is_accepted(self):
+        """The caller named the class, so there is nothing to disagree with."""
+        attrs = PatchAttrs(**{registry.TAG_FIELD: "absent:Whatever"})
+        assert isinstance(attrs, PatchAttrs)
+
+    def test_the_tag_does_not_become_an_extra_field(self):
+        """PatchAttrs keeps extras, and the tag is not one of them."""
+        attrs = PatchAttrs(**{registry.TAG_FIELD: "PatchAttrs"})
+        assert not hasattr(attrs, registry.TAG_FIELD)
+
+    def test_a_union_member_states_it_once(self):
+        """
+        The five resource models declare the tag as a real field.
+
+        Pydantic must pick a class before an object exists, so their tag
+        cannot be a serializer concern; the base class leaves them alone
+        rather than writing a second copy of what they already wrote.
+        """
+        text = Cable(resource_id="c1").model_dump_json()
+        assert json.loads(text)[registry.TAG_FIELD] == "Cable"
+        assert text.count(f'"{registry.TAG_FIELD}"') == 1

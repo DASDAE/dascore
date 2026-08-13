@@ -171,3 +171,7 @@ class RemoteCacheError(IOError, DASCoreError):
 
 class InvalidInventoryError(ValueError, DASCoreError):
     """Raised when inventory metadata violates the DASDAE inventory model."""
+
+
+class InvalidModelTagError(ValueError, DASCoreError):
+    """Raised when a serialized document names its model class illegally."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import cached_property
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -11,12 +12,21 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
     model_validator,
 )
 from typing_extensions import Self
 
 from dascore.compat import is_array_like
 from dascore.exceptions import InvalidInventoryError
+from dascore.models.registry import (
+    TAG_FIELD,
+    check_tag_matches,
+    get_model_tag,
+    register_model,
+)
 from dascore.models.types import DateTime64, FrozenDictType
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
@@ -99,6 +109,48 @@ class DascoreBaseModel(BaseModel):
         validate_default=True,
         arbitrary_types_allowed=True,
     )
+
+    def __init_subclass__(cls, **kwargs):
+        """Register every model so a document can name it."""
+        super().__init_subclass__(**kwargs)
+        register_model(cls)
+
+    @model_serializer(mode="wrap")
+    def _write_object_type(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> Any:
+        """
+        Name this class in the document, in text serializations only.
+
+        Only json mode, because a python-mode dump is not a document: it is
+        what equality compares, what ``new`` reconstructs from and what the
+        index ingests, none of which want a key that is not a field.
+
+        Models which discriminate a union declare ``object_type`` as a real
+        field, and pydantic has already written it.
+        """
+        out = handler(self)
+        if info.mode == "json" and TAG_FIELD not in type(self).model_fields:
+            out[TAG_FIELD] = get_model_tag(type(self))
+        return out
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_object_type(cls, data: Any) -> Any:
+        """
+        Consume a document's class tag, refusing one which names another class.
+
+        The tag is never required: a document dispatches on it before it gets
+        here, and a hand-written object or a nested one may simply not state
+        it. What it may not do is disagree.
+        """
+        if not isinstance(data, Mapping) or TAG_FIELD in cls.model_fields:
+            return data
+        if TAG_FIELD not in data:
+            return data
+        data = dict(data)
+        check_tag_matches(cls, data.pop(TAG_FIELD))
+        return data
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
