@@ -1231,15 +1231,16 @@ def _canonicalization_moved_values(original, out) -> bool:
     canonicalization; the rest is data loss.
     """
     # Only collapsing to a range can move values, and only a coord we were
-    # handed can be kept, so everything else skips the comparison.
+    # handed can be kept, so everything else skips the comparison. A CoordRange
+    # cannot reach here; the caller returns it before this is consulted.
     if original is None or not isinstance(out, CoordRange):
         return False
     # A CoordPartial is a placeholder whose values are all NaN, so it has
     # nothing to lose; canonicalizing it is the whole point.
-    if isinstance(original, CoordRange | CoordPartial):
+    if isinstance(original, CoordPartial):
         return False
-    if original.shape != out.shape:
-        return False
+    # Canonicalization re-labels a coordinate, it never resamples one.
+    assert original.shape == out.shape
     return not np.array_equal(original.values, out.values)
 
 
