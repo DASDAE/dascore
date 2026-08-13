@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 from pydantic import Field, ValidationError
 
+from dascore.core.attrs import PatchAttrs
+from dascore.io.core import FiberIO
 from dascore.models import (
     DascoreBaseModel,
     DateTime64,
@@ -161,3 +163,67 @@ class TestModelHash:
         """A model holding an array is unhashable, and says so."""
         with pytest.raises(TypeError, match="unhashable"):
             hash(_TestModel(array=np.arange(10)))
+
+
+def _dascore_patch_attrs_classes():
+    """Every PatchAttrs class DASCore itself declares, base included."""
+    # The subclasses only exist once their io modules are imported, and other
+    # test modules register their own subclasses globally on import, so the
+    # walk both forces the load and keeps to DASCore's own classes.
+    FiberIO.manager.load_plugins()
+    found: dict[str, type[PatchAttrs]] = {}
+    stack = [PatchAttrs]
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        if cls.__module__.startswith("dascore."):
+            found[cls.__name__] = cls
+    return [found[name] for name in sorted(found)]
+
+
+# A required field has no default to round trip, so the walk states one. A
+# new required field fails the assert below rather than dropping out of it.
+_REQUIRED_ATTR_VALUES = {"gauge_length": 10.0}
+
+
+def _minimal_attrs(cls):
+    """Build the emptiest legal instance of a PatchAttrs class."""
+    required = {name for name, f in cls.model_fields.items() if f.is_required()}
+    assert not (unknown := required - set(_REQUIRED_ATTR_VALUES)), (
+        f"{cls.__name__} requires {sorted(unknown)}, which "
+        "_REQUIRED_ATTR_VALUES does not state a value for."
+    )
+    return cls(**{name: _REQUIRED_ATTR_VALUES[name] for name in required})
+
+
+@pytest.mark.parametrize(
+    "attrs_class",
+    _dascore_patch_attrs_classes(),
+    ids=lambda cls: cls.__name__,
+)
+class TestPatchAttrsSerialization:
+    """
+    Every PatchAttrs class must survive a text round trip.
+
+    Parametrized over the class walk rather than a list, so a format added
+    later is covered without touching this file.
+    """
+
+    def test_json_round_trip(self, attrs_class):
+        """A defaulted instance reconstructs from its own json."""
+        attrs = _minimal_attrs(attrs_class)
+        out = attrs_class.model_validate_json(attrs.model_dump_json())
+        assert out == attrs
+
+    def test_no_field_defaults_to_a_non_finite_number(self, attrs_class):
+        """
+        Nan and inf have no json spelling, so a float defaulting to one
+        writes null and then refuses to read it back. Optional numbers are
+        spelled `FiniteFloat | None`.
+        """
+        for name, field in attrs_class.model_fields.items():
+            default = field.get_default(call_default_factory=True)
+            if isinstance(default, float):
+                assert np.isfinite(default), (
+                    f"{attrs_class.__name__}.{name} defaults to {default}."
+                )

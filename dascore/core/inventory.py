@@ -46,6 +46,7 @@ from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import (
     DateTime64,
+    FiniteFloat,
     FrozenDictType,
     InventoryModel,
     TimeRangedModel,
@@ -90,8 +91,6 @@ VALID_COORDINATE_LABELS = get_args(CoordinateLabel)
 # The token rule is shared with PatchAttrs.acquisition_key so a code legal
 # in one is legal in the other.
 CodeStr = Annotated[str, AfterValidator(check_code)]
-# A float which must be finite; nan/inf silently poison downstream math.
-FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 # Sensor orientation, in the ranges seismology already uses.
 Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
 Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]

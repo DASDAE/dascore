@@ -95,5 +95,10 @@ UTF8Str = Annotated[str, PlainValidator(unbyte)]
 # A positive (> 0) integer.
 PositiveInt = Annotated[int, Field(gt=0)]
 
+# A float which must be finite; nan/inf silently poison downstream math.
+# Spell an optional number `FiniteFloat | None`: nan has no JSON spelling,
+# so a nan-defaulted float writes `null` and then refuses to read it back.
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
 # A positive (> 0), finite (no nan/inf) float.
 PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]

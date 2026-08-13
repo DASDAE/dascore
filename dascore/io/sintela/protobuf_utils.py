@@ -56,7 +56,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import ScanPayload, make_scan_payload
-from dascore.models import PositiveFiniteFloat, PositiveInt
+from dascore.models import FiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
 PBUF_MAGIC = 0x46554250
@@ -143,7 +143,7 @@ def _get_fft_data_type(has_complex: bool) -> dict[str, str]:
 class SintelaProtobufAttrs(PatchAttrs):
     """Patch attributes for Sintela protobuf recordings."""
 
-    gauge_length: float = np.nan
+    gauge_length: FiniteFloat | None = None
     packet_type: str = ""
     recorder_namespace: str = ""
     metadata_recording_time: np.datetime64 | None = None

@@ -35,6 +35,7 @@ from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import build_patches
+from dascore.models import FiniteFloat
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
@@ -56,10 +57,10 @@ class Block:
 class SR4731PatchAttrs(PatchAttrs):
     """Patch attributes for supported SR-4731 SOR files."""
 
-    wavelength_nm: float = np.nan
-    acquisition_range_m: float = np.nan
-    sample_spacing_usec: float = np.nan
-    refractive_index: float = np.nan
+    wavelength_nm: FiniteFloat | None = None
+    acquisition_range_m: FiniteFloat | None = None
+    sample_spacing_usec: FiniteFloat | None = None
+    refractive_index: FiniteFloat | None = None
     trace_count: int = 0
     sample_scale: int = 0
 
