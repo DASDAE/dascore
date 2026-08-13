@@ -157,10 +157,16 @@ class TestG1MTXH5:
         assert patch.shape == (68, 100, 128)
         assert patch.attrs.data_category == "DSS"
         assert patch.attrs.data_type == "brillouin_spectrum"
-        assert patch.attrs.format_version == 1
         assert patch.attrs.fiber_from == 50
         assert "temperature" in patch.coords.coord_map
         assert patch.coords.dim_map["temperature"] == ("time",)
+        assert patch.coords.dim_map["sample_span"] == ("time",)
+
+    def test_format_version_not_duplicated_in_attrs(self, mtx_h5_path):
+        """The file version is reported as the format version, not as an attr."""
+        patch = dc.read(mtx_h5_path)[0]
+        assert "format_version" not in dict(patch.attrs)
+        assert dc.scan(mtx_h5_path)[0].source_version == FebusMTXH5V1.version
 
     def test_read_preserves_mtx_array_order(self, tmp_path):
         """The patch data should match the MTX array stored in the file."""

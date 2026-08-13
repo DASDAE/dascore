@@ -22,6 +22,10 @@ _BSL_H5_ATTRS = frozenset({"formatVersion", "channel", "fiberFrom", "fiberTo", "
 _MTX_DIMS = ("time", "distance", "frequency")
 _BSL_DIMS = ("time", "distance")
 _BSL_H5_MODE_STRAIN = 1
+# The root "start_time"/"end_time" attrs are bit-identical to the first
+# start_times and last end_times entries, so they only restate the time
+# datasets as untyped epoch floats. "formatVersion" is already reported as
+# source_version. All three are deliberately absent here.
 _G1_H5_ATTR_MAP = {
     "acq_res": "acq_res",
     "ampliPower": "ampli_power",
@@ -31,7 +35,6 @@ _G1_H5_ATTR_MAP = {
     "fiberFrom": "fiber_from",
     "fiberLength": "fiber_length",
     "fiberTo": "fiber_to",
-    "formatVersion": "format_version",
     "freq_fiber": "freq_fiber",
     "freq_offset": "freq_offset",
     "freq_offset_abs": "freq_offset_abs",
@@ -41,8 +44,6 @@ _G1_H5_ATTR_MAP = {
     "sampling_resolution": "sampling_resolution",
     "signal_size": "signal_size",
     "spatial_resolution": "spatial_resolution",
-    "start_time": "start_time",
-    "end_time": "end_time",
     "zoneCount": "zone_count",
     "zones": "zones",
     "febusDataKind": "febus_data_kind",
@@ -190,13 +191,30 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
         return get_exact_coord(values, units=units)
 
     extra_coords = {} if extra_coords is None else extra_coords
-    time = _coord(dc.to_datetime64(resource["start_times"][...]))
+    starts = resource["start_times"][...]
+    ends = resource["end_times"][...]
+    if ends.shape != starts.shape:
+        msg = (
+            f"start_times has shape {starts.shape} but end_times has "
+            f"{ends.shape}; the file is truncated or still being written."
+        )
+        raise ValueError(msg)
+    time = _coord(dc.to_datetime64(starts))
+    # Each sample covers a window rather than being instantaneous, so keep how
+    # long it ran. The span is differenced off the raw arrays rather than
+    # stored as end_times: starts and ends are each near-regular and snap to
+    # slightly different steps, so subtracting the two built coords would turn
+    # the jitter into a linear drift. Built exactly, and ignoring `snap`,
+    # because that jitter is the signal -- though a span array regular enough
+    # to look like a range is still normalized to one by the coord manager.
+    sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
     distance = _coord(resource["distances"][...], units="m")
     temperature = _coord(resource["temperatures"][...], units="°C")
     coords = {
         "time": time,
         "distance": distance,
         "temperature": ("time", temperature),
+        "sample_span": ("time", sample_span),
         **extra_coords,
     }
     return dc.get_coord_manager(coords, dims=dims)

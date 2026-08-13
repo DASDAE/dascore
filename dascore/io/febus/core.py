@@ -188,7 +188,12 @@ class FebusG1CSV1(FiberIO):
 
 
 class FebusMTXH5V1(FiberIO):
-    """HDF5 format used by Febus for storing Brillouin spectra."""
+    """
+    HDF5 format used by Febus for storing Brillouin spectra.
+
+    As with the BSL files, ``time`` holds the start of each acquisition
+    window and the non-dimensional ``sample_span`` coord holds its length.
+    """
 
     name = "febus_mtx_h5"
     preferred_extensions = ("h5", "hdf5")
@@ -246,7 +251,13 @@ class FebusMTXH5V1(FiberIO):
 
 
 class FebusBSLH5V1(FiberIO):
-    """HDF5 format used by Febus G1 for storing BSL strain files."""
+    """
+    HDF5 format used by Febus G1 for storing BSL strain files.
+
+    Samples are not instantaneous; each one covers an acquisition window.
+    The ``time`` coord holds the start of that window and the non-dimensional
+    ``sample_span`` coord, mapped to ``time``, holds how long it ran.
+    """
 
     name = "febus_bsl_h5"
     preferred_extensions = ("h5", "hdf5")
