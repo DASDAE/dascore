@@ -457,6 +457,10 @@ class _Table(NamedTuple):
     # The column rows are read in the order of, never row position, so
     # re-sorting a spreadsheet is harmless.
     order: str | None = None
+    # True where that column is the table's own scaffolding rather than a
+    # field, so nothing else records where a row sits and it must place
+    # each row unambiguously.
+    places: bool = False
 
 
 # Keyed by CSV stem, which is the attribute the table fills. Held as a
@@ -464,7 +468,7 @@ class _Table(NamedTuple):
 # property of the attribute, and stating it is shorter than deducing it.
 # A test pins every key to a real field of the model which declares it.
 _TABLES: Mapping[str, _Table] = {
-    "optical_components": _Table(order="sequence"),
+    "optical_components": _Table(order="sequence", places=True),
     "coupling": _Table(),
     "annotations": _Table(),
     "geometry": _Table(points=True, group="segment", order="distance"),
@@ -576,11 +580,32 @@ def _parse_cell(text: str):
     return int(text) if number.is_integer() and "." not in text else number
 
 
+def _check_places(keys, column: str, path: Path) -> None:
+    """
+    Refuse an ordering which does not place every row.
+
+    Components tile the path, each starting where the previous ends, so
+    two rows sharing a place would be ordered by where they happen to sit
+    in the file -- which is the one thing this column exists to stop
+    deciding anything.
+    """
+    repeated = sorted({str(x) for x in keys[keys.duplicated()]})
+    if repeated:
+        msg = (
+            f"{_quote(path)} states {column} {', '.join(repeated)} more than "
+            "once, so it does not say which row comes first."
+        )
+        raise InvalidInventoryError(msg)
+
+
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
     """Read a table whose every row is one object."""
     _require_columns(frame, [table.order], path)
+    ordered = _ordered(frame, table.order, path)
+    if table.places:
+        _check_places(ordered[table.order], table.order, path)
     out = []
-    for _, row in _ordered(frame, table.order, path).iterrows():
+    for _, row in ordered.iterrows():
         cells = _cells(row)
         # The order column is the table's own scaffolding where the object
         # has no such field; components are placed by it and keep nothing.

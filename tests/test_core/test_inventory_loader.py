@@ -1539,3 +1539,31 @@ class TestUnreadableTables:
         }
         with pytest.raises(InvalidInventoryError, match="its header names 3 columns"):
             make_inventory(files)
+
+    def test_a_sequence_which_places_two_rows_alike(self, make_inventory):
+        """Components tile the path, so no two may claim one place."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "sequence,object_type,optical_length,name\n"
+                "1,FiberSegment,100.0,a\n"
+                "1,Splice,0.1,b\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="does not say which row"):
+            make_inventory(files)
+
+    def test_a_cell_which_does_not_pertain_to_its_row(self, make_inventory):
+        """The model refuses a field its own type does not declare."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "sequence,object_type,optical_length,name,fiber_color\n"
+                "1,Splice,0.1,b,blue\n"
+            ),
+        }
+        # A splice has no fiber colour; only a segment does.
+        with pytest.raises(InvalidInventoryError, match="Could not read OpticalPath"):
+            make_inventory(files)
