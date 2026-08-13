@@ -52,6 +52,22 @@ def _folds_case() -> bool:
 FOLDS_CASE = _folds_case()
 
 
+def _keeps_trailing_dot() -> bool:
+    """Return True if this filesystem keeps a trailing dot in a name."""
+    with tempfile.TemporaryDirectory() as name:
+        directory = Path(name)
+        try:
+            (directory / "probe.").mkdir()
+        except OSError:  # pragma: no cover - no filesystem here refuses it
+            return False
+        return (directory / "probe.").exists() and not (directory / "probe").exists()
+
+
+# Windows strips a trailing dot, so `path.` and `path` are one directory
+# there and the blank location cannot be spelled twice.
+KEEPS_TRAILING_DOT = _keeps_trailing_dot()
+
+
 @pytest.fixture
 def make_inventory(tmp_path):
     """Return a function which writes a directory and loads it."""
@@ -1709,6 +1725,9 @@ class TestPathEpochsBelongToTheirArray:
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
         assert pd.isnull(path.start_time)
 
+    @pytest.mark.skipif(
+        not KEEPS_TRAILING_DOT, reason="this filesystem holds one of the two"
+    )
     def test_two_undated_epochs_of_one_lineage(self, make_inventory):
         """NaT equals nothing, so this collision has to be found by hand."""
         files = {
@@ -1898,3 +1917,16 @@ class TestGapsMutationTestingFound:
             ),
         }
         assert one_path(make_inventory(files)).coupling[0].description == "NA"
+
+    def test_two_undated_epochs_collide_on_every_filesystem(self, tmp_path):
+        """The rule above, where the directories which state it cannot exist.
+
+        Windows keeps no trailing dot, so `path.` and `path` are one
+        directory there; the comparison is pinned here instead.
+        """
+        first = inv.OpticalPath(name="first")
+        second = inv.OpticalPath(name="second")
+        sources = {id(first): tmp_path / "a.yaml", id(second): tmp_path / "b.yaml"}
+        assert pd.isnull(first.start_time) and pd.isnull(second.start_time)
+        with pytest.raises(InvalidInventoryError, match="two spellings of one epoch"):
+            loader._close_lineages([first, second], sources)
