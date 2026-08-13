@@ -35,12 +35,12 @@ from dascore.exceptions import (
     PatchError,
     UnresolvedPatchError,
 )
+from dascore.models import values_equal
 from dascore.proc.coords import update_coords
 from dascore.units import get_quantity_str
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key
-from dascore.utils.models import values_equal
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 

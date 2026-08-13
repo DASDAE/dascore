@@ -44,19 +44,19 @@ from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError
+from dascore.models import (
+    DateTime64,
+    FrozenDictType,
+    InventoryModel,
+    TimeRangedModel,
+    UnitQuantity,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     check_code,
     is_strictly_monotonic,
     optional_import,
     validate_acquisition_key,
-)
-from dascore.utils.models import (
-    DateTime64,
-    FrozenDictType,
-    InventoryModel,
-    TimeRangedModel,
-    UnitQuantity,
 )
 
 CouplingType = Literal[

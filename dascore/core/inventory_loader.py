@@ -56,8 +56,8 @@ from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
 )
+from dascore.models import InventoryModel, TimeRangedModel
 from dascore.utils.misc import check_code, optional_import
-from dascore.utils.models import InventoryModel, TimeRangedModel
 from dascore.utils.time import to_datetime64
 
 # One data model stands behind all three spellings, so they are accepted

@@ -18,9 +18,9 @@ from dascore.constants import (
 )
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.core import make_scan_payload
+from dascore.models import UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
-from dascore.utils.models import UTF8Str
 
 from .a1utils import (
     _get_febus_version_str,

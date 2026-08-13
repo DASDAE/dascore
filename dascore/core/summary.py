@@ -17,7 +17,7 @@ import dascore as dc
 from dascore.constants import path_types
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import CoordSummary
-from dascore.utils.models import DascoreBaseModel
+from dascore.models import DascoreBaseModel
 from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 

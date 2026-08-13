@@ -14,11 +14,11 @@ from scipy.ndimage import gaussian_filter
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.models import DascoreBaseModel
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
 )
-from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 _smooth_param = """

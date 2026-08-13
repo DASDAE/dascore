@@ -13,9 +13,9 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.exceptions import CoordError, UnitError
+from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import unbyte
-from dascore.utils.models import ArrayLike
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as

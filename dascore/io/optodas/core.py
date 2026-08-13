@@ -9,8 +9,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import UTF8Str
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UTF8Str
 
 from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
 

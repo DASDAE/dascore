@@ -16,7 +16,7 @@ from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
 )
-from dascore.utils.models import InventoryModel, TimeRangedModel
+from dascore.models import InventoryModel, TimeRangedModel
 
 pytest.importorskip("yaml")
 

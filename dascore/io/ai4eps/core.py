@@ -9,8 +9,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import DateTime64
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import DateTime64
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_ai4eps
 

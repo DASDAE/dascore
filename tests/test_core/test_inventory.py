@@ -14,8 +14,8 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
+from dascore.models import values_equal
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.models import values_equal
 
 
 def build_inventory() -> inv.Inventory:

@@ -8,8 +8,7 @@ import numpy as np
 import pytest
 from pydantic import Field, ValidationError
 
-from dascore.units import Quantity
-from dascore.utils.models import (
+from dascore.models import (
     DascoreBaseModel,
     DateTime64,
     FrozenDictType,
@@ -17,6 +16,7 @@ from dascore.utils.models import (
     UnitQuantity,
     sensible_model_equals,
 )
+from dascore.units import Quantity
 
 
 class _TestModel(DascoreBaseModel):

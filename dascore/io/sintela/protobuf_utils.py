@@ -56,8 +56,8 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import ScanPayload, make_scan_payload
+from dascore.models import DascoreBaseModel, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
-from dascore.utils.models import DascoreBaseModel, PositiveFiniteFloat, PositiveInt
 
 PBUF_MAGIC = 0x46554250
 META_TAG = "META"

@@ -15,11 +15,11 @@ from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.models import UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
-from dascore.utils.models import UTF8Str
 
 # --- Getting format/version
 

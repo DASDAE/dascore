@@ -1,13 +1,12 @@
 """
-Deprecated home of DASCore's models; import from [dascore.models](`dascore.models`).
+DASCore's model layer: base classes and the annotated types they are built from.
 
-Everything here is re-exported from its new home so out-of-tree readers which
-import from this path keep working.
+Anything which inherits from [DascoreBaseModel](`dascore.models.base.DascoreBaseModel`)
+can appear in a DASCore document. Models used only to shuttle values inside one
+module are plain pydantic models instead.
 """
 
 from __future__ import annotations
-
-from pydantic import BaseModel
 
 from dascore.models.base import (
     DascoreBaseModel,
@@ -34,7 +33,6 @@ from dascore.models.types import (
 
 __all__ = [
     "ArrayLike",
-    "BaseModel",
     "CommaSeparatedStr",
     "DTypeLike",
     "DascoreBaseModel",

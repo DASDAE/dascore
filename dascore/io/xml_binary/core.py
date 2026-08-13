@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.io import FiberIO, ScanPayload
-from dascore.utils.models import UTF8Str
+from dascore.models import UTF8Str
 from dascore.utils.paths import coerce_to_upath
 
 from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
