@@ -1254,7 +1254,21 @@ class TestTrackTables:
             "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
             "fiber_arrays/DAS.L001/name.csv": "a,b\n1,2\n",
         }
-        with pytest.raises(InvalidInventoryError, match="not a row-shaped"):
+        with pytest.raises(InvalidInventoryError, match="does not read as a table"):
+            make_inventory(files)
+
+    def test_a_row_shaped_attribute_with_no_table(self, make_inventory):
+        """Station.channels is row-shaped and still has no table form.
+
+        The message must not tell the author otherwise, which is what it
+        did while it said "not a row-shaped attribute".
+        """
+        files = {
+            "stations/DAS.STA1/attrs.yaml": "object_type: Station\n",
+            "stations/DAS.STA1/channels.csv": "code,location_code\nHHZ,00\n",
+        }
+        assert "channels" in inv.Station.model_fields
+        with pytest.raises(InvalidInventoryError, match="does not read as a table"):
             make_inventory(files)
 
     def test_stated_inline_and_as_a_table(self, make_inventory):

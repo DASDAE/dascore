@@ -933,9 +933,12 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
             )
             raise InvalidInventoryError(msg)
         if (table := _TABLES.get(stem)) is None:
+            # Not "is not row-shaped": Station.channels is as row-shaped as
+            # anything here and still has no table, so saying that would be
+            # telling the author something false about their own model.
             msg = (
-                f"{_quote(child)} names {stem}, which is not a row-shaped "
-                f"attribute; state it in {_ATTRS_STEM} instead."
+                f"{_quote(child)} names {stem}, which this format does not "
+                f"read as a table; state it in the {_ATTRS_STEM} file instead."
             )
             raise InvalidInventoryError(msg)
         if stem in data:
