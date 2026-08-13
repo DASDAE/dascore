@@ -28,6 +28,8 @@ written against the last released version; breaking only against unreleased work
 - changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
 ```
 
+Write the text after the colon as a complete sentence, with a subject and a verb, ending in a period; both entries above do, while a bare noun phrase such as `removed: the tran namespace` does not stand on its own once it is lifted into the release notes.
+
 `none` may be written bare or as the section's only bullet (`- none`); both pass.
 
 # Paths

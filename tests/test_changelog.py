@@ -147,7 +147,13 @@ class TestChangelogSectionChecker:
         commented = "<!--\n- added: an example from the template.\n-->"
         assert checker.validate(_body(commented))
 
-    def test_section_ends_at_the_next_heading(self, checker):
-        """Entries belonging to a later section are not read as changelog ones."""
-        body = _body("none") + "\n## Checklist\n\n- [ ] did a thing.\n"
+    @pytest.mark.parametrize("heading", ["## Checklist", "  ## Checklist"])
+    def test_section_ends_at_the_next_heading(self, checker, heading):
+        """Entries belonging to a later section are not read as changelog ones.
+
+        The heading may be indented: several merged pull requests carry an
+        indented template, and reading past it would take the checklist's
+        boxes for malformed entries.
+        """
+        body = _body("none") + f"\n{heading}\n\n- [ ] did a thing.\n"
         assert checker.validate(body) == []
