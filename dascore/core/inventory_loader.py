@@ -75,6 +75,17 @@ _OBJECT_SUFFIXES = (".yaml", ".yml", ".json")
 _ATTRS_STEM = "attrs"
 _ENVELOPE_STEM = "inventory"
 
+# The name a data directory carries its own inventory under, in either
+# form: the directory `.inventory/` or a file naming its format --
+# `.inventory.yaml`, `.inventory.yml`, or `.inventory.json`. Hidden,
+# like `.dascore_index.sqlite3` beside it -- a companion the directory
+# keeps rather than content it holds -- which is also what keeps the file
+# scanner (whose `skip_hidden` defaults to True) from reading it as data.
+# The visible spelling is deliberately not accepted: `inventory.yaml` is
+# the envelope of the authoring format, so a data directory holding one
+# would be claiming to be an inventory directory itself.
+BLESSED_NAME = ".inventory"
+
 # Separates an entity's name from the epoch it starts.
 _EPOCH_MARKER = "@"
 
@@ -1484,6 +1495,90 @@ def load_directory(path: str | os.PathLike) -> Inventory:
     return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
 
 
+def _load_file(path: Path) -> Inventory:
+    """
+    Load a whole inventory from one serialized document.
+
+    The envelope of an authoring directory read on its own terms: same
+    parsers, same errors, so the single-file artifact ``to_yaml`` writes
+    and the directory it came from fail the same way when they fail.
+    """
+    return Inventory._from_mapping(_read_object(path), _quote(path))
+
+
+def _blessed_candidates(directory: Path) -> tuple[Path, ...]:
+    """Every spelling of the blessed name, the directory form first."""
+    tree = directory / BLESSED_NAME
+    return (tree, *(tree.with_suffix(suffix) for suffix in _OBJECT_SUFFIXES))
+
+
+def carries_inventory(directory: str | os.PathLike) -> bool:
+    """
+    Return whether a directory holds anything under the blessed name.
+
+    A few stats and nothing more: this is the question a spool asks when
+    it opens a directory, so it must not read, parse, or judge what it
+    finds. Which of the two forms the directory means, or whether it
+    names a form at all, is ``find_inventory``'s to answer, when
+    something actually asks; whether what it names loads is the loader's,
+    later still, and nobody's until then.
+
+    Parameters
+    ----------
+    directory
+        The directory to look in.
+    """
+    return any(x.exists() for x in _blessed_candidates(Path(directory)))
+
+
+def find_inventory(directory: str | os.PathLike) -> Path | None:
+    """
+    Return the path of the inventory a directory carries, or None.
+
+    Only the name is judged, never the contents: a path comes back
+    because something sits under the blessed name in a form that name
+    takes, not because it loads. Raises instead of answering when the
+    directory says two things at once -- both forms present -- or when
+    what sits there is the wrong kind of thing for the name it has, which
+    is a misspelling of the convention rather than a file which owes it
+    nothing.
+
+    Parameters
+    ----------
+    directory
+        The directory to look in.
+    """
+    candidates = _blessed_candidates(Path(directory))
+    tree = candidates[0]
+    if not (found := [x for x in candidates if x.exists()]):
+        return None
+    if len(found) > 1:
+        listed = ", ".join(sorted(x.name for x in found))
+        msg = (
+            f"{tree.parent} carries more than one inventory: {listed}. A "
+            "directory states its inventory once; keep the one it means."
+        )
+        raise InvalidInventoryError(msg)
+    (only,) = found
+    # A near-miss: something is sitting under the blessed name in a form
+    # that name does not take, which is a misspelling of the convention
+    # rather than a file which owes it nothing.
+    if only == tree and not only.is_dir():
+        msg = (
+            f"{only} is a file. An inventory a directory carries is either "
+            f"the authoring directory {BLESSED_NAME}/ or a file naming its "
+            f"format, {BLESSED_NAME}{_OBJECT_SUFFIXES[0]}."
+        )
+        raise InvalidInventoryError(msg)
+    if only != tree and only.is_dir():
+        msg = (
+            f"{only} is a directory. The authoring directory an inventory "
+            f"lives in takes no suffix: {BLESSED_NAME}/."
+        )
+        raise InvalidInventoryError(msg)
+    return only
+
+
 def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     """
     Load or create a DASDAE inventory.
@@ -1508,6 +1603,13 @@ def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     if isinstance(source, str | os.PathLike):
         if os.path.isdir(source):
             return load_directory(source)
+        # A serialized document is read the way the format reads its own
+        # object files: the suffix picks the parser, so a JSON inventory
+        # loads where PyYAML is not installed, and a file which does not
+        # parse says so as an invalid inventory rather than as whatever
+        # the parser happened to raise.
+        if os.path.isfile(source) and _object_suffix(Path(source)) is not None:
+            return _load_file(Path(source))
         return Inventory.from_yaml(source)
     msg = f"Could not get an inventory from {source!r}."
     raise InvalidInventoryError(msg)

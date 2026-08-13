@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import abc
 import inspect
+import os
+import threading
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import replace
@@ -14,6 +16,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, overload
 
 import numpy as np
 import pandas as pd
+from pydantic import ValidationError
 from rich.text import Text
 from typing_extensions import Self
 
@@ -34,10 +37,17 @@ from dascore.constants import (
     path_types,
     timeable_types,
 )
-from dascore.core.inventory import Inventory
+from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
+from dascore.core.inventory_loader import (
+    BLESSED_NAME,
+    carries_inventory,
+    find_inventory,
+)
 from dascore.exceptions import (
+    InvalidInventoryError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
+    MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
     PatchError,
@@ -424,10 +434,116 @@ def _combine_state(values, label):
     if len(present) == 2 and present[0] != present[1]:
         msg = (
             f"The spools carry different {label}, which have no combined "
-            "meaning. Attach one inventory to the combined spool instead."
+            "meaning. Attach one inventory to the combined spool instead, "
+            "or drop an operand's with Spool.remove_inventory -- which is "
+            "also the answer when neither was attached by hand and each "
+            "directory simply carries its own."
         )
         raise InvalidSpoolError(msg)
     return present[0]
+
+
+class _InventoryRef:
+    """
+    An inventory a spool has been pointed at but has not read.
+
+    Attaching states where the inventory is; the read happens at the
+    first question only an inventory can answer, and then once. The
+    holder is shared rather than copied, because a spool copy-constructs
+    from its parent (`select`, `sort`, `chunk` each return a new one), so
+    a spool sliced ten ways still reads its inventory a single time and
+    two views of one parent can never disagree about what it says.
+
+    An inventory is an input, not a cache, so it is never re-read behind
+    the caller's back: a file which changes under a running program is a
+    new input rather than a stale one, and re-attaching is how the
+    program says to read it again -- `Spool.attach_inventory()` with no
+    argument for the one a directory carries, the same path again for
+    any other. A read which failed is not a read, though, and is tried
+    again next time: an unreadable inventory is a thing to go and fix,
+    and holding the failure would mean the fix could not be seen.
+    """
+
+    def __init__(self, path, blessed: bool = False):
+        # Anchored now, while the working directory is still the one the
+        # caller named it from: the read happens later, and a relative
+        # path would then be resolved against wherever the program had
+        # got to -- another directory, or another process entirely.
+        # For a blessed reference this is the directory, not the file:
+        # which of the two forms the directory carries is decided when it
+        # is read, so discovery stays a stat and its complaints wait.
+        self.path = path.absolute()
+        self.blessed = blessed
+        self._inventory: Inventory | None = None
+        self._lock = threading.Lock()
+
+    def __getstate__(self):
+        """A lock cannot be pickled, and a fresh one is what a copy wants."""
+        return {k: v for k, v in self.__dict__.items() if k != "_lock"}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
+    def resolve(self) -> Inventory:
+        """Return the inventory, reading it if this is the first ask."""
+        # Held across the read, not merely around the assignment: threads
+        # mapping over one spool all reach this at once, and reading a
+        # large authoring directory once per worker is the cost this
+        # whole class exists to avoid.
+        with self._lock:
+            if self._inventory is None:
+                self._inventory = self._read()
+            return self._inventory
+
+    def _read(self) -> Inventory:
+        """Read the inventory, saying where an unreadable one came from."""
+        try:
+            source = self.path
+            if self.blessed:
+                source = find_inventory(self.path)
+                if source is None:
+                    msg = "nothing is there now, though there was on opening"
+                    raise InvalidInventoryError(msg)
+            return dc.inventory(source)
+        except (
+            InvalidInventoryError,
+            MissingOptionalDependencyError,
+            ValidationError,
+            OSError,
+        ) as error:
+            # Surfacing from inside select() or enrich(), the failure has
+            # to say which file it means and how the spool came to have
+            # it -- most sharply when nobody chose it by hand.
+            where = (
+                f"the inventory {self.path} carries under the name "
+                f"{BLESSED_NAME!r}, attached when the spool was opened"
+                if self.blessed
+                else f"the inventory attached to this spool from {self.path}"
+            )
+            msg = f"Could not read {where}: {error}"
+            raise InvalidInventoryError(msg) from error
+
+    def __eq__(self, other) -> bool:
+        """
+        Whether this and another attachment are the same one.
+
+        An attachment is compared as the thing it is -- a place, or a
+        value -- rather than by what reading it would produce. Comparing
+        never reads, which is what keeps `==` and `+` from doing file
+        I/O, from raising out of an unreadable inventory, and from
+        answering differently depending on whether something happened to
+        read it first. So a place equals the same place, a value equals
+        an equal value, and a place is no value until someone asks.
+        """
+        if isinstance(other, _InventoryRef):
+            return (self.path, self.blessed) == (other.path, other.blessed)
+        if isinstance(other, Inventory):
+            return False
+        return NotImplemented
+
+    # Defined because __eq__ is: a reference is spool state, never a key.
+    __hash__ = None
 
 
 def _combine_inventories(first, second) -> tuple:
@@ -948,9 +1064,10 @@ class Spool(BaseSpool):
     )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
-    # An attached inventory, the enrich kwargs to apply on extraction
-    # (None means attached without automatic enrichment), and what to do
-    # with a patch the inventory does not describe.
+    # An attached inventory -- itself, or a reference which reads it when
+    # something asks -- the enrich kwargs to apply on extraction (None
+    # means attached without automatic enrichment), and what to do with a
+    # patch the inventory does not describe.
     _inventory = None
     _enrich_kwargs: dict | None = None
     _on_unresolved: str = "warn"
@@ -1083,13 +1200,9 @@ class Spool(BaseSpool):
         """{doc}."""
         requested = _requested_names(_attrs, _coords, kwargs)
         known_attrs, known_coords = self._index_names()
-        selectable, channels = set(), {}
-        if self._inventory is not None:
-            names = self._inventory.get_names()
-            channels = self._channel_query(
-                requested, names, known_attrs, known_coords, _coords, kwargs
-            )
-            selectable = set(names.attrs) - known_coords
+        channels, selectable = self._inventory_query(
+            requested, known_attrs, known_coords, _coords, kwargs
+        )
         attrs, coords = resolve_selector_namespaces(
             known_attrs | selectable,
             known_coords,
@@ -1140,8 +1253,51 @@ class Spool(BaseSpool):
         backend = self._catalog.backend
         return set(backend.attr_names()), set(backend.coord_names())
 
+    def _inventory_query(
+        self, requested, known_attrs, known_coords, _coords, kwargs
+    ) -> tuple[dict, set[str]]:
+        """
+        Split what a query names between the inventory and the index.
+
+        Returns the selectors the inventory answers per channel, and the
+        attr names it could state — which is what widens the namespace a
+        query may draw on.
+
+        Whether an inventory has anything to say here is settled without
+        reading one: the observing-system facts are the models' own, the
+        same for every inventory, and a name the index already carries
+        keeps the index's meaning even where an inventory could also
+        place it on the fiber. So a query about what the index already
+        knows leaves a lazily attached inventory unread, and one naming
+        anything else is asking a question only the inventory can answer.
+        """
+        if self._inventory is None:
+            return {}, set()
+        # A name the index already uses for a coordinate keeps its meaning;
+        # bare names resolve to attrs first, and an inventory must not
+        # quietly move one out of the namespace it has always been in.
+        selectable = set(_SYSTEM_FACT_NAMES) - known_coords
+        outside = (requested - known_attrs - known_coords - selectable) | (
+            _namespace_names(_coords) - known_coords
+        )
+        if not outside:
+            return {}, selectable
+        # `selectable` rather than the inventory's own attr names, which
+        # are the same set: one spelling of what an inventory could state
+        # keeps this from deciding to read on one rule and then reading
+        # under another.
+        channels = self._channel_query(
+            self._resolved_inventory().get_names().coords,
+            requested,
+            known_attrs | known_coords | selectable,
+            known_coords,
+            _coords,
+            kwargs,
+        )
+        return channels, selectable
+
     def _channel_query(
-        self, requested, names, known_attrs, known_coords, _coords, kwargs
+        self, coord_names, requested, known, known_coords, _coords, kwargs
     ) -> dict:
         """
         Return the selectors naming coordinates the inventory runs along
@@ -1156,8 +1312,7 @@ class Spool(BaseSpool):
         could also place it on the fiber, and an inventory must not
         quietly move a name out of the namespace it has always been in.
         """
-        coords = set(names.coords) - known_coords
-        known = known_attrs | known_coords | set(names.attrs)
+        coords = set(coord_names) - known_coords
         candidates = (requested - known) | (_namespace_names(_coords) & coords)
         wanted = candidates & coords
         if not wanted:
@@ -1191,9 +1346,8 @@ class Spool(BaseSpool):
             return {}, {}, _attrs, _coords, kwargs
         requested = _requested_names(_attrs, _coords, kwargs)
         known_attrs, known_coords = self._index_names()
-        names = self._inventory.get_names()
-        channels = self._channel_query(
-            requested, names, known_attrs, known_coords, _coords, kwargs
+        channels, selectable = self._inventory_query(
+            requested, known_attrs, known_coords, _coords, kwargs
         )
         # Neither keyword has anything to mean about a value the fiber
         # states: it has no sample numbering of its own -- the channels it
@@ -1216,10 +1370,6 @@ class Spool(BaseSpool):
             raise InvalidSpoolQueryError(msg)
         kwargs = _without_keys(kwargs, channels)
         _coords = _without_names(_coords, channels)
-        # A name the index already uses for a coordinate keeps its meaning;
-        # bare names resolve to attrs first, and an inventory must not
-        # quietly move one out of the namespace it has always been in.
-        selectable = set(names.attrs) - known_coords
         # samples=True selections are coordinate-only, so an attr among
         # them is an error the index states better than this can.
         if samples or not requested & selectable:
@@ -1277,7 +1427,11 @@ class Spool(BaseSpool):
             judged = np.isin(working["_patch_id"].to_numpy(), np.asarray(applies_to))
             contexts[~judged] = None
         name, pieces, reasons = resolve_channel_pieces(
-            self._inventory, contexts, working, query, complement=complement
+            self._resolved_inventory(),
+            contexts,
+            working,
+            query,
+            complement=complement,
         )
         _refuse_rows(source_rows, reasons, _UNPLACEABLE)
         if name is None:
@@ -1333,7 +1487,9 @@ class Spool(BaseSpool):
                 if contexts is None:
                     contexts = self._resolve_rows(ids)
                 matched[~stated] = _match_resolved(
-                    get_attr_values(self._inventory, contexts[~stated], name),
+                    get_attr_values(
+                        self._resolved_inventory(), contexts[~stated], name
+                    ),
                     name,
                     selector,
                     backend.attr_units(name),
@@ -1361,7 +1517,7 @@ class Spool(BaseSpool):
         resolved = dict(
             zip(
                 df["_patch_id"].to_numpy(),
-                resolve_contexts(self._inventory, *columns),
+                resolve_contexts(self._resolved_inventory(), *columns),
                 strict=True,
             )
         )
@@ -1384,7 +1540,7 @@ class Spool(BaseSpool):
             dtype=np.int64,
         )
 
-    def attach_inventory(self, inventory) -> Self:
+    def attach_inventory(self, inventory=None) -> Self:
         """
         Attach a DASDAE inventory to this spool.
 
@@ -1401,7 +1557,10 @@ class Spool(BaseSpool):
         Parameters
         ----------
         inventory
-            The inventory to carry.
+            The inventory to carry: an `Inventory`, or the path of one
+            (an authoring directory or a serialized file), which is read
+            at the first question rather than now. None means the one
+            the spool's own directory carries, read again.
 
         Examples
         --------
@@ -1422,14 +1581,62 @@ class Spool(BaseSpool):
         inventory defines along the fiber become selectable, and
         [`split_by`](`dascore.core.spool.Spool.split_by`) can expand the
         spool by the values of one.
+
+        A spool opened on a directory which carries an inventory under
+        the name `.inventory` starts out attached to it, so this is
+        needed there only to attach a different one — or, with no
+        argument, to read that one again after editing it. An inventory
+        is read once and held, since it is an input rather than a cache;
+        re-reading it is a thing the program says, not something which
+        happens behind it.
         """
-        if not isinstance(inventory, Inventory):
-            msg = f"attach_inventory needs an Inventory, got {type(inventory)}."
+        if inventory is None:
+            inventory = self._blessed_inventory(demanded=True)
+        elif isinstance(inventory, str | os.PathLike):
+            path = Path(inventory)
+            # Eager, though the read is not: a path which is not there is
+            # the caller's own mistake, and saying so later would blame
+            # whichever call first happened to ask a question.
+            if not path.exists():
+                msg = f"No inventory at {path}."
+                raise InvalidInventoryError(msg)
+            inventory = _InventoryRef(path)
+        elif not isinstance(inventory, Inventory):
+            msg = (
+                "attach_inventory needs an Inventory or the path of one, "
+                f"got {type(inventory)}."
+            )
             raise ParameterError(msg)
         new = self.__class__(self)
         new._inventory = inventory
         new._enrich_kwargs = None
         return new
+
+    def _blessed_inventory(self, demanded: bool = False):
+        """
+        A reference to the inventory this spool's directory carries.
+
+        Whether one is there is settled now, by a stat; which form it
+        takes and whether it can be read wait until something asks. When
+        `demanded`, having none is an error rather than an answer, since
+        the caller asked for that one in particular.
+        """
+        path = self.spool_path
+        on_directory = path is not None and path.is_dir()
+        if on_directory and carries_inventory(path):
+            return _InventoryRef(path, blessed=True)
+        if not demanded:
+            return None
+        where = (
+            f"{path} holds nothing named {BLESSED_NAME}"
+            if on_directory
+            else "this spool was not opened on a directory which could hold one"
+        )
+        msg = (
+            f"This spool carries no inventory of its own: {where}. Pass the "
+            "inventory to attach, or the path of one."
+        )
+        raise InvalidInventoryError(msg)
 
     def remove_inventory(self) -> Self:
         """
@@ -1439,6 +1646,10 @@ class Spool(BaseSpool):
         goes with it, since there is nothing left to enrich from. A spool
         with no inventory is returned unchanged in substance; as everywhere
         else, the original spool is left alone.
+
+        Removal sticks, including on a spool which found its inventory in
+        its own directory: the slot is filled when the spool is opened
+        and nothing fills it again.
 
         Examples
         --------
@@ -1489,8 +1700,9 @@ class Spool(BaseSpool):
         Parameters
         ----------
         inventory
-            The inventory to enrich from. Defaults to the spool's attached
-            inventory; given one, it is attached as well.
+            The inventory to enrich from, or the path of one. Defaults to
+            the spool's attached inventory; given one, it is attached as
+            well.
         on_unresolved
             What to do with a patch the inventory does not describe — one
             naming no entry, or naming one the inventory does not resolve
@@ -1612,7 +1824,7 @@ class Spool(BaseSpool):
         # into, so it would quietly give an empty spool. Selection refuses
         # a name it does not know, and a misspelling is no more meaningful
         # here than it is there.
-        if name not in set(self._inventory.get_names().coords):
+        if name not in set(self._resolved_inventory().get_names().coords):
             msg = (
                 f"{name!r} is not a coordinate the attached inventory defines "
                 "along the fiber, so there is nothing to split on. "
@@ -1624,7 +1836,11 @@ class Spool(BaseSpool):
             _check_stampable(name, working)
         contexts = self._plan_contexts(working)
         dim, rows, reasons = resolve_split_pieces(
-            self._inventory, contexts, working, name, _glob_filter(include, exclude)
+            self._resolved_inventory(),
+            contexts,
+            working,
+            name,
+            _glob_filter(include, exclude),
         )
         _refuse_rows(source_rows, reasons, _UNPLACEABLE)
         if dim is None:  # nothing to split: no row has a fiber to split on
@@ -1642,7 +1858,7 @@ class Spool(BaseSpool):
         columns = _resolution_columns(working)
         if columns is None:
             return np.full(len(working), None, dtype=object)
-        return resolve_contexts(self._inventory, *columns)
+        return resolve_contexts(self._resolved_inventory(), *columns)
 
     def conform_to_inventory(
         self,
@@ -1669,7 +1885,8 @@ class Spool(BaseSpool):
         Parameters
         ----------
         inventory
-            The inventory to conform to. Defaults to the spool's attached
+            The inventory to conform to, or the path of one. Defaults to
+            the spool's attached
             inventory; given one, it is attached as well — and attaching
             clears enrichment set up from the old one, as it does
             everywhere. Conforming to the spool's own inventory leaves
@@ -1731,7 +1948,7 @@ class Spool(BaseSpool):
         epochs = (
             [_NO_EPOCHS] * len(working)
             if columns is None
-            else resolve_row_epochs(new._inventory, *columns)
+            else resolve_row_epochs(new._resolved_inventory(), *columns)
         )
         _refuse_rows(
             source_rows,
@@ -1829,6 +2046,25 @@ class Spool(BaseSpool):
             return self
         return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
 
+    def _resolved_inventory(self) -> Inventory:
+        """
+        The attached inventory itself, read now if it has not been.
+
+        Every question answered *from* an inventory goes through here,
+        and nothing else reads one -- comparing two attachments, which is
+        the other thing a spool does with them, deliberately does not.
+        The cheap `self._inventory is None` says whether one is attached
+        at all, which is what lets a spool be opened, counted, ordered,
+        chunked, and read without a lazily attached inventory ever being
+        touched. Data access is never hostage to a metadata file.
+        """
+        # Every caller is already behind that cheap check, one way or
+        # another: asking an inventory question of a spool carrying none
+        # is refused where the question is asked, in its own words.
+        attached = self._inventory
+        assert attached is not None
+        return attached.resolve() if isinstance(attached, _InventoryRef) else attached
+
     def _enrichment(self):
         """Return how this spool enriches, or None if it does not."""
         if self._inventory is None or self._enrich_kwargs is None:
@@ -1841,7 +2077,7 @@ class Spool(BaseSpool):
             return patch
         kwargs, on_unresolved = enrichment
         try:
-            return patch.enrich(self._inventory, **kwargs)
+            return patch.enrich(self._resolved_inventory(), **kwargs)
         except UnresolvedPatchError:
             # The inventory does not describe this patch. Dropping it is
             # conform_to_inventory's job, so it comes out as it went in.
@@ -2165,6 +2401,13 @@ class Spool(BaseSpool):
 
         The directory's index (created/updated via ``update()``) backs
         the catalog; ``path`` may also be an existing directory indexer.
+
+        A directory which carries an inventory under the name
+        ``.inventory`` — the authoring directory ``.inventory/`` or a
+        serialized ``.inventory.yaml``, ``.inventory.yml``, or
+        ``.inventory.json`` — hands it to the spool, which reads it at
+        the first question only an inventory can answer. See
+        [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
         """
         from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
         from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
@@ -2181,6 +2424,10 @@ class Spool(BaseSpool):
             )
         else:
             out._catalog = PatchCatalog.from_directory(path, index_path=index_path)
+        # Filling the slot at the moment the spool is opened is what makes
+        # `remove_inventory` stick: nothing refills it afterwards, so no
+        # sentinel is needed to tell unset from deliberately emptied.
+        out._inventory = out._blessed_inventory()
         return out
 
     @classmethod

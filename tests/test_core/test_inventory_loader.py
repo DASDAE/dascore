@@ -2026,3 +2026,155 @@ class TestPRReviewFindings:
             ),
         }
         assert len(one_path(make_inventory(files)).geometry[0].distance) == 2000
+
+
+class TestFindInventory:
+    """The name a data directory carries its own inventory under."""
+
+    def test_nothing_there(self, tmp_path):
+        """A directory carrying no inventory says so both ways."""
+        assert loader.find_inventory(tmp_path) is None
+        assert not loader.carries_inventory(tmp_path)
+
+    def test_the_file_form(self, tmp_path):
+        """A serialized inventory beside the data it describes."""
+        found = tmp_path / f"{loader.BLESSED_NAME}.yaml"
+        found.write_text(dc.inventory().to_yaml())
+        assert loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) == found
+        assert isinstance(dc.inventory(loader.find_inventory(tmp_path)), inv.Inventory)
+
+    def test_the_directory_form(self, tmp_path):
+        """An authoring directory beside the data it describes."""
+        found = write_inventory(tmp_path / loader.BLESSED_NAME, MINIMAL)
+        assert loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) == found
+        assert len(dc.inventory(loader.find_inventory(tmp_path)).networks) == 1
+
+    def test_the_visible_name_is_not_it(self, tmp_path):
+        """`inventory.yaml` is the envelope of the authoring format."""
+        (tmp_path / "inventory.yaml").write_text(dc.inventory().to_yaml())
+        assert not loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) is None
+
+    @pytest.mark.parametrize("suffix", loader._OBJECT_SUFFIXES)
+    def test_every_object_suffix(self, tmp_path, suffix):
+        """One data model stands behind each spelling here too."""
+        found = tmp_path / f"{loader.BLESSED_NAME}{suffix}"
+        found.write_text("{}")
+        assert loader.find_inventory(tmp_path) == found
+
+    def test_two_spellings_of_one_fact(self, tmp_path):
+        """A directory states its inventory once."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").write_text("{}")
+        (tmp_path / loader.BLESSED_NAME).mkdir()
+        with pytest.raises(InvalidInventoryError, match="more than one inventory"):
+            loader.find_inventory(tmp_path)
+
+    def test_two_files_of_one_fact(self, tmp_path):
+        """Two suffixes are two spellings, as they are inside the format."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").write_text("{}")
+        (tmp_path / f"{loader.BLESSED_NAME}.json").write_text("{}")
+        with pytest.raises(InvalidInventoryError, match="more than one inventory"):
+            loader.find_inventory(tmp_path)
+
+    def test_a_suffixless_file(self, tmp_path):
+        """The bare name is the directory form; a file under it names none."""
+        (tmp_path / loader.BLESSED_NAME).write_text("{}")
+        with pytest.raises(InvalidInventoryError, match="is a file"):
+            loader.find_inventory(tmp_path)
+
+    def test_a_suffixed_directory(self, tmp_path):
+        """The authoring directory takes no suffix."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").mkdir()
+        with pytest.raises(InvalidInventoryError, match="is a directory"):
+            loader.find_inventory(tmp_path)
+
+    def test_the_name_is_hidden(self):
+        """Which is what keeps the file scanner from reading it as data."""
+        assert loader.BLESSED_NAME.startswith(".")
+
+
+class TestLoadSerializedFile:
+    """A whole inventory read from one document, not a directory."""
+
+    def test_json_needs_no_yaml(self, tmp_path, monkeypatch):
+        """The suffix picks the parser, so JSON is not YAML's to read."""
+        path = tmp_path / "whole.json"
+        path.write_text('{"description": "a JSON inventory"}')
+
+        def _refuse(name, **kwargs):
+            raise MissingOptionalDependencyError(name)
+
+        # Both bindings, because JSON is legal YAML: a fallback to the
+        # YAML route would parse this file and pass a test which only
+        # watched the loader's own import.
+        monkeypatch.setattr(loader, "optional_import", _refuse)
+        monkeypatch.setattr(inv, "optional_import", _refuse)
+        assert dc.inventory(path).description == "a JSON inventory"
+
+    def test_a_document_which_does_not_parse(self, tmp_path):
+        """Which is an invalid inventory, not a parser's business."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("this: [is not: yaml\n")
+        with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
+            dc.inventory(path)
+
+    def test_fields_which_are_not_named(self, tmp_path):
+        """`1: 2` is legal YAML, and names no field of anything."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("1: 2\n")
+        with pytest.raises(InvalidInventoryError, match="not named"):
+            dc.inventory(path)
+
+    def test_a_document_which_is_not_a_mapping(self, tmp_path):
+        """A list of things defines no inventory."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("- 1\n- 2\n")
+        with pytest.raises(InvalidInventoryError, match="holds no mapping"):
+            dc.inventory(path)
+
+    # 0x81 is undefined in cp1252 as well as invalid UTF-8, so the file is
+    # undecodable wherever this runs rather than only where UTF-8 is the
+    # default -- a Windows checkout would otherwise decode it and parse on.
+    UNDECODABLE = b"description: \x81\n"
+
+    def test_an_undecodable_file(self, tmp_path):
+        """Bytes which are no text are no inventory either."""
+        path = tmp_path / "whole.yaml"
+        path.write_bytes(self.UNDECODABLE)
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(path)
+
+    def test_an_undecodable_document_of_any_suffix(self, tmp_path):
+        """The route which reads YAML by default decodes alike."""
+        path = tmp_path / "whole.txt"
+        path.write_bytes(self.UNDECODABLE)
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(path)
+
+    def test_a_suffixless_document(self, tmp_path):
+        """Read as YAML, and refused in the same words when it is not."""
+        path = tmp_path / "whole.txt"
+        path.write_text("this: [is not: yaml\n")
+        with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
+            dc.inventory(path)
+
+    def test_a_suffixless_document_with_unnamed_fields(self, tmp_path):
+        """The one route into an inventory says this the same way."""
+        path = tmp_path / "whole.txt"
+        path.write_text("1: 2\n")
+        with pytest.raises(InvalidInventoryError, match="not named"):
+            dc.inventory(path)
+
+    def test_a_missing_file_is_still_named(self, tmp_path):
+        """The message a caller who mistyped a path needs."""
+        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+            dc.inventory(tmp_path / "absent.yaml")
+
+    def test_a_round_trip(self, tmp_path):
+        """What `to_yaml` writes is what this reads."""
+        original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
+        path = tmp_path / "whole.yaml"
+        original.to_yaml(path)
+        assert dc.inventory(path) == original
