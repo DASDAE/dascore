@@ -16,6 +16,7 @@ from dascore.utils.docs import (
     get_doc_anchor,
     get_docstring,
     get_plugin_table,
+    iter_public,
     objs_to_doc_df,
     render_module_api,
     render_package_api,
@@ -192,3 +193,15 @@ class TestRenderApi:
         markdown = render_package_api("dascore.utils")
         assert "### dascore.utils.misc {#dascore-utils-misc}" in markdown
         assert "### dascore.utils.patch {#dascore-utils-patch}" in markdown
+
+    def test_decorated_helpers_are_documented(self):
+        """Cached helpers are callables, not functions, and must not vanish."""
+        names = {name for name, _ in iter_public("dascore.utils.downloader")}
+        assert "get_registry_df" in names
+
+    def test_griffe_models_never_reach_the_page(self):
+        """Unhandled docstring sections must not render object reprs."""
+        # ChunkPlan documents an Attributes section, which has its own model.
+        markdown = render_module_api("dascore.utils.chunk_plan")
+        assert "object at 0x" not in markdown
+        assert "| Attribute | Type | Description |" in markdown

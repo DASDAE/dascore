@@ -288,24 +288,47 @@ def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
         elif kind == "examples":
             for _, text in sec.value:
                 blocks.append("```python\n" + str(text).strip() + "\n```")
+        elif kind in {"attributes", "other parameters"}:
+            label = "Attribute" if kind == "attributes" else "Parameter"
+            rows = [f"| {label} | Type | Description |", "|---|---|---|"]
+            for a in sec.value:
+                anno = types.get(a.name) or (
+                    "" if a.annotation is None else str(a.annotation)
+                )
+                anno = f"`{anno}`" if anno else ""
+                desc = " ".join(str(a.description).split())
+                rows.append(f"| `{a.name}` | {anno} | {desc} |")
+            blocks.append("\n".join(rows))
         elif kind == "admonition":
             body = getattr(sec.value, "description", sec.value)
             blocks.append(f"**{sec.title or 'Note'}:** {str(body).strip()}")
-        else:
-            blocks.append(str(sec.value).strip())
+        elif isinstance(sec.value, str):
+            blocks.append(sec.value.strip())
     return summary, blocks
 
 
 def iter_public(module_name: str):
-    """Yield (name, object) for public objects defined in the module."""
+    """
+    Yield (name, object) for public objects defined in the module.
+
+    Decorated helpers (e.g. functools.cache) are callables rather than plain
+    functions, so unwrap before deciding what a name is and where it was
+    defined; skipping them would drop both their docs and their anchor.
+    """
     mod = importlib.import_module(module_name)
     for name in sorted(dir(mod)):
         if name.startswith("_"):
             continue
         obj = getattr(mod, name)
-        if not (inspect.isfunction(obj) or inspect.isclass(obj)):
+        unwrapped = inspect.unwrap(obj)
+        is_documentable = (
+            inspect.isfunction(unwrapped)
+            or inspect.isclass(unwrapped)
+            or (callable(obj) and inspect.isroutine(unwrapped))
+        )
+        if not is_documentable or inspect.ismodule(obj):
             continue
-        if getattr(obj, "__module__", "") != module_name:
+        if getattr(unwrapped, "__module__", "") != module_name:
             continue
         yield name, obj
 
