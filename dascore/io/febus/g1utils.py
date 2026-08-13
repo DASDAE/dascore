@@ -205,8 +205,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     # stored as end_times: starts and ends are each near-regular and snap to
     # slightly different steps, so subtracting the two built coords would turn
     # the jitter into a linear drift. Built exactly, and ignoring `snap`,
-    # because that jitter is the signal -- though a span array regular enough
-    # to look like a range is still normalized to one by the coord manager.
+    # because that jitter is the signal.
     sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
     distance = _coord(resource["distances"][...], units="m")
     temperature = _coord(resource["temperatures"][...], units="°C")

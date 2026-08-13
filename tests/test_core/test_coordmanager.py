@@ -17,6 +17,7 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
+    CoordMonotonicArray,
     CoordPartial,
     CoordRange,
     get_coord,
@@ -1068,7 +1069,9 @@ class TestPreserveBaseCoord:
     Only CoordRange (the canonical evenly-sampled representation) is returned
     unchanged. Other coord types (CoordPartial, CoordArray, CoordMonotonicArray)
     are still re-inferred so a fully-specified partial, or slicing that yields an
-    even/empty subset, is canonicalized.
+    even/empty subset, is canonicalized. That re-inference keeps the coord it was
+    given whenever collapsing it to a range would move any value, since only the
+    exact case is a change of representation rather than of data.
     """
 
     def test_update_preserves_range_coord_identity(self, cm_basic):
@@ -1134,6 +1137,37 @@ class TestPreserveBaseCoord:
         new_coord = out.coords.coord_map["x"]
         assert isinstance(new_coord, CoordRange)
         assert new_coord.evenly_sampled
+
+    def test_near_even_coord_keeps_its_values(self):
+        """Small real irregularity must survive; see #896.
+
+        The evenness test is tolerant (rtol 1e-3), so spacing that varies by
+        less than that used to be replaced by an idealized ramp -- silently
+        inventing sample positions.
+        """
+        values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
+        coord = CoordMonotonicArray(values=values)
+        cm = get_coord_manager({"distance": coord}, dims=("distance",))
+        out = cm.coord_map["distance"]
+        assert np.array_equal(out.values, values)
+        # a range here would mean the spacing was made up
+        assert not isinstance(out, CoordRange)
+
+    def test_near_even_coord_survives_patch(self):
+        """The public Patch path must not move the values either."""
+        values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
+        coord = CoordMonotonicArray(values=values)
+        patch = dc.Patch(data=np.zeros(5), coords={"x": coord}, dims=("x",))
+        assert np.array_equal(patch.get_coord("x").values, values)
+
+    def test_exactly_even_array_still_canonicalizes(self):
+        """Preserving values must not disable the lossless collapse."""
+        values = np.arange(5, dtype=float)
+        coord = CoordMonotonicArray(values=values)
+        cm = get_coord_manager({"distance": coord}, dims=("distance",))
+        out = cm.coord_map["distance"]
+        assert isinstance(out, CoordRange)
+        assert np.array_equal(out.values, values)
 
 
 class TestSqueeze:
