@@ -350,6 +350,12 @@ class TestNearMisses:
         with pytest.raises(InvalidInventoryError, match="must agree with the name"):
             make_inventory(files)
 
+    def test_illegal_address_token_names_the_file(self, make_inventory):
+        """The entity a token names is built from every address, not one file."""
+        files = {"acquisitions/DAS.L0_01..RAW.yaml": "type: Acquisition\n"}
+        with pytest.raises(InvalidInventoryError, match="names fiber_array"):
+            make_inventory(files)
+
     def test_wrong_token_count(self, make_inventory):
         """An acquisition name is an address of four tokens."""
         files = {"acquisitions/DAS.L001.RAW.yaml": "type: Acquisition\n"}

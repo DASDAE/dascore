@@ -47,7 +47,7 @@ from dascore.core.inventory import (
     Station,
 )
 from dascore.exceptions import InvalidInventoryError
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import check_code, optional_import
 from dascore.utils.models import InventoryModel, TimeRangedModel
 from dascore.utils.time import to_datetime64
 
@@ -322,6 +322,14 @@ def _apply_identity(data: dict, container: _Container, name: str, source: Path):
     address = []
     for token, field in zip(tokens, container.identity, strict=True):
         if field in _ADDRESS_LEVELS:
+            # Checked here because the entity this token names is built
+            # later, from every address which mentions it, and by then
+            # there is no one file to blame for the token being illegal.
+            try:
+                check_code(token)
+            except InvalidInventoryError as error:
+                msg = f"{_quote(source)} names {field} {token!r}: {error}"
+                raise InvalidInventoryError(msg) from error
             address.append(token)
             continue
         stated = data.setdefault(field, token)
