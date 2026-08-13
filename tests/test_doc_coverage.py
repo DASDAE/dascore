@@ -61,6 +61,10 @@ UNREFERENCED_OBJECTS = {
     "dascore.core.coords.ensure_consistent_dtype": "Coord construction helper.",
     "dascore.core.coords.get_compatible_values": "Coord construction helper.",
     "dascore.core.summary.normalize_source_patch_id": "Summary internal.",
+    "dascore.core.inventory.InventoryNames": "Names the inventory machinery fills in.",
+    "dascore.core.inventory.interval_masks": "Coverage helper for inventory resolution.",
+    "dascore.proc.inventory.get_attr_values": "Enrichment internal, not re-exported.",
+    "dascore.proc.inventory.resolve_contexts": "Enrichment internal, not re-exported.",
 }
 
 # Class members which are mechanism rather than API: pydantic validators run

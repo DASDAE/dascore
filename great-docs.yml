@@ -145,9 +145,9 @@ reference:
       - name: Patch
         members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, flat_dump, get_coord, get_patch_name, get_registered_namespaces, summary, T]
       - name: BaseSpool
-        members: [chunk, concatenate, get_contents, get_patch_names, get_registered_namespaces, map, select, sort, split, stack, update]
+        members: [chunk, concatenate, get_contents, get_patch_names, get_registered_namespaces, map, select, sort, split, stack, unselect, update]
       - name: Spool
-        members: [from_directory, from_file, chunk_plan, spool_path, indexer, has_live_patches]
+        members: [from_directory, from_file, attach_inventory, chunk_plan, enrich, remove_inventory, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
         members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, new, update]
       - name: PatchSummary
@@ -203,6 +203,7 @@ reference:
       - proc.drop_coords
       - proc.drop_private_coords
       - proc.dropna
+      - proc.enrich
       - proc.equals
       - proc.fillna
       - proc.flip
@@ -297,6 +298,7 @@ reference:
       - examples.febus_dss_mine_2
       - examples.forge_dss
       - examples.forge_dts
+      - examples.inventory_patch_pair
       - examples.nd_patch
       - examples.patch_with_null
       - examples.random_directory_spool
@@ -334,6 +336,7 @@ reference:
       - io.FiberIO
       - io.PatchIO
       - io.ScanPayload
+      - io.make_scan_payload
       - io.dataframe_to_patch
       - io.patch_to_dataframe
       - io.obspy_to_patch
@@ -428,6 +431,7 @@ reference:
       - exceptions.RemoteCacheError
       - exceptions.TimeError
       - exceptions.UnitError
+      - exceptions.UnresolvedPatchError
       - exceptions.UnknownExampleError
       - exceptions.UnknownFiberFormatError
       - exceptions.UnsupportedKeywordError
