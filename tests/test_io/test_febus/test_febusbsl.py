@@ -131,6 +131,26 @@ class TestFebusBSL:
         # the snapped time coord would have given a constant span
         assert len(np.unique(span.values)) > 1
 
+    def test_sample_span_keeps_a_monotonic_drift(self):
+        """Spans that drift steadily are regular enough to be snapped away.
+
+        They survive because the coord manager no longer collapses a coord
+        when doing so would move its values (#896).
+        """
+        starts = np.arange(4, dtype=np.float64)
+        ends = starts + np.array([1.0, 1.001, 1.0020005, 1.0030015])
+        coords = _get_g1_h5_base_coords(
+            {
+                "start_times": starts,
+                "end_times": ends,
+                "distances": np.arange(2, dtype=np.float64),
+                "temperatures": np.zeros(4, dtype=np.float64),
+            },
+            dims=("time", "distance"),
+        )
+        span = coords.coord_map["sample_span"]
+        assert np.array_equal(span.values, dc.to_timedelta64(ends - starts))
+
     def test_mismatched_time_dataset_lengths_raise(self, bsl_path, tmp_path):
         """A half-written file should fail loudly, not broadcast to garbage."""
         new_path = tmp_path / bsl_path.name

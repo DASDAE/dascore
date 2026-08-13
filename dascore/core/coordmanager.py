@@ -55,6 +55,7 @@ from typing_extensions import Self
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
+    CoordPartial,
     CoordRange,
     CoordSummary,
     get_coord,
@@ -1219,6 +1220,29 @@ def get_coord_manager(
     return out
 
 
+def _canonicalization_moved_values(original, out) -> bool:
+    """
+    Return True if canonicalizing `original` to `out` changed any value.
+
+    Collapsing an array coord to a CoordRange is meant to be a change of
+    representation, but the evenness test behind it is tolerant, so a
+    coordinate carrying small real irregularity (measured positions, timing
+    jitter) would be replaced by an idealized ramp. Only the exact case is a
+    canonicalization; the rest is data loss.
+    """
+    # Only collapsing to a range can move values, and only a coord we were
+    # handed can be kept, so everything else skips the comparison.
+    if original is None or not isinstance(out, CoordRange):
+        return False
+    # A CoordPartial is a placeholder whose values are all NaN, so it has
+    # nothing to lose; canonicalizing it is the whole point.
+    if isinstance(original, CoordRange | CoordPartial):
+        return False
+    if original.shape != out.shape:
+        return False
+    return not np.array_equal(original.values, out.values)
+
+
 def _get_coord_dim_map(coords, dims):
     """Get coord_map, dim_map, and new dims from coord input."""
 
@@ -1233,12 +1257,15 @@ def _get_coord_dim_map(coords, dims):
         # CoordRange -- get_coord performs that inference.
         if isinstance(coord, CoordRange):
             return coord
+        original = coord if isinstance(coord, BaseCoord) else None
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
             out = get_coord(data=coord)
+        if _canonicalization_moved_values(original, out):
+            return original
         return out
 
     def _coord_from_simple(name, coord):
