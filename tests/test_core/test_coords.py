@@ -1438,6 +1438,15 @@ class TestCoordRange:
         assert index == slice(None, 1, None)
         assert after.degenerate and before.degenerate
 
+    @pytest.mark.parametrize("bound", [np.inf, np.nan])
+    def test_select_non_finite_bound(self, bound):
+        """A non-finite bound means an open side, not a zero-step index."""
+        coord = get_coord(start=0, stop=100, step=1)
+        for value in (coord.min(), coord.max()):
+            assert coord.select((value, bound)) == coord.select((value, ...))
+            assert coord.select((-bound, value)) == coord.select((..., value))
+        assert coord.select((-bound, bound)) == coord.select((..., ...))
+
     def test_zero_dim_array_inputs(self):
         """Ensure 0d arrays (which aren't unboxed) can init a CoordRange."""
         coord = CoordRange(start=np.array(0.0), stop=np.array(10.0), step=np.array(1.0))

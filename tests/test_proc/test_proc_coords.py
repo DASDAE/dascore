@@ -292,6 +292,13 @@ class TestSelect:
         assert selected_patch.data.shape == original_patch.data.shape
         assert np.array_equal(selected_patch.data, original_patch.data)
 
+    def test_select_infinite_bound(self, random_patch):
+        """An infinite bound is an open one, like ... or None."""
+        dmin = random_patch.get_coord("distance").min()
+        expected = random_patch.select(distance=(dmin, ...))
+        assert random_patch.select(distance=(dmin, np.inf)).equals(expected)
+        assert random_patch.select(distance=(-np.inf, ...)).equals(expected)
+
     def test_select_by_distance(self, random_patch):
         """Ensure distance can be used to filter patch."""
         dmin, dmax = 100, 200

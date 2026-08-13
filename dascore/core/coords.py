@@ -1651,7 +1651,12 @@ class CoordRange(BaseCoord):
             except ZeroDivisionError:
                 return self._get_zero_step_index(value, forward)
             if not math.isfinite(fraction):
-                return self._get_zero_step_index(value, forward)
+                # Two things land here. A zero step, whose samples all equal
+                # start, has a degenerate but defined index. A non-finite
+                # bound (np.inf, NaN) has none; it means an open side.
+                if step == 0:
+                    return self._get_zero_step_index(value, forward)
+                return None
             out = math.ceil(fraction) if forward else math.floor(fraction)
             if forward and out < 0:
                 return None
