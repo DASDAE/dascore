@@ -558,6 +558,68 @@ class TestChunkOnlyOnDims:
             dc.spool([q]).chunk(sensor=100)
 
 
+class TestSkippedPartitionPolicing:
+    """Partitions which produce no outputs are never policed (D8)."""
+
+    @staticmethod
+    def _two_partition_frame():
+        """Rows forming one long and one too-short partition."""
+        return pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0, 100.0],
+                "time_max": [9.0, 19.0, 101.0],
+                "time_step": [1.0, 1.0, 1.0],
+                "_patch_id": [0, 1, 2],
+                "dims": ["time"] * 3,
+            }
+        )
+
+    def test_skipped_partition_values_untouched(self):
+        """A skipped partition's attrs are not policed — not even hashed."""
+        df = self._two_partition_frame()
+        # an unhashable value in the too-short partition must not matter
+        df["note"] = ["ok", "ok", ["unhashable"]]
+        plan = build_chunk_plan(df, time=5)
+        assert set(plan.outputs["note"]) == {"ok"}
+
+    def test_conflict_in_skipped_partition_ignored(self):
+        """Conflicts confined to a skipped partition never raise."""
+        df = self._two_partition_frame()
+        df.loc[len(df)] = [102.0, 103.0, 1.0, 3, "time"]
+        df["note"] = ["ok", "ok", "a", "b"]
+        plan = build_chunk_plan(df, time=5)
+        assert set(plan.outputs["note"]) == {"ok"}
+
+    def test_earlier_conflict_outranks_later_resolution_error(self):
+        """A policed conflict raises before a later partition's error."""
+        df = self._two_partition_frame()
+        df["time_max"] = [9.0, 19.0, 109.0]  # both partitions long enough
+        df["note"] = ["a", "b", "c"]  # conflict in the first partition
+        df["_dtype"] = ["float64", "float64", ""]  # size fails in the second
+        with pytest.raises(CoordMergeError, match="note"):
+            build_chunk_plan(df, time=dc.units.get_quantity("40 bytes"))
+
+    @staticmethod
+    def _one_partition_frame():
+        """Two contiguous rows forming a single active partition."""
+        return pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0],
+                "time_max": [9.0, 19.0],
+                "time_step": [1.0, 1.0],
+                "_patch_id": [0, 1],
+                "dims": ["time"] * 2,
+            }
+        )
+
+    def test_unhashable_active_value_raises(self):
+        """An unhashable policed value in an active partition errors loudly."""
+        df = self._one_partition_frame()
+        df["note"] = [[1], [1]]  # attr values must be hashable
+        with pytest.raises(TypeError, match="unhashable"):
+            build_chunk_plan(df, time=...)
+
+
 class TestDimlessFrames:
     """Plain planner frames without a dims column still plan."""
 

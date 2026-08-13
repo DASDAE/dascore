@@ -647,40 +647,6 @@ def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.Dat
     return df
 
 
-def _remove_overlaps(df, name):
-    """.
-    Remove overlaps in col, where col_min and col_max should exist in df.
-
-    Assumes df is sorted.
-    """
-
-    def _get_step_values(df, step_name):
-        array = np.roll(df[step_name].values, 1)
-        isna = pd.isnull(array)
-        zeros = np.zeros_like(array, dtype=array.dtype)
-        return np.where(~isna, array, zeros)
-
-    def _get_correct_starts(start, stop, df, step_name):
-        step = _get_step_values(df, step_name)
-        stop_roll = np.roll(stop, 1)
-        start_lt_stop = start <= stop_roll
-        start_lt_stop[0] = False  # remove roll artifact; [0] should be start[0]
-        adjusted = stop_roll + step
-        return np.where(start_lt_stop, adjusted, start)
-
-    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
-    assert df[min_name].is_monotonic_increasing, "df must be sorted"
-    start = df[min_name].values
-    stop = df[max_name].values
-    # Add step to stop roll so we don't get 1 sample of overlap
-    corrected_starts = _get_correct_starts(start, stop, df, step_name)
-    # wrap around in roll gives wrong start value, correct it.
-    corrected_starts[0] = start[0]
-    old_modified = _column_or_value(df, "_modified", False)
-    _modified = old_modified | (corrected_starts != start)
-    return df.assign(**{min_name: corrected_starts, "_modified": _modified})
-
-
 def _column_or_value(df, col, value):
     """
     Return column values if present; else a numpy array broadcast of

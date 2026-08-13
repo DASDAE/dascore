@@ -197,6 +197,53 @@ class TestHivePathAttrBenchmarks:
             assert patch.attrs.acquisition_key.startswith("XX.")
 
 
+def _make_gapped_patches(count, shape=(10, 20), time_step=0.01):
+    """Make small patches separated by gaps so each is its own partition."""
+    base = dc.get_example_patch(
+        "random_das",
+        time_min="2023-01-01",
+        shape=shape,
+        time_step=time_step,
+        distance_step=1.0,
+    ).update_attrs(history=[])
+    duration = to_timedelta64(shape[1] * time_step)
+    gap = to_timedelta64(5 * time_step)  # larger than the default tolerance
+    start = np.datetime64("2023-01-01")
+    stride = duration + gap
+    return [
+        base.update_coords(time_min=start + i * stride).update_attrs(history=[])
+        for i in range(count)
+    ]
+
+
+class TestManyPartitionChunkBenchmarks:
+    """
+    Benchmarks for planning chunks across many gapped partitions.
+
+    Every patch sits behind a gap larger than the merge tolerance, so
+    each is its own partition; chunking is lazy, so these capture the
+    planning cost, which scales with partition count rather than data
+    volume (the regime a long gappy acquisition puts the planner in).
+    """
+
+    @pytest.fixture(scope="class")
+    def many_partition_spool(self):
+        """An in-memory spool where every patch is its own partition."""
+        return dc.spool(_make_gapped_patches(100))
+
+    @pytest.mark.benchmark
+    def test_merge_many_partitions(self, many_partition_spool):
+        """Time merge-mode planning over many partitions."""
+        merged = many_partition_spool.chunk(time=None)
+        assert len(merged) == 100
+
+    @pytest.mark.benchmark
+    def test_segment_many_partitions(self, many_partition_spool):
+        """Time segment-mode planning over many partitions."""
+        chunked = many_partition_spool.chunk(time=0.05)
+        assert len(chunked) == 400
+
+
 class TestMemorySpoolBenchmarks:
     """Benchmarks for in-memory spool creation and access."""
 
