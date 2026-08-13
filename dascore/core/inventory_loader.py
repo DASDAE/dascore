@@ -138,6 +138,18 @@ def _quote(path: Path) -> str:
     return str(Path(path.parent.name) / path.name)
 
 
+def _object_suffix(path: Path) -> str | None:
+    """
+    Return a path's object-file suffix, or None if it has none.
+
+    Matched without regard to case, since a case-insensitive filesystem
+    holds ``DAS.YAML`` and ``DAS.yaml`` as one file and silently skipping
+    one spelling would load an inventory missing whatever it named.
+    """
+    suffix = path.suffix.casefold()
+    return suffix if suffix in _OBJECT_SUFFIXES else None
+
+
 def _entry_name(path: Path) -> str:
     """
     Return the address an entry's name states.
@@ -145,9 +157,9 @@ def _entry_name(path: Path) -> str:
     ``Path.stem`` cannot be used: an address is full of dots, so it would
     read ``DAS.L001`` as the stem ``DAS`` with a suffix.
     """
-    if path.is_dir() or path.suffix not in _OBJECT_SUFFIXES:
+    if path.is_dir() or (suffix := _object_suffix(path)) is None:
         return path.name
-    return path.name[: -len(path.suffix)]
+    return path.name[: -len(suffix)]
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -162,7 +174,7 @@ def _read_object(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError) as error:
         msg = f"Could not read {_quote(path)}: {error}."
         raise InvalidInventoryError(msg) from error
-    if path.suffix == ".json":
+    if _object_suffix(path) == ".json":
         try:
             data = json.loads(text)
         except ValueError as error:
@@ -275,7 +287,9 @@ def _pick_model(data: dict, container: _Container, source: Path):
     """
     declared = data.get("type")
     legal = tuple(x.__name__ for x in container.models)
-    if declared is None:
+    # Not merely absent: a type which is not a name at all -- a list, a
+    # mapping -- names no model either, and must not reach the lookups below.
+    if not isinstance(declared, str):
         msg = (
             f"{_quote(source)} declares no type. Every object file states "
             f"what it is, e.g. 'type: {legal[0]}'."
@@ -382,7 +396,7 @@ def _refuse_tracks(entity: Path) -> None:
     for child in sorted(entity.iterdir()):
         if child.name.startswith("."):
             continue
-        stem = child.name.partition(_EPOCH_MARKER)[0].partition(".")[0]
+        stem = child.name.partition(_EPOCH_MARKER)[0].partition(".")[0].casefold()
         if child.is_dir() and stem == _PATH_STEM:
             msg = (
                 f"{_quote(child)} is an optical path epoch, which cannot be "
@@ -390,7 +404,7 @@ def _refuse_tracks(entity: Path) -> None:
                 f"{_ATTRS_STEM} file for now."
             )
             raise InvalidInventoryError(msg)
-        if child.suffix == ".csv":
+        if child.suffix.casefold() == ".csv":
             msg = (
                 f"{_quote(child)} is a track table, which cannot be read yet. "
                 f"State {_entry_name(child)} in the entity's {_ATTRS_STEM} "
@@ -405,9 +419,9 @@ def _attrs_file(entity: Path) -> Path:
     for child in sorted(entity.iterdir()):
         if child.is_dir() or child.name.startswith("."):
             continue
-        if child.suffix not in _OBJECT_SUFFIXES:
+        if _object_suffix(child) is None:
             continue
-        if _entry_name(child) != _ATTRS_STEM:
+        if _entry_name(child).casefold() != _ATTRS_STEM:
             msg = (
                 f"{_quote(child)} is not part of an entity directory, whose "
                 f"object file is named {_ATTRS_STEM}."
@@ -451,8 +465,8 @@ def _container_entries(directory: Path) -> list[Path]:
     for child in sorted(directory.iterdir()):
         if child.name.startswith("."):
             continue
-        if child.is_file() and child.suffix not in _OBJECT_SUFFIXES:
-            if child.suffix == ".csv":
+        if child.is_file() and _object_suffix(child) is None:
+            if child.suffix.casefold() == ".csv":
                 msg = (
                     f"{_quote(child)} is a track table outside an entity "
                     "directory; a table lives beside the attrs file of the "
@@ -468,13 +482,17 @@ def _container_entries(directory: Path) -> list[Path]:
     return list(seen.values())
 
 
-def _load_container(directory: Path, container: _Container) -> list[_Entry]:
+def _load_container(directory: Path, container: _Container, root: Path):
     """Load every entry of one top-level container directory."""
     out = []
     for child in _container_entries(directory):
         if child.is_dir():
             _refuse_tracks(child)
             data_source = _attrs_file(child)
+            # An entity directory holds its own attrs and tracks; an object
+            # filed inside it belongs to a container and is not loaded from
+            # here, so it has to be refused rather than stepped over.
+            _refuse_stray_objects(child, root, skip=data_source)
         else:
             data_source = child
         out.append(_load_entry(child, data_source, container))
@@ -509,6 +527,18 @@ def _check_epoch_duplicates(entries: list[_Entry]) -> None:
     return None
 
 
+def _outlives(child, parent) -> bool:
+    """
+    Return True if a child stays valid past its parent epoch's end.
+
+    Half-open on both sides, so a child ending exactly where its parent
+    does fits: the instant they share belongs to neither.
+    """
+    if pd.isnull(parent.end_time):
+        return False
+    return pd.isnull(child.end_time) or child.end_time > parent.end_time
+
+
 def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     """
     Group children by the parent epoch each one falls in.
@@ -518,6 +548,12 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     one falling in several -- including one whose own start is unset while
     its container has more than one epoch -- is ambiguous rather than
     resolved.
+
+    Starting inside an epoch is not enough to belong to it: a child which
+    runs on past its container's epoch would be reachable only before the
+    boundary, since resolution past it selects the next epoch, which does
+    not hold the child. That is a contradiction in the directory rather
+    than a choice to make on the author's behalf.
     """
     out = defaultdict(list)
     for child in children:
@@ -533,6 +569,16 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
             msg = (
                 f"{_quote(child.source)} belongs to {kind} {named!r}, which "
                 f"has {len(matches)} epochs effective {when}."
+            )
+            raise InvalidInventoryError(msg)
+        parent = parents[matches[0]]
+        if _outlives(child.model, parent.model):
+            ends = child.model.end_time
+            runs = "never ends" if pd.isnull(ends) else f"ends at {ends}"
+            msg = (
+                f"{_quote(child.source)} {runs}, so it runs past the {kind} "
+                f"epoch holding it, which ends at {parent.model.end_time}. "
+                "State it once per epoch it spans."
             )
             raise InvalidInventoryError(msg)
         out[matches[0]].append(child)
@@ -622,10 +668,15 @@ def _load_envelope(root: Path) -> dict[str, Any]:
     arrays and acquisitions loads with defaults -- but it is the one place
     the document's version and CRS may be stated.
     """
+    # Scanned rather than constructed from the known suffixes, so that a
+    # shouted spelling is found and, when both are present, reported as the
+    # two spellings of one envelope that they are.
     found = [
-        candidate
-        for suffix in _OBJECT_SUFFIXES
-        if (candidate := root / f"{_ENVELOPE_STEM}{suffix}").is_file()
+        child
+        for child in sorted(root.iterdir())
+        if child.is_file()
+        and _object_suffix(child) is not None
+        and _entry_name(child).casefold() == _ENVELOPE_STEM
     ]
     if not found:
         return {}
@@ -648,44 +699,54 @@ def _load_envelope(root: Path) -> dict[str, Any]:
                 "structure rather than in the envelope."
             )
             raise InvalidInventoryError(msg)
-    # Checked here rather than left to the model, so a typo names its file
-    # like every other error this format raises.
-    if unknown := sorted(set(data) - set(Inventory.model_fields)):
-        msg = f"{_quote(source)} states {unknown}, which an inventory has not."
-        raise InvalidInventoryError(msg)
+    # Validated here, discarding the result, so that a typo'd key or an
+    # unreadable value names its file like every other error this format
+    # raises rather than surfacing as a bare pydantic error at the end.
+    try:
+        Inventory(**data)
+    except Exception as error:
+        msg = f"Could not read the envelope from {_quote(source)}: {error}"
+        raise InvalidInventoryError(msg) from error
     return data
 
 
-def _check_strays(root: Path) -> None:
+def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> None:
     """
     Refuse a model-declaring file which nothing contains.
 
     A typo like ``aquisitions/`` must not quietly load an inventory with
-    no acquisitions, while the field material beside it stays welcome.
+    no acquisitions, and neither must an object filed one level too deep,
+    inside an entity directory which holds only its own attrs and tracks.
+    Everything which declares nothing stays welcome where it lies.
     """
     known = _model_names()
 
     def check(path: Path):
-        if path.name.startswith("."):
+        if path.name.startswith(".") or path == skip:
             return
         if path.is_dir():
             for child in sorted(path.iterdir()):
                 check(child)
-        elif path.suffix in _OBJECT_SUFFIXES:
+        elif _object_suffix(path) is not None:
             if (declared := _declared_type(path)) in known:
                 msg = (
                     f"{path.relative_to(root)} declares type {declared!r} but "
-                    "nothing contains it. Inventory objects live in "
-                    f"{tuple(_CONTAINERS)}."
+                    "nothing contains it. An inventory object lives in one of "
+                    f"{tuple(_CONTAINERS)}, named for the entity it is."
                 )
                 raise InvalidInventoryError(msg)
 
+    check(start)
+
+
+def _check_strays(root: Path) -> None:
+    """Refuse a stray object anywhere outside a recognized container."""
     for child in sorted(root.iterdir()):
         if child.is_dir() and child.name in _CONTAINERS:
             continue
-        if child.is_file() and _entry_name(child) == _ENVELOPE_STEM:
+        if child.is_file() and _entry_name(child).casefold() == _ENVELOPE_STEM:
             continue
-        check(child)
+        _refuse_stray_objects(child, root)
 
 
 def load_directory(path) -> Inventory:
@@ -700,7 +761,7 @@ def load_directory(path) -> Inventory:
     root = Path(path)
     envelope = _load_envelope(root)
     entries = {
-        name: _load_container(root / name, container)
+        name: _load_container(root / name, container, root)
         for name, container in _CONTAINERS.items()
         if (root / name).is_dir()
     }

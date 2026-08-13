@@ -401,6 +401,81 @@ class TestNearMisses:
             make_inventory(files)
 
 
+class TestReviewFindings:
+    """Regressions for what the counterpart review found."""
+
+    def test_object_filed_inside_an_entity_directory(self, make_inventory):
+        """An object one level too deep must not be silently dropped."""
+        files = {
+            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001/misplaced/DAS.L001..RAW.yaml": (
+                "type: Acquisition\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="nothing contains it"):
+            make_inventory(files)
+
+    @pytest.mark.parametrize("suffix", ["YAML", "YML", "JSON"])
+    def test_upper_case_suffixes(self, make_inventory, suffix):
+        """A case-insensitive filesystem holds one file, not two spellings."""
+        text = (
+            '{"type": "Acquisition"}'
+            if suffix == "JSON"
+            else "type: Acquisition\ndata_category: DAS\n"
+        )
+        out = make_inventory({f"acquisitions/DAS.L001..RAW.{suffix}": text})
+        assert out.networks[0].fiber_arrays[0].acquisitions[0].code == "RAW"
+
+    def test_upper_case_envelope(self, make_inventory):
+        """The envelope is found however its suffix is spelled."""
+        out = make_inventory(
+            {**MINIMAL, "inventory.YAML": "type: Inventory\nresource_id: shouted\n"}
+        )
+        assert out.resource_id == "shouted"
+
+    def test_child_outliving_its_parent_epoch(self, make_inventory):
+        """Starting inside an epoch is not enough to belong to it."""
+        files = {
+            "fiber_arrays/DAS.L001.yaml": (
+                "type: FiberArray\nend_time: '2024-06-01'\n"
+            ),
+            "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+            # Starts inside the first epoch and never ends, so resolution
+            # after June would find the second array, which does not hold it.
+            "acquisitions/DAS.L001..RAW@2024-05-01.yaml": "type: Acquisition\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="runs past"):
+            make_inventory(files)
+
+    def test_child_ending_exactly_at_the_boundary_fits(self, make_inventory):
+        """Half-open on both sides, so the shared instant belongs to neither."""
+        out = make_inventory(
+            {
+                "fiber_arrays/DAS.L001.yaml": (
+                    "type: FiberArray\nend_time: '2024-06-01'\n"
+                ),
+                "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+                "acquisitions/DAS.L001..RAW@2024-05-01.yaml": (
+                    "type: Acquisition\nend_time: '2024-06-01'\n"
+                ),
+            }
+        )
+        first = out.networks[0].fiber_arrays[0]
+        assert [x.code for x in first.acquisitions] == ["RAW"]
+
+    def test_unreadable_envelope_value_names_the_file(self, make_inventory):
+        """An envelope error reads like every other error this format raises."""
+        files = {**MINIMAL, "inventory.yaml": "type: Inventory\nschema_version: nope\n"}
+        with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
+            make_inventory(files)
+
+    def test_type_which_is_not_a_name(self, make_inventory):
+        """A type which is not a name at all names no model either."""
+        files = {"acquisitions/DAS.L001..RAW.yaml": "type: [Acquisition]\n"}
+        with pytest.raises(InvalidInventoryError, match="declares no type"):
+            make_inventory(files)
+
+
 class TestOneIdentityOneSpelling:
     """Identity is unique per container regardless of spelling."""
 
