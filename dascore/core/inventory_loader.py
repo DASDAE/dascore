@@ -226,10 +226,20 @@ def _parse_epoch(text: str, source: Path):
         raise InvalidInventoryError(f"{unreadable}.")
     time = match["time"] or "000000"
     try:
-        return to_datetime64(f"{date}T{time[:2]}:{time[2:4]}:{time[4:]}")
+        parsed = to_datetime64(f"{date}T{time[:2]}:{time[2:4]}:{time[4:]}")
     except ValueError as error:
         # The pattern admits digits which name no instant, e.g. a 13th month.
         raise InvalidInventoryError(f"{unreadable}: {error}") from error
+    # A nanosecond timestamp spans about 1678 to 2262 and numpy wraps around
+    # silently past either end, which would put this epoch centuries from
+    # where its name says and quietly misfile every child of it.
+    if not str(parsed).startswith(date):
+        msg = (
+            f"Epoch timestamp {text!r} {where} is outside the range a "
+            f"nanosecond timestamp can represent; it would read as {parsed}."
+        )
+        raise InvalidInventoryError(msg)
+    return parsed
 
 
 def _split_epoch(source: Path, epochs_allowed: bool):

@@ -574,6 +574,29 @@ class TestEpochTimestamps:
         with pytest.raises(InvalidInventoryError, match="timezone designator"):
             make_inventory(files)
 
+    # The last is on the final representable day, so the guard cannot be
+    # passing by comparing dates alone.
+    @pytest.mark.parametrize(
+        "stamp", ["2500-01-01", "1000-01-01", "2262-04-12", "2262-04-11T235000"]
+    )
+    def test_outside_the_representable_range(self, make_inventory, stamp):
+        """A nanosecond timestamp wraps silently, so the name is refused."""
+        files = {f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "type: Acquisition\n"}
+        with pytest.raises(InvalidInventoryError, match="outside the range"):
+            make_inventory(files)
+
+    def test_the_last_representable_instant(self, make_inventory):
+        """The check refuses what wraps without refusing what does not."""
+        out = make_inventory(
+            {
+                "acquisitions/DAS.L001..RAW@2262-04-11T234716.yaml": (
+                    "type: Acquisition\n"
+                )
+            }
+        )
+        acquisition = out.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acquisition.start_time == np.datetime64("2262-04-11T23:47:16", "ns")
+
     def test_two_epoch_markers(self, make_inventory):
         """A name carries at most one epoch."""
         files = {
