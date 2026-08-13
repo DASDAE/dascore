@@ -26,7 +26,7 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
    branch being released; ask if not given. It is **not** always `master` — work
    lands on `dev`, so scoping to `master` silently omits everything not merged
    down. Compare `git rev-list --count` for both first. Read them with `gh`,
-   keeping number, title, merge date, URL, labels, and body; consult diffs when
+   keeping number, title, merge date, labels, and body; consult diffs when
    the body is thin.
 
 4. Drop reverted pairs. When a PR in scope reverts another in scope, omit both
@@ -50,10 +50,8 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
    else observable including performance. Check the tag before marking anything
    breaking — an API introduced after it cannot break anyone.
 
-   For the first release after `docs/changelog.qmd` became a stub, also read its
-   pre-stub revision, per "Draft the release notes" in
-   `docs/contributing/publish_a_new_release.qmd` — which also lists the sections
-   to use, and their order.
+   See "Draft the release notes" in `docs/contributing/publish_a_new_release.qmd`
+   for the sections to use, and their order.
 
 6. Print the new tag and the changelog. Split a PR's unrelated changes into
    separate entries, omit PRs with no user-facing effect rather than letting them
@@ -61,17 +59,28 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
 
 ## Output Format
 
+One section per entry category, in this order: `Breaking Changes`, `Added`,
+`Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+
 ```text
 Next Version: vX.Y.Z
 
 ## Breaking Changes
-- #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+- Short summary (#125)
+
+## Added
+- Short summary (#126)
 
 ## Changed
-- #125: Short summary (https://github.com/OWNER/REPO/pull/125)
+- Short summary (#125)
 
-Reverted (no net change): #126 reverted by #127
+## Fixed
+- Short summary (#127)
+
+Reverted (no net change): #128 reverted by #129
 ```
 
-A `**breaking**` entry appears twice, as #125 does. Omit empty sections and the
-`Reverted` line when unused. If no PRs are in scope, print the version and say so.
+Each entry ends with its pull request in parentheses, which GitHub renders as a
+link; do not write the full URL. A `**breaking**` entry appears twice, as #125
+does. Omit empty sections and the `Reverted` line when unused. If no PRs are in
+scope, print the version and say so.
