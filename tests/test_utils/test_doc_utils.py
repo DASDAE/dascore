@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import textwrap
 
 import pandas as pd
 import pytest
 
+import dascore.utils.docs as docs_module
 import dascore.utils.namespace as ns_module
 from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
@@ -235,6 +237,20 @@ class TestRenderApi:
         """A `{python}` cell would run when the page is rendered."""
         markdown = render_package_api("dascore.utils")
         assert "```{python}" not in markdown
+
+    def test_a_module_needing_a_missing_dependency_is_skipped(self, monkeypatch):
+        """One unimportable module must not take the rest of the page with it."""
+        real = importlib.import_module
+
+        def fake(name, *args, **kwargs):
+            if name == "dascore.utils.misc":
+                raise ImportError("no optional dependency here")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(docs_module.importlib, "import_module", fake)
+        markdown = render_package_api("dascore.utils")
+        assert "### dascore.utils.misc" not in markdown
+        assert "### dascore.utils.patch {#dascore-utils-patch}" in markdown
 
     def test_every_callout_is_closed(self):
         """An unclosed callout swallows the entries which follow it."""

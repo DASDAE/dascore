@@ -202,10 +202,7 @@ def _fmt_default(value) -> str:
 
 def _signature(obj) -> str:
     """Render a signature without the quoting artifacts of string annotations."""
-    try:
-        sig = inspect.signature(obj)
-    except (TypeError, ValueError):
-        return getattr(obj, "__name__", "?") + "(...)"
+    sig = inspect.signature(obj)
     parts, seen_kw_only = [], False
     for p in sig.parameters.values():
         if p.kind is p.KEYWORD_ONLY and not seen_kw_only:
@@ -229,10 +226,7 @@ def _signature(obj) -> str:
 
 def _param_types(obj) -> dict[str, str]:
     """Map parameter name to its annotation, for the parameter table."""
-    try:
-        sig = inspect.signature(obj)
-    except (TypeError, ValueError):
-        return {}
+    sig = inspect.signature(obj)
     return {
         p.name: _fmt_annotation(p.annotation)
         for p in sig.parameters.values()
@@ -272,12 +266,11 @@ def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
         kind = sec.kind.value
         if kind == "text":
             text = str(sec.value).strip()
-            if not summary:
+            if not summary:  # the first line of the first block is the summary
                 first, _, rest = text.partition("\n\n")
                 summary = " ".join(first.split())
-                if rest.strip():
-                    blocks.append(rest.strip())
-            else:
+                text = rest.strip()
+            if text:
                 blocks.append(text)
         elif kind == "parameters":
             rows = ["| Parameter | Type | Description |", "|---|---|---|"]
@@ -327,8 +320,9 @@ def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
         elif kind == "admonition":
             body = getattr(sec.value, "description", sec.value)
             blocks.append(f"**{sec.title or 'Note'}:** {str(body).strip()}")
-        elif isinstance(sec.value, str):
-            blocks.append(sec.value.strip())
+        # Any other section is dropped rather than rendered: griffe parses
+        # several into models of their own, whose repr on the page would be
+        # worse than their absence.
     return summary, blocks
 
 
