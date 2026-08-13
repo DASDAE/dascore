@@ -8,10 +8,11 @@ CSV files a field crew can maintain as a spreadsheet. A directory of these
 files is itself a loadable inventory, and ``to_yaml`` exports the
 single-file interchange artifact for shipping beside a data archive.
 
-This module reads the object half. The track tables, and the optical path
-epoch directories which hold them, are refused by name rather than
-skipped, so a directory cannot load as an entity silently missing the
-tracks its own files state.
+A table is matched to the model by name: ``<name>.csv`` fills the
+attribute ``<name>`` of the type its directory declares. ``path`` is the
+one reserved container stem -- those directories address an optical path
+epoch rather than serializing an attribute, and each location code is a
+lineage in which an epoch runs until its successor begins.
 
 The contract, in one line: **file declares object_type, container agrees, name
 implies identity, envelope implies version.** Every object file states what
@@ -55,6 +56,7 @@ from dascore.core.inventory import (
     OpticalPath,
     Station,
     _overlapping_epochs,
+    _times_equal,
 )
 from dascore.exceptions import (
     InvalidInventoryError,
@@ -427,13 +429,15 @@ def _load_entry(entry: Path, data_source: Path, container: _Container, crs) -> _
     data = _read_object(data_source)
     model = _pick_model(data, container, data_source)
     _refuse_supplied(data, container.supplied, data_source, "an object file")
-    if entry.is_dir():
-        _merge_tables(data, entry, model, crs, data_source)
-        _merge_paths(data, entry, model, crs, data_source)
     name, epoch = _split_epoch(entry, container.epochs)
     address = _apply_identity(data, container, name, data_source)
     if epoch is not None and "start_time" not in data:
         data["start_time"] = epoch
+    # After the epoch, not before: an entity's first path epoch starts
+    # where the entity does, so its own start has to be known by then.
+    if entry.is_dir():
+        _merge_tables(data, entry, model, crs, data_source)
+        _merge_paths(data, entry, model, crs, data_source, data.get("start_time"))
     built = _build(model, data, data_source)
     if epoch is not None and built.start_time != epoch:
         msg = (
@@ -454,8 +458,10 @@ class _Table(NamedTuple):
     # The column assigning points to objects, for a collection of them.
     # None where the attribute is a single object, or a row is an object.
     group: str | None = None
-    # The column rows are read in the order of, never row position, so
-    # re-sorting a spreadsheet is harmless.
+    # The column rows are read in the order of. Where a table names one,
+    # row position decides nothing and re-sorting a spreadsheet is
+    # harmless; where it does not, the rows keep the order they were
+    # written in, which the model reads as a set rather than a sequence.
     order: str | None = None
     # True where that column is the table's own scaffolding rather than a
     # field, so nothing else records where a row sits and it must place
@@ -466,7 +472,7 @@ class _Table(NamedTuple):
 # Keyed by CSV stem, which is the attribute the table fills. Held as a
 # registry rather than introspected: how rows map onto objects is a
 # property of the attribute, and stating it is shorter than deducing it.
-# A test pins every key to a real field of the model which declares it.
+# TestTableRegistry pins every key to a field of the model declaring it.
 _TABLES: Mapping[str, _Table] = {
     "optical_components": _Table(order="sequence", places=True),
     "coupling": _Table(),
@@ -495,7 +501,7 @@ def _read_table(path: Path) -> pd.DataFrame:
     # be seen; and it raises its own error for a file with no columns,
     # which would arrive before this one could say what was expected.
     try:
-        with path.open(newline="") as stream:
+        with path.open(newline="", encoding="utf-8-sig") as stream:
             header, *body = list(csv.reader(stream)) or [[]]
     except (OSError, UnicodeDecodeError) as error:
         msg = f"Could not read {_quote(path)}: {error}."
@@ -524,7 +530,15 @@ def _read_table(path: Path) -> pd.DataFrame:
     # index_col=False so that no column is ever read as an index; the row
     # widths above already agree, and this keeps them agreeing.
     return pd.read_csv(
-        path, dtype=str, keep_default_na=False, na_values=[""], index_col=False
+        path,
+        dtype=str,
+        keep_default_na=False,
+        na_values=[""],
+        index_col=False,
+        # Both readers decode alike, or the header checked above is not
+        # the header parsed here: a locale-encoded read disagrees with
+        # pandas' UTF-8, and a byte order mark reaches only one of them.
+        encoding="utf-8-sig",
     )
 
 
@@ -544,12 +558,36 @@ def _require_columns(frame: pd.DataFrame, needed, path: Path) -> None:
         raise InvalidInventoryError(msg)
 
 
+def _require_stated(frame: pd.DataFrame, needed, path: Path) -> None:
+    """
+    Refuse a blank cell in a column the table is read by.
+
+    A column which orders or groups the rows decides where each one goes,
+    so a row leaving it empty has no place. Left to pandas the row would
+    simply disappear -- a null sorts last, and a null grouping key drops
+    its row from every group.
+    """
+    for column in needed:
+        if column is None:
+            continue
+        empty = [
+            str(n) for n, ok in enumerate(frame[column].notna(), start=2) if not ok
+        ]
+        if empty:
+            msg = (
+                f"{_quote(path)} leaves {column} empty at row(s) "
+                f"{', '.join(empty)}, so those rows state no place."
+            )
+            raise InvalidInventoryError(msg)
+
+
 def _ordered(frame: pd.DataFrame, column: str | None, path: Path) -> pd.DataFrame:
     """
-    Return the rows in the order their own column states.
+    Return the rows in the order the named column states, if any.
 
-    Row position never decides anything, so re-sorting a spreadsheet
-    cannot change what a table means.
+    A table which names one is read by it rather than by row position, so
+    re-sorting a spreadsheet cannot change what it means. A table which
+    names none keeps the order it was written in.
     """
     if column is None:
         return frame
@@ -577,10 +615,12 @@ def _parse_cell(text: str):
         number = float(text)
     except ValueError:
         return text
-    return int(text) if number.is_integer() and "." not in text else number
+    # int(number) rather than int(text): 1e3 is integral, and only the
+    # number knows that -- the text raises.
+    return int(number) if number.is_integer() and "." not in text else number
 
 
-def _check_places(keys, column: str, path: Path) -> None:
+def _check_places(keys: pd.Series, column: str, path: Path) -> None:
     """
     Refuse an ordering which does not place every row.
 
@@ -601,15 +641,20 @@ def _check_places(keys, column: str, path: Path) -> None:
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
     """Read a table whose every row is one object."""
     _require_columns(frame, [table.order], path)
+    _require_stated(frame, [table.order], path)
     ordered = _ordered(frame, table.order, path)
-    if table.places:
+    if table.places and table.order is not None:
         _check_places(ordered[table.order], table.order, path)
     out = []
     for _, row in ordered.iterrows():
         cells = _cells(row)
         # The order column is the table's own scaffolding where the object
-        # has no such field; components are placed by it and keep nothing.
-        cells.pop(_SEQUENCE, None)
+        # has no such field, so it is dropped -- but only where the table
+        # says it has one. Dropped everywhere, a stray sequence column in
+        # coupling.csv would vanish instead of being refused as the
+        # unknown field the model calls it.
+        if table.places:
+            cells.pop(table.order, None)
         out.append(cells)
     return out
 
@@ -624,20 +669,39 @@ def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[di
     canonical axes, so the frame decides which column is which.
     """
     _require_columns(frame, [table.order, table.group], path)
+    _require_stated(frame, [table.order, table.group], path)
     frame = _ordered(frame, table.order, path)
-    groups = frame.groupby(table.group, sort=True) if table.group else [(None, frame)]
+    # dropna=False: a blank grouping cell would otherwise take its row out
+    # of the table without a word. _require_stated has already refused one,
+    # and this keeps that the reason nothing is missing.
+    groups = (
+        frame.groupby(table.group, sort=True, dropna=False)
+        if table.group
+        else [(None, frame)]
+    )
     out = []
     for name, rows in groups:
-        point = {} if name is None else {"name": str(name)}
+        point: dict[str, Any] = {} if name is None else {"name": str(name)}
         for column in rows.columns:
-            if column == table.group:
+            if column == table.group or column in axes:
                 continue
-            values = [x for x in rows[column] if not pd.isnull(x)]
-            if not values:
+            stated = rows[column].notna()
+            if not stated.any():
                 continue
-            if column in axes:
-                continue
-            point[column] = tuple(values)
+            # Each column becomes one array and the arrays are read
+            # together, so a column stated by some rows and not others
+            # would compact past the gap and pair values which never
+            # shared a row: `5,` above `,100` would map channel 5 to a
+            # distance the file never gave it.
+            if not stated.all():
+                empty = [str(n) for n, ok in enumerate(stated, start=2) if not ok]
+                msg = (
+                    f"{_quote(path)} leaves {column} empty at row(s) "
+                    f"{', '.join(empty)} while other rows state it; a column "
+                    "is stated by every point or by none."
+                )
+                raise InvalidInventoryError(msg)
+            point[column] = tuple(rows[column])
         if axes:
             point["coordinates"] = _coordinates(rows, axes, path)
         out.append(point)
@@ -674,7 +738,7 @@ def _is_path_dir(child: Path) -> bool:
     return stem.casefold() == _PATH_STEM
 
 
-def _load_path(directory: Path, crs):
+def _load_path(directory: Path, crs, begins):
     """
     Read one optical path epoch from its own directory.
 
@@ -704,6 +768,11 @@ def _load_path(directory: Path, crs):
         raise InvalidInventoryError(msg)
     if epoch is not None and "start_time" not in data:
         data["start_time"] = epoch
+    # The bare `path` directory is the first epoch, and it starts where the
+    # fiber array holding it does -- left unset it would claim the
+    # unbounded past, which is before the array it belongs to exists.
+    if epoch is None and "start_time" not in data and not pd.isnull(begins):
+        data["start_time"] = begins
     _merge_tables(data, directory, OpticalPath, crs, attrs)
     built = _build(OpticalPath, data, attrs)
     if epoch is not None and built.start_time != epoch:
@@ -738,7 +807,9 @@ def _close_lineages(paths: list, sources: dict) -> list:
             lineage, key=lambda x: (not pd.isnull(x.start_time), x.start_time)
         )
         for first, second in itertools.pairwise(ordered):
-            if first.start_time == second.start_time:
+            # _times_equal, not ==: NaT equals nothing, itself included,
+            # so two undated epochs of one lineage would never collide.
+            if _times_equal(first.start_time, second.start_time):
                 msg = (
                     f"{_quote(sources[id(first)])} and "
                     f"{_quote(sources[id(second)])} start at the same instant, "
@@ -760,7 +831,7 @@ def _close_lineages(paths: list, sources: dict) -> list:
     return out
 
 
-def _merge_paths(data: dict, entity: Path, model, crs, attrs: Path) -> None:
+def _merge_paths(data: dict, entity: Path, model, crs, attrs: Path, begins) -> None:
     """Fill the optical paths an entity directory's epoch directories state."""
     directories = [x for x in sorted(entity.iterdir()) if _is_path_dir(x)]
     if not directories:
@@ -780,8 +851,11 @@ def _merge_paths(data: dict, entity: Path, model, crs, attrs: Path) -> None:
         raise InvalidInventoryError(msg)
     paths, sources = [], {}
     for directory in directories:
-        built = _load_path(directory, crs)
-        sources[id(built)] = directory / _ATTRS_STEM
+        built = _load_path(directory, crs, begins)
+        # The file itself, not a name built from the stem: the suffix is
+        # whichever of the three the author used, and an error naming
+        # `path/attrs` sends them looking for a file which is not there.
+        sources[id(built)] = _attrs_file(directory)
         paths.append(built)
     data[field] = _close_lineages(paths, sources)
 
@@ -869,21 +943,29 @@ def _parse_annotations(rows: list[dict], path: Path) -> None:
     decide the group's shape, so a group which mixes kinds would be two
     tracks sharing a name.
     """
-    kinds: dict[str, tuple[type, int]] = {}
+    kinds: dict[str, tuple[str, int]] = {}
     for number, row in enumerate(rows, start=2):
         if (text := row.get("value")) is None:
             continue
         row["value"] = value = _parse_cell(text)
-        # bool before int: a bool IS an int, so the wider name would let
-        # true and 1 share a group whose shape they do not share.
-        kind = bool if isinstance(value, bool) else type(value)
+        # A boolean is asked about first because a bool IS an int, which
+        # would otherwise let true and 1 share a group whose shape they do
+        # not share. An int and a float, by contrast, are ONE kind: the
+        # model reads them alike, so telling them apart here would make
+        # the order the rows were written in decide whether a group loads.
+        kind = (
+            "a boolean"
+            if isinstance(value, bool)
+            else "a number"
+            if isinstance(value, int | float)
+            else "text"
+        )
         group = str(row.get("group", ""))
         first, where = kinds.setdefault(group, (kind, number))
-        if first is not kind and not (first is float and kind is int):
+        if first != kind:
             msg = (
-                f"{_quote(path)} row {number}: group {group!r} states a "
-                f"{kind.__name__} where row {where} states a {first.__name__}; "
-                "one group holds one kind."
+                f"{_quote(path)} row {number}: group {group!r} states {kind} "
+                f"where row {where} states {first}; one group holds one kind."
             )
             raise InvalidInventoryError(msg)
 
