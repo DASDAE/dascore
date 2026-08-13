@@ -12,9 +12,12 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Mapping
+from typing import TypeVar, cast
 
 from dascore.exceptions import InvalidModelTagError
 from dascore.utils.plugins import get_entry_point_loaders
+
+T = TypeVar("T")
 
 # The key a document states its class in. Specific enough that no reader's
 # header and no user's extra attribute is expected to spell it, which is why
@@ -159,9 +162,9 @@ def check_tag_matches(cls: type, tag: str) -> None:
 
 def resolve_tagged_model(
     data: Mapping,
-    default: type | None = None,
+    default: type[T] | None = None,
     source: str | None = None,
-) -> type:
+) -> type[T]:
     """
     Return the model class a document names.
 
@@ -187,7 +190,15 @@ def resolve_tagged_model(
             raise InvalidModelTagError(msg)
         return default
     if (cls := resolve_model_tag(tag)) is not None:
-        return cls
+        # The registry holds every model, so what it returns is only the
+        # right kind of thing because this says so.
+        if default is not None and not issubclass(cls, default):
+            msg = (
+                f"The document{where} declares {TAG_FIELD} {tag!r}, which is "
+                f"not a {default.__name__}."
+            )
+            raise InvalidModelTagError(msg)
+        return cast("type[T]", cls)
     msg = (
         f"Nothing registers the {TAG_FIELD} {tag!r}{where}. It was likely "
         "written by a package which is not installed."

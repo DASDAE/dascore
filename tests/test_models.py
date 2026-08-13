@@ -327,6 +327,12 @@ class TestModelTagRegistry:
             out = registry.resolve_tagged_model(data, default=PatchAttrs)
         assert out is PatchAttrs
 
+    def test_a_resolved_tag_must_be_the_kind_asked_for(self):
+        """A file naming a class of the wrong kind is refused, not built."""
+        data = {registry.TAG_FIELD: "Cable"}
+        with pytest.raises(InvalidModelTagError, match="not a PatchAttrs"):
+            registry.resolve_tagged_model(data, default=PatchAttrs)
+
     def test_an_unknown_tag_without_a_default_raises(self):
         """A standalone document has no other class to fall back on."""
         data = {registry.TAG_FIELD: "absent:Whatever"}
@@ -341,6 +347,18 @@ class TestModelTagRegistry:
     def test_an_untagged_document_takes_the_default(self):
         """A caller which names the class does not need the document to."""
         assert registry.resolve_tagged_model({}, default=PatchAttrs) is PatchAttrs
+
+    def test_a_broken_plugin_does_not_break_resolution(self, monkeypatch):
+        """A plugin which cannot be imported has no models to find."""
+
+        def _boom():
+            raise ImportError("this plugin is a stale entry point")
+
+        monkeypatch.setattr(registry, "_plugins_swept", False)
+        monkeypatch.setattr(
+            registry, "get_entry_point_loaders", lambda group: {"broken": _boom}
+        )
+        assert registry.resolve_model_tag("absent:Whatever") is None
 
     def test_a_model_in_an_unimported_module_is_found(self):
         """

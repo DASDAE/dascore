@@ -39,3 +39,46 @@ DASCore-assigned `data_type` values should be snake_case and listed in `VALID_DA
 | `data_type="some_value"` | Set the returned patch's `data_type` to that value. |
 
 Functions may still require a specific input label with `required_attrs`, for example `required_attrs={"data_type": "velocity"}`. This should only be used when the function's assumptions truly depend on that label and are documented.
+
+## Format-specific subclasses
+
+A format whose files carry fields the base class does not model declares a
+`PatchAttrs` subclass for them; there are more than a dozen under
+`dascore/io/`. Since the fields are declared, they are validated and coerced
+like any other, rather than surviving as untyped extras.
+
+A serialized patch names the class it holds, so the subclass comes back:
+
+```python
+import dascore as dc
+from dascore.io.odh4.core import ODH4PatchAttrs
+
+patch = dc.get_example_patch()
+patch = patch.update(attrs=ODH4PatchAttrs(**dict(patch.attrs), gauge_length=10.0))
+patch.io.write("example.h5", "dasdae")
+
+type(dc.read("example.h5")[0].attrs)  # ODH4PatchAttrs
+```
+
+The name is a registered one rather than an import path, so moving a class
+between modules does not break files already written, and reading a file
+never imports a path it names. A file naming a class which is not installed
+— written, say, by a plugin this environment lacks — reads as the base
+`PatchAttrs` with a warning rather than failing.
+
+### Spelling an optional number
+
+An absent number is spelled `FiniteFloat | None`, defaulting to `None`:
+
+```python
+from dascore.models import FiniteFloat
+
+class JingleV1PatchAttrs(dc.PatchAttrs):
+    """Attrs for the jingle format."""
+
+    gauge_length: FiniteFloat | None = None
+```
+
+Not `float = np.nan`. JSON has no spelling for nan, so such a field writes
+`null` and then refuses to read it back, which means the class cannot
+reconstruct from its own `model_dump_json()`.
