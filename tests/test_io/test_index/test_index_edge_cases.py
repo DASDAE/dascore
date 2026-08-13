@@ -141,6 +141,62 @@ class TestIndexCoverageEdges:
         finally:
             back.close()
 
+    def test_stepless_numeric_coord_keeps_null_step(self, tmp_path):
+        """A numeric coord with no step stays NaN rather than an int sentinel.
+
+        When no numeric coord in the result carries a step, the envelope
+        column holds only timedeltas and nulls; inferring a dtype there
+        turned those nulls into NaT, and then into int64 min.
+        """
+        # the time coord's step is what puts a Timedelta in the shared envelope
+        # column; without it there is nothing for pandas to infer a temporal
+        # dtype from, and the bug cannot occur. Stated here rather than
+        # inherited from a helper default so the trigger cannot drift away.
+        time_coord = _time_coord("2024-01-01T00:00:00", 60, step_s=0.004)
+        assert time_coord["step"] is not None
+        summary = PatchSummary(
+            attrs={"tag": "t"},
+            coords={
+                "time": time_coord,
+                # both numeric coords are stepless, so nothing anchors the
+                # envelope column to a numeric dtype
+                "distance": {
+                    "dtype": "float64",
+                    "min": 0.0,
+                    "max": 10.0,
+                    "step": None,
+                    "units": "m",
+                    "dims": ("distance",),
+                    "len": 11,
+                },
+                "temperature": {
+                    "dtype": "float64",
+                    "min": 20.0,
+                    "max": 25.0,
+                    "step": None,
+                    "units": "degC",
+                    "dims": ("time",),
+                    "len": 15000,
+                },
+            },
+            dims=("time", "distance"),
+            shape=(15000, 11),
+            dtype="float32",
+            source_path="a.h5",
+            source_format="X",
+            source_version="1",
+        )
+        back = get_backend(tmp_path / "i.sqlite3")
+        try:
+            back.write_sources(s2r([summary]))
+            df = back.query()
+            step = df["temperature_step"]
+            # int64 min is what a NaT in this column decays to
+            assert step.dtype == np.dtype("float64")
+            assert step.isna().all()
+        finally:
+            back.close()
+
     def test_reopen_missing_meta_row(self, tmp_path):
         """An index whose meta row was lost is rejected on reopen."""
         path = tmp_path / "i.sqlite3"
