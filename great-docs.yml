@@ -397,6 +397,20 @@ reference:
       - core.inventory.ExternalResource
       - core.inventory.ResolvedContext
 
+  - title: Models
+    desc: >
+      The base classes DASCore's documents are built from, and the registry
+      which lets a serialized document name the class it holds.
+    contents:
+      - models.DascoreBaseModel
+      - models.InventoryModel
+      - models.TimeRangedModel
+      - models.sensible_model_equals
+      - models.sensible_model_hash
+      - models.values_equal
+      - models.registry.register_model
+      - models.registry.registered_models
+
   - title: Exceptions
     desc: Exception classes raised by DASCore
     contents:
@@ -418,6 +432,7 @@ reference:
       - exceptions.InvalidIndexError
       - exceptions.InvalidIndexVersionError
       - exceptions.InvalidInventoryError
+      - exceptions.InvalidModelTagError
       - exceptions.InvalidSpoolError
       - exceptions.InvalidSpoolQueryError
       - exceptions.InvalidTimeRangeError

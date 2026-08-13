@@ -73,6 +73,10 @@ UNREFERENCED_OBJECTS = {
     "dascore.proc.inventory.resolve_row_epochs": "Inventory placement internal.",
     "dascore.proc.inventory.resolve_split_pieces": "Inventory placement internal.",
     "dascore.core.inventory_loader.load_directory": "Reached through dc.inventory().",
+    "dascore.models.registry.check_tag_matches": "Model tagging internal.",
+    "dascore.models.registry.get_model_tag": "Model tagging internal.",
+    "dascore.models.registry.resolve_model_tag": "Model tagging internal.",
+    "dascore.models.registry.resolve_tagged_model": "Model tagging internal.",
 }
 
 # Class members which are mechanism rather than API: pydantic validators run
