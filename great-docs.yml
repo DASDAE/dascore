@@ -87,7 +87,6 @@ sections:
 # Names picked up by discovery that are implementation details or
 # accidental re-exports (dascore modules do not define __all__).
 exclude:
-  - clients
   - warnings
   - compat.MATERIALIZE_NOW
   - compat.random_state
@@ -124,6 +123,7 @@ exclude:
   - units.unbyte
   - units.UnitError
   - viz.PatchNameSpace
+  - viz.VizPatchNameSpace
 
 # Curated API reference. Grouped by task, mirroring how the tutorial
 # introduces the library.
@@ -143,23 +143,26 @@ reference:
     desc: The central data structures of DASCore
     contents:
       - name: Patch
-        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, get_coord, get_patch_name, T]
+        members: [data, coords, dims, attrs, shape, size, ndim, dtype, seconds, channel_count, coord_shapes, flat_dump, get_coord, get_patch_name, get_registered_namespaces, summary, T]
       - name: BaseSpool
-        members: [chunk, concatenate, get_contents, get_patch_names, map, select, sort, split, stack, update]
+        members: [chunk, concatenate, get_contents, get_patch_names, get_registered_namespaces, map, select, sort, split, stack, update]
       - name: Spool
         members: [from_directory, from_file, chunk_plan, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
-        members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, update]
+        members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, new, update]
       - name: PatchSummary
-        members: [dim_tuple, dump_structured, flat_dump, from_patch, get_coord_summary, get_summary_df]
+        members: [dim_tuple, dump_structured, flat_dump, from_patch, get_coord_summary, get_summary_df, new, summary]
       - name: CoordManager
-        members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, validate_data]
+        members: [convert_units, coord_range, coord_shapes, coord_size, decimate, dim_to_coord_map, disassociate_coord, drop_coords, drop_disassociated_coords, drop_private_coords, equals, flip, get_array, get_axis, get_coord, get_coord_tuple_map, get_summary_df, keys, make_broadcastable_to, max, min, ndim, new, order, rename_coord, select, set_dims, set_units, shape, simplify_units, size, snap, sort, squeeze, step, to_summary_dict, transpose, update, validate_data]
       - name: proc.BaseCoord
-        members: [align_to, approx_equal, change_length, convert_units, coord_range, empty, get_discontinuities, get_next_index, get_sample_count, get_slice_tuple, index, max, min, new, order, reduce_coord, select, set_units, simplify, simplify_units, snap, sort, to_summary, update, update_data, update_limits]
+        members: [align_to, approx_equal, change_length, convert_units, coord_range, data, degenerate, empty, evenly_sampled, fingerprint, get_discontinuities, get_next_index, get_sample_count, get_slice_tuple, get_summary_df, index, limits, max, min, ndim, new, order, reduce_coord, reverse_sorted, select, set_units, simplify, simplify_units, size, snap, sort, sorted, to_summary, unit_str, update, update_data, update_limits]
       - name: proc.CoordSegmented
-        members: [from_array, get_discontinuities, simplify]
+        members: [from_array, get_discontinuities, segment_count, simplify, values]
       - core.coords.CoordRange
       - core.coords.CoordMonotonicArray
+      - core.coords.CoordArray
+      - core.coords.CoordPartial
+      - core.coords.CoordString
       - core.coords.CoordSummary
       - core.coords.concat_coords
       - get_coord
@@ -234,6 +237,7 @@ reference:
       - proc.snap_coords
       - proc.sobel_filter
       - proc.sort_coords
+      - proc.split_gaps
       - proc.squeeze
       - proc.standardize
       - proc.taper
@@ -314,12 +318,14 @@ reference:
       - to_timedelta64
       - to_float
       - units.convert_units
+      - units.get_byte_count
       - units.get_factor_and_unit
       - units.get_filter_units
       - units.get_inverted_quant
       - units.get_quantity_str
       - units.get_registry
       - units.invert_quantity
+      - units.is_data_size
       - units.is_percent
 
   - title: IO Interfaces
@@ -345,6 +351,47 @@ reference:
         members: [get_handle]
       - name: io.H5Writer
         members: [get_handle]
+
+  - title: Configuration
+    desc: Reading and setting DASCore's runtime configuration
+    contents:
+      - config.get_config
+      - config.set_config
+      - config.config_context
+      - config.config_attr
+      - config.reset_config
+      - config.DascoreConfig
+
+  - title: Inventory
+    desc: >
+      The DASDAE inventory model, describing the cables, interrogators and
+      channels a dataset was recorded with.
+    contents:
+      - Inventory
+      - inventory
+      - core.inventory.Network
+      - core.inventory.Station
+      - core.inventory.Channel
+      - core.inventory.Cable
+      - core.inventory.FiberArray
+      - core.inventory.FiberSegment
+      - core.inventory.Interrogator
+      - core.inventory.OpticalPath
+      - core.inventory.OpticalPathAnnotation
+      - core.inventory.OpticalMeasurement
+      - core.inventory.Acquisition
+      - core.inventory.Connector
+      - core.inventory.Splice
+      - core.inventory.Terminator
+      - core.inventory.Enclosure
+      - core.inventory.CouplingCondition
+      - core.inventory.Geometry
+      - core.inventory.DistanceMap
+      - core.inventory.CoordinateReferenceSystem
+      - core.inventory.Response
+      - core.inventory.CreationInfo
+      - core.inventory.ExternalResource
+      - core.inventory.ResolvedContext
 
   - title: Exceptions
     desc: Exception classes raised by DASCore
