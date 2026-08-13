@@ -218,7 +218,7 @@ you intend to select literally.
 
 ## Attrs
 
-The metadata stored in `Patch.attrs` is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.utils.models.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
+The metadata stored in `Patch.attrs` is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.models.base.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
 
 
 ```{python}

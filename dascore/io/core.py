@@ -77,7 +77,7 @@ from dascore.utils.misc import (
     warn_or_raise,
 )
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
-from dascore.utils.plugins import get_entry_point_loaders
+from dascore.utils.plugins import FIBER_IO_GROUP, get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import (
     get_remote_cache_scope,
@@ -490,7 +490,7 @@ class _FiberIOManager:
         Get the unloaded entry points registered to this domain into a dict of
         {name: ep}.
         """
-        return pd.Series(get_entry_point_loaders("dascore.fiber_io"))
+        return pd.Series(get_entry_point_loaders(FIBER_IO_GROUP))
 
     @cached_property
     @_locked("_lock")
@@ -940,7 +940,7 @@ class FiberIO:
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
 
-    manager = _FiberIOManager("dascore.fiber_io")
+    manager = _FiberIOManager(FIBER_IO_GROUP)
 
     # A dict of methods which should implement automatic type casting.
     # and the index of the parameter to type cast.

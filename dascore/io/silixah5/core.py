@@ -9,7 +9,7 @@ from typing import Literal
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.models import FiniteFloat
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -25,8 +25,8 @@ from .utils import (
 class SilixaPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for Silixa hdf5 format."""
 
-    gauge_length: FiniteFloat | None = None
-    pulse_width: FiniteFloat | None = None
+    gauge_length: OptionalFiniteFloat = None
+    pulse_width: OptionalFiniteFloat = None
 
 
 class SilixaH5V1(FiberIO):

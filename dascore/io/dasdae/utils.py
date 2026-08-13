@@ -18,7 +18,7 @@ from dascore.core.coords import get_coord
 from dascore.io.core import make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
 from dascore.io.utils import get_exact_coord
-from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
+from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -96,8 +96,11 @@ def _save_attrs_and_dims(patch, patch_group):
         if attr_type is not None:
             patch_group.attrs[f"{_ATTR_TYPE_PREFIX}{i}"] = attr_type
     # Values are dumped one at a time rather than as one document, so the
-    # class is recorded beside them rather than injected into them.
-    patch_group.attrs[_ATTRS_CLASS_KEY] = get_model_tag(type(patch.attrs))
+    # class is recorded beside them rather than injected into them. A class
+    # which cannot be named (see get_model_tag) is simply not named, which
+    # reads back the way a file written before this did.
+    if (tag := get_model_tag(type(patch.attrs))) is not None:
+        patch_group.attrs[_ATTRS_CLASS_KEY] = tag
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
@@ -188,8 +191,7 @@ def _get_attrs_class(patch_group) -> type[PatchAttrs]:
     always used to give.
     """
     tag = unbyte(patch_group.attrs.get(_ATTRS_CLASS_KEY, None))
-    data = {TAG_FIELD: tag} if tag else {}
-    return resolve_tagged_model(data, default=PatchAttrs, source=patch_group.name)
+    return resolve_tagged_model(tag or None, default=PatchAttrs)
 
 
 def _read_array(table_array):

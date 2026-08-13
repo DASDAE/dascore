@@ -1042,6 +1042,21 @@ class TestModelAssumptions:
             checked.append(name)
         assert len(checked) == len(loader._CONTAINERS) == 5
 
-    def test_inventory_models_forbid_extra_fields(self):
-        """An inventory model refuses unknown input, tag included."""
+    def test_inventory_models_refuse_unknown_input(self):
+        """
+        An inventory model refuses a key it does not declare.
+
+        Which is why the tag has to be consumed rather than ignored, and is
+        checked on the concrete models rather than on the base, since a
+        subclass may override the config (PatchAttrs does, in the other
+        hierarchy).
+        """
         assert InventoryModel.model_config["extra"] == "forbid"
+        checked = []
+        for container in loader._CONTAINERS.values():
+            for model in container.models:
+                fields = {"code": "X"} if "code" in model.model_fields else {}
+                with pytest.raises(ValidationError, match="not permitted"):
+                    model(**fields, nonsense_key=1)
+                checked.append(model)
+        assert len(checked) == 9

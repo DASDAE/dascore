@@ -23,6 +23,7 @@ from dascore.compat import is_array_like
 from dascore.exceptions import InvalidInventoryError
 from dascore.models.registry import (
     TAG_FIELD,
+    _lookup,
     check_tag_matches,
     get_model_tag,
     register_model,
@@ -120,18 +121,27 @@ class DascoreBaseModel(BaseModel):
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> Any:
         """
-        Name this class in the document, in text serializations only.
+        Name this class in the document, in json-mode dumps only.
 
-        Only json mode, because a python-mode dump is not a document: it is
-        what equality compares, what ``new`` reconstructs from and what the
-        index ingests, none of which want a key that is not a field.
+        A python-mode dump is not a document: it is what equality compares,
+        what ``new`` reconstructs from and what the index ingests, none of
+        which want a key that is not a field.
 
-        Models which discriminate a union declare ``object_type`` as a real
-        field, and pydantic has already written it.
+        Gated inside the serializer rather than with ``when_used="json"``,
+        which reads better and silently breaks ``include``/``exclude``:
+        pydantic skips the whole wrapper in python mode, and with it the
+        field filtering the handler would have applied.
         """
         out = handler(self)
-        if info.mode == "json" and TAG_FIELD not in type(self).model_fields:
-            out[TAG_FIELD] = get_model_tag(type(self))
+        if info.mode != "json" or TAG_FIELD in out:  # a union member's own
+            return out
+        # Its field is defaulted, so exclude_defaults drops it and leaves a
+        # document the union cannot dispatch on. Put back what the model
+        # says rather than what the registry calls the class: a subclass
+        # out of tree has a different tag, and the Literal would refuse it.
+        declared = getattr(self, TAG_FIELD, None)
+        if (tag := declared or get_model_tag(type(self))) is not None:
+            out[TAG_FIELD] = tag
         return out
 
     @model_validator(mode="before")
@@ -140,17 +150,28 @@ class DascoreBaseModel(BaseModel):
         """
         Consume a document's class tag, refusing one which names another class.
 
-        The tag is never required: a document dispatches on it before it gets
-        here, and a hand-written object or a nested one may simply not state
-        it. What it may not do is disagree.
+        The tag is never required: a document dispatches on it before it
+        gets here, and a hand-written object or a nested one may simply not
+        state it. What it may not do is disagree.
+
+        A value which names no known class is left alone rather than
+        consumed. ``PatchAttrs`` keeps extra fields, so this key may be a
+        reader's own metadata, and eating it would lose that silently; a
+        tag DASCore wrote always resolves.
         """
-        if not isinstance(data, Mapping) or TAG_FIELD in cls.model_fields:
+        if not isinstance(data, Mapping) or TAG_FIELD not in data:
             return data
-        if TAG_FIELD not in data:
+        # A union member declares the tag as a real field and validates it
+        # against its own Literal, which is stricter than this.
+        if TAG_FIELD in cls.model_fields:
             return data
-        data = dict(data)
-        check_tag_matches(cls, data.pop(TAG_FIELD))
-        return data
+        tag = data[TAG_FIELD]
+        if (declared := _lookup(tag)) is None:
+            return data
+        check_tag_matches(cls, declared, tag)
+        out = dict(data)
+        out.pop(TAG_FIELD)
+        return out
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""

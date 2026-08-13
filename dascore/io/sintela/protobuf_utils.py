@@ -56,7 +56,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import ScanPayload, make_scan_payload
-from dascore.models import FiniteFloat, PositiveFiniteFloat, PositiveInt
+from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
 PBUF_MAGIC = 0x46554250
@@ -143,7 +143,7 @@ def _get_fft_data_type(has_complex: bool) -> dict[str, str]:
 class SintelaProtobufAttrs(PatchAttrs):
     """Patch attributes for Sintela protobuf recordings."""
 
-    gauge_length: FiniteFloat | None = None
+    gauge_length: OptionalFiniteFloat = None
     packet_type: str = ""
     recorder_namespace: str = ""
     metadata_recording_time: np.datetime64 | None = None
@@ -158,8 +158,9 @@ class _ProtobufModel(BaseModel):
     Base for this module's parsing models.
 
     Plain pydantic: these validate values on the way out of a protobuf
-    payload and are never serialized, so they want none of what
-    DascoreBaseModel adds beyond validation.
+    payload and are never serialized. Subclassing DascoreBaseModel would
+    only claim each a tag in the model registry, naming them in documents
+    they never appear in.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)

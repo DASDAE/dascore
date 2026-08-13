@@ -13,6 +13,7 @@ import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.io.utils import build_patches
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 
@@ -29,10 +30,10 @@ class NeubrexRFSPatchAttrs(dc.PatchAttrs):
 class NeubrexDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex DAS Format files."""
 
-    gauge_length: float = 0
-    index_of_reflection: float = 1.46
+    gauge_length: OptionalFiniteFloat = 0
+    index_of_reflection: OptionalFiniteFloat = 1.46
     triggered_time: np.datetime64 | None = None
-    phase_to_strain: float | None = None
+    phase_to_strain: OptionalFiniteFloat = None
     distance_decimation_filter: int = 0
     time_decimation_filter: int = 0
 

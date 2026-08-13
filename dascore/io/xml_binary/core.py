@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.io import FiberIO, ScanPayload
-from dascore.models import FiniteFloat, UTF8Str
+from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.paths import coerce_to_upath
 
 from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
@@ -18,8 +18,8 @@ from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
-    pulse_width: FiniteFloat | None = None
-    gauge_length: FiniteFloat | None = None
+    pulse_width: OptionalFiniteFloat = None
+    gauge_length: OptionalFiniteFloat = None
     zone_name: UTF8Str = ""
 
 

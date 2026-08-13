@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, SerializeAsAny, model_validator
 
 import dascore as dc
 from dascore.constants import path_types
@@ -202,7 +202,7 @@ class PatchSummary(DascoreBaseModel):
 
     model_config = ConfigDict(title="Patch Summary", extra="ignore", frozen=True)
 
-    attrs: PatchAttrs = Field(default_factory=PatchAttrs)
+    attrs: SerializeAsAny[PatchAttrs] = Field(default_factory=PatchAttrs)
     coords: dict[str, CoordSummary] = Field(default_factory=dict)
     dims: tuple[str, ...] = ()
     shape: tuple[int, ...] = ()

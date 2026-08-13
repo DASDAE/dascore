@@ -8,6 +8,7 @@ from typing import Annotated, TypeVar
 import numpy as np
 from pydantic import (
     AfterValidator,
+    BeforeValidator,
     Field,
     PlainSerializer,
     PlainValidator,
@@ -96,9 +97,29 @@ UTF8Str = Annotated[str, PlainValidator(unbyte)]
 PositiveInt = Annotated[int, Field(gt=0)]
 
 # A float which must be finite; nan/inf silently poison downstream math.
-# Spell an optional number `FiniteFloat | None`: nan has no JSON spelling,
-# so a nan-defaulted float writes `null` and then refuses to read it back.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+def _none_if_not_finite(value):
+    """Read a non-finite number as an absent one."""
+    if value is None:
+        return None
+    try:
+        return value if np.isfinite(value) else None
+    except (TypeError, ValueError):
+        # Not a number at all. Whatever it is, the field's own validation
+        # is what should describe it.
+        return value
+
+
+# How to spell a number which may be absent. Absence is `None`, because
+# json has no spelling for nan: a nan-defaulted float writes `null` and
+# then refuses to read it back, so its class cannot reconstruct from its
+# own dump. A file which spells "unknown" as nan is read as absent rather
+# than refused, since that is the same statement in another notation.
+OptionalFiniteFloat = Annotated[
+    FiniteFloat | None, BeforeValidator(_none_if_not_finite)
+]
 
 # A positive (> 0), finite (no nan/inf) float.
 PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]

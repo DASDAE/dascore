@@ -132,11 +132,12 @@ def _object_type_tag(name: str):
     """
     Return the serialization-only ``object_type`` field of a union member.
 
-    Every model states its class when serialized (see
+    Every model states its class in a json document (see
     [dascore.models.registry](`dascore.models.registry`)), but pydantic must
-    pick a class for these before an object exists, so the models sharing a
-    union declare the tag as a real field and the base class leaves them
-    alone. Users never set it: it defaults to the class name, the Literal
+    pick a union member's class before an object exists, so these models
+    declare the tag as a real field and the base class leaves them alone.
+
+    Users never set it: it defaults to the class name, the Literal
     annotation rejects any other value, and it is hidden from repr.
     """
     return Field(default=name, repr=False)

@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.models import DateTime64, FiniteFloat
+from dascore.models import DateTime64, OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_ai4eps
@@ -20,11 +20,11 @@ class AI4EPSPatchAttrs(dc.PatchAttrs):
 
     event_id: str = ""
     event_time: DateTime64 = np.datetime64("NaT", "ns")
-    magnitude: FiniteFloat | None = None
+    magnitude: OptionalFiniteFloat = None
     magnitude_type: str = ""
-    event_latitude: FiniteFloat | None = None
-    event_longitude: FiniteFloat | None = None
-    event_depth_km: FiniteFloat | None = None
+    event_latitude: OptionalFiniteFloat = None
+    event_longitude: OptionalFiniteFloat = None
+    event_depth_km: OptionalFiniteFloat = None
 
 
 class AI4EPSV1(FiberIO):

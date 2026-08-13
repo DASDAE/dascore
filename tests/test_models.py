@@ -12,7 +12,7 @@ import pytest
 from pydantic import Field, ValidationError
 
 from dascore.core.attrs import PatchAttrs
-from dascore.core.inventory import Cable
+from dascore.core.inventory import Cable, Inventory
 from dascore.exceptions import InvalidModelTagError
 from dascore.io.core import FiberIO
 from dascore.io.sintela.core import SintelaPatchAttrs
@@ -20,6 +20,7 @@ from dascore.models import (
     DascoreBaseModel,
     DateTime64,
     FrozenDictType,
+    OptionalFiniteFloat,
     TimeDelta64,
     UnitQuantity,
     registry,
@@ -184,6 +185,13 @@ class TestModelHash:
             hash(_TestModel(array=np.arange(10)))
 
 
+# A floor, not a count: raise it when a format adds a class. It exists
+# because FiberIO swallows a plugin's import failure as a warning, which
+# would otherwise drop that format's class out of the walk below and leave
+# this file green while testing one format fewer.
+_ATTRS_CLASS_FLOOR = 18
+
+
 def _dascore_patch_attrs_classes():
     """Every PatchAttrs class DASCore itself declares, base included."""
     # The subclasses only exist once their io modules are imported, and other
@@ -197,12 +205,22 @@ def _dascore_patch_attrs_classes():
         stack.extend(cls.__subclasses__())
         if cls.__module__.startswith("dascore."):
             found[cls.__name__] = cls
+    assert len(found) >= _ATTRS_CLASS_FLOOR, (
+        f"only {len(found)} PatchAttrs classes were found; a format's plugin "
+        "probably failed to import, which would silently go untested here."
+    )
     return [found[name] for name in sorted(found)]
 
 
 # A required field has no default to round trip, so the walk states one. A
 # new required field fails the assert below rather than dropping out of it.
 _REQUIRED_ATTR_VALUES = {"gauge_length": 10.0}
+
+
+def _optional_float_names(cls):
+    """Names of the fields on a class which hold an optional number."""
+    annotation = OptionalFiniteFloat.__origin__
+    return [n for n, f in cls.model_fields.items() if f.annotation == annotation]
 
 
 def _minimal_attrs(cls):
@@ -232,20 +250,38 @@ class TestPatchAttrsSerialization:
         """A defaulted instance reconstructs from its own json."""
         attrs = _minimal_attrs(attrs_class)
         out = attrs_class.model_validate_json(attrs.model_dump_json())
-        assert out == attrs
+        # Compared as text, not with ==, which counts any null equal to any
+        # other and so cannot see a value degrade to None on the way through.
+        assert out.model_dump_json() == attrs.model_dump_json()
 
-    def test_no_field_defaults_to_a_non_finite_number(self, attrs_class):
+    def test_no_field_holds_a_number_json_cannot_spell(self, attrs_class):
         """
-        Nan and inf have no json spelling, so a float defaulting to one
-        writes null and then refuses to read it back. Optional numbers are
-        spelled `FiniteFloat | None`.
+        No field holds a number json cannot spell.
+
+        NaN and inf write as `null` and then refuse to read back, so an
+        optional number is spelled `OptionalFiniteFloat`. Checked on the
+        built instance rather than the raw default, since `np.float32("nan")`
+        is not a `float` and would slip past that.
         """
-        for name, field in attrs_class.model_fields.items():
-            default = field.get_default(call_default_factory=True)
-            if isinstance(default, float):
-                assert np.isfinite(default), (
-                    f"{attrs_class.__name__}.{name} defaults to {default}."
+        instance = _minimal_attrs(attrs_class)
+        for name in attrs_class.model_fields:
+            value = getattr(instance, name, None)
+            if isinstance(value, float | np.floating):
+                assert np.isfinite(value), (
+                    f"{attrs_class.__name__}.{name} holds {value}."
                 )
+
+    def test_a_non_finite_value_from_a_file_reads_as_absent(self, attrs_class):
+        """
+        A format which spells "unknown" as nan is read, not refused.
+
+        Readers hand vendor header floats straight to these classes, and a
+        scan swallows a ValidationError as "failed to scan", so refusing one
+        would silently drop the file from a spool rather than report it.
+        """
+        for name in _optional_float_names(attrs_class):
+            built = _minimal_attrs(attrs_class).new(**{name: np.float32("nan")})
+            assert getattr(built, name) is None
 
 
 @pytest.fixture
@@ -260,6 +296,46 @@ def clean_registry():
 def _model_in(module: str, name: str = "Square", base=DascoreBaseModel):
     """Declare a model as though it lived in another package."""
     return type(name, (base,), {"__module__": module, "__qualname__": name})
+
+
+class TestOptionalFiniteFloat:
+    """How a number which may be absent is spelled."""
+
+    class _Model(DascoreBaseModel):
+        value: OptionalFiniteFloat = None
+
+    @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, np.float32("nan")])
+    def test_a_non_finite_number_is_absent(self, value):
+        """A file which spells "unknown" as nan is read, not refused."""
+        assert self._Model(value=value).value is None
+
+    def test_a_number_survives(self):
+        """Everything else is the number it was."""
+        assert self._Model(value=1.5).value == 1.5
+
+    def test_a_non_number_is_left_to_the_field(self):
+        """
+        Only numbers can be finite, so anything else passes through here.
+
+        A string is what a yaml or json document holds, and pydantic's own
+        coercion is what should read it -- or refuse it, in its own words.
+        """
+        assert self._Model(value="1.5").value == 1.5
+        with pytest.raises(ValidationError):
+            self._Model(value="not a number")
+
+
+def test_optional_numbers_are_declared_across_the_formats():
+    """
+    The nan-to-None loop above tests nothing on a class with no such field.
+
+    So the fields it walks are counted here: were the annotation renamed or
+    the migration reverted, every one of those loops would quietly empty.
+    """
+    total = sum(
+        len(_optional_float_names(cls)) for cls in _dascore_patch_attrs_classes()
+    )
+    assert total >= 25
 
 
 class TestModelTagRegistry:
@@ -284,12 +360,42 @@ class TestModelTagRegistry:
         # The collision does not replace what was there before it.
         assert registry.registered_models()["Doubled"] is first
 
-    def test_colliding_plugin_names_warn(self, clean_registry):
-        """A user cannot rename another package's class, so this only warns."""
+    def test_colliding_plugin_names_stop_resolving(self, clean_registry):
+        """
+        A user cannot rename another package's class, so importing both works.
+
+        What the tag may not do is quietly pick one: a document written by
+        the first would then be read as the second.
+        """
         _model_in("myplugin.a", "Doubled")
         with pytest.warns(UserWarning, match="claim the tag"):
-            second = _model_in("myplugin.b", "Doubled")
-        assert registry.registered_models()["myplugin:Doubled"] is second
+            _model_in("myplugin.b", "Doubled")
+        assert "myplugin:Doubled" not in registry.registered_models()
+        with pytest.raises(InvalidModelTagError, match="names two classes"):
+            registry.resolve_model_tag("myplugin:Doubled")
+
+    def test_an_uppercase_package_is_a_legal_namespace(self, clean_registry):
+        """
+        A package name may start with a capital, and many do (PIL, Terra15).
+
+        The tag DASCore writes must be one it can read: a namespace the
+        grammar refused would make its own files unreadable.
+        """
+        cls = _model_in("Terra15.attrs", "Terra15Attrs")
+        tag = registry.get_model_tag(cls)
+        assert tag == "Terra15:Terra15Attrs"
+        assert registry.resolve_model_tag(tag) is cls
+
+    def test_a_class_which_cannot_be_named_is_not_registered(self, clean_registry):
+        """
+        A parametrized generic is spelled `G[int]`, which no document states.
+
+        Writing that tag anyway would produce a file DASCore refuses to
+        read, so such a class is simply not named.
+        """
+        cls = _model_in("myplugin.generics", "Square[int]")
+        assert registry.get_model_tag(cls) is None
+        assert "myplugin:Square[int]" not in registry.registered_models()
 
     def test_a_class_declared_in_a_function_is_not_registered(self, clean_registry):
         """Nothing can resolve a name which exists only while a call runs."""
@@ -310,7 +416,9 @@ class TestModelTagRegistry:
     )
     def test_legal_tags(self, tag):
         """The grammar takes a name, a namespace and room for a version."""
-        assert registry.TAG_PATTERN.match(tag)
+        # Through the function rather than the pattern: what matters is that
+        # a legal tag is looked up rather than refused outright.
+        registry.resolve_model_tag(tag)
 
     @pytest.mark.parametrize(
         "tag", ["", "9Cable", "Cable-1", ":Cable", "dascore.core.inventory.Cable", 3]
@@ -322,31 +430,28 @@ class TestModelTagRegistry:
 
     def test_an_unknown_tag_falls_back_with_a_warning(self):
         """A document from an uninstalled package still reads as its base."""
-        data = {registry.TAG_FIELD: "absent:Whatever"}
         with pytest.warns(UserWarning, match="Nothing registers"):
-            out = registry.resolve_tagged_model(data, default=PatchAttrs)
+            out = registry.resolve_tagged_model("absent:Whatever", default=PatchAttrs)
         assert out is PatchAttrs
 
     def test_a_resolved_tag_must_be_the_kind_asked_for(self):
         """A file naming a class of the wrong kind is refused, not built."""
-        data = {registry.TAG_FIELD: "Cable"}
         with pytest.raises(InvalidModelTagError, match="not a PatchAttrs"):
-            registry.resolve_tagged_model(data, default=PatchAttrs)
+            registry.resolve_tagged_model("Cable", default=PatchAttrs)
 
     def test_an_unknown_tag_without_a_default_raises(self):
         """A standalone document has no other class to fall back on."""
-        data = {registry.TAG_FIELD: "absent:Whatever"}
         with pytest.raises(InvalidModelTagError, match="Nothing registers"):
-            registry.resolve_tagged_model(data)
+            registry.resolve_tagged_model("absent:Whatever")
 
     def test_an_untagged_document_without_a_default_raises(self):
         """Nothing but the document says what a standalone document holds."""
         with pytest.raises(InvalidModelTagError, match="declares no"):
-            registry.resolve_tagged_model({"a": 1})
+            registry.resolve_tagged_model(None)
 
     def test_an_untagged_document_takes_the_default(self):
         """A caller which names the class does not need the document to."""
-        assert registry.resolve_tagged_model({}, default=PatchAttrs) is PatchAttrs
+        assert registry.resolve_tagged_model(None, default=PatchAttrs) is PatchAttrs
 
     def test_a_broken_plugin_does_not_break_resolution(self, monkeypatch):
         """A plugin which cannot be imported has no models to find."""
@@ -396,10 +501,17 @@ class TestObjectTypeSerialization:
         assert registry.TAG_FIELD not in PatchAttrs().model_dump()
         assert registry.TAG_FIELD not in PatchAttrs().new(tag="a").model_dump()
 
-    def test_equality_is_unaffected(self, clean_registry):
-        """Two classes' instances are still told apart by their fields."""
-        assert PatchAttrs(tag="a") == PatchAttrs(tag="a")
-        assert PatchAttrs(tag="a") != PatchAttrs(tag="b")
+    def test_include_and_exclude_still_filter_fields(self):
+        """
+        A model serializer must not cost the caller `include`/`exclude`.
+
+        Declaring it with `when_used="json"` reads better and silently
+        breaks them: pydantic skips the wrapper in python mode, and the
+        field filtering goes with it. `Patch.equals` dumps with `include`.
+        """
+        attrs = PatchAttrs(tag="a")
+        assert set(attrs.model_dump(include={"tag"})) == {"tag"}
+        assert "tag" not in attrs.model_dump(exclude={"tag"})
 
     def test_nested_models_state_their_class(self):
         """Universal, so a nested object can be read on its own later."""
@@ -424,19 +536,50 @@ class TestObjectTypeSerialization:
         attrs = PatchAttrs(**{registry.TAG_FIELD: "absent:Whatever"})
         assert isinstance(attrs, PatchAttrs)
 
+    @pytest.mark.parametrize("value", ["my_sensor", "a b c", 3])
+    def test_an_attr_which_names_no_class_is_kept(self, value):
+        """
+        A reader's own metadata spelled like the tag is data, not a tag.
+
+        PatchAttrs keeps extra fields, so consuming a value which names no
+        class would lose it silently; a tag DASCore wrote always resolves.
+        """
+        attrs = PatchAttrs(**{registry.TAG_FIELD: value})
+        assert attrs.model_dump()[registry.TAG_FIELD] == value
+
     def test_the_tag_does_not_become_an_extra_field(self):
         """PatchAttrs keeps extras, and the tag is not one of them."""
         attrs = PatchAttrs(**{registry.TAG_FIELD: "PatchAttrs"})
         assert not hasattr(attrs, registry.TAG_FIELD)
 
-    def test_a_union_member_states_it_once(self):
+    def test_a_union_member_writes_its_own_tag(self, clean_registry):
         """
-        The five resource models declare the tag as a real field.
+        The nine union members declare the tag as a real field.
 
         Pydantic must pick a class before an object exists, so their tag
-        cannot be a serializer concern; the base class leaves them alone
-        rather than writing a second copy of what they already wrote.
+        cannot be a serializer concern. The base class must leave the value
+        alone rather than overwrite it with the registry's name for the
+        class: the two differ for a subclass declared out of tree, and the
+        closed Literal would refuse to read the registry's spelling back.
         """
-        text = Cable(resource_id="c1").model_dump_json()
-        assert json.loads(text)[registry.TAG_FIELD] == "Cable"
-        assert text.count(f'"{registry.TAG_FIELD}"') == 1
+        dumped = json.loads(Cable(resource_id="c1").model_dump_json())
+        assert dumped[registry.TAG_FIELD] == "Cable"
+        # A plugin's subclass of a union member: tag and Literal disagree.
+        plugin_cable = type("PluginCable", (Cable,), {"__module__": "myplugin.cables"})
+        assert registry.get_model_tag(plugin_cable) == "myplugin:PluginCable"
+        sub_dump = json.loads(plugin_cable(resource_id="c1").model_dump_json())
+        assert sub_dump[registry.TAG_FIELD] == "Cable"
+        # Which is what keeps the document readable at all.
+        assert isinstance(Cable(**sub_dump), Cable)
+
+    def test_a_union_member_states_its_tag_under_exclude_defaults(self):
+        """
+        The tag is defaulted, so a dump flag would otherwise drop it.
+
+        The serializer puts it back: a document which cannot say which union
+        member it holds cannot be read at all.
+        """
+        inventory = Inventory(resources={"c1": Cable(resource_id="c1")})
+        dumped = inventory.model_dump(mode="json", exclude_defaults=True)
+        assert dumped["resources"]["c1"][registry.TAG_FIELD] == "Cable"
+        assert Inventory(**dumped) == inventory
