@@ -76,7 +76,8 @@ _ATTRS_STEM = "attrs"
 _ENVELOPE_STEM = "inventory"
 
 # The name a data directory carries its own inventory under, in either
-# form: the directory `.inventory/` or a file `.inventory.yaml`. Hidden,
+# form: the directory `.inventory/` or a file naming its format --
+# `.inventory.yaml`, `.inventory.yml`, or `.inventory.json`. Hidden,
 # like `.dascore_index.sqlite3` beside it -- a companion the directory
 # keeps rather than content it holds -- which is also what keeps the file
 # scanner (whose `skip_hidden` defaults to True) from reading it as data.
@@ -1494,6 +1495,24 @@ def load_directory(path: str | os.PathLike) -> Inventory:
     return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
 
 
+def _load_file(path: Path) -> Inventory:
+    """
+    Load a whole inventory from one serialized document.
+
+    The envelope of an authoring directory read on its own terms: same
+    parsers, same errors, so the single-file artifact ``to_yaml`` writes
+    and the directory it came from fail the same way when they fail.
+    """
+    data = _read_object(path)
+    # `Inventory(**data)` would raise TypeError on a key which is not a
+    # string -- `1: 2` is legal YAML -- naming Python's calling
+    # convention rather than the document which broke the rule.
+    if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
+        msg = f"{_quote(path)} holds fields which are not named: {', '.join(named)}."
+        raise InvalidInventoryError(msg)
+    return Inventory(**data).check()
+
+
 def _blessed_candidates(directory: Path) -> tuple[Path, ...]:
     """Every spelling of the blessed name, the directory form first."""
     tree = directory / BLESSED_NAME
@@ -1506,9 +1525,10 @@ def carries_inventory(directory: str | os.PathLike) -> bool:
 
     A few stats and nothing more: this is the question a spool asks when
     it opens a directory, so it must not read, parse, or judge what it
-    finds. Whether what is there is loadable -- or even whether the
-    directory says which of the two forms it means -- is
-    ``find_inventory``'s to answer, when something actually asks.
+    finds. Which of the two forms the directory means, or whether it
+    names a form at all, is ``find_inventory``'s to answer, when
+    something actually asks; whether what it names loads is the loader's,
+    later still, and nobody's until then.
 
     Parameters
     ----------
@@ -1520,7 +1540,15 @@ def carries_inventory(directory: str | os.PathLike) -> bool:
 
 def find_inventory(directory: str | os.PathLike) -> Path | None:
     """
-    Return the inventory a directory carries, or None if it carries none.
+    Return the path of the inventory a directory carries, or None.
+
+    Only the name is judged, never the contents: a path comes back
+    because something sits under the blessed name in a form that name
+    takes, not because it loads. Raises instead of answering when the
+    directory says two things at once -- both forms present -- or when
+    what sits there is the wrong kind of thing for the name it has, which
+    is a misspelling of the convention rather than a file which owes it
+    nothing.
 
     Parameters
     ----------
@@ -1582,6 +1610,13 @@ def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     if isinstance(source, str | os.PathLike):
         if os.path.isdir(source):
             return load_directory(source)
+        # A serialized document is read the way the format reads its own
+        # object files: the suffix picks the parser, so a JSON inventory
+        # loads where PyYAML is not installed, and a file which does not
+        # parse says so as an invalid inventory rather than as whatever
+        # the parser happened to raise.
+        if os.path.isfile(source) and _object_suffix(Path(source)) is not None:
+            return _load_file(Path(source))
         return Inventory.from_yaml(source)
     msg = f"Could not get an inventory from {source!r}."
     raise InvalidInventoryError(msg)

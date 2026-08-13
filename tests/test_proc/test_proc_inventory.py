@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import inspect
 import itertools
+import os
 import pickle
 import re
+import tempfile
 import warnings
 from collections.abc import Mapping
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -22,6 +25,7 @@ from dascore.constants import (
     enrich_on_missing_description,
 )
 from dascore.core.inventory import (
+    _SYSTEM_FACT_NAMES,
     Acquisition,
     CoordinateReferenceSystem,
     CouplingCondition,
@@ -36,6 +40,7 @@ from dascore.core.inventory import (
     OpticalPathAnnotation,
 )
 from dascore.core.inventory_loader import BLESSED_NAME
+from dascore.core.spool import _InventoryRef
 from dascore.examples import get_example_patch, inventory_patch_pair
 from dascore.exceptions import (
     CoordMergeError,
@@ -606,6 +611,20 @@ class TestRemoveInventory:
         assert spool.remove_inventory()[0].equals(patch)
 
 
+def _enforces_permissions() -> bool:
+    """Return True if a file with no mode bits is actually unreadable."""
+    with tempfile.TemporaryDirectory() as name:
+        path = Path(name) / "probe"
+        path.write_text("")
+        path.chmod(0o000)
+        return not os.access(path, os.R_OK)
+
+
+# Asked once, at collection: root ignores modes and Windows has none, so
+# there the file a permission test means to make unreadable simply is not.
+ENFORCES_PERMISSIONS = _enforces_permissions()
+
+
 def write_inventory(root, files):
     """Write a mapping of relative path to text as an authoring directory."""
     for name, text in files.items():
@@ -649,9 +668,18 @@ class TestBlessedInventory:
     def test_the_scanner_ignores_it(self, tmp_path, patch):
         """A hidden name is one the file scanner already skips."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        write_inventory(tmp_path / BLESSED_NAME, {"inventory.yaml": "version: 0.0.1\n"})
-        spool = dc.spool(tmp_path).update()
-        assert len(spool) == 1
+        blessed = tmp_path / BLESSED_NAME
+        blessed.mkdir()
+        # A readable DAS file, which is the only thing that tells being
+        # skipped from being unreadable: a stray .yaml is no format the
+        # scanner would have indexed anyway.
+        dc.write(patch, blessed / "patch.h5", "dasdae")
+        (blessed / "inventory.yaml").write_text("schema_version: 1\n")
+        assert len(dc.spool(tmp_path).update()) == 1
+        visible = tmp_path / "visible"
+        visible.mkdir()
+        dc.write(patch, visible / "patch.h5", "dasdae")
+        assert len(dc.spool(tmp_path).update()) == 2
 
     def test_a_visible_inventory_is_not_attached(self, tmp_path, patch, inventory):
         """`inventory.yaml` names the envelope, not a spool's inventory."""
@@ -662,6 +690,12 @@ class TestBlessedInventory:
     def test_in_memory_spools_carry_none(self, patch):
         """There is no directory to have carried one."""
         assert dc.spool(patch)._inventory is None
+
+    def test_a_file_spool_carries_none(self, tmp_path, patch, inventory):
+        """A file is not a directory, whatever lies beside it."""
+        dc.write(patch, tmp_path / "patch.h5", "dasdae")
+        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        assert dc.spool(tmp_path / "patch.h5")._inventory is None
 
 
 class TestLazyInventory:
@@ -688,8 +722,14 @@ class TestLazyInventory:
         assert spool._inventory._inventory is None
 
     def test_the_attr_names_are_the_models_own(self, inventory):
-        """What `_inventory_query` decides without reading rests on this."""
-        assert inventory.get_names().attrs == dc.inventory().get_names().attrs
+        """What `_inventory_query` decides without reading rests on this.
+
+        It gates on a constant rather than on the attached inventory, so
+        an inventory whose attrs depended on its contents would make the
+        gate skip reads it needs.
+        """
+        assert set(inventory.get_names().attrs) == set(_SYSTEM_FACT_NAMES)
+        assert set(dc.inventory().get_names().attrs) == set(_SYSTEM_FACT_NAMES)
 
     def test_a_fiber_coordinate_reads_it(self, data_directory):
         """A name the index does not have is a question for the inventory."""
@@ -768,6 +808,35 @@ class TestLazyInventory:
         assert spool.enrich()[0].attrs.gauge_length == 10.0
         assert spool.attach_inventory().enrich()[0].attrs.gauge_length == 2.0
 
+    def test_a_syntax_error_says_where_it_came_from(self, tmp_path, patch):
+        """A file which does not parse is an inventory which does not load."""
+        dc.write(patch, tmp_path / "patch.h5", "dasdae")
+        (tmp_path / f"{BLESSED_NAME}.yaml").write_text("this: [is not: yaml\n")
+        spool = dc.spool(tmp_path).update()
+        with pytest.raises(InvalidInventoryError, match="when the spool was opened"):
+            spool.enrich()[0]
+
+    def test_fields_which_are_not_named(self, tmp_path, patch):
+        """`1: 2` is legal YAML and no inventory; the document is blamed."""
+        dc.write(patch, tmp_path / "patch.h5", "dasdae")
+        (tmp_path / f"{BLESSED_NAME}.yaml").write_text("1: 2\n")
+        spool = dc.spool(tmp_path).update()
+        with pytest.raises(InvalidInventoryError, match="not named"):
+            spool.enrich()[0]
+
+    @pytest.mark.skipif(
+        not ENFORCES_PERMISSIONS, reason="an unreadable file is readable here"
+    )
+    def test_an_unreadable_file_says_where_it_came_from(self, tmp_path, patch):
+        """A permission error is no more the caller's to decipher."""
+        dc.write(patch, tmp_path / "patch.h5", "dasdae")
+        path = tmp_path / f"{BLESSED_NAME}.yaml"
+        path.write_text("schema_version: 1\n")
+        spool = dc.spool(tmp_path).update()
+        path.chmod(0o000)
+        with pytest.raises(InvalidInventoryError, match="when the spool was opened"):
+            spool.enrich()[0]
+
     def test_a_failed_read_is_not_a_read(self, tmp_path, patch, inventory):
         """An unreadable inventory is a thing to fix, so the fix is seen."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
@@ -792,7 +861,13 @@ class TestLazyInventory:
 
     def test_update_keeps_it(self, data_directory):
         """Re-indexing the files says nothing about the inventory."""
-        assert dc.spool(data_directory).update().update()._inventory is not None
+        spool = dc.spool(data_directory)
+        assert spool.update()._inventory is spool._inventory
+
+    def test_update_does_not_bring_it_back(self, data_directory):
+        """Removal outlives a re-index, since nothing refills the slot."""
+        spool = dc.spool(data_directory).update().remove_inventory()
+        assert spool.update()._inventory is None
 
 
 class TestAttachInventoryPath:
@@ -831,12 +906,23 @@ class TestAttachInventoryPath:
             dc.spool(patch).attach_inventory("nowhere.yaml")
 
     def test_a_named_failure_says_which_file(self, tmp_path, patch):
-        """Named by hand, so the name is what the message needs."""
+        """Named by hand, and still said to have been attached here."""
         path = tmp_path / "broken.yaml"
         path.write_text("[]\n")
         spool = dc.spool(patch).attach_inventory(path)
-        with pytest.raises(InvalidInventoryError, match=r"broken\.yaml"):
+        with pytest.raises(InvalidInventoryError, match="attached to this spool from"):
             spool.enrich()[0]
+
+    def test_a_path_is_anchored_when_it_is_attached(self, tmp_path, patch, inventory):
+        """The read comes later, possibly from another directory entirely."""
+        inventory.to_yaml(tmp_path / "somewhere.yaml")
+        here = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            spool = dc.spool(patch).attach_inventory("somewhere.yaml")
+        finally:
+            os.chdir(here)
+        assert spool.enrich()[0].attrs.gauge_length == 10.0
 
     def test_enrich_takes_a_path(self, tmp_path, patch, inventory):
         """Both inventory verbs attach what they are given."""
@@ -869,43 +955,80 @@ class TestAttachInventoryPath:
 
 
 class TestLazyInventoryEquality:
-    """Two spools agree about an inventory whether or not they read it."""
+    """Comparing two attachments never reads either of them."""
 
     def test_two_references_to_one_place(self, data_directory):
-        """Which needs no read at all."""
+        """The same place is the same attachment, unread."""
         first, second = dc.spool(data_directory), dc.spool(data_directory)
         assert first.update() == second.update()
         assert first._inventory._inventory is None
 
-    def test_a_reference_and_the_inventory_itself(self, data_directory, inventory):
-        """One side is resolved to answer, since a name is not a value."""
-        spool = dc.spool(data_directory).update()
-        assert spool == spool.attach_inventory(inventory)
+    def test_two_references_to_different_places(self, tmp_path, patch, inventory):
+        """Two places are two attachments, whatever they hold."""
+        spools = []
+        for name in ("first", "second"):
+            root = tmp_path / name
+            root.mkdir()
+            dc.write(patch, root / "patch.h5", "dasdae")
+            inventory.to_yaml(root / f"{BLESSED_NAME}.yaml")
+            spools.append(dc.spool(root).update())
+        assert spools[0] != spools[1]
+        assert all(x._inventory._inventory is None for x in spools)
 
-    def test_a_reference_and_a_different_inventory(self, data_directory, inventory):
-        """The read decides it, and decides against."""
+    def test_a_place_and_a_value(self, data_directory, inventory):
+        """A place is no value until someone asks, and this does not ask."""
         spool = dc.spool(data_directory).update()
-        other = _replace_acquisition(inventory, gauge_length=7.0)
-        assert spool != spool.attach_inventory(other)
+        assert spool != spool.attach_inventory(inventory)
+        assert spool._inventory._inventory is None
+
+    def test_a_directory_and_the_inventory_it_carries(self, data_directory):
+        """One path, two things: the data directory and an inventory."""
+        spool = dc.spool(data_directory).update()
+        named = spool.attach_inventory(data_directory / f"{BLESSED_NAME}.yaml")
+        assert spool._inventory != named._inventory
+        assert spool._inventory != _InventoryRef(data_directory)
 
     def test_something_which_is_no_kind_of_inventory(self, data_directory):
-        """Not a question worth reading a file to answer."""
+        """Which the comparison declines rather than answers."""
         spool = dc.spool(data_directory).update()
+        assert spool._inventory.__eq__(42) is NotImplemented
         assert spool._inventory != 42
         assert spool._inventory._inventory is None
 
-    def test_a_union_carries_it_over(self, data_directory, inventory):
-        """Both halves are resolved, so agreeing is a thing they can do."""
+    def test_a_union_carries_one_over(self, data_directory):
+        """Both operands name the same place, so the union has an answer."""
         spool = dc.spool(data_directory).update()
-        combined = spool + spool.attach_inventory(inventory)
+        combined = spool + spool.select(time=...)
         assert combined.enrich()[0].attrs.gauge_length == 10.0
 
     def test_a_union_of_two_different_ones_raises(self, data_directory, inventory):
         """Two answers to one question have no combined meaning."""
         spool = dc.spool(data_directory).update()
-        other = _replace_acquisition(inventory, gauge_length=7.0)
         with pytest.raises(InvalidSpoolError, match="different inventories"):
-            spool + spool.attach_inventory(other)
+            spool + spool.attach_inventory(inventory)
+
+    def test_a_union_never_reads_an_inventory(self, tmp_path, patch):
+        """Data access is never hostage to a metadata file, `+` included."""
+        spools = []
+        for name in ("first", "second"):
+            root = tmp_path / name
+            root.mkdir()
+            dc.write(patch, root / "patch.h5", "dasdae")
+            (root / f"{BLESSED_NAME}.yaml").write_text("this: [is not: yaml\n")
+            spools.append(dc.spool(root).update())
+        with pytest.raises(InvalidSpoolError, match="different inventories"):
+            spools[0] + spools[1]
+        assert len(spools[0] + spools[0].select(time=...)) == 1
+
+    def test_equality_never_raises(self, tmp_path, patch, inventory):
+        """`==` is asked in places which cannot take an exception."""
+        broken, whole = tmp_path / "broken", tmp_path / "whole"
+        for root in (broken, whole):
+            root.mkdir()
+            dc.write(patch, root / "patch.h5", "dasdae")
+        (broken / f"{BLESSED_NAME}.yaml").write_text("this: [is not: yaml\n")
+        inventory.to_yaml(whole / f"{BLESSED_NAME}.yaml")
+        assert dc.spool(broken).update() not in [dc.spool(whole).update()]
 
 
 class TestMultiValuedTrackFields:

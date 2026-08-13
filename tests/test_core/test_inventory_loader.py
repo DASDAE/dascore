@@ -2093,3 +2093,49 @@ class TestFindInventory:
     def test_the_name_is_hidden(self):
         """Which is what keeps the file scanner from reading it as data."""
         assert loader.BLESSED_NAME.startswith(".")
+
+
+class TestLoadSerializedFile:
+    """A whole inventory read from one document, not a directory."""
+
+    def test_json_needs_no_yaml(self, tmp_path, monkeypatch):
+        """The suffix picks the parser, so JSON is not YAML's to read."""
+        path = tmp_path / "whole.json"
+        path.write_text('{"description": "a JSON inventory"}')
+        asked = []
+        monkeypatch.setattr(loader, "optional_import", lambda x, **kw: asked.append(x))
+        assert dc.inventory(path).description == "a JSON inventory"
+        assert not asked
+
+    def test_a_document_which_does_not_parse(self, tmp_path):
+        """Which is an invalid inventory, not a parser's business."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("this: [is not: yaml\n")
+        with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
+            dc.inventory(path)
+
+    def test_fields_which_are_not_named(self, tmp_path):
+        """`1: 2` is legal YAML, and names no field of anything."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("1: 2\n")
+        with pytest.raises(InvalidInventoryError, match="not named"):
+            dc.inventory(path)
+
+    def test_a_document_which_is_not_a_mapping(self, tmp_path):
+        """A list of things defines no inventory."""
+        path = tmp_path / "whole.yaml"
+        path.write_text("- 1\n- 2\n")
+        with pytest.raises(InvalidInventoryError, match="holds no mapping"):
+            dc.inventory(path)
+
+    def test_a_missing_file_is_still_named(self, tmp_path):
+        """The message a caller who mistyped a path needs."""
+        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+            dc.inventory(tmp_path / "absent.yaml")
+
+    def test_a_round_trip(self, tmp_path):
+        """What `to_yaml` writes is what this reads."""
+        original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
+        path = tmp_path / "whole.yaml"
+        original.to_yaml(path)
+        assert dc.inventory(path) == original
