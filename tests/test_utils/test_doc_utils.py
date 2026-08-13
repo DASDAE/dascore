@@ -13,9 +13,12 @@ from dascore.examples import EXAMPLE_PATCHES
 from dascore.utils.docs import (
     compose_docstring,
     format_dtypes,
+    get_doc_anchor,
     get_docstring,
     get_plugin_table,
     objs_to_doc_df,
+    render_module_api,
+    render_package_api,
 )
 
 
@@ -153,3 +156,39 @@ class TestObjToDocDF:
         df = objs_to_doc_df(EXAMPLE_PATCHES, cross_reference=False)
         assert "(`dascore.examples" not in df["Name"].iloc[0]
         assert isinstance(df, pd.DataFrame)
+
+
+class TestRenderApi:
+    """Tests for rendering a module's API onto one documentation page."""
+
+    @pytest.fixture(scope="class")
+    def misc_markdown(self):
+        """Rendered markdown for a module with a mix of documented objects."""
+        return render_module_api("dascore.utils.misc")
+
+    def test_anchor_is_stable_and_html_safe(self):
+        """Anchors must be reproducible so the inventory can point at them."""
+        anchor = get_doc_anchor("dascore.utils.misc.iterate")
+        assert anchor == "dascore-utils-misc-iterate"
+        assert anchor == get_doc_anchor("dascore.utils.misc.iterate")
+
+    def test_entry_has_anchor_signature_and_summary(self, misc_markdown):
+        """Each entry needs the pieces a reader and the inventory rely on."""
+        assert "#### iterate {#dascore-utils-misc-iterate}" in misc_markdown
+        assert "iterate(" in misc_markdown
+
+    def test_details_are_collapsed(self, misc_markdown):
+        """Parameters and examples sit in a collapsed callout, not inline."""
+        assert 'collapse="true"' in misc_markdown
+        assert "| Parameter | Type | Description |" in misc_markdown
+
+    def test_only_objects_defined_in_the_module(self, misc_markdown):
+        """Imported names belong to the module which defines them."""
+        # misc imports numpy as np; it should not document numpy.
+        assert "#### np " not in misc_markdown
+
+    def test_package_render_covers_every_module(self):
+        """Every non-private module with public objects gets a section."""
+        markdown = render_package_api("dascore.utils")
+        assert "### dascore.utils.misc {#dascore-utils-misc}" in markdown
+        assert "### dascore.utils.patch {#dascore-utils-patch}" in markdown

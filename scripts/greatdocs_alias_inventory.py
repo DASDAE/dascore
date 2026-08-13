@@ -21,12 +21,23 @@ this only feeds it a richer inventory.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
 import os
 import sys
 from pathlib import Path
 
 OBJECTS_JSON = Path("objects.json")
+
+# Where the single-page utils reference lands in the built site.
+#
+# great-docs resolves inventory uris in two ways: with the linking page's path
+# (a relative path is computed, which normalizes the `..`) and, on reference
+# pages, by simply stripping a leading `reference/` -- that branch assumes
+# every documented object lives under `reference/`. Spelling the path this way
+# lands on `../utilities/index.html` either way. Worth reporting upstream.
+UTILITIES_PAGE = "reference/../utilities/index.html"
 
 # Modules whose links should land on a section of the API index.
 MODULE_SECTIONS = {
@@ -179,6 +190,31 @@ def main() -> None:
     # 4. Module links -> API index sections.
     for name, uri in MODULE_SECTIONS.items():
         add_alias(name, {"role": "module", "uri": uri, "dispname": "-"})
+
+    # 5. The utilities page documents every helper in dascore.utils on one
+    #    page, so point cross references at the anchor of each entry rather
+    #    than a page that does not exist.
+    import pkgutil
+
+    from dascore.utils.docs import get_doc_anchor, iter_public
+
+    utils = importlib.import_module("dascore.utils")
+    for info in pkgutil.walk_packages(utils.__path__, prefix="dascore.utils."):
+        if any(part.startswith("_") for part in info.name.split(".")):
+            continue
+        try:
+            members = list(iter_public(info.name))
+        except ImportError:
+            continue
+        if not members:
+            continue
+        page = f"{UTILITIES_PAGE}#{get_doc_anchor(info.name)}"
+        add_alias(info.name, {"role": "module", "uri": page, "dispname": "-"})
+        for name, obj in members:
+            dotted = f"{info.name}.{name}"
+            uri = f"{UTILITIES_PAGE}#{get_doc_anchor(dotted)}"
+            role = "class" if inspect.isclass(obj) else "function"
+            add_alias(dotted, {"role": role, "uri": uri, "dispname": "-"})
 
     if new_items:
         data["items"] = items + new_items

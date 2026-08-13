@@ -79,6 +79,10 @@ sections:
   - title: About
     dir: about
     index: true
+  # One page for the whole utils package: a page per helper would triple the
+  # site for objects that are supporting cast rather than the main interface.
+  - title: Utilities
+    dir: utilities
 
 # Names picked up by discovery that are implementation details or
 # accidental re-exports (dascore modules do not define __all__).
@@ -341,15 +345,6 @@ reference:
         members: [get_handle]
       - name: io.H5Writer
         members: [get_handle]
-
-  - title: Utilities
-    desc: Assorted helper utilities
-    contents:
-      - utils.array.apply_ufunc
-      - utils.array.apply_array_func
-      - utils.chunk_plan.ChunkPlan
-      - utils.patch.merge_compatible_coords_attrs
-      - utils.remote_io.clear_remote_file_cache
 
   - title: Exceptions
     desc: Exception classes raised by DASCore

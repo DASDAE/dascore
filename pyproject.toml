@@ -73,6 +73,8 @@ extras = [
 ]
 
 docs = [
+    # renders utils docstrings onto the utilities page
+    "griffe",
     "ipywidgets",
     "tabulate",
     # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
@@ -302,7 +304,13 @@ include = ["dascore"]
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
-include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+# griffe (docs extra) is imported only while rendering the utilities page.
+include = [
+    "dascore/compat.py",
+    "dascore/utils/docs.py",
+    "dascore/utils/jit.py",
+    "dascore/io/dasvader/utils.py",
+]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

@@ -1,0 +1,16 @@
+---
+title: Utilities
+description: "Every public helper in dascore.utils, with details on demand."
+---
+
+DASCore's `utils` package holds the helpers the rest of the library is built from. They are public, but they are supporting cast rather than the main interface — the [API reference](/reference/index.qmd) covers the patch, spool and processing functions most users need.
+
+Everything defined in `dascore.utils` is listed below, one section per module. Each entry shows its signature and summary; open **Details** for parameters, returns and examples.
+
+```{python}
+#| echo: false
+#| output: asis
+from dascore.utils.docs import render_package_api
+
+print(render_package_api("dascore.utils"))
+```
