@@ -913,6 +913,21 @@ class TestAttachInventoryPath:
         with pytest.raises(InvalidInventoryError, match="attached to this spool from"):
             spool.enrich()[0]
 
+    def test_a_named_file_of_any_suffix(self, tmp_path, patch, inventory):
+        """A path is a path; only the blessed name insists on a spelling."""
+        path = tmp_path / "inventory.txt"
+        path.write_text(inventory.to_yaml())
+        spool = dc.spool(patch).attach_inventory(path)
+        assert spool.enrich()[0].attrs.gauge_length == 10.0
+
+    def test_a_named_file_which_does_not_parse(self, tmp_path, patch):
+        """Whatever its suffix, and whichever parser reached for it."""
+        path = tmp_path / "inventory.txt"
+        path.write_text("this: [is not: yaml\n")
+        spool = dc.spool(patch).attach_inventory(path)
+        with pytest.raises(InvalidInventoryError, match="attached to this spool from"):
+            spool.enrich()[0]
+
     def test_a_path_is_anchored_when_it_is_attached(self, tmp_path, patch, inventory):
         """The read comes later, possibly from another directory entirely."""
         inventory.to_yaml(tmp_path / "somewhere.yaml")

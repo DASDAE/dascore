@@ -2301,11 +2301,39 @@ class Inventory(InventoryModel):
             if not os.path.exists(source):
                 msg = f"No such inventory file: {source!r}."
                 raise InvalidInventoryError(msg)
-            with open(source) as fh:
-                text = fh.read()
+            try:
+                with open(source) as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError) as error:
+                msg = f"Could not read {source!r}: {error}."
+                raise InvalidInventoryError(msg) from error
         yaml = optional_import("yaml", required_for="YAML inventory serialization")
-        data = yaml.safe_load(text)
-        if not isinstance(data, dict):
-            msg = f"Could not parse an inventory mapping from {source!r}."
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            # A document which does not parse is an invalid inventory, and
+            # says so as one: a caller who asked for an inventory should
+            # not have to know which parser was reaching for the file.
+            msg = f"Could not parse YAML from {source!r}: {error}."
+            raise InvalidInventoryError(msg) from error
+        return cls._from_mapping(data, f"{source!r}")
+
+    @classmethod
+    def _from_mapping(cls, data, source: str) -> Self:
+        """
+        Build a checked inventory from one parsed document.
+
+        Shared by every route into a whole inventory, so that a document
+        which is not one is refused in the same words whichever parser
+        read it.
+        """
+        if not isinstance(data, Mapping):
+            msg = f"Could not parse an inventory mapping from {source}."
+            raise InvalidInventoryError(msg)
+        # `cls(**data)` would raise TypeError on a key which is not a
+        # string -- `1: 2` is legal YAML -- naming Python's calling
+        # convention rather than the document which broke the rule.
+        if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
+            msg = f"{source} holds fields which are not named: {', '.join(named)}."
             raise InvalidInventoryError(msg)
         return cls(**data).check()

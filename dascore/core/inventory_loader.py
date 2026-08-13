@@ -1503,14 +1503,7 @@ def _load_file(path: Path) -> Inventory:
     parsers, same errors, so the single-file artifact ``to_yaml`` writes
     and the directory it came from fail the same way when they fail.
     """
-    data = _read_object(path)
-    # `Inventory(**data)` would raise TypeError on a key which is not a
-    # string -- `1: 2` is legal YAML -- naming Python's calling
-    # convention rather than the document which broke the rule.
-    if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
-        msg = f"{_quote(path)} holds fields which are not named: {', '.join(named)}."
-        raise InvalidInventoryError(msg)
-    return Inventory(**data).check()
+    return Inventory._from_mapping(_read_object(path), _quote(path))
 
 
 def _blessed_candidates(directory: Path) -> tuple[Path, ...]:

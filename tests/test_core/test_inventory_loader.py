@@ -2128,6 +2128,39 @@ class TestLoadSerializedFile:
         with pytest.raises(InvalidInventoryError, match="holds no mapping"):
             dc.inventory(path)
 
+    # 0x81 is undefined in cp1252 as well as invalid UTF-8, so the file is
+    # undecodable wherever this runs rather than only where UTF-8 is the
+    # default -- a Windows checkout would otherwise decode it and parse on.
+    UNDECODABLE = b"description: \x81\n"
+
+    def test_an_undecodable_file(self, tmp_path):
+        """Bytes which are no text are no inventory either."""
+        path = tmp_path / "whole.yaml"
+        path.write_bytes(self.UNDECODABLE)
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(path)
+
+    def test_an_undecodable_document_of_any_suffix(self, tmp_path):
+        """The route which reads YAML by default decodes alike."""
+        path = tmp_path / "whole.txt"
+        path.write_bytes(self.UNDECODABLE)
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(path)
+
+    def test_a_suffixless_document(self, tmp_path):
+        """Read as YAML, and refused in the same words when it is not."""
+        path = tmp_path / "whole.txt"
+        path.write_text("this: [is not: yaml\n")
+        with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
+            dc.inventory(path)
+
+    def test_a_suffixless_document_with_unnamed_fields(self, tmp_path):
+        """The one route into an inventory says this the same way."""
+        path = tmp_path / "whole.txt"
+        path.write_text("1: 2\n")
+        with pytest.raises(InvalidInventoryError, match="not named"):
+            dc.inventory(path)
+
     def test_a_missing_file_is_still_named(self, tmp_path):
         """The message a caller who mistyped a path needs."""
         with pytest.raises(InvalidInventoryError, match="No such inventory file"):
