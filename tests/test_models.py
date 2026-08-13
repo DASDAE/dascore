@@ -8,9 +8,11 @@ import subprocess
 import sys
 
 import numpy as np
+import pydantic
 import pytest
 from pydantic import Field, ValidationError
 
+import dascore.models as dc_models
 from dascore.core.attrs import PatchAttrs
 from dascore.core.inventory import Cable, Inventory
 from dascore.exceptions import InvalidModelTagError
@@ -27,6 +29,7 @@ from dascore.models import (
     sensible_model_equals,
 )
 from dascore.units import Quantity
+from dascore.utils import models as models_shim
 
 
 class _TestModel(DascoreBaseModel):
@@ -338,6 +341,30 @@ def test_optional_numbers_are_declared_across_the_formats():
     assert total >= 25
 
 
+class TestDeprecatedModelPath:
+    """`dascore.utils.models` keeps working for readers which import it."""
+
+    def test_names_resolve_to_their_new_home(self):
+        """The same objects, not copies of them."""
+        assert models_shim.DascoreBaseModel is DascoreBaseModel
+        assert models_shim.DateTime64 is DateTime64
+
+    def test_it_re_exports_everything_the_package_does(self):
+        """
+        Re-exported wholesale, so a name added later cannot go missing.
+
+        Which is the point of the star import: a second hand-maintained
+        list would drift from the first without anything noticing.
+        """
+        assert set(dc_models.__all__) <= set(models_shim.__all__)
+        for name in models_shim.__all__:
+            assert hasattr(models_shim, name), name
+
+    def test_it_still_carries_pydantic_base_model(self):
+        """It re-exported this, so something out of tree may import it."""
+        assert models_shim.BaseModel is pydantic.BaseModel
+
+
 class TestModelTagRegistry:
     """A tag names one class, and the registry is what resolves it."""
 
@@ -465,6 +492,7 @@ class TestModelTagRegistry:
         )
         assert registry.resolve_model_tag("absent:Whatever") is None
 
+    @pytest.mark.concurrency
     def test_a_model_in_an_unimported_module_is_found(self):
         """
         A format's models only exist once its module is imported.
