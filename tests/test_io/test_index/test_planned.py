@@ -341,6 +341,68 @@ class TestCollapseGuard:
         catalog = dc.spool([dc.get_example_patch()])._catalog
         assert collapse_working_df(catalog) is None
 
+    def test_collapse_keeps_modified(self):
+        """
+        The flag says a member is a trim rather than a whole source.
+
+        Losing it makes the next plan mark such a member "load whole",
+        and the loader then reads the entire file it was a slice of.
+        """
+        chunked = dc.spool(dc.get_example_patch()).chunk(time=2)
+        collapsed = collapse_working_df(chunked._catalog)
+        assert "_modified" in collapsed.columns
+        assert collapsed["_modified"].all()
+
+
+class TestRePlanKeepsTheTrim:
+    """Re-planning a dimension must not load back what was trimmed off."""
+
+    def test_nested_chunk_matches_a_direct_one(self):
+        """
+        Chunking twice gives what chunking once does, data included.
+
+        The example patch spans 8 s, so `chunk(time=3)` keeps two full
+        chunks and drops the 2 s remainder; the nested form used to
+        report 4500 samples from a 2000 sample patch instead.
+        """
+        patch = dc.get_example_patch()
+        direct = dc.spool(patch).chunk(time=3)
+        nested = dc.spool(patch).chunk(time=2).chunk(time=3)
+        assert len(nested) == len(direct)
+        assert sum(x.shape[1] for x in nested) == sum(x.shape[1] for x in direct)
+        for one, two in zip(direct, nested, strict=True):
+            assert np.array_equal(one.data, two.data)
+            assert np.array_equal(one.get_array("time"), two.get_array("time"))
+
+    def test_a_re_chunked_selection_keeps_its_range(self):
+        """
+        The reported case: the second chunk ignored the selection.
+
+        A member reloaded whole overlaps its neighbour, so the merge
+        repeated the overlap and the coordinate stopped increasing.
+        """
+        patch = dc.get_example_patch().set_units(distance="m")
+        coord = patch.get_coord("distance")
+        span = float(coord.max() - coord.min() + coord.step)
+        moved = patch.update_coords(distance=coord.data + span).set_units(distance="m")
+        chunked = dc.spool([patch, moved]).chunk(
+            distance=200, conflict="keep_first", keep_partial=True
+        )
+        selected = chunked.select(distance=(250 * m, 450 * m))
+        wanted = sum(x.shape[x.get_axis("distance")] for x in selected)
+        merged = selected.chunk(distance=None, conflict="keep_first")
+        values = np.asarray(merged[0].get_coord("distance").values)
+        assert len(values) == wanted
+        assert len(np.unique(values)) == len(values)
+
+    def test_merging_chunks_of_one_patch_rebuilds_it(self):
+        """Every piece is a trim, so none of them may load whole."""
+        patch = dc.get_example_patch()
+        merged = dc.spool(patch).chunk(distance=100).chunk(distance=None)
+        assert len(merged) == 1
+        assert merged[0].shape == patch.shape
+        assert np.array_equal(merged[0].data, patch.data)
+
 
 class TestStatedUnits:
     """Row values arrive from dataframes, so absence is NaN."""

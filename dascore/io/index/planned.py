@@ -618,7 +618,12 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
         }
         members = members[members["output_id"].isin(present)]
     ranges = _residual_ranges(catalog._residuals)
-    working = members.drop(columns=["output_id", "_modified"], errors="ignore")
+    # `_modified` carries: it says the member is a *trim* of its source
+    # rather than the whole of it, which is exactly what the re-plan needs
+    # to know. Dropping it left `_build_members` to assume no source was
+    # modified, so a member which was a slice of a file came back marked
+    # "load whole" and the loader read all of it.
+    working = members.drop(columns=["output_id"], errors="ignore")
     bare = {
         name: value
         for name, value in ranges.items()
