@@ -10,6 +10,7 @@ changelog source belongs in the repository and this test fails if one appears.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -18,9 +19,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CHECKER_PATH = _REPO_ROOT / ".github" / "scripts" / "check_pr_changelog.py"
 _CONFIG_PATH = _REPO_ROOT / "great-docs.yml"
 
-# Directories the docs are written in, plus the repository root, which is where
-# a hand-written changelog would most likely land.
-_DOC_DIRS = ("about", "contributing", "docs", "notes", "recipes", "tutorial")
+# The directories the docs are written in, read from the configuration so a new
+# section is searched too, plus `docs` (assets the sections draw on) and the
+# repository root, which is where a hand-written changelog would most likely
+# land.
+_SECTION_RE = re.compile(r"^\s+dir:\s*(\S+)\s*$", re.MULTILINE)
 
 # Run wherever the docs are, skip where they are not. The sdist grafts tests but
 # ships only docs/LICENSE, so a directory existing is not enough to tell the two
@@ -37,16 +40,25 @@ _POLICY = (
 )
 
 
+def _doc_directories() -> list[Path]:
+    """Return the repository root and every directory a section is built from."""
+    config = _CONFIG_PATH.read_text(encoding="utf-8")
+    dirs = {"docs", *_SECTION_RE.findall(config)}
+    return [_REPO_ROOT, *(_REPO_ROOT / name for name in sorted(dirs))]
+
+
 def _changelog_sources() -> list[Path]:
-    """Return any file in the repository which is a changelog of its own."""
+    """Return any file in the docs which is a changelog of its own."""
     out = []
-    for name in (_REPO_ROOT.name, *_DOC_DIRS):
-        directory = _REPO_ROOT if name == _REPO_ROOT.name else _REPO_ROOT / name
-        for path in sorted(directory.glob("*")):
-            stem = path.name.lower()
-            if stem.startswith("changelog") or stem.startswith("change_log"):
+    for directory in _doc_directories():
+        # The root is searched shallowly (its subdirectories are the sections,
+        # searched in their own right); a section, all the way down.
+        paths = directory.glob("*") if directory == _REPO_ROOT else directory.rglob("*")
+        for path in paths:
+            name = path.name.lower()
+            if name.startswith(("changelog", "change_log")):
                 out.append(path)
-    return out
+    return sorted(out)
 
 
 @pytest.mark.skipif(
@@ -69,9 +81,11 @@ class TestNoChangelogSource:
         changelog page with it, leaving dascore.org/changelog.html a 404.
         """
         text = _CONFIG_PATH.read_text(encoding="utf-8")
-        assert "\nrepo:" in text, (
-            f"great-docs.yml must set `repo:` so the changelog page is "
-            f"generated from the GitHub releases. {_POLICY}"
+        match = re.search(r'^repo:\s*"?(\S+?)"?\s*$', text, re.MULTILINE)
+        repo = match.group(1) if match else ""
+        assert "github.com" in repo, (
+            f"great-docs.yml must set `repo:` to the GitHub repository the "
+            f"changelog page is generated from, not {repo!r}. {_POLICY}"
         )
 
 

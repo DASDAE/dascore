@@ -21,6 +21,7 @@ pages of their own.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
 import pkgutil
 from pathlib import Path
@@ -29,7 +30,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.core import FiberIO
-from dascore.utils.docs import iter_public
+from dascore.utils.docs import iter_package_modules, iter_public
 
 # Not every job that collects this suite installs the docs/test extras; the
 # free-threaded and WASM workflows install pytest alone.
@@ -62,7 +63,7 @@ UNREFERENCED_OBJECTS = {
     "dascore.core.coords.get_compatible_values": "Coord construction helper.",
     "dascore.core.summary.normalize_source_patch_id": "Summary internal.",
     "dascore.core.inventory.InventoryNames": "Names the inventory machinery fills in.",
-    "dascore.core.inventory.interval_masks": "Coverage helper for inventory resolution.",
+    "dascore.core.inventory.interval_masks": "Inventory coverage helper.",
     "dascore.proc.inventory.get_attr_values": "Enrichment internal, not re-exported.",
     "dascore.proc.inventory.resolve_contexts": "Enrichment internal, not re-exported.",
 }
@@ -135,16 +136,28 @@ def _iter_public_safe(module_name: str) -> list:
     """
     Return a module's public objects, tolerating a missing optional dependency.
 
-    Only the absence of a third-party package is tolerated. An ImportError
-    naming a dascore module is a broken import, and swallowing it would drop
-    every object in that module from the comparison and quietly weaken the test.
+    Only a package which is not installed at all is tolerated. An ImportError
+    naming a dascore module, or naming an installed one (a misspelled `from
+    numpy import ...`), is a broken import; swallowing it would drop every
+    object in that module from the comparison and quietly weaken the test.
     """
     try:
         return list(iter_public(module_name))
     except ImportError as e:
-        if (e.name or "").startswith("dascore"):
+        name = e.name or ""
+        if name.startswith("dascore") or _is_installed(name):
             raise
         return []
+
+
+def _is_installed(module_name: str) -> bool:
+    """Return True if the named package can be found in the environment."""
+    if not module_name:
+        return True
+    try:
+        return importlib.util.find_spec(module_name.split(".")[0]) is not None
+    except (ImportError, ValueError):
+        return True
 
 
 def _reexports(module_name: str) -> list:
@@ -185,15 +198,21 @@ def _public_surface() -> dict:
     return out
 
 
-def _reference_entries(config) -> list[tuple[str, list[str]]]:
-    """Return (dotted path, member names) for every reference entry."""
+def _reference_entries(config) -> list[tuple[str, list[str] | None]]:
+    """
+    Return (dotted path, member names) for every reference entry.
+
+    Members are None for an entry which does not name them, which is how
+    great-docs is told to document them all; an entry naming an empty list
+    documents none of them, and is checked like any other explicit list.
+    """
     out = []
     for group in config.get("reference", []):
         for item in group.get("contents", []):
             if isinstance(item, str):
-                out.append((item, []))
+                out.append((item, None))
             else:
-                out.append((item["name"], item.get("members", [])))
+                out.append((item["name"], item.get("members")))
     return out
 
 
@@ -205,17 +224,14 @@ def _documented(config) -> set:
         if obj is None:
             continue
         out.add(_key(obj))
-        for member in members:
+        for member in members or []:
             sub = getattr(obj, member, None)
             if sub is not None:
                 out.add(_key(sub))
-    package = importlib.import_module(SINGLE_PAGE_PACKAGE)
-    for module_name in _walk_modules(package):
-        try:
-            objects = list(iter_public(module_name))
-        except ImportError:
-            continue
-        out.update(_key(obj) for _, obj in objects)
+    # Walked the way the page renders it, so the two cannot disagree about
+    # which modules are covered.
+    for module_name in iter_package_modules(SINGLE_PAGE_PACKAGE):
+        out.update(_key(obj) for _, obj in _iter_public_safe(module_name))
     for dotted in config.get("exclude", []):
         out.add(_key(_resolve(dotted)))
     out.discard(None)
@@ -234,26 +250,29 @@ def _accounted_members(config) -> dict:
             for name in UNREFERENCED_MEMBERS
             if name.rsplit(".", 1)[0] == dotted
         }
-        out.setdefault(obj, set()).update(members, exempt)
+        out.setdefault(obj, set()).update(members or [], exempt)
     return out
 
 
 def _formats_table_entries() -> set:
-    """Return the (name, version) pairs listed on the supported formats page."""
-    table = FiberIO.get_supported_io_table()
-    return set(zip(table["name"], table["version"], strict=True))
+    """Return the reader classes the supported formats page lists."""
+    FiberIO.get_supported_io_table()  # loads the plugins the table is built from
+    return {
+        type(fiberio)
+        for versions in FiberIO.manager._format_version.values()
+        for fiberio in versions.values()
+    }
 
 
-def _in_formats_table(obj, entries: set) -> bool:
+def _in_formats_table(obj, readers: set) -> bool:
     """
     Return True for a reader the supported formats page actually lists.
 
-    Subclassing FiberIO is not enough: a reader only reaches the table once it
-    is registered, so an unregistered one is documented nowhere.
+    Subclassing FiberIO is not enough, and neither is sharing a registered
+    reader's name and version: the table lists the reader the registry holds,
+    so an unregistered one is documented nowhere.
     """
-    if not (inspect.isclass(obj) and issubclass(obj, FiberIO)):
-        return False
-    return (getattr(obj, "name", None), getattr(obj, "version", None)) in entries
+    return obj in readers
 
 
 def _member_origin(attr) -> str:
@@ -350,7 +369,7 @@ class TestDocCoverage:
             if obj is None:
                 continue
             missing += [
-                f"{dotted}.{m}" for m in members if getattr(obj, m, None) is None
+                f"{dotted}.{m}" for m in members or [] if getattr(obj, m, None) is None
             ]
         assert not missing, (
             f"great-docs.yml names members which no longer exist: {sorted(missing)}"
@@ -373,7 +392,7 @@ class TestDocCoverage:
         missing = []
         for dotted, members in _reference_entries(config):
             obj = _resolve(dotted)
-            if not inspect.isclass(obj) or not members:
+            if not inspect.isclass(obj) or members is None:
                 continue
             names = set().union(*(accounted.get(a, set()) for a in obj.__mro__))
             for name in dir(obj):

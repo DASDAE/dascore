@@ -21,7 +21,6 @@ this only feeds it a richer inventory.
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import json
 import os
@@ -217,25 +216,20 @@ def main() -> None:
     # 5. The utilities page documents every helper in dascore.utils on one
     #    page, so point cross references at the anchor of each entry rather
     #    than a page that does not exist.
-    import pkgutil
+    from dascore.utils.docs import get_doc_anchor, iter_package_modules, iter_public
 
-    from dascore.utils.docs import get_doc_anchor, iter_public
-
-    utils = importlib.import_module("dascore.utils")
     add_alias("dascore.utils", {"role": "module", "uri": UTILITIES_PAGE})
-    for info in pkgutil.walk_packages(utils.__path__, prefix="dascore.utils."):
-        if any(part.startswith("_") for part in info.name.split(".")):
-            continue
+    for module_name in iter_package_modules("dascore.utils"):
         try:
-            members = list(iter_public(info.name))
+            members = list(iter_public(module_name))
         except ImportError:
             continue
         if not members:
             continue
-        page = f"{UTILITIES_PAGE}#{get_doc_anchor(info.name)}"
-        add_alias(info.name, {"role": "module", "uri": page, "dispname": "-"})
+        page = f"{UTILITIES_PAGE}#{get_doc_anchor(module_name)}"
+        add_alias(module_name, {"role": "module", "uri": page, "dispname": "-"})
         for name, obj in members:
-            dotted = f"{info.name}.{name}"
+            dotted = f"{module_name}.{name}"
             uri = f"{UTILITIES_PAGE}#{get_doc_anchor(dotted)}"
             role = "class" if inspect.isclass(obj) else "function"
             add_alias(dotted, {"role": role, "uri": uri, "dispname": "-"})

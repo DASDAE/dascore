@@ -379,6 +379,21 @@ def render_module_api(module_name: str) -> str:
     return "\n".join(out)
 
 
+def iter_package_modules(package_name: str):
+    """
+    Yield the importable name of a package and each public module in it.
+
+    The package itself is included: a helper defined in its ``__init__`` is
+    as public as one in a submodule, and leaving it out would document
+    neither it nor an anchor to link to it.
+    """
+    package = importlib.import_module(package_name)
+    yield package_name
+    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package_name}."):
+        if not any(part.startswith("_") for part in info.name.split(".")):
+            yield info.name
+
+
 def render_package_api(package_name: str, skip_empty: bool = True) -> str:
     """
     Render the public API of every module in a package as markdown.
@@ -394,19 +409,16 @@ def render_package_api(package_name: str, skip_empty: bool = True) -> str:
     skip_empty
         If True, omit modules which define no public objects.
     """
-    package = importlib.import_module(package_name)
     out = []
-    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package_name}."):
-        if any(part.startswith("_") for part in info.name.split(".")):
-            continue
+    for name in iter_package_modules(package_name):
         try:
-            body = render_module_api(info.name)
+            body = render_module_api(name)
         except ImportError:  # an optional dependency the doc env lacks
             continue
         if skip_empty and not body.strip():
             continue
-        out.append(f"### {info.name} {{#{get_doc_anchor(info.name)}}}\n")
-        module_doc = inspect.getdoc(importlib.import_module(info.name)) or ""
+        out.append(f"### {name} {{#{get_doc_anchor(name)}}}\n")
+        module_doc = inspect.getdoc(importlib.import_module(name)) or ""
         if module_doc:
             out.append(" ".join(module_doc.split("\n\n")[0].split()) + "\n")
         out.append(body)
