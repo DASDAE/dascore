@@ -1657,14 +1657,13 @@ class CoordRange(BaseCoord):
                 # eventually raise) about the generic unit that implies.
                 if not step:
                     return self._get_zero_step_index(value, forward)
-                # NaN names no position at all, so it is an open side.
-                if math.isnan(fraction):
-                    return None
-                # An infinite fraction is a bound past one end of the coord,
-                # either because the bound itself is infinite or because it
-                # sits far enough from start to overflow the division. Its
-                # sign says which end, and the range checks below turn the
-                # end the samples are not on into an open side.
+                # Otherwise the fraction is infinite: a bound past one end of
+                # the coord, either because the bound itself is infinite or
+                # because it sits far enough from start to overflow the
+                # division. Its sign says which end, and the range checks
+                # below turn the end the samples are not on into an open
+                # side. It cannot be NaN; a null bound, NaN and NaT alike,
+                # is already None by the time it gets here.
                 out = len(self) if fraction > 0 else -1
             else:
                 out = math.ceil(fraction) if forward else math.floor(fraction)
