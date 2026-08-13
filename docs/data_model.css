@@ -1,0 +1,198 @@
+/*
+ * Styles for the interactive data-model diagram rendered by
+ * docs/filters/render-data-model.lua. Loaded for the whole site because
+ * quarto takes one css list per format; every selector is namespaced to
+ * the widget so nothing else can pick these rules up.
+ */
+
+:root {
+  --dm-accent: #0b7285;
+  --dm-ink: #243036;
+  --dm-muted: #5c6770;
+  --dm-band: #f6f8fa;
+  --dm-panel: #ffffff;
+  --dm-line: #d9e1e8;
+}
+
+.quarto-dark {
+  --dm-ink: #f0f4f6;
+  --dm-muted: #bac5ca;
+  --dm-band: #172126;
+  --dm-panel: #1f2a30;
+  --dm-line: #45545d;
+}
+
+.render-data-model {
+  margin: 1.4rem 0 2rem;
+  padding: 1rem;
+  border: 1px solid var(--dm-line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--dm-panel), var(--dm-band));
+}
+
+.quarto-dark .render-data-model {
+  box-shadow: none;
+}
+
+.data-model-title {
+  margin-bottom: 0.6rem;
+  color: var(--dm-ink);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.render-data-model-graph {
+  /* The graph pans inside the canvas; container scrollbars are never useful
+     and flicker when the canvas rounds to 1px larger than the container. */
+  overflow: hidden;
+  width: 100%;
+  height: min(68vh, 640px);
+  min-height: 420px;
+  padding: 0.5rem;
+  border: 1px solid var(--dm-line);
+  border-radius: 6px;
+  background: transparent;
+}
+
+.render-data-model-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 0.65rem;
+}
+
+.render-data-model-toolbar button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--dm-line);
+  border-radius: 6px;
+  background: var(--dm-panel);
+  color: var(--dm-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.render-data-model-toolbar button:hover {
+  border-color: var(--dm-accent);
+}
+
+.data-model-legend {
+  margin: 0.75rem 0 0;
+  color: var(--dm-muted);
+  font-size: 0.88rem;
+}
+
+.data-model-legend-title {
+  margin-bottom: 0.35rem;
+  color: var(--dm-ink);
+  font-weight: 700;
+}
+
+.data-model-legend ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.data-model-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.data-model-legend-swatch {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--dm-line);
+  border-radius: 4px;
+}
+
+.data-model-legend-label {
+  color: var(--dm-ink);
+  font-weight: 600;
+}
+
+.data-model-legend-description::before {
+  content: "-";
+  margin: 0 0.35rem 0 0.1rem;
+}
+
+/* The tooltip is appended to the document body, not to the widget, so it
+   is styled from the same variables rather than nested inside it. */
+.data-model-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: none;
+  max-width: min(520px, calc(100vw - 2rem));
+  max-height: min(70vh, 680px);
+  overflow: auto;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--dm-line);
+  border-radius: 8px;
+  background: var(--dm-panel);
+  color: var(--dm-ink);
+  box-shadow: 0 12px 32px rgba(18, 30, 38, 0.18);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  scrollbar-gutter: stable;
+  white-space: normal;
+}
+
+.quarto-dark .data-model-tooltip {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+}
+
+.data-model-tooltip.is-visible {
+  display: block;
+}
+
+.data-model-tooltip-title {
+  margin-bottom: 0.45rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.data-model-tooltip-title a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+.data-model-tooltip-title a:hover {
+  color: var(--dm-accent);
+}
+
+.data-model-tooltip-heading {
+  margin-top: 0.65rem;
+  font-weight: 700;
+}
+
+.data-model-tooltip-rule {
+  color: var(--dm-muted);
+}
+
+.data-model-tooltip-summary {
+  margin-top: 0.2rem;
+  white-space: normal;
+}
+
+.data-model-tooltip-attribute {
+  margin-top: 0.45rem;
+}
+
+.data-model-tooltip-signature strong {
+  font-weight: 700;
+}
+
+.data-model-tooltip-description {
+  margin-left: 2ch;
+  color: var(--dm-muted);
+}

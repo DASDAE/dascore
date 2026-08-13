@@ -1,0 +1,359 @@
+"""
+Tests for the generated inventory data-model diagram.
+
+The diagram on docs/tutorial/inventory.qmd is built from the pydantic models
+by scripts/_inventory_model.py, which runs during the documentation build.
+These tests pin the property that motivates generating it: what the diagram
+shows is what the models say, so no edit to a model can leave the picture
+describing an inventory DASCore does not have.
+
+The generator lives outside the package, so it is loaded by path the way
+tests/test_changelog.py loads the changelog checker.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import inspect
+import sys
+import typing
+from pathlib import Path
+
+import pytest
+
+from dascore.core.inventory import (
+    Acquisition,
+    Cable,
+    FiberSegment,
+    Interrogator,
+    Inventory,
+    OpticalPath,
+    Station,
+    _OpticalComponentBase,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_GENERATOR_PATH = _REPO_ROOT / "scripts" / "_inventory_model.py"
+
+# The generator is part of the documentation build, which an sdist does not
+# ship; skip rather than fail where the scripts directory is absent.
+pytestmark = pytest.mark.skipif(
+    not _GENERATOR_PATH.is_file(),
+    reason="the documentation scripts are not present",
+)
+
+
+def _load_generator():
+    """Import the diagram generator, which lives outside the package."""
+    name = "_inventory_model"
+    spec = importlib.util.spec_from_file_location(name, _GENERATOR_PATH)
+    module = importlib.util.module_from_spec(spec)
+    # Registered before it runs: dataclasses resolves a class's annotations
+    # through sys.modules, and the generator defines dataclasses.
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        del sys.modules[name]
+        raise
+    return module
+
+
+@pytest.fixture(scope="module")
+def generator():
+    """The module which builds the diagram from the models."""
+    pytest.importorskip("yaml", reason="the generator writes YAML")
+    return _load_generator()
+
+
+@pytest.fixture(scope="module")
+def spec(generator):
+    """The diagram as it is generated from the current models."""
+    return generator.build_spec()
+
+
+@pytest.fixture(scope="module")
+def edges(spec):
+    """Every containment edge, as (source, target) pairs."""
+    return {(edge[0], edge[1]) for edge in spec["edges"]}
+
+
+@pytest.fixture(scope="module")
+def references(spec):
+    """Every reference edge, as (source, target, field) triples."""
+    return {tuple(edge) for edge in spec["references"]}
+
+
+class TestNodesFollowTheModels:
+    """Each drawn node must describe the model it names."""
+
+    def test_every_public_model_is_drawn(self, generator, spec):
+        """A model added to the inventory must appear in the diagram."""
+        drawn = set(spec["nodes"])
+        for name in generator._inventory_models():
+            assert name in drawn
+
+    def test_attributes_are_the_model_fields(self, generator, spec):
+        """A node lists the fields its model has, and only those."""
+        for node in generator.NODES:
+            shown = [x["name"] for x in spec["nodes"][node.name]["attributes"]]
+            expected = [
+                name for name, info in node.model.model_fields.items() if info.repr
+            ]
+            assert sorted(shown) == sorted(expected)
+
+    def test_the_serialization_tag_is_hidden(self, spec):
+        """object_type is how a document names a class, not a field to set."""
+        for node in spec["nodes"].values():
+            assert "object_type" not in {x["name"] for x in node["attributes"]}
+
+    def test_descriptions_come_from_the_models(self, generator, spec):
+        """Every attribute's documentation is the field's own."""
+        for node in generator.NODES:
+            for attribute in spec["nodes"][node.name]["attributes"]:
+                field = node.model.model_fields[attribute["name"]]
+                assert attribute["description"] == (field.description or "")
+
+    def test_types_are_the_written_annotations(self, spec):
+        """A type is shown as the model spells it."""
+        attributes = {
+            x["name"]: x["type"] for x in spec["nodes"]["Acquisition"]["attributes"]
+        }
+        assert attributes["gauge_length"] == "FiniteFloat | None"
+        assert attributes["interrogator"] == "Interrogator | str | None"
+        assert attributes["distance_map"] == "DistanceMap | None"
+
+    def test_private_aliases_are_expanded(self, spec):
+        """A reader cannot look up an alias the models keep to themselves."""
+        resources = {
+            x["name"]: x["type"] for x in spec["nodes"]["Inventory"]["attributes"]
+        }["resources"]
+        assert "_Resource" not in resources
+        for name in ("Interrogator", "Cable", "Enclosure", "OpticalMeasurement"):
+            assert name in resources
+
+    def test_summaries_come_from_the_docstrings(self, generator, spec):
+        """Every node says what it is, in the model's own words."""
+        for node in generator.NODES:
+            summary = spec["nodes"][node.name]["summary"]
+            first_paragraph = inspect.getdoc(node.model).partition("\n\n")[0]
+            assert summary == " ".join(first_paragraph.split())
+
+    def test_summaries_are_one_line(self, spec):
+        """A tooltip renders its summary as a single run of text."""
+        for node in spec["nodes"].values():
+            assert node["summary"]
+            assert "\n" not in node["summary"]
+
+    def test_a_summary_is_the_purpose_not_the_rules(self, spec):
+        """The rest of a docstring is the class's rules; they stay behind."""
+        assert spec["nodes"]["Acquisition"]["summary"] == (
+            "Time-aware, channel-like DFOS acquisition setup."
+        )
+        # OpticalPath's docstring runs to several paragraphs of track rules.
+        assert len(spec["nodes"]["OpticalPath"]["summary"]) < 120
+
+    def test_inherited_fields_are_listed_too(self, spec):
+        """A component shows what it gets from its base as well as its own."""
+        shown = {x["name"] for x in spec["nodes"]["FiberSegment"]["attributes"]}
+        assert {"fiber_number", "loss_db", "optical_length"} <= shown
+
+    def test_own_fields_come_first(self, spec):
+        """The fields which distinguish a class lead its attribute list."""
+        shown = [x["name"] for x in spec["nodes"]["Acquisition"]["attributes"]]
+        assert shown.index("code") < shown.index("description")
+
+
+class TestEdgesFollowTheModels:
+    """Which class points at which must be read out of the annotations."""
+
+    def test_containment_matches_the_fields(self, edges):
+        """A field holding another drawn model is an edge to it."""
+        assert ("Inventory", "Network") in edges
+        assert ("Network", "FiberArray") in edges
+        assert ("FiberArray", "Acquisition") in edges
+        assert ("FiberArray", "OpticalPath") in edges
+        assert ("Acquisition", "DistanceMap") in edges
+        assert ("Station", "Channel") in edges
+
+    def test_no_edge_leaves_the_diagram(self, spec, edges, references):
+        """Every edge joins two drawn nodes."""
+        drawn = set(spec["nodes"])
+        for source, target in edges:
+            assert source in drawn and target in drawn
+        for source, target, _ in references:
+            assert source in drawn and target in drawn
+
+    def test_a_union_points_at_the_base_it_shares(self, edges):
+        """A path holds components, stated once rather than four times."""
+        assert ("OpticalPath", "OpticalComponent") in edges
+        for name in ("FiberSegment", "Connector", "Splice", "Terminator"):
+            assert ("OpticalComponent", name) in edges
+            assert ("OpticalPath", name) not in edges
+
+    def test_a_resource_id_alternative_is_a_reference(self, references):
+        """A field taking a str beside a model refers rather than contains."""
+        assert ("Acquisition", "Interrogator", "interrogator") in references
+        assert ("FiberSegment", "Cable", "container") in references
+        assert ("Cable", "ExternalResource", "specification") in references
+
+    def test_a_reference_is_not_also_containment(self, edges):
+        """The two kinds of edge are exclusive."""
+        assert ("Acquisition", "Interrogator") not in edges
+        assert ("FiberSegment", "Cable") not in edges
+
+    def test_a_mapping_key_is_not_a_reference(self, edges, references):
+        """The str keying Inventory.resources says nothing about the values."""
+        for name in ("Interrogator", "Cable", "Enclosure", "ExternalResource"):
+            assert ("Inventory", name) in edges
+            assert not [x for x in references if x[:2] == ("Inventory", name)]
+
+    def test_an_inherited_field_is_drawn_once(self, references):
+        """The base draws what it declares; subclasses draw their own."""
+        assert ("OpticalComponent", "OpticalMeasurement", "loss_db") not in references
+        measurements = {x for x in references if x[1] == "OpticalMeasurement"}
+        assert ("OpticalComponent", "OpticalMeasurement", "loss_measurement") in (
+            measurements
+        )
+        assert ("FiberSegment", "OpticalMeasurement", "loss_measurement") not in (
+            measurements
+        )
+
+    def test_a_self_reference_survives(self, references):
+        """A cable inside a cable is a real thing to say."""
+        assert ("Cable", "Cable", "container") in references
+
+
+class TestNodeListIsValidated:
+    """The presentation half must be checked against the models."""
+
+    def _nodes(self, generator, **kwargs):
+        """A one-entry node list with the given overrides."""
+        return (generator.Node(Inventory, "metadata", **kwargs),)
+
+    def test_a_missing_model_is_refused(self, generator):
+        """Leaving a public model out fails the documentation build."""
+        with pytest.raises(ValueError, match="leaves out"):
+            generator._check_nodes(self._nodes(generator))
+
+    def test_a_public_class_may_not_be_relabelled(self, generator):
+        """A drawn class answers to its own name."""
+        nodes = tuple(
+            generator.Node(node.model, node.style_class, label="Nonsense")
+            if node.model is Acquisition
+            else node
+            for node in generator.NODES
+        )
+        with pytest.raises(ValueError, match="drawn under its own name"):
+            generator._check_nodes(nodes)
+
+    def test_a_private_base_may_be_relabelled(self, generator):
+        """Which is how OpticalComponent gets a name a reader knows."""
+        generator._check_nodes(generator.NODES)
+        assert any(x.label == "OpticalComponent" for x in generator.NODES)
+
+    def test_an_undefined_style_is_refused(self, generator):
+        """A node cannot ask for a color the legend does not define."""
+        nodes = tuple(
+            generator.Node(node.model, "nonexistent") if node.model is Cable else node
+            for node in generator.NODES
+        )
+        with pytest.raises(ValueError, match="undefined style"):
+            generator._check_nodes(nodes)
+
+    def test_a_repeated_model_is_refused(self, generator):
+        """One class, one box."""
+        nodes = (*generator.NODES, generator.NODES[0])
+        with pytest.raises(ValueError, match="more than once"):
+            generator._check_nodes(nodes)
+
+    def test_a_non_model_is_refused(self, generator):
+        """Only pydantic models can be introspected into a node."""
+        nodes = (*generator.NODES, generator.Node(int, "metadata"))
+        with pytest.raises(ValueError, match="not a pydantic model"):
+            generator._check_nodes(nodes)
+
+    def test_every_style_is_used(self, generator):
+        """A legend entry no node wears would be explaining nothing."""
+        worn = {node.style_class for node in generator.NODES}
+        assert worn == {style["id"] for style in generator.STYLES}
+
+
+class TestAnnotationsMustStayText:
+    """The type column is source text, which needs the future import."""
+
+    def test_an_evaluated_annotation_is_refused(self, generator):
+        """Losing the future import fails loudly rather than printing reprs."""
+
+        class Evaluated(Station):
+            """A model whose annotation was evaluated at class creation."""
+
+        Evaluated.__annotations__ = {"resolved": int}
+        with pytest.raises(TypeError, match="from __future__ import annotations"):
+            generator._raw_annotation(Evaluated, "resolved")
+
+    def test_an_unknown_field_is_refused(self, generator):
+        """Asking for a field no class in the mro declares is a mistake."""
+        with pytest.raises(AttributeError, match="no annotation"):
+            generator._raw_annotation(Acquisition, "not_a_field")
+
+
+class TestWrittenSpec:
+    """What lands on disk for the documentation build to read."""
+
+    def test_written_where_the_page_looks(self, generator, tmp_path):
+        """The page names _generated/inventory_model.yml beside itself."""
+        path = generator.write_model_spec(tmp_path)
+        assert path == tmp_path / "_generated" / generator.SPEC_NAME
+        assert path.is_file()
+
+    def test_says_it_is_generated(self, generator, tmp_path):
+        """Nobody should edit the file by hand."""
+        text = generator.write_model_spec(tmp_path).read_text(encoding="utf-8")
+        assert text.lstrip().startswith("#")
+        assert "Do not edit" in text
+
+    def test_round_trips_through_yaml(self, generator, spec, tmp_path):
+        """What the filter parses is what the generator built."""
+        yaml = pytest.importorskip("yaml")
+        text = generator.write_model_spec(tmp_path).read_text(encoding="utf-8")
+        assert yaml.safe_load(text) == spec
+
+    def test_api_links_are_resolved_when_known(self, generator):
+        """A node links to its class's API page where there is one."""
+        cross_refs = {"dascore.core.inventory.Acquisition": "/api/acquisition.qmd"}
+        built = generator.build_spec(cross_refs=cross_refs)
+        assert built["nodes"]["Acquisition"]["reference_href"] == "/api/acquisition.qmd"
+        assert built["nodes"]["Cable"]["reference_href"] == ""
+
+
+class TestWalkTypes:
+    """The rule which separates containing something from referring to it."""
+
+    def test_a_str_beside_a_model_marks_a_reference(self, generator):
+        """Which is how a resource_id may stand in for the object."""
+        hints = typing.get_type_hints(Acquisition)
+        found = dict(generator._walk_types(hints["interrogator"]))
+        assert found[Interrogator] is True
+
+    def test_a_model_alone_is_containment(self, generator):
+        """Nothing may stand in for a contained object."""
+        hints = typing.get_type_hints(OpticalPath)
+        found = dict(generator._walk_types(hints["geometry"]))
+        assert all(value is False for value in found.values())
+
+    def test_a_str_elsewhere_does_not_carry(self, generator):
+        """A mapping key is a str about which nothing follows."""
+        hints = typing.get_type_hints(Inventory)
+        found = dict(generator._walk_types(hints["resources"]))
+        assert found[Interrogator] is False
+
+    def test_the_drawn_ancestor_wins(self, generator):
+        """A class is drawn as the most basal node it descends from."""
+        nodes = {node.model: node for node in generator.NODES}
+        assert generator._node_of(FiberSegment, nodes).name == "OpticalComponent"
+        assert generator._node_of(_OpticalComponentBase, nodes).name == (
+            "OpticalComponent"
+        )
+        assert generator._node_of(Cable, nodes).name == "Cable"
+        assert generator._node_of(int, nodes) is None

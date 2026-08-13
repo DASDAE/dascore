@@ -8,6 +8,7 @@ project:
 filters:
   - quarto
   - filters/fill_links.py
+  - filters/render-data-model.lua
 
 execute:
   warning: false
@@ -20,7 +21,9 @@ format:
       dark: darkly
     code-copy: true
     code-overflow: wrap
-    css: styles.css
+    css:
+      - styles.css
+      - data_model.css
 
 website:
   title: {{ dascore_version_str }}
@@ -123,6 +126,9 @@ website:
 
         - text: Coordinates
           href: tutorial/coords.qmd
+
+        - text: Inventory
+          href: tutorial/inventory.qmd
 
     - id: Recipes
       title: 'Recipes'

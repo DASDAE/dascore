@@ -331,3 +331,20 @@ print(agg_patch)
 ```
 
 See the [parallel processing recipe](../recipes/parallelization.qmd) for more examples with `map`.
+
+# Inventory
+
+A spool can carry a DASDAE [inventory](inventory.qmd): a description of the observing system its data was recorded through — the fiber, where it goes, and how the interrogator was configured over time. Attaching one adds nothing to the patches, but makes the names the inventory defines along the fiber available to `select` and [`split_by`](`dascore.core.spool.Spool.split_by`), and lets [`enrich`](`dascore.core.spool.Spool.enrich`) copy that metadata onto patches as they are extracted.
+
+```{python}
+import dascore as dc
+from dascore.examples import inventory_patch_pair
+
+patch, inventory = inventory_patch_pair()
+spool = dc.spool(patch).attach_inventory(inventory)
+
+# The inventory annotates two zones along the fiber, so they can be selected.
+assert len(spool.split_by("zone")) == 2
+```
+
+A spool opened on a directory which carries an inventory under the name `.inventory` starts out attached to it.

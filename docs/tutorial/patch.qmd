@@ -462,7 +462,7 @@ assert patch.get_coord("distance").step is not None
 assert outside.get_coord("distance").step is None
 ```
 
-That is why [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the patches' own coordinates. A patch can have samples removed from its middle; at spool level the complement of a range would be a hole in every patch rather than a choice between patches. The coordinates an attached DASDAE inventory defines along the fiber are a separate case, and are accepted: removing one of those chooses which channels a patch holds. When several coordinates are named, each is complemented on its own — the true complement of a block is a frame around it, which no array can hold.
+That is why [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the patches' own coordinates. A patch can have samples removed from its middle; at spool level the complement of a range would be a hole in every patch rather than a choice between patches. The coordinates an attached DASDAE [inventory](inventory.qmd) defines along the fiber are a separate case, and are accepted: removing one of those chooses which channels a patch holds. When several coordinates are named, each is complemented on its own — the true complement of a block is a frame around it, which no array can hold.
 
 ## Order
  Order is similar to [`Patch.select`](`dascore.Patch.select`), but will re-arrange data to the order specified by a value array. This may also cause parts of the patch to be duplicated.
