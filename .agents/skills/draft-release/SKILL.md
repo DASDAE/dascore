@@ -43,6 +43,11 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
    "breaks the last *released* version", so a drastic-looking change may break
    nothing any user has.
 
+   Reuse `extract_section` and `validate` from that script rather than writing
+   a second parser: a body may indent the heading that ends the section, and
+   `none` may be bulleted, so a hand-rolled one reads a later section's
+   checklist as malformed entries.
+
    A literal `none` is trustworthy; an empty or absent section means the PR
    predates the policy, so classify it yourself from title, body, and diff.
    Labels here are topical (`proc`, `spool`, `IO`) rather than semantic: `Added`
