@@ -1651,18 +1651,32 @@ class CoordRange(BaseCoord):
             except ZeroDivisionError:
                 return self._get_zero_step_index(value, forward)
             if not math.isfinite(fraction):
-                # Two things land here. A zero step, whose samples all equal
-                # start, has a degenerate but defined index. A non-finite
-                # bound (np.inf, NaN) has none; it means an open side.
-                if step == 0:
+                # A zero step, whose samples all equal start, has a
+                # degenerate but defined index. Ask it by truthiness: a
+                # timedelta step compared to a bare 0 warns (and will
+                # eventually raise) about the generic unit that implies.
+                if not step:
                     return self._get_zero_step_index(value, forward)
-                return None
-            out = math.ceil(fraction) if forward else math.floor(fraction)
+                # NaN names no position at all, so it is an open side.
+                if math.isnan(fraction):
+                    return None
+                # An infinite fraction is a bound past one end of the coord,
+                # either because the bound itself is infinite or because it
+                # sits far enough from start to overflow the division. Its
+                # sign says which end, and the range checks below turn the
+                # end the samples are not on into an open side.
+                out = len(self) if fraction > 0 else -1
+            else:
+                out = math.ceil(fraction) if forward else math.floor(fraction)
             if forward and out < 0:
                 return None
             if not forward and out >= len(self):
                 return None
             return out
+        # A 0d array is Sized but holds a single bound, so unbox it rather
+        # than let the array path cast its infinity to the smallest int64.
+        if getattr(value, "ndim", 1) == 0:
+            return self._get_index(value[()], forward=forward)
         array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
         # Due to float weirdness we need a little bit of a fudge factor here.

@@ -294,10 +294,13 @@ class TestSelect:
 
     def test_select_infinite_bound(self, random_patch):
         """An infinite bound is an open one, like ... or None."""
-        dmin = random_patch.get_coord("distance").min()
-        expected = random_patch.select(distance=(dmin, ...))
-        assert random_patch.select(distance=(dmin, np.inf)).equals(expected)
-        assert random_patch.select(distance=(-np.inf, ...)).equals(expected)
+        coord = random_patch.get_coord("distance")
+        middle = coord.values[len(coord) // 2]
+        expected = random_patch.select(distance=(middle, ...))
+        assert random_patch.select(distance=(middle, np.inf)).equals(expected)
+        assert random_patch.select(distance=(-np.inf, ...)).equals(random_patch)
+        # The infinite side must not swallow the finite one.
+        assert expected.shape != random_patch.shape
 
     def test_select_by_distance(self, random_patch):
         """Ensure distance can be used to filter patch."""

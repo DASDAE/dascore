@@ -1442,10 +1442,30 @@ class TestCoordRange:
     def test_select_non_finite_bound(self, bound):
         """A non-finite bound means an open side, not a zero-step index."""
         coord = get_coord(start=0, stop=100, step=1)
-        for value in (coord.min(), coord.max()):
+        for value in (coord.min(), 42, coord.max()):
             assert coord.select((value, bound)) == coord.select((value, ...))
             assert coord.select((-bound, value)) == coord.select((..., value))
         assert coord.select((-bound, bound)) == coord.select((..., ...))
+        # The open side must not swallow the finite one; 42 really trims.
+        assert len(coord.select((42, bound))[0]) < len(coord)
+
+    def test_select_infinite_bound_pointing_at_the_data(self):
+        """An infinite bound is open on the side it points, empty on the other."""
+        coord = get_coord(start=0, stop=100, step=1)
+        # No sample is >= inf, nor <= -inf, so these ask for nothing.
+        assert not len(coord.select((np.inf, None))[0])
+        assert not len(coord.select((None, -np.inf))[0])
+
+    def test_select_non_finite_bound_in_0d_array(self):
+        """A 0d array holds one bound, so it is open like the scalar is."""
+        coord = get_coord(start=0, stop=100, step=1)
+        assert coord.select((42, np.array(np.inf))) == coord.select((42, ...))
+
+    def test_select_bound_which_overflows_the_division(self):
+        """A bound too far from start to divide is outside, not open."""
+        coord = get_coord(start=0.0, stop=1e-305, step=1e-308)
+        assert not len(coord.select((1e308, None))[0])
+        assert not len(coord.select((None, -1e308))[0])
 
     def test_zero_dim_array_inputs(self):
         """Ensure 0d arrays (which aren't unboxed) can init a CoordRange."""
