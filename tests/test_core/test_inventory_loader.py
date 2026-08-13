@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,6 +34,19 @@ def write_inventory(root, files) -> object:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     return root
+
+
+def _folds_case() -> bool:
+    """Return True if this filesystem holds two case variants as one file."""
+    with tempfile.TemporaryDirectory() as name:
+        directory = Path(name)
+        (directory / "CaseProbe").write_text("")
+        return (directory / "caseprobe").exists()
+
+
+# Asked once, at collection. Windows and most macOS checkouts fold case, so
+# a name differing from another only by case is the same file there.
+FOLDS_CASE = _folds_case()
 
 
 @pytest.fixture
@@ -612,6 +627,12 @@ class TestOneIdentityOneSpelling:
         with pytest.raises(InvalidInventoryError, match="two extensions"):
             make_inventory(files)
 
+    # Where case is folded, writing the second name replaces the first
+    # rather than joining it, so the collision this refuses cannot be built.
+    # That is the rule holding rather than failing: the guard exists so an
+    # inventory authored where both names fit does not quietly lose one when
+    # it is copied somewhere they do not.
+    @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
     def test_case_only_difference(self, make_inventory):
         """A case-insensitive filesystem could not hold both."""
         files = {
@@ -620,6 +641,16 @@ class TestOneIdentityOneSpelling:
         }
         with pytest.raises(InvalidInventoryError, match="differ only by case"):
             make_inventory(files)
+
+    def test_case_only_difference_is_named_as_such(self, tmp_path):
+        """The reason two entries collide, on every filesystem.
+
+        The test above cannot run where case is folded, which is every
+        Windows and most macOS checkouts, so the explaining half of the
+        rule is pinned here instead.
+        """
+        first, second = tmp_path / "DAS.L001.yaml", tmp_path / "das.l001.yaml"
+        assert "differ only by case" in loader._collide(first, second)
 
     def test_file_and_directory(self, make_inventory):
         """Both spellings of one identity at once raise."""
