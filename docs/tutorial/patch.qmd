@@ -339,7 +339,7 @@ The following methods help trim, reshape, and manipulate coordinates.
 
 ## Select
 
-Patches are trimmed using the [`Patch.select`](`dascore.Patch.select`) method. Unlike [`Patch.order`](`dascore.Patch.order`), `select` will not change the order of the affected dimensions, it will only remove elements. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `...` indicating an open interval. 
+Patches are trimmed using the [`Patch.select`](`dascore.Patch.select`) method. Unlike [`Patch.order`](`dascore.Patch.order`), `select` will not change the order of the affected dimensions, it will only remove elements. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `...` or `None`, indicating an open interval, as can an infinite bound pointing away from the data, such as `(lower_limit, np.inf)`. 
 
 ```{python}
 import numpy as np

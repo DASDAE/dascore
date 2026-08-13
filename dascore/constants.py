@@ -235,7 +235,8 @@ for each attribute.
 select_values_description = """
 Any dimension name can be passed as key, and the values can be:
     - a tuple of (min, max) for that dimension, or an equivalent slice.
-      `None` and ... both indicate open intervals.
+      `None` and ... both indicate open intervals, as does an infinite
+      bound pointing away from the data, eg `(min, np.inf)`.
     - an integer, when `samples=True`, to select a single row or column.
     - an array of values to select, which must be a subset of the
       coordinate array.
