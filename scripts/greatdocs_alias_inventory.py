@@ -114,21 +114,24 @@ def main() -> None:
 
     # 0. Point uris at anchors the rendered pages actually emit. great-docs
     #    records `Patch.html#dascore.Patch.data`, but quarto gives the member
-    #    section the short id `#data`; an object which owns its whole page
-    #    (write.html) has no anchor for itself and needs none. This runs first
-    #    so the aliases added below copy the corrected uris.
+    #    section the id pandoc derives from its heading: the short name,
+    #    lowercased (`Patch.T` lands at `#t`). An object which owns its whole
+    #    page (write.html), and a private member the page does not render at
+    #    all, are honestly linked at the top of the page instead. This runs
+    #    first so the aliases added below copy the corrected uris.
     rewritten = 0
     for item in items:
         uri = item.get("uri", "")
         page, sep, fragment = uri.partition("#")
-        if not sep or not page.startswith("reference/") or "." not in fragment:
+        if not sep or not page.startswith("reference/"):
             continue
         page_object = page[len("reference/") : -len(".html")]
         qualname = fragment.removeprefix("dascore.")
-        if qualname == page_object:  # the object owns the page
+        member = qualname.split(".")[-1]
+        if qualname == page_object or member.startswith("_"):
             new_uri = page
         else:
-            new_uri = f"{page}#{qualname.split('.')[-1]}"
+            new_uri = f"{page}#{member.lower()}"
         if new_uri != uri:
             item["uri"] = new_uri
             rewritten += 1

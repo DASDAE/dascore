@@ -204,4 +204,35 @@ class TestRenderApi:
         # ChunkPlan documents an Attributes section, which has its own model.
         markdown = render_module_api("dascore.utils.chunk_plan")
         assert "object at 0x" not in markdown
+
+    def test_an_example_which_is_a_code_block_stays_one_block(self):
+        """A fenced example must not close the fence the page wraps it in."""
+        # compose_docstring's example is itself a fenced block. Wrapping it in
+        # a fence of the same length ends the block at the example's own
+        # opening fence, so the example body lands outside any block and the
+        # rest of the page is swallowed by the next fence it meets.
+        markdown = render_module_api("dascore.utils.docs")
+        inside, fence = set(), ""
+        for line in markdown.splitlines():
+            if line.startswith("```") and not fence:
+                fence = line[: len(line) - len(line.lstrip("`"))]
+            elif fence and line.strip() == fence:
+                fence = ""
+            elif fence:
+                inside.add(line)
+        assert not fence, "a code block was left open"
+        assert "from dascore.utils.docs import compose_docstring" in inside
+
+    def test_examples_are_shown_rather_than_executed(self):
+        """A `{python}` cell would run when the page is rendered."""
+        markdown = render_package_api("dascore.utils")
+        assert "```{python}" not in markdown
+
+    def test_every_callout_is_closed(self):
+        """An unclosed callout swallows the entries which follow it."""
+        markdown = render_package_api("dascore.utils")
+        lines = markdown.splitlines()
+        opened = sum(1 for line in lines if line.startswith(":::") and "{" in line)
+        closed = sum(1 for line in lines if set(line.strip()) == {":"})
+        assert opened == closed
         assert "| Attribute | Type | Description |" in markdown

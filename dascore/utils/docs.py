@@ -7,6 +7,7 @@ import inspect
 import logging
 import os
 import pkgutil
+import re
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -249,6 +250,18 @@ def _parse(doc: str):
     return Docstring(doc, parser="numpy").parse("numpy")
 
 
+def _fence(text: str, char: str = "`") -> str:
+    """
+    Return a fence long enough to enclose text carrying fences of its own.
+
+    Docstrings are markdown, so one may hold a code block or a callout; a
+    fence of the usual three would be closed by the first one inside and the
+    rest of the page would render as its contents.
+    """
+    longest = max((len(m) for m in re.findall(f"{char}+", text)), default=0)
+    return char * max(3, longest + 1)
+
+
 def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
     """Return the summary line and the collapsible body blocks."""
     summary, blocks = "", []
@@ -287,7 +300,16 @@ def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
             blocks.append("**Raises:** " + "; ".join(items))
         elif kind == "examples":
             for _, text in sec.value:
-                blocks.append("```python\n" + str(text).strip() + "\n```")
+                body = str(text).strip()
+                # An example which is already a code block keeps its own
+                # fence; wrapping it would show the fence as content. A
+                # `{python}` cell is demoted to a plain block, since the page
+                # displays examples rather than running them.
+                if body.startswith("```"):
+                    blocks.append(re.sub(r"^(`{3,})\{python\}", r"\1python", body))
+                else:
+                    fence = _fence(body)
+                    blocks.append(f"{fence}python\n{body}\n{fence}")
         elif kind in {"attributes", "other parameters"}:
             label = "Attribute" if kind == "attributes" else "Parameter"
             rows = [f"| {label} | Type | Description |", "|---|---|---|"]
@@ -347,12 +369,13 @@ def render_module_api(module_name: str) -> str:
         if summary:
             out.append(f"{summary}\n")
         if blocks:
+            fence = _fence("\n".join(blocks), ":")
             out.append(
-                '::: {.callout-note collapse="true" appearance="simple" '
+                f'{fence} {{.callout-note collapse="true" appearance="simple" '
                 'title="Details"}\n'
             )
             out.extend(b + "\n" for b in blocks)
-            out.append(":::\n")
+            out.append(f"{fence}\n")
     return "\n".join(out)
 
 
