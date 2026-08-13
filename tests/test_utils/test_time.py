@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import numpy as np
@@ -183,6 +183,17 @@ class TestToDateTime64:
         out = to_datetime64(dt)
         assert isinstance(out, np.datetime64)
         assert out == to_datetime64("2021-01-02")
+
+    def test_date(self):
+        """Ensure a date works, being the instant its day starts."""
+        out = to_datetime64(date.fromisoformat("2021-01-02"))
+        assert isinstance(out, np.datetime64)
+        assert out == to_datetime64("2021-01-02")
+
+    def test_date_does_not_shadow_datetime(self):
+        """A datetime is a date, so it must keep its own handler."""
+        stamp = datetime.fromisoformat("2021-01-02T03:04:05")
+        assert to_datetime64(stamp) == to_datetime64("2021-01-02T03:04:05")
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""

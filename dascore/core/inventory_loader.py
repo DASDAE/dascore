@@ -8,6 +8,11 @@ CSV files a field crew can maintain as a spreadsheet. A directory of these
 files is itself a loadable inventory, and ``to_yaml`` exports the
 single-file interchange artifact for shipping beside a data archive.
 
+This module reads the object half. The track tables, and the optical path
+epoch directories which hold them, are refused by name rather than
+skipped, so a directory cannot load as an entity silently missing the
+tracks its own files state.
+
 The contract, in one line: **file declares type, container agrees, name
 implies identity, envelope implies version.** Every object file states what
 it is, its container checks that statement rather than supplying it, its
@@ -45,8 +50,12 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     Station,
+    _overlapping_epochs,
 )
-from dascore.exceptions import InvalidInventoryError
+from dascore.exceptions import (
+    InvalidInventoryError,
+    MissingOptionalDependencyError,
+)
 from dascore.utils.misc import check_code, optional_import
 from dascore.utils.models import InventoryModel, TimeRangedModel
 from dascore.utils.time import to_datetime64
@@ -83,6 +92,10 @@ class _Container(NamedTuple):
     # names a field of the model states that field; the rest are
     # _ADDRESS_LEVELS naming the entity which contains it.
     identity: tuple[str, ...]
+    # Collections whose members are addressed by their own names, in their
+    # own container. A file here may not state them: assembly would replace
+    # whatever it said, so stating them is a fact the format cannot keep.
+    supplied: tuple[str, ...] = ()
 
     @property
     def epochs(self) -> bool:
@@ -95,8 +108,8 @@ _CONTAINERS: Mapping[str, _Container] = {
         (Interrogator, Cable, Enclosure, ExternalResource, OpticalMeasurement),
         ("resource_id",),
     ),
-    "networks": _Container((Network,), ("code",)),
-    "fiber_arrays": _Container((FiberArray,), ("network", "code")),
+    "networks": _Container((Network,), ("code",), ("fiber_arrays", "stations")),
+    "fiber_arrays": _Container((FiberArray,), ("network", "code"), ("acquisitions",)),
     "stations": _Container((Station,), ("network", "code")),
     "acquisitions": _Container(
         (Acquisition,), ("network", "fiber_array", "location_code", "code")
@@ -126,7 +139,11 @@ def _model_names() -> frozenset[str]:
     """
 
     def walk(model):
-        yield model.__name__
+        # Scoped to dascore's own models, so that what a caller happens to
+        # have subclassed and imported cannot change which files this
+        # format calls a near-miss.
+        if model.__module__.startswith("dascore."):
+            yield model.__name__
         for sub in model.__subclasses__():
             yield from walk(sub)
 
@@ -147,9 +164,9 @@ def _object_suffix(path: Path) -> str | None:
     """
     Return a path's object-file suffix, or None if it has none.
 
-    Matched without regard to case, since a case-insensitive filesystem
-    holds ``DAS.YAML`` and ``DAS.yaml`` as one file and silently skipping
-    one spelling would load an inventory missing whatever it named.
+    Matched without regard to case: a shouted ``DAS.L001.YAML`` is the file
+    ``DAS.L001.yaml`` would be, and skipping it for its spelling would load
+    an inventory silently missing whatever it named.
     """
     suffix = path.suffix.casefold()
     return suffix if suffix in _OBJECT_SUFFIXES else None
@@ -204,11 +221,13 @@ def _declared_type(path: Path) -> str | None:
 
     This tells field material from a misfiled object, so a file which does
     not parse simply is not an object: a YAML-suffixed file under a photos
-    directory owes this format nothing.
+    directory owes this format nothing. Nor does an unreadable one make an
+    inventory unloadable -- without PyYAML installed, a JSON inventory must
+    still load past whatever YAML happens to lie beside it.
     """
     try:
         data = _read_object(path)
-    except InvalidInventoryError:
+    except (InvalidInventoryError, MissingOptionalDependencyError):
         return None
     declared = data.get("type")
     return declared if isinstance(declared, str) else None
@@ -242,6 +261,15 @@ def _parse_epoch(text: str, source: Path):
     if (match := _EPOCH_RE.fullmatch(text)) is None:
         raise InvalidInventoryError(f"{unreadable}.")
     time = match["time"] or "000000"
+    # A datetime64 keeps nanoseconds, and quietly drops whatever is finer,
+    # so a name stating more precision than it can hold would load as an
+    # instant other than the one it names.
+    if len(time.partition(".")[2]) > 9:
+        msg = (
+            f"Epoch timestamp {text!r} {where} states a time finer than the "
+            "nanosecond an inventory timestamp keeps."
+        )
+        raise InvalidInventoryError(msg)
     try:
         parsed = to_datetime64(f"{date}T{time[:2]}:{time[2:4]}:{time[4:]}")
     except ValueError as error:
@@ -315,6 +343,25 @@ def _pick_model(data: dict, container: _Container, source: Path):
     raise InvalidInventoryError(msg)
 
 
+def _refuse_supplied(data: dict, fields, source: Path, held_by: str) -> None:
+    """
+    Refuse a collection which the directory structure supplies.
+
+    The hierarchy materializes from names, so the members of these
+    collections are addressed in their own container. Assembly replaces
+    whatever a file said about them, which would make a stated one vanish
+    -- and vanish only once some other file happened to address the same
+    entity, so the file's own meaning would depend on its neighbours.
+    """
+    for field in fields:
+        if field in data:
+            msg = (
+                f"{_quote(source)} states {field}, which live in the directory "
+                f"structure rather than in {held_by}."
+            )
+            raise InvalidInventoryError(msg)
+
+
 def _build(model, data: dict, source: Path):
     """Validate one mapping into its model, naming the file if it fails."""
     if "schema_version" in data:
@@ -375,6 +422,7 @@ def _load_entry(entry: Path, data_source: Path, container: _Container) -> _Entry
     """Load one entry of a container from its object file."""
     data = _read_object(data_source)
     model = _pick_model(data, container, data_source)
+    _refuse_supplied(data, container.supplied, data_source, "an object file")
     name, epoch = _split_epoch(entry, container.epochs)
     address = _apply_identity(data, container, name, data_source)
     if epoch is not None and "start_time" not in data:
@@ -465,10 +513,29 @@ def _container_entries(directory: Path) -> list[Path]:
     Identity is unique per container regardless of spelling, so two names
     differing only by case, or one name spelled as both a file and a
     directory, are two spellings of one thing rather than two things.
+
+    Case is folded here and nowhere else, because the rule is about the
+    filesystem rather than about identity: a case-insensitive one cannot
+    hold both files. Codes themselves stay case-sensitive, as they are to
+    the models and to ``Inventory.resolve``, so a directory which folded
+    them would disagree with what it loads.
     """
     seen: dict[str, Path] = {}
     for child in sorted(directory.iterdir()):
         if child.name.startswith("."):
+            # A resource id is free-form, so a leading dot could be meant as
+            # part of a name rather than as a hidden file. The filesystem
+            # disagrees, and an entity nothing can see would go missing in
+            # silence, so the ambiguity is refused rather than resolved.
+            if (
+                _object_suffix(child) is not None
+                and _declared_type(child) in _model_names()
+            ):
+                msg = (
+                    f"{_quote(child)} declares an inventory object, but a name "
+                    "beginning with '.' is hidden, so it cannot name one."
+                )
+                raise InvalidInventoryError(msg)
             continue
         if child.is_file() and _object_suffix(child) is None:
             if child.suffix.casefold() == ".csv":
@@ -506,42 +573,52 @@ def _load_container(directory: Path, container: _Container, root: Path):
 
 def _check_epoch_duplicates(entries: list[_Entry]) -> None:
     """
-    Refuse two entries which name one identity at one instant.
+    Refuse two entries whose epochs of one entity overlap in time.
 
     Epoch-name uniqueness is temporal rather than textual, so
     ``@2024-06-01`` and ``@2024-06-01T000000`` are two spellings of one
-    epoch. The models catch the overlap; the files are what the author can
-    act on.
+    epoch. The models reach the same verdict through the assembled tree,
+    but name the entity; the author can only act on the files, so the
+    overlap is found here while both are still in hand. The rule itself
+    is the models', borrowed rather than restated, since a check which
+    caught only identical instants would let a partial overlap through to
+    the fileless message this exists to replace.
     """
-    seen: dict[Any, Path] = {}
+    sources = {id(x.model): x.source for x in entries}
+    grouped = defaultdict(list)
     for entry in entries:
-        model = entry.model
-        key = (
-            *entry.address,
-            model.code,
-            getattr(model, "location_code", ""),
-            model.start_time,
+        grouped[(*entry.address, getattr(entry.model, "location_code", ""))].append(
+            entry.model
         )
-        if (first := seen.get(key)) is not None:
+    for models in grouped.values():
+        for _, first, second in _overlapping_epochs(models, lambda x: x.code):
             msg = (
-                f"{_quote(first)} and {_quote(entry.source)} name one entity "
-                "at one instant, so they are two spellings of one epoch."
+                f"{_quote(sources[id(first)])} and {_quote(sources[id(second)])} "
+                "state epochs of one entity which overlap in time."
             )
             raise InvalidInventoryError(msg)
-        seen[key] = entry.source
     return None
 
 
-def _outlives(child, parent) -> bool:
+def _escapes(child, parent) -> str:
     """
-    Return True if a child stays valid past its parent epoch's end.
+    Say how a child's validity leaves its parent epoch, or "" if it fits.
 
-    Half-open on both sides, so a child ending exactly where its parent
-    does fits: the instant they share belongs to neither.
+    Half-open at both ends, so a child ending exactly where its parent
+    does fits: the instant they share belongs to neither. An unset bound
+    is unbounded, and unbounded is outside any epoch which states that
+    end -- which is how a child with no epoch of its own escapes a parent
+    which has one.
     """
-    if pd.isnull(parent.end_time):
-        return False
-    return pd.isnull(child.end_time) or child.end_time > parent.end_time
+    if not pd.isnull(parent.start_time) and (
+        pd.isnull(child.start_time) or child.start_time < parent.start_time
+    ):
+        return "starts before"
+    if not pd.isnull(parent.end_time) and (
+        pd.isnull(child.end_time) or child.end_time > parent.end_time
+    ):
+        return "runs past"
+    return ""
 
 
 def _place(children: list[_Entry], parents: list[_Entry], kind: str):
@@ -577,13 +654,13 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
             )
             raise InvalidInventoryError(msg)
         parent = parents[matches[0]]
-        if _outlives(child.model, parent.model):
-            ends = child.model.end_time
-            runs = "never ends" if pd.isnull(ends) else f"ends at {ends}"
+        if escape := _escapes(child.model, parent.model):
+            span = f"{parent.model.start_time} to {parent.model.end_time}"
             msg = (
-                f"{_quote(child.source)} {runs}, so it runs past the {kind} "
-                f"epoch holding it, which ends at {parent.model.end_time}. "
-                "State it once per epoch it spans."
+                f"{_quote(child.source)} is valid from {child.model.start_time} "
+                f"to {child.model.end_time}, so it {escape} the {kind} epoch "
+                f"holding it, which runs {span}. State it once per epoch it "
+                "spans."
             )
             raise InvalidInventoryError(msg)
         out[matches[0]].append(child)
@@ -712,13 +789,7 @@ def _load_envelope(root: Path) -> dict[str, Any]:
             f"declares 'type: {Inventory.__name__}'."
         )
         raise InvalidInventoryError(msg)
-    for field in _ENVELOPE_COLLECTIONS:
-        if field in data:
-            msg = (
-                f"{_quote(source)} states {field}, which live in the directory "
-                "structure rather than in the envelope."
-            )
-            raise InvalidInventoryError(msg)
+    _refuse_supplied(data, _ENVELOPE_COLLECTIONS, source, "the envelope")
     # Validated here, discarding the result, so that a typo'd key or an
     # unreadable value names its file like every other error this format
     # raises rather than surfacing as a bare pydantic error at the end.
@@ -786,6 +857,17 @@ def load_directory(path) -> Inventory:
         if (root / name).is_dir()
     }
     _check_strays(root)
+    # After the stray check, which knows why a directory holds no container:
+    # a mistyped `aquisitions/` can say so, rather than being reported as a
+    # directory holding nothing.
+    if not entries and not envelope:
+        # Every directory would otherwise be an empty inventory, so a
+        # mistyped path would load rather than say it holds nothing.
+        msg = (
+            f"{root} holds no inventory: it has neither an envelope nor any "
+            f"of the containers {tuple(_CONTAINERS)}."
+        )
+        raise InvalidInventoryError(msg)
     for name, container in _CONTAINERS.items():
         if container.epochs:
             _check_epoch_duplicates(entries.get(name, []))

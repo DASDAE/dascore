@@ -198,7 +198,11 @@ def parse_project(obj, key=None):
             base_address = _get_base_address(path, base_path)
 
             # this is referenced outside of its base address, skip this one.
-            if base_address not in key:
+            # A prefix test rather than a substring one: the address of
+            # dascore/core/inventory.py is a substring of every key under
+            # dascore/core/inventory_loader.py, so a module named after
+            # another would claim as its own everything it merely imports.
+            if key != base_address and not key.startswith(f"{base_address}."):
                 return
 
             data_dict[str(id(obj))] = get_data(obj, key, base_path, parent_is_class)

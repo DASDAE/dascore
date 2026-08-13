@@ -8,7 +8,10 @@ import pytest
 import dascore as dc
 from dascore.core import inventory as inv
 from dascore.core import inventory_loader as loader
-from dascore.exceptions import InvalidInventoryError
+from dascore.exceptions import (
+    InvalidInventoryError,
+    MissingOptionalDependencyError,
+)
 from dascore.utils.models import InventoryModel, TimeRangedModel
 
 pytest.importorskip("yaml")
@@ -350,11 +353,19 @@ class TestNearMisses:
         with pytest.raises(InvalidInventoryError, match="must agree with the name"):
             make_inventory(files)
 
-    def test_illegal_address_token_names_the_file(self, make_inventory):
+    @pytest.mark.parametrize(
+        ("name", "level"),
+        # Both address levels, since each is checked by the same loop and
+        # only one of them was ever exercised.
+        [("DAS.L0_01..RAW.yaml", "fiber_array"), ("D_AS.L001..RAW.yaml", "network")],
+    )
+    def test_illegal_address_token_names_the_file(self, make_inventory, name, level):
         """The entity a token names is built from every address, not one file."""
-        files = {"acquisitions/DAS.L0_01..RAW.yaml": "type: Acquisition\n"}
-        with pytest.raises(InvalidInventoryError, match="names fiber_array"):
+        files = {f"acquisitions/{name}": "type: Acquisition\n"}
+        with pytest.raises(InvalidInventoryError, match=f"names {level}") as info:
             make_inventory(files)
+        # The point of the check is which file to open, so assert the name.
+        assert name in str(info.value)
 
     def test_wrong_token_count(self, make_inventory):
         """An acquisition name is an address of four tokens."""
@@ -401,8 +412,8 @@ class TestNearMisses:
             make_inventory(files)
 
 
-class TestReviewFindings:
-    """Regressions for what the counterpart review found."""
+class TestOverlookedInput:
+    """Input the loader did not inspect, each of which loaded a wrong inventory."""
 
     def test_object_filed_inside_an_entity_directory(self, make_inventory):
         """An object one level too deep must not be silently dropped."""
@@ -469,6 +480,101 @@ class TestReviewFindings:
         with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
             make_inventory(files)
 
+    @pytest.mark.parametrize(
+        ("where", "field", "member"),
+        [
+            ("networks/DAS.yaml", "stations", "code: STA1"),
+            ("networks/DAS.yaml", "fiber_arrays", "code: L001"),
+            ("fiber_arrays/DAS.L001.yaml", "acquisitions", "code: RAW"),
+        ],
+    )
+    def test_nested_collections_are_refused(self, make_inventory, where, field, member):
+        """A file may not state what the directory supplies and would replace."""
+        declared = "Network" if where.startswith("networks") else "FiberArray"
+        text = f"type: {declared}\n{field}:\n  - {member}\n"
+        with pytest.raises(InvalidInventoryError, match=field):
+            make_inventory({**MINIMAL, where: text})
+
+    def test_child_predating_its_parent_epoch(self, make_inventory):
+        """Containment is checked at the near end as well as the far one."""
+        files = {
+            "networks/DAS@2024-01-01.yaml": "type: Network\n",
+            # No start of its own, so it claims the unbounded past, which is
+            # outside a network beginning in 2024.
+            "stations/DAS.STA1.yaml": "type: Station\nend_time: '2020-01-01'\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="starts before"):
+            make_inventory(files)
+
+    def test_child_ending_after_its_parent_epoch(self, make_inventory):
+        """The far end refuses a real end time, not only an unset one."""
+        files = {
+            "fiber_arrays/DAS.L001.yaml": (
+                "type: FiberArray\nend_time: '2024-06-01'\n"
+            ),
+            "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+            "acquisitions/DAS.L001..RAW@2024-05-01.yaml": (
+                "type: Acquisition\nend_time: '2024-07-01'\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="runs past"):
+            make_inventory(files)
+
+    def test_json_inventory_without_pyyaml(self, tmp_path, monkeypatch):
+        """A JSON inventory loads past whatever YAML lies beside it.
+
+        PyYAML is optional, and the tests which need it skip without it, so
+        this pins the JSON-only path here rather than leaving it to a
+        minimal install nothing in this file would exercise.
+        """
+
+        def no_yaml(name, **kwargs):
+            raise MissingOptionalDependencyError(f"no {name}")
+
+        monkeypatch.setattr(loader, "optional_import", no_yaml)
+        root = write_inventory(
+            tmp_path / "json_only",
+            {
+                "acquisitions/DAS.L001..RAW.json": '{"type": "Acquisition"}',
+                # Field material the loader must step over without reading.
+                "notes/log.yaml": "note: a deployment log\n",
+            },
+        )
+        out = dc.inventory(root)
+        assert out.networks[0].fiber_arrays[0].acquisitions[0].code == "RAW"
+
+    def test_hidden_object_file_in_a_container(self, make_inventory):
+        """A resource id may hold a dot, but a hidden file names no entity."""
+        files = {**MINIMAL, "resources/.cable.yaml": "type: Cable\n"}
+        with pytest.raises(InvalidInventoryError, match="hidden"):
+            make_inventory(files)
+
+    def test_epoch_finer_than_a_nanosecond(self, make_inventory):
+        """A name stating more precision than is kept would load as another instant."""
+        files = {
+            "acquisitions/DAS.L001..RAW@2024-05-12T103000.1234567899.yaml": (
+                "type: Acquisition\n"
+            )
+        }
+        with pytest.raises(InvalidInventoryError, match="finer than the nanosecond"):
+            make_inventory(files)
+
+    def test_unquoted_dates(self, make_inventory):
+        """YAML reads an unquoted date as a date, which is how one is written."""
+        out = make_inventory(
+            {
+                "fiber_arrays/DAS.L001.yaml": (
+                    "type: FiberArray\nstart_time: 2024-01-01\nend_time: 2024-07-01\n"
+                ),
+                "acquisitions/DAS.L001..RAW@2024-02-01.yaml": (
+                    "type: Acquisition\nend_time: 2024-03-01\n"
+                ),
+            }
+        )
+        array = out.networks[0].fiber_arrays[0]
+        assert array.end_time == np.datetime64("2024-07-01", "ns")
+        assert array.acquisitions[0].end_time == np.datetime64("2024-03-01", "ns")
+
     def test_type_which_is_not_a_name(self, make_inventory):
         """A type which is not a name at all names no model either."""
         files = {"acquisitions/DAS.L001..RAW.yaml": "type: [Acquisition]\n"}
@@ -522,7 +628,19 @@ class TestOneIdentityOneSpelling:
             "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "type: Acquisition\n",
             "acquisitions/DAS.L001..RAW@2024-06-01T000000.yaml": "type: Acquisition\n",
         }
-        with pytest.raises(InvalidInventoryError, match="one epoch"):
+        with pytest.raises(InvalidInventoryError, match="overlap in time"):
+            make_inventory(files)
+
+    def test_overlapping_epochs_of_one_entity(self, make_inventory):
+        """Two epochs of one entity may not overlap, not merely coincide."""
+        files = {
+            "acquisitions/DAS.L001..RAW@2024-01-01.yaml": (
+                "type: Acquisition\nend_time: '2024-08-01'\n"
+            ),
+            "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "type: Acquisition\n",
+        }
+        # Both files are named, since the entity alone would not say which.
+        with pytest.raises(InvalidInventoryError, match="RAW@2024-01-01"):
             make_inventory(files)
 
 
@@ -584,7 +702,7 @@ class TestIgnoredEntries:
         root = tmp_path / "unreadable"
         write_inventory(root, MINIMAL)
         (root / "acquisitions" / "DAS.L001..DEC.yaml").write_bytes(b"\xff\xfe\x00")
-        with pytest.raises(InvalidInventoryError, match="Could not read"):
+        with pytest.raises(InvalidInventoryError, match=r"DAS\.L001\.\.DEC\.yaml"):
             dc.inventory(root)
 
 
@@ -772,10 +890,17 @@ class TestFactory:
         dc.inventory().to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
-    def test_empty_directory(self, tmp_path):
-        """A directory with nothing in it is an empty inventory."""
+    def test_directory_which_holds_no_inventory(self, tmp_path):
+        """A mistyped path must not read as an inventory which is empty."""
+        root = tmp_path / "not_an_inventory"
+        (root / "photos").mkdir(parents=True)
+        with pytest.raises(InvalidInventoryError, match="holds no inventory"):
+            dc.inventory(root)
+
+    def test_empty_container_is_an_empty_inventory(self, tmp_path):
+        """A container, even an empty one, says the directory is an inventory."""
         root = tmp_path / "empty"
-        root.mkdir()
+        (root / "acquisitions").mkdir(parents=True)
         assert not dc.inventory(root).networks
 
 
