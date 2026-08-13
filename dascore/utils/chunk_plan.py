@@ -44,7 +44,7 @@ from dascore.units import (
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
-from dascore.utils.pd import _remove_overlaps, get_interval_columns
+from dascore.utils.pd import get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
@@ -542,8 +542,8 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
     1.0 when members tile the grid exactly. Greater when consecutive
     members are separated by less than one sample, which happens with
     near-contiguous files whose boundaries do not land on the grid.
-    Overlapping members are excluded: `_remove_overlaps` deduplicates
-    them at member-build time, so they do not add samples.
+    Overlapping members are excluded: the overlap correction
+    deduplicates them at member-build time, so they do not add samples.
     """
     # the caller already read these columns for this partition
     start, stop, step = get_interval_columns(sub, name)
@@ -676,152 +676,193 @@ def _coord_owner(col: str, coord_names: set[str]) -> str | None:
     return None
 
 
-def _police_columns(sub: pd.DataFrame, name, conflict) -> dict:
+def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     """
-    Return the carried column values for one partition (spec 2.5/6.4).
+    Order the relation by (partition, envelope min, patch id).
+
+    Partition order follows spec 8: by (partition min, smallest member
+    patch id) — never by anything derived from input row order. Returns
+    the sorted frame (fresh RangeIndex), each row's partition ordinal,
+    the offsets where partitions begin, and the partition envelopes.
+    """
+    min_name, max_name = f"{name}_min", f"{name}_max"
+    grouped = df.groupby(labels, sort=False)
+    stats = grouped.agg(
+        _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_id", "min")
+    ).sort_values(["_min", "_pid"], kind="stable")
+    rank = pd.Series(np.arange(len(stats)), index=stats.index)
+    codes = labels.map(rank).to_numpy(dtype=np.int64)
+    # last lexsort key is primary: partition, then envelope min, then id
+    order = np.lexsort((df["_patch_id"].to_numpy(), df[min_name].to_numpy(), codes))
+    sorted_df = df.iloc[order].reset_index(drop=True)
+    codes = codes[order]
+    seg_starts = np.flatnonzero(np.r_[True, np.diff(codes) != 0])
+    return (
+        sorted_df,
+        codes,
+        seg_starts,
+        stats["_min"].to_numpy(),
+        stats["_max"].to_numpy(),
+    )
+
+
+def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str):
+    """
+    Overlap-corrected source envelopes over the whole sorted relation.
+
+    Within each partition (rows ordered by start, patch id) an
+    overlapping source's start moves to just past the previous source's
+    stop, so the earlier source owns the overlap (D3: complete overlaps
+    keep the first member, deterministically). Returns the corrected
+    starts, the row modification flags, and the kept-row mask (sources
+    left degenerate by the correction contribute nothing).
+    """
+    start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
+    is_first = np.zeros(len(sorted_df), dtype=bool)
+    is_first[seg_starts] = True
+    prev_stop = np.roll(stop, 1)
+    rolled_step = np.roll(step, 1)
+    isna = pd.isnull(rolled_step)
+    prev_step = np.where(~isna, rolled_step, np.zeros_like(rolled_step))
+    # Add the step so consecutive sources do not share one sample; the
+    # roll artifact at each partition's first row is masked out.
+    overlaps = (start <= prev_stop) & ~is_first
+    corrected = np.where(overlaps, prev_stop + prev_step, start)
+    modified = corrected != start
+    if "_modified" in sorted_df.columns:
+        modified = sorted_df["_modified"].to_numpy() | modified
+    keep = corrected <= stop
+    return corrected, modified, keep
+
+
+def _carried_columns(
+    sorted_df: pd.DataFrame,
+    codes: np.ndarray,
+    seg_starts: np.ndarray,
+    name: str,
+    conflict: str,
+    active: np.ndarray,
+) -> dict[str, pd.Series]:
+    """
+    Resolve every partition's carried columns at once (spec 2.5/6.4).
 
     Group attrs, dims, and def keys are single-valued by construction.
-    Remaining public attrs must be single-valued, policed by `conflict`.
+    Remaining public attrs must be single-valued per partition, policed
+    by `conflict`. Returns a mapping of column -> one carried value per
+    partition (null where a partition does not carry the column), in the
+    order columns ride onto outputs. A conflict raises for the first
+    active partition (in output order) and its first conflicting column,
+    exactly as per-partition policing did; partitions which produced no
+    outputs (`active` False) are never policed.
     """
-    dims = set(str(sub.iloc[0].get("dims", "")).split(","))
-    coord_names = dims | {name}
-    carried: dict[str, Any] = {}
-    for col in sub.columns:
-        if col.startswith("_") or col in _SOURCE_COLUMNS:
-            continue
-        owner = _coord_owner(col, coord_names)
-        if owner == name:  # chunk-dim envelope columns are rebuilt
-            continue
-        values = sub[col].unique()
-        single = len(values) == 1 or (len(values) and pd.isnull(values).all())
-        if single:
-            carried[col] = values[0]
-            continue
+    n_parts = len(seg_starts)
+    first = sorted_df.iloc[seg_starts].reset_index(drop=True)
+    has_dims = "dims" in sorted_df.columns
+    # per-partition dims spelling used for column ownership (partition
+    # keys make dims single-valued within a partition)
+    police_dims = [str(x) for x in first["dims"]] if has_dims else [""] * n_parts
+    policed = [
+        col
+        for col in sorted_df.columns
+        if not col.startswith("_")
+        and col not in _SOURCE_COLUMNS
+        # chunk-dim envelope columns are rebuilt, never carried
+        and _coord_owner(col, {name}) != name
+    ]
+    carried: dict[str, pd.Series] = {}
+    if policed:
+        # Aggregate only rows of active partitions: skipped partitions
+        # were never policed (their values may not even be hashable),
+        # and their carried values are never published.
+        rows = active[codes]
+        grouped = sorted_df.loc[rows, policed].groupby(codes[rows], sort=True)
+        group_size = grouped.size()
+        part_index = group_size.index.to_numpy()
+        sizes = np.zeros(n_parts, dtype=np.int64)
+        sizes[part_index] = group_size.to_numpy()
+        nunique = np.zeros((n_parts, len(policed)), dtype=np.int64)
+        nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
+        counts = np.zeros_like(nunique)
+        counts[part_index] = grouped.count().to_numpy()
+        # single-valued: one distinct value with no nulls beside it, or
+        # all null (matching Series.unique length semantics; nunique
+        # with dropna=False would differ — it counts None and NaN in an
+        # object column as two, where unique-length logic calls a
+        # partition holding only nulls single-valued)
+        single = ((nunique == 1) & (counts == sizes[:, None])) | (counts == 0)
+        # ownership of each policed column under each partition's dims
+        owned = np.zeros_like(single)
+        for dims_str in set(police_dims):
+            coord_names = set(dims_str.split(",")) | {name}
+            rows = np.asarray([x == dims_str for x in police_dims])
+            for index, col in enumerate(policed):
+                if _coord_owner(col, coord_names) is not None:
+                    owned[rows, index] = True
+        conflicted = ~single & active[:, None]
         # Group attrs and dims are partition keys, so they are always
-        # single-valued above and never reach the conflict policy here.
-        if owner is not None or conflict == "raise":
+        # single-valued and never reach the conflict policy here.
+        raising = conflicted & (owned | (conflict == "raise"))
+        if raising.any():
+            part = int(np.argmax(raising.any(axis=1)))
+            col = policed[int(np.argmax(raising[part]))]
             msg = (
                 f"Cannot merge on dim {name} because all values for "
                 f"{col} are not equal. Consider using the `conflict` "
                 "argument to loosen this restriction."
             )
             raise CoordMergeError(msg)
-        if conflict == "keep_first":
-            carried[col] = sub[col].iloc[0]
-        # conflict == "drop": omit the column entirely.
-    # Structural (dimension) def keys carry — single-valued by partitioning.
-    for col in _dim_def_key_columns(sub, name):
-        if col in sub.columns:
-            carried[col] = sub[col].iloc[0]
-    # Canonical units carry for every dimension, the chunked one included
-    # (partition-constant: units are a sampling-partition component).
-    for coord in coord_names:
-        col = f"_{coord}_units"
-        if col in sub.columns:
-            carried[col] = sub[col].iloc[0]
+        keep_first = conflict == "keep_first"
+        for index, col in enumerate(policed):
+            # keep_first carries the first member's value; drop omits the
+            # column for that partition (null after assembly).
+            keeps = single[:, index] | (conflicted[:, index] & keep_first)
+            if not (keeps & active).any():
+                continue  # dropped by every active partition: omit entirely
+            values = first[col]
+            carried[col] = values if keeps.all() else values.where(keeps)
+    # Structural (dimension) def keys carry — single-valued by
+    # partitioning — and canonical units carry for every dimension, the
+    # chunked one included (partition-constant: units are a
+    # sampling-partition component).
+    columns = set(sorted_df.columns)
+    extras: dict[str, np.ndarray] = {}
+    for part in range(n_parts):
+        dims_val = first["dims"].iloc[part] if has_dims else None
+        dim_names: set[str] = set()
+        if has_dims and not pd.isnull(dims_val):
+            dim_names = set(str(dims_val).split(","))
+        dim_names.discard(name)
+        part_cols = [
+            key for x in sorted(dim_names) if (key := f"_{x}_def_key") in columns
+        ]
+        coord_names = set(police_dims[part].split(",")) | {name}
+        part_cols += [key for x in coord_names if (key := f"_{x}_units") in columns]
+        for col in part_cols:
+            mask = extras.get(col)
+            if mask is None:
+                mask = extras[col] = np.zeros(n_parts, dtype=bool)
+            mask[part] = True
+    for col, mask in extras.items():
+        if not (mask & active).any():
+            continue
+        values = first[col]
+        carried[col] = values if mask.all() else values.where(mask)
     return carried
 
 
-def _output_dtypes(sub: pd.DataFrame, members: pd.DataFrame) -> pd.Series | None:
+def _uniform_dtype_str(value, cache: dict[str, str]) -> str:
     """
-    The element dtype each output assembles to, indexed by output_id.
+    The assembled dtype string for a single-dtype partition.
 
-    Carried privately (see SPOOL_PRIVATE_RENAMES) because a size-based
-    chunk needs it. It is resolved per *output* rather than per
-    partition: a partition may legitimately mix dtypes, but an output
-    drawing only from its float32 members really is float32, and
-    claiming the partition-wide upcast would both over-size a later
-    chunk and make the plan row disagree with the patch it assembles
-    (which spool equality compares).
+    Matches `_combined_dtype` exactly (np.result_type normalizes the
+    spelling); "" is the same not-known sentinel ingest writes — never
+    NaN, which would reach the derived catalog as the string "nan".
     """
-    if "_dtype" not in sub.columns or members.empty:
-        return None
-    by_patch = sub.drop_duplicates("_patch_id").set_index("_patch_id")["_dtype"]
-    grouped = members.groupby("output_id")["_patch_id"]
-    # A scalar-returning apply on a SeriesGroupBy is always a Series; the
-    # stubs cannot see through the lambda and claim DataFrame | Series.
-    dtypes: pd.Series = grouped.apply(  # ty: ignore[invalid-assignment]
-        lambda pids: _combined_dtype(by_patch.reindex(pids))
-    )
-    # "" is the same not-known sentinel ingest writes; never leave NaN,
-    # which would reach the derived catalog as the string "nan".
-    return dtypes.map(lambda x: "" if x is None else str(x))
-
-
-def _build_members(sub: pd.DataFrame, outputs: pd.DataFrame, name) -> pd.DataFrame:
-    """
-    Bind one partition's outputs to trimmed source slices.
-
-    Sources are ordered by (start, _patch_id); overlapping coverage is
-    deduplicated so the earlier source owns the overlap (D3: complete
-    overlaps keep the first member, deterministically).
-    """
-    min_name, max_name = f"{name}_min", f"{name}_max"
-    step_name = f"{name}_step"
-    # The partition's unit (single-valued after normalization) rides on
-    # every member row: trim magnitudes mean THIS unit, not whatever
-    # spelling the member's source file used.
-    unit_col = f"_{name}_units"
-    plan_units = sub[unit_col].iloc[0] if unit_col in sub.columns else None
-    sub = sub.sort_values([min_name, "_patch_id"], kind="stable")
-    original = sub[[min_name, max_name]].reset_index(drop=True)
-    sub = _remove_overlaps(sub, name)
-    # Fully-covered sources become degenerate after start correction; they
-    # contribute nothing (deterministic keep-first dedup).
-    keep = sub[min_name].values <= sub[max_name].values
-    sub = sub[keep]
-    original = original[keep].reset_index(drop=True)
-    # sub and outputs are always non-empty here: a partition too short to
-    # yield an interval raises ChunkError in the caller (and the earliest
-    # source is never fully covered), so both keep at least one row.
-    steps = sub[step_name].values
-    src1 = sub[min_name].values
-    src2 = sub[max_name].values
-    chu1 = outputs[min_name].values
-    chu2 = outputs[max_name].values
-    out_ids = outputs["output_id"].to_numpy()
-    patch_ids = sub["_patch_id"].to_numpy()
-    orig_min = original[min_name].to_numpy()
-    orig_max = original[max_name].to_numpy()
-    modified_src = (
-        sub["_modified"].to_numpy()
-        if "_modified" in sub
-        else np.zeros(len(sub), dtype=bool)
-    )
-    # Map each output onto the source rows it draws from.
-    starts_ind = np.searchsorted(src1, chu1, side="right") - 1
-    ends_ind = np.searchsorted(src2, chu2, side="left")
-    rows = []
-    for out_num, (a, b) in enumerate(zip(starts_ind, ends_ind)):
-        a = max(int(a), 0)
-        for src_num in range(a, int(b) + 1):
-            if src_num >= len(sub):
-                continue
-            lo = max(src1[src_num], chu1[out_num])
-            hi = min(src2[src_num], chu2[out_num])
-            # Sources within a partition are continuous (partitioning
-            # splits on gaps) and start-corrected, so searchsorted never
-            # offers a source which does not overlap the output. Assert it
-            # rather than skipping: silently dropping a source would lose
-            # data, and the state cannot be reached from the public API.
-            assert lo <= hi, f"source {src_num} does not overlap output {out_num}"
-            unchanged = (
-                lo == orig_min[src_num]
-                and hi == orig_max[src_num]
-                and not modified_src[src_num]
-            )
-            row = {
-                "output_id": out_ids[out_num],
-                "_patch_id": patch_ids[src_num],
-                min_name: lo,
-                max_name: hi,
-                step_name: steps[src_num],
-                "_modified": not unchanged,
-            }
-            if plan_units is not None:
-                row[unit_col] = plan_units
-            rows.append(row)
-    return pd.DataFrame(rows)
+    key = "" if value is None or pd.isnull(value) else str(value)
+    if key not in cache:
+        combined = _combined_dtype(pd.Series([key], dtype=object))
+        cache[key] = "" if combined is None else str(combined)
+    return cache[key]
 
 
 def build_chunk_plan(
@@ -945,38 +986,77 @@ def build_chunk_plan(
     if not per_partition:
         value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)
     size_diagnostics: list[dict] = []
-    out_frames, member_frames = [], []
+    sorted_df, codes, seg_starts, g_starts, g_stops = _partition_frames(
+        df, labels, name
+    )
+    n_parts = len(seg_starts)
+    seg_ends = np.r_[seg_starts[1:], len(sorted_df)]
+    step_all = get_interval_columns(sorted_df, name)[2].to_numpy()
+    part_steps = np.array(  # D7: one step everywhere per partition
+        [get_middle_value(step_all[a:b]) for a, b in zip(seg_starts, seg_ends)]
+    )
+    corrected, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
+    # kept-row (member candidate) arrays; partitions stay contiguous, so
+    # partition p's kept rows sit in [koffsets[p], koffsets[p + 1])
+    start_all = sorted_df[min_name].to_numpy()
+    stop_all = sorted_df[max_name].to_numpy()
+    src1, src2 = corrected[keep_row], stop_all[keep_row]
+    korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
+    kpids = sorted_df["_patch_id"].to_numpy()[keep_row]
+    ksteps, kmod = step_all[keep_row], mod_after[keep_row]
+    koffsets = np.r_[0, np.cumsum(np.bincount(codes[keep_row], minlength=n_parts))]
+    has_dtype = "_dtype" in sorted_df.columns
+    if has_dtype:
+        # The element dtype resolves per *output*, not per partition: a
+        # partition may legitimately mix dtypes, but an output drawing
+        # only from its float32 members really is float32, and claiming
+        # the partition-wide upcast would both over-size a later chunk
+        # and make the plan row disagree with the patch it assembles
+        # (which spool equality compares). Uniform partitions (the
+        # common case) resolve in one shot; mixed ones resolve per
+        # output below. Carried privately (see SPOOL_PRIVATE_RENAMES)
+        # because a size-based chunk needs it.
+        dtype_all = sorted_df["_dtype"].to_numpy()
+        kdtypes = dtype_all[keep_row]
+        dtype_cache: dict[str, str] = {}
+    active = np.zeros(n_parts, dtype=bool)
+    fed_counts = np.zeros(n_parts, dtype=np.int64)
+    out_starts, out_stops, out_ids = [], [], []
+    m_out_ids, m_src, m_lo, m_hi, m_parts, dtype_parts = [], [], [], [], [], []
     next_id = 0
-    # Deterministic partition order (spec 8): by (partition min, smallest
-    # member patch id) — never by anything derived from input row order.
-    grouped = df.groupby(labels, sort=False)
-    stats = grouped.agg(_min=(min_name, "min"), _pid=("_patch_id", "min"))
-    part_order = stats.sort_values(["_min", "_pid"], kind="stable").index
-    groups = grouped.groups
-    for label in part_order:
-        sub = df.loc[groups[label]]
-        start, stop, step = get_interval_columns(sub, name)
-        part_step = get_middle_value(step.values)  # D7: one step everywhere
-        g_start, g_stop = start.min(), stop.max()
+    # An error hit while processing partition p is deferred until the
+    # partitions before p have been policed for conflicts: the old
+    # per-partition loop policed each partition before touching the
+    # next, so an earlier partition's CoordMergeError outranks a later
+    # partition's resolution error.
+    deferred: BaseException | None = None
+    for part in range(n_parts):
+        part_step = part_steps[part]
         if per_partition and not merge_mode:
             # The bound itself is enforced by the packing factor, which is
             # measured in units of this step and so cancels the choice
             # (length works out to n_samples / max density either way).
             # The smallest step is still the better unit: it makes the
             # flooring granularity the finest the partition allows.
-            size_step = step.abs().min()
-            value_c, overlap_c, diag = _resolve_partition_length(
-                value, overlap, sub, name, size_step, df[min_name].dtype
-            )
+            sub = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
+            size_step = np.abs(step_all[seg_starts[part] : seg_ends[part]]).min()
+            try:
+                value_c, overlap_c, diag = _resolve_partition_length(
+                    value, overlap, sub, name, size_step, df[min_name].dtype
+                )
+            except Exception as exc:
+                deferred = exc
+                break
             if diag is not None:
                 size_diagnostics.append({"first_output_id": next_id, **diag})
         if merge_mode:
-            start_stop = np.atleast_2d(np.asarray([g_start, g_stop]))
+            starts_p = g_starts[part : part + 1]
+            stops_p = g_stops[part : part + 1]
         else:
             try:
                 start_stop = get_intervals(
-                    g_start,
-                    g_stop,
+                    g_starts[part],
+                    g_stops[part],
                     value_c,
                     overlap=overlap_c,
                     # interval arithmetic is over (direction-free) envelope
@@ -987,24 +1067,80 @@ def build_chunk_plan(
                 )
             except ChunkError:  # partition too short; skip (D8)
                 continue
-        sub_sorted = sub.sort_values([min_name, "_patch_id"], kind="stable")
-        carried = _police_columns(sub_sorted, name, conflict)
-        outputs = pd.DataFrame(start_stop, columns=[min_name, max_name])
-        outputs[f"{name}_step"] = part_step
-        for col, val in carried.items():
-            outputs[col] = val
-        outputs["output_id"] = np.arange(next_id, next_id + len(outputs))
-        next_id += len(outputs)
-        members = _build_members(sub, outputs, name)
+            except Exception as exc:
+                deferred = exc
+                break
+            starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
+        active[part] = True
+        n_out = len(starts_p)
+        ids_p = np.arange(next_id, next_id + n_out)
+        next_id += n_out
+        # Map each output onto the kept source rows it draws from.
+        lo_k, hi_k = koffsets[part], koffsets[part + 1]
+        s1, s2 = src1[lo_k:hi_k], src2[lo_k:hi_k]
+        first_src = np.maximum(np.searchsorted(s1, starts_p, side="right") - 1, 0)
+        last_src = np.minimum(np.searchsorted(s2, stops_p, side="left"), len(s1) - 1)
+        m_counts = np.maximum(last_src - first_src + 1, 0)
+        total = int(m_counts.sum())
+        rel_out = np.repeat(np.arange(n_out), m_counts)
+        offsets = np.repeat(np.cumsum(m_counts) - m_counts, m_counts)
+        rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
+        lo = np.maximum(s1[rel_src], starts_p[rel_out])
+        hi = np.minimum(s2[rel_src], stops_p[rel_out])
+        # Sources within a partition are continuous (partitioning splits
+        # on gaps) and start-corrected, so searchsorted never offers a
+        # source which does not overlap the output. Assert it rather
+        # than skipping: silently dropping a source would lose data, and
+        # the state cannot be reached from the public API.
+        overlap_ok = lo <= hi
+        assert overlap_ok.all(), (
+            f"source {rel_src[int(np.argmax(~overlap_ok))]} does not "
+            f"overlap output {rel_out[int(np.argmax(~overlap_ok))]}"
+        )
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
         # runtime error; it is not surfaced at all.
-        fed = set(members["output_id"]) if not members.empty else set()
-        outputs = outputs[outputs["output_id"].isin(fed)]
-        if (dtypes := _output_dtypes(sub_sorted, members)) is not None:
-            outputs["_dtype"] = outputs["output_id"].map(dtypes).fillna("")
-        out_frames.append(outputs)
-        member_frames.append(members)
+        fed = m_counts > 0
+        fed_counts[part] = int(fed.sum())
+        out_starts.append(starts_p[fed])
+        out_stops.append(stops_p[fed])
+        out_ids.append(ids_p[fed])
+        m_out_ids.append(ids_p[rel_out])
+        m_src.append(rel_src + lo_k)
+        m_lo.append(lo)
+        m_hi.append(hi)
+        m_parts.append(np.full(total, part, dtype=np.int64))
+        if has_dtype:
+            part_dtypes = dtype_all[seg_starts[part] : seg_ends[part]]
+            if len(pd.unique(part_dtypes)) == 1:
+                uniform = _uniform_dtype_str(part_dtypes[0], dtype_cache)
+                dtype_parts.append(np.full(fed_counts[part], uniform, dtype=object))
+            else:
+                # each output's members are contiguous in rel_src, so the
+                # per-output dtype pools are simple slices
+                kdt = kdtypes[lo_k:hi_k]
+                bounds = np.cumsum(m_counts) - m_counts
+                combined = [
+                    _combined_dtype(
+                        pd.Series(
+                            kdt[rel_src[bounds[out] : bounds[out] + m_counts[out]]],
+                            dtype=object,
+                        )
+                    )
+                    for out in np.flatnonzero(fed)
+                ]
+                dtype_parts.append(
+                    np.array(
+                        ["" if x is None else str(x) for x in combined], dtype=object
+                    )
+                )
+    # Police the partitions which produced outputs; too-short (skipped)
+    # partitions are exempt, and a conflict in a partition processed
+    # before a deferred error outranks that error, exactly as the
+    # per-partition loop raised them.
+    carried = _carried_columns(sorted_df, codes, seg_starts, name, conflict, active)
+    if deferred is not None:
+        raise deferred
     if size_diagnostics:
         # Diagnostics are only collected on the size-chunk path, where the
         # chunk value is an information Quantity (is_data_size gated).
@@ -1022,14 +1158,47 @@ def build_chunk_plan(
                 "dimension first to make them smaller."
             )
             warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
-    if not out_frames or all(x.empty for x in out_frames):
+    if not fed_counts.sum():
         msg = "Could not chunk. No segments with sufficient length found."
         raise ChunkError(msg)
-    outputs = pd.concat(out_frames, ignore_index=True)
-    members = pd.concat(
-        [x for x in member_frames if not x.empty] or [empty_members],
-        ignore_index=True,
+    # Assemble the outputs table: envelopes and step, then the carried
+    # columns (each partition's single value repeated over its outputs),
+    # then the ids.
+    repeats = np.repeat(np.arange(n_parts), fed_counts)
+    data: dict[str, Any] = {
+        min_name: np.concatenate(out_starts),
+        max_name: np.concatenate(out_stops),
+        f"{name}_step": part_steps[repeats],
+    }
+    for col, values in carried.items():
+        data[col] = values.take(repeats).reset_index(drop=True)
+    data["output_id"] = np.concatenate(out_ids)
+    if has_dtype:
+        data["_dtype"] = np.concatenate(dtype_parts)
+    outputs = pd.DataFrame(data)
+    src_rows = np.concatenate(m_src)
+    unchanged = (
+        (np.concatenate(m_lo) == korig_min[src_rows])
+        & (np.concatenate(m_hi) == korig_max[src_rows])
+        & ~kmod[src_rows]
     )
+    members = pd.DataFrame(
+        {
+            "output_id": np.concatenate(m_out_ids),
+            "_patch_id": kpids[src_rows],
+            min_name: np.concatenate(m_lo),
+            max_name: np.concatenate(m_hi),
+            f"{name}_step": ksteps[src_rows],
+            "_modified": ~unchanged,
+        }
+    )
+    # The partition's unit (single-valued after normalization) rides on
+    # every member row: trim magnitudes mean THIS unit, not whatever
+    # spelling the member's source file used.
+    if (unit_col := f"_{name}_units") in sorted_df.columns:
+        first_units = sorted_df[unit_col].iloc[seg_starts].reset_index(drop=True)
+        member_parts = np.concatenate(m_parts)
+        members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     return ChunkPlan(outputs, members, name, value, params)
 
 

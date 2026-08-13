@@ -219,6 +219,14 @@ def _aux_coord_info(
         return out
     cols = [c for c in ("output_id", "_patch_id", "_modified") if c in members.columns]
     joined = members[cols].merge(source_rows, on="_patch_id", how="left")
+    grouped = joined.groupby("output_id", sort=True)
+    output_ids = grouped.size().index.to_numpy()
+    single = (grouped.size() == 1).to_numpy()
+    modified = (
+        grouped["_modified"].any().to_numpy()
+        if "_modified" in joined.columns
+        else np.zeros(len(output_ids), dtype=bool)
+    )
     for name, dims_str in coord_dims_map.items():
         cmin, cmax = f"{name}_min", f"{name}_max"
         if cmin not in joined.columns:
@@ -229,33 +237,42 @@ def _aux_coord_info(
         # the values of every coordinate on those dims
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
-        for output_id, sub in joined.groupby("output_id"):
-            lo, hi = sub[cmin].min(), sub[cmax].max()
-            if pd.isnull(lo) and pd.isnull(hi):
-                continue
-            keys = set(sub[key_col].dropna()) if key_col in sub.columns else set()
-            modified = bool(sub["_modified"].any()) if "_modified" in sub else False
-            keep = (
-                len(keys) == 1
-                and not trimmed
-                and (not rides or (len(sub) == 1 and not modified))
-            )
-            steps = (
-                set(sub[step_col].dropna())
-                if keep and step_col in sub.columns
-                else set()
-            )
-            unit_col = f"_{name}_units"
-            units = set(sub[unit_col].dropna()) if unit_col in sub.columns else set()
+        unit_col = f"_{name}_units"
+        lows = grouped[cmin].min().to_numpy()
+        highs = grouped[cmax].max().to_numpy()
+        # the *_first arrays are only read where their gate is True, and
+        # a gate can only be True when its column exists
+        no_gate = np.zeros(len(output_ids), dtype=bool)
+        keep, key_first = no_gate, None
+        if key_col in joined.columns:
+            keep = grouped[key_col].nunique().to_numpy() == 1
+            key_first = grouped[key_col].first().to_numpy()
+        keep = keep & (not trimmed)
+        if rides:
+            keep = keep & single & ~modified
+        step_ok, step_first = no_gate, None
+        if step_col in joined.columns:
+            step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
+            step_first = grouped[step_col].first().to_numpy()
+        unit_ok, unit_first = no_gate, None
+        if unit_col in joined.columns:
+            unit_ok = grouped[unit_col].nunique().to_numpy() == 1
+            unit_first = grouped[unit_col].first().to_numpy()
+        # a coordinate absent from every member contributes nothing
+        absent = pd.isnull(lows) & pd.isnull(highs)
+        for index in np.flatnonzero(~absent):
+            step = step_first[index] if step_first is not None else None
+            key = key_first[index] if key_first is not None else None
+            unit = unit_first[index] if unit_first is not None else None
             info = {
-                cmin: lo,
-                cmax: hi,
-                step_col: steps.pop() if len(steps) == 1 else None,
-                key_col: keys.pop() if keep else None,
-                unit_col: units.pop() if len(units) == 1 else None,
+                cmin: lows[index],
+                cmax: highs[index],
+                step_col: step if step_ok[index] else None,
+                key_col: key if keep[index] else None,
+                unit_col: unit if unit_ok[index] else None,
                 "dims": dims,
             }
-            out.setdefault(int(output_id), {})[name] = info
+            out.setdefault(int(output_ids[index]), {})[name] = info
     return out
 
 
@@ -267,10 +284,23 @@ def _output_records(
     """Convert plan output rows into ingestible source records."""
     records = []
     aux_info = aux_info or {}
+    # Envelope columns belong to coordinates actually present in a row;
+    # an attr that merely looks envelope-shaped (channel_step with no
+    # channel coord) is ordinary metadata and must be preserved. The
+    # def-key columns are frame-wide, so the envelope-key sets repeat
+    # across rows and are cached by (dims, aux coord names).
+    base_names = {
+        key[1 : -len("_def_key")]
+        for key in outputs.columns
+        if key.startswith("_") and key.endswith("_def_key")
+    }
+    base_names |= {"time", "distance"}  # fixed patches-table envelopes
+    envelope_cache: dict[tuple, set[str]] = {}
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
         dim_names = [d for d in dims.split(",") if d]
+        aux = aux_info.get(output_id, {})
         coords = []
         for name in dim_names:
             record = _coord_record_from_row(row, name)
@@ -278,27 +308,22 @@ def _output_records(
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
         # patches, so the catalog must keep describing them
-        for name, info in aux_info.get(output_id, {}).items():
+        for name, info in aux.items():
             if name in dim_names:
                 continue
             record = _coord_record_from_row(info, name, dims=info["dims"])
             if record is not None:
                 coords.append(record)
-        # Envelope columns belong to coordinates actually present in the
-        # row; an attr that merely looks envelope-shaped (channel_step with
-        # no channel coord) is ordinary metadata and must be preserved.
-        coord_names = set(dim_names) | set(aux_info.get(output_id, {}))
-        coord_names |= {
-            key[1 : -len("_def_key")]
-            for key in row
-            if key.startswith("_") and key.endswith("_def_key")
-        }
-        coord_names |= {"time", "distance"}  # fixed patches-table envelopes
-        envelope_keys = {
-            f"{name}_{sfx}"
-            for name in coord_names
-            for sfx in ("min", "max", "step", "units")
-        }
+        cache_key = (dims, tuple(aux))
+        envelope_keys = envelope_cache.get(cache_key)
+        if envelope_keys is None:
+            coord_names = set(dim_names) | set(aux) | base_names
+            envelope_keys = {
+                f"{name}_{sfx}"
+                for name in coord_names
+                for sfx in ("min", "max", "step", "units")
+            }
+            envelope_cache[cache_key] = envelope_keys
         attrs = {}
         for key, value in row.items():
             if (
