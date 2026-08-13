@@ -612,19 +612,10 @@ class TestSkippedPartitionPolicing:
             }
         )
 
-    def test_conflict_outranks_later_unhashable_column(self):
-        """An earlier column's conflict wins over a later unhashable one."""
+    def test_unhashable_active_value_raises(self):
+        """An unhashable policed value in an active partition errors loudly."""
         df = self._one_partition_frame()
-        df["aaa"] = ["a", "b"]  # conflicts first (column order)
-        df["zzz"] = [[1], [1]]  # unhashable, but polices later
-        with pytest.raises(CoordMergeError, match="aaa"):
-            build_chunk_plan(df, time=...)
-
-    def test_unhashable_column_raises_at_its_place(self):
-        """An unhashable value met before any conflict raises TypeError."""
-        df = self._one_partition_frame()
-        df["aaa"] = [[1], [1]]  # unhashable polices first
-        df["zzz"] = ["a", "b"]  # would conflict, but is met later
+        df["note"] = [[1], [1]]  # attr values must be hashable
         with pytest.raises(TypeError, match="unhashable"):
             build_chunk_plan(df, time=...)
 

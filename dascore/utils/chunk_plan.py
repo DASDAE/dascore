@@ -735,44 +735,6 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     return corrected, modified, keep
 
 
-def _conflict_message(name: str, col: str) -> str:
-    """The error message for a partition whose attr values conflict."""
-    return (
-        f"Cannot merge on dim {name} because all values for "
-        f"{col} are not equal. Consider using the `conflict` "
-        "argument to loosen this restriction."
-    )
-
-
-def _police_partition_major(
-    sorted_df: pd.DataFrame,
-    seg_starts: np.ndarray,
-    name: str,
-    conflict: str,
-    active: np.ndarray,
-    policed: list[str],
-    owned: np.ndarray,
-) -> None:
-    """
-    Replay conflict policing partition-major to surface the right error.
-
-    Reached only when the whole-frame aggregation hit an unhashable
-    value somewhere in an active partition. Per-partition policing met
-    values partition by partition, column by column, so whichever came
-    first — a conflict or the unhashable value itself — won; replaying
-    in that order raises the same error it would have.
-    """
-    seg_ends = np.r_[seg_starts[1:], len(sorted_df)]
-    for part in np.flatnonzero(active):
-        sub = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
-        for index, col in enumerate(policed):
-            values = sub[col].unique()  # raises the TypeError at its old spot
-            single = len(values) == 1 or (len(values) and pd.isnull(values).all())
-            if single or not (owned[part, index] or conflict == "raise"):
-                continue
-            raise CoordMergeError(_conflict_message(name, col))
-
-
 def _carried_columns(
     sorted_df: pd.DataFrame,
     codes: np.ndarray,
@@ -827,17 +789,11 @@ def _carried_columns(
         sizes = np.zeros(n_parts, dtype=np.intp)
         sizes[part_index] = group_size.to_numpy()
         nunique = np.zeros((n_parts, len(policed)), dtype=np.intp)
-        try:
-            nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
-        except TypeError:
-            # An unhashable value in an active partition. The old loop
-            # met these partition-major, so an earlier partition's
-            # conflict (or an earlier column's unhashable value)
-            # outranks this one; replay in that order.
-            _police_partition_major(
-                sorted_df, seg_starts, name, conflict, active, policed, owned
-            )
-            raise  # the replay found nothing earlier: surface the original
+        # An unhashable attr value in an active partition raises
+        # TypeError here. Per-partition policing raised it too, though
+        # partition-major rather than at aggregation; such values are
+        # outside the relation's contract, so the eager error is fine.
+        nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
         counts = np.zeros_like(nunique)
         counts[part_index] = grouped.count().to_numpy()
         # single-valued: one distinct value with no nulls beside it, or
@@ -853,7 +809,12 @@ def _carried_columns(
         if raising.any():
             part = int(np.argmax(raising.any(axis=1)))
             col = policed[int(np.argmax(raising[part]))]
-            raise CoordMergeError(_conflict_message(name, col))
+            msg = (
+                f"Cannot merge on dim {name} because all values for "
+                f"{col} are not equal. Consider using the `conflict` "
+                "argument to loosen this restriction."
+            )
+            raise CoordMergeError(msg)
         keep_first = conflict == "keep_first"
         for index, col in enumerate(policed):
             # keep_first carries the first member's value; drop omits the
