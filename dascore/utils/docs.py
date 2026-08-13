@@ -242,12 +242,15 @@ def _param_types(obj) -> dict[str, str]:
 
 def _parse(doc: str):
     """Parse a numpydoc docstring into griffe sections."""
-    from griffe import Docstring  # noqa: PLC0415
+    from dascore.utils.misc import optional_import  # noqa: PLC0415
+
+    # griffe ships with the doc build rather than with dascore.
+    griffe = optional_import("griffe", required_for="rendering the API docs")
 
     # Griffe logs a warning for every parameter documented without a type,
     # which is DASCore's house style (types come from the annotations).
     logging.getLogger("griffe").setLevel(logging.ERROR)
-    return Docstring(doc, parser="numpy").parse("numpy")
+    return griffe.Docstring(doc, parser="numpy").parse("numpy")
 
 
 def _fence(text: str, char: str = "`") -> str:
@@ -412,13 +415,17 @@ def render_package_api(package_name: str, skip_empty: bool = True) -> str:
     out = []
     for name in iter_package_modules(package_name):
         try:
-            body = render_module_api(name)
+            module = importlib.import_module(name)
         except ImportError:  # an optional dependency the doc env lacks
             continue
+        # Rendering is deliberately outside the guard: a module which cannot
+        # be imported is skipped, but a renderer which cannot run would
+        # otherwise empty the page without saying so.
+        body = render_module_api(name)
         if skip_empty and not body.strip():
             continue
         out.append(f"### {name} {{#{get_doc_anchor(name)}}}\n")
-        module_doc = inspect.getdoc(importlib.import_module(name)) or ""
+        module_doc = inspect.getdoc(module) or ""
         if module_doc:
             out.append(" ".join(module_doc.split("\n\n")[0].split()) + "\n")
         out.append(body)

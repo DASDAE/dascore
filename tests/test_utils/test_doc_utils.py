@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import textwrap
 
 import pandas as pd
@@ -161,6 +162,13 @@ class TestObjToDocDF:
 
 class TestRenderApi:
     """Tests for rendering a module's API onto one documentation page."""
+
+    # griffe parses the docstrings and ships with the doc build, not with
+    # dascore; the minimal-dependency, free-threaded and WASM jobs lack it.
+    pytestmark = pytest.mark.skipif(
+        importlib.util.find_spec("griffe") is None,
+        reason="griffe is only installed with the doc build",
+    )
 
     @pytest.fixture(scope="class")
     def misc_markdown(self):
