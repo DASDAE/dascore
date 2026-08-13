@@ -66,6 +66,13 @@ UNREFERENCED_OBJECTS = {
     "dascore.core.inventory.interval_masks": "Inventory coverage helper.",
     "dascore.proc.inventory.get_attr_values": "Enrichment internal, not re-exported.",
     "dascore.proc.inventory.resolve_contexts": "Enrichment internal, not re-exported.",
+    "dascore.proc.inventory.PlacedRow": "Inventory placement internal.",
+    "dascore.proc.inventory.RowEpochs": "Inventory placement internal.",
+    "dascore.proc.inventory.channel_placements": "Inventory placement internal.",
+    "dascore.proc.inventory.resolve_channel_pieces": "Inventory placement internal.",
+    "dascore.proc.inventory.resolve_row_epochs": "Inventory placement internal.",
+    "dascore.proc.inventory.resolve_split_pieces": "Inventory placement internal.",
+    "dascore.core.inventory_loader.load_directory": "Reached through dc.inventory().",
 }
 
 # Class members which are mechanism rather than API: pydantic validators run

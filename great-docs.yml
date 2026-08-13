@@ -147,7 +147,7 @@ reference:
       - name: BaseSpool
         members: [chunk, concatenate, get_contents, get_patch_names, get_registered_namespaces, map, select, sort, split, stack, unselect, update]
       - name: Spool
-        members: [from_directory, from_file, attach_inventory, chunk_plan, enrich, remove_inventory, spool_path, indexer, has_live_patches]
+        members: [from_directory, from_file, attach_inventory, chunk_plan, conform_to_inventory, enrich, remove_inventory, split_by, spool_path, indexer, has_live_patches]
       - name: PatchAttrs
         members: [drop, drop_private, flat_dump, from_dict, get, get_summary_df, items, new, update]
       - name: PatchSummary
@@ -244,6 +244,7 @@ reference:
       - proc.taper
       - proc.taper_range
       - proc.transpose
+      - proc.unselect
       - proc.update
       - proc.update_attrs
       - proc.update_coords
