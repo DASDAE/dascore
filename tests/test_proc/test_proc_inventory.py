@@ -10,6 +10,7 @@ import re
 import tempfile
 import warnings
 from collections.abc import Mapping
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
@@ -611,6 +612,14 @@ class TestRemoveInventory:
         assert spool.remove_inventory()[0].equals(patch)
 
 
+# These tests put an inventory on disk, which needs a YAML writer.  The
+# rest of this module builds them in memory, and dascore runs without
+# PyYAML installed -- as the free-threaded and WebAssembly jobs do.
+needs_yaml = pytest.mark.skipif(
+    find_spec("yaml") is None, reason="PyYAML is not installed"
+)
+
+
 def _enforces_permissions() -> bool:
     """Return True if a file with no mode bits is actually unreadable."""
     with tempfile.TemporaryDirectory() as name:
@@ -643,6 +652,7 @@ def data_directory(tmp_path_factory, patch, inventory):
     return path
 
 
+@needs_yaml
 class TestBlessedInventory:
     """A data directory hands its own inventory to the spool over it."""
 
@@ -698,6 +708,7 @@ class TestBlessedInventory:
         assert dc.spool(tmp_path / "patch.h5")._inventory is None
 
 
+@needs_yaml
 class TestLazyInventory:
     """Attaching states where an inventory is; reading it waits."""
 
@@ -870,6 +881,7 @@ class TestLazyInventory:
         assert spool.update()._inventory is None
 
 
+@needs_yaml
 class TestAttachInventoryPath:
     """An inventory can be attached by name as well as by value."""
 
@@ -969,6 +981,7 @@ class TestAttachInventoryPath:
         assert spool.attach_inventory()._enrich_kwargs is None
 
 
+@needs_yaml
 class TestLazyInventoryEquality:
     """Comparing two attachments never reads either of them."""
 
