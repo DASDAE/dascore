@@ -2026,3 +2026,70 @@ class TestPRReviewFindings:
             ),
         }
         assert len(one_path(make_inventory(files)).geometry[0].distance) == 2000
+
+
+class TestFindInventory:
+    """The name a data directory carries its own inventory under."""
+
+    def test_nothing_there(self, tmp_path):
+        """A directory carrying no inventory says so both ways."""
+        assert loader.find_inventory(tmp_path) is None
+        assert not loader.carries_inventory(tmp_path)
+
+    def test_the_file_form(self, tmp_path):
+        """A serialized inventory beside the data it describes."""
+        found = tmp_path / f"{loader.BLESSED_NAME}.yaml"
+        found.write_text(dc.inventory().to_yaml())
+        assert loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) == found
+        assert isinstance(dc.inventory(loader.find_inventory(tmp_path)), inv.Inventory)
+
+    def test_the_directory_form(self, tmp_path):
+        """An authoring directory beside the data it describes."""
+        found = write_inventory(tmp_path / loader.BLESSED_NAME, MINIMAL)
+        assert loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) == found
+        assert len(dc.inventory(loader.find_inventory(tmp_path)).networks) == 1
+
+    def test_the_visible_name_is_not_it(self, tmp_path):
+        """`inventory.yaml` is the envelope of the authoring format."""
+        (tmp_path / "inventory.yaml").write_text(dc.inventory().to_yaml())
+        assert not loader.carries_inventory(tmp_path)
+        assert loader.find_inventory(tmp_path) is None
+
+    @pytest.mark.parametrize("suffix", loader._OBJECT_SUFFIXES)
+    def test_every_object_suffix(self, tmp_path, suffix):
+        """One data model stands behind each spelling here too."""
+        found = tmp_path / f"{loader.BLESSED_NAME}{suffix}"
+        found.write_text("{}")
+        assert loader.find_inventory(tmp_path) == found
+
+    def test_two_spellings_of_one_fact(self, tmp_path):
+        """A directory states its inventory once."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").write_text("{}")
+        (tmp_path / loader.BLESSED_NAME).mkdir()
+        with pytest.raises(InvalidInventoryError, match="more than one inventory"):
+            loader.find_inventory(tmp_path)
+
+    def test_two_files_of_one_fact(self, tmp_path):
+        """Two suffixes are two spellings, as they are inside the format."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").write_text("{}")
+        (tmp_path / f"{loader.BLESSED_NAME}.json").write_text("{}")
+        with pytest.raises(InvalidInventoryError, match="more than one inventory"):
+            loader.find_inventory(tmp_path)
+
+    def test_a_suffixless_file(self, tmp_path):
+        """The bare name is the directory form; a file under it names none."""
+        (tmp_path / loader.BLESSED_NAME).write_text("{}")
+        with pytest.raises(InvalidInventoryError, match="is a file"):
+            loader.find_inventory(tmp_path)
+
+    def test_a_suffixed_directory(self, tmp_path):
+        """The authoring directory takes no suffix."""
+        (tmp_path / f"{loader.BLESSED_NAME}.yaml").mkdir()
+        with pytest.raises(InvalidInventoryError, match="is a directory"):
+            loader.find_inventory(tmp_path)
+
+    def test_the_name_is_hidden(self):
+        """Which is what keeps the file scanner from reading it as data."""
+        assert loader.BLESSED_NAME.startswith(".")

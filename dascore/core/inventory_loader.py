@@ -75,6 +75,16 @@ _OBJECT_SUFFIXES = (".yaml", ".yml", ".json")
 _ATTRS_STEM = "attrs"
 _ENVELOPE_STEM = "inventory"
 
+# The name a data directory carries its own inventory under, in either
+# form: the directory `.inventory/` or a file `.inventory.yaml`. Hidden,
+# like `.dascore_index.sqlite3` beside it -- a companion the directory
+# keeps rather than content it holds -- which is also what keeps the file
+# scanner (whose `skip_hidden` defaults to True) from reading it as data.
+# The visible spelling is deliberately not accepted: `inventory.yaml` is
+# the envelope of the authoring format, so a data directory holding one
+# would be claiming to be an inventory directory itself.
+BLESSED_NAME = ".inventory"
+
 # Separates an entity's name from the epoch it starts.
 _EPOCH_MARKER = "@"
 
@@ -1482,6 +1492,70 @@ def load_directory(path: str | os.PathLike) -> Inventory:
     resources = {x.model.resource_id: x.model for x in entries.get("resources", [])}
     networks = _assemble(entries)
     return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
+
+
+def _blessed_candidates(directory: Path) -> tuple[Path, ...]:
+    """Every spelling of the blessed name, the directory form first."""
+    tree = directory / BLESSED_NAME
+    return (tree, *(tree.with_suffix(suffix) for suffix in _OBJECT_SUFFIXES))
+
+
+def carries_inventory(directory: str | os.PathLike) -> bool:
+    """
+    Return whether a directory holds anything under the blessed name.
+
+    A few stats and nothing more: this is the question a spool asks when
+    it opens a directory, so it must not read, parse, or judge what it
+    finds. Whether what is there is loadable -- or even whether the
+    directory says which of the two forms it means -- is
+    ``find_inventory``'s to answer, when something actually asks.
+
+    Parameters
+    ----------
+    directory
+        The directory to look in.
+    """
+    return any(x.exists() for x in _blessed_candidates(Path(directory)))
+
+
+def find_inventory(directory: str | os.PathLike) -> Path | None:
+    """
+    Return the inventory a directory carries, or None if it carries none.
+
+    Parameters
+    ----------
+    directory
+        The directory to look in.
+    """
+    candidates = _blessed_candidates(Path(directory))
+    tree = candidates[0]
+    if not (found := [x for x in candidates if x.exists()]):
+        return None
+    if len(found) > 1:
+        listed = ", ".join(sorted(x.name for x in found))
+        msg = (
+            f"{tree.parent} carries more than one inventory: {listed}. A "
+            "directory states its inventory once; keep the one it means."
+        )
+        raise InvalidInventoryError(msg)
+    (only,) = found
+    # A near-miss: something is sitting under the blessed name in a form
+    # that name does not take, which is a misspelling of the convention
+    # rather than a file which owes it nothing.
+    if only == tree and not only.is_dir():
+        msg = (
+            f"{only} is a file. An inventory a directory carries is either "
+            f"the authoring directory {BLESSED_NAME}/ or a file naming its "
+            f"format, {BLESSED_NAME}{_OBJECT_SUFFIXES[0]}."
+        )
+        raise InvalidInventoryError(msg)
+    if only != tree and only.is_dir():
+        msg = (
+            f"{only} is a directory. The authoring directory an inventory "
+            f"lives in takes no suffix: {BLESSED_NAME}/."
+        )
+        raise InvalidInventoryError(msg)
+    return only
 
 
 def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
