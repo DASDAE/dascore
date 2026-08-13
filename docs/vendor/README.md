@@ -12,4 +12,4 @@ Third-party JavaScript used by the interactive data-model diagram on the [invent
 
 The license files are deliberately extension-less: quarto renders every `.md` under `docs/` as a page of the site, so `LICENSE.md` would publish the Eclipse Public License at `dascore.org/vendor/elk/LICENSE.html`, inside DASCore's own theme and navigation. Anything added here that is not meant to become a site page needs the same treatment. (`README.md` is exempt — quarto does not render files by that name.)
 
-To upgrade one, replace the file with the new release, update the version in the table and in the `add_html_dependency` call in the filter, and rebuild the docs to confirm the diagram still lays out.
+To upgrade one: replace the file with the new release, check the release's own license and attribution files and update the ones here and the table row if either has changed, update the version in the table and in the `add_html_dependency` call in the filter, and rebuild the docs to confirm the diagram still lays out. A project can relicense between releases, so the license column is only true of the version beside it.

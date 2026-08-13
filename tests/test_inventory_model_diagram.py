@@ -155,6 +155,19 @@ class TestNodesFollowTheModels:
         with pytest.raises(ValueError, match="private name"):
             generator._attributes(Acquisition, {"Interrogator": "_Secret"})
 
+    def test_markdown_in_documentation_fails_the_build(self, generator):
+        """
+        The filter reads the spec through a markdown parser.
+
+        A backtick or asterisk in a field's documentation would be taken as
+        formatting and dropped on the way to the tooltip, so the text is
+        refused at the point it is generated. The repo's docstrings use
+        double backticks freely, which is how this would arrive.
+        """
+        for text in ("holds a ``value``", "an *emphatic* claim"):
+            with pytest.raises(ValueError, match="read as markdown"):
+                generator._check_plain(text, "somewhere")
+
     def test_summaries_come_from_the_docstrings(self, generator, spec):
         """Every node says what it is, in the model's own words."""
         for node in generator.NODES:

@@ -336,14 +336,37 @@ def _attributes(model: type, expansions: dict[str, str]) -> list[dict[str, str]]
                 "_alias_expansions, or draw what it stands for."
             )
             raise ValueError(msg)
+        where = f"{model.__name__}.{name}"
         out.append(
             {
                 "name": name,
                 "type": text,
-                "description": model.model_fields[name].description or "",
+                "description": _check_plain(
+                    model.model_fields[name].description or "", where
+                ),
             }
         )
     return out
+
+
+def _check_plain(text: str, where: str) -> str:
+    """
+    Refuse text the diagram would render as markdown rather than show.
+
+    The filter reads the spec through pandoc's metadata parser, which is a
+    markdown reader: a backtick or an asterisk in a field's documentation
+    would be taken as formatting and stripped on the way to the tooltip.
+    The repo's docstrings use double backticks freely, so this is a matter
+    of time rather than of principle.
+    """
+    if found := set("`*") & set(text):
+        marks = ", ".join(sorted(repr(x) for x in found))
+        msg = (
+            f"{where} holds {marks}, which the diagram would read as markdown "
+            f"and drop: {text!r}. Say it without the markup."
+        )
+        raise ValueError(msg)
+    return text
 
 
 def _summary(model: type) -> str:
@@ -355,7 +378,7 @@ def _summary(model: type) -> str:
     """
     doc = inspect.getdoc(model) or ""
     paragraph = doc.split("\n\n")[0]
-    return " ".join(paragraph.split())
+    return _check_plain(" ".join(paragraph.split()), f"{model.__name__}'s docstring")
 
 
 def _walk_types(annotation, resource_id_accepted: bool = False):
