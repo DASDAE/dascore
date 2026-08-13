@@ -117,7 +117,7 @@ def merge_coord_managers(
             if dim_coord is not None and coord_name == dim:
                 out[coord_name] = (managers[0].dim_map[dim], dim_coord)
                 continue
-            merge_coords = [x.coord_map[dim] for x in managers]
+            merge_coords = [x.coord_map[coord_name] for x in managers]
             axis = managers[0].dim_map[coord_name].index(dim)
             if len(units := {x.units for x in merge_coords}) != 1:
                 # TODO: we might try to convert all the units to a common
@@ -127,9 +127,12 @@ def merge_coord_managers(
                     f"share the same units. Units found are: {set(units)}"
                 )
                 raise CoordMergeError(msg)
-            snap_coords = _snap_coords(merge_coords)
-            data = [x.data for x in snap_coords]
-            dims = managers[0].dim_map[dim]
+            # Only the dimension coordinate defines contiguity, so only it is
+            # snapped; coords merely associated with dim just follow along.
+            if coord_name == dim:
+                merge_coords = _snap_coords(merge_coords)
+            data = [x.data for x in merge_coords]
+            dims = managers[0].dim_map[coord_name]
             new_data = np.concatenate(data, axis=axis)
             # raw value concatenation loses the coord's units; reattach
             # the (verified common) units so the merge stays unit-true

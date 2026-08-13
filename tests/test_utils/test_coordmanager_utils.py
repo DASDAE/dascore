@@ -51,6 +51,27 @@ class TestMergeCoordManagers:
         assert new_time.min() == time.min()
         assert new_time.max() == cm2.coord_map["time"].max()
 
+    def test_merge_keeps_associated_coord_values(self, cm_basic):
+        """A coord along the merge dim keeps its own values, not the dim's."""
+        size = cm_basic.shape[cm_basic.get_axis("time")]
+        cm1 = cm_basic.update_coords(quality=("time", np.arange(size)))
+        time = cm1.coord_map["time"]
+        # each manager gets its own quality values; identical ones could not
+        # tell a real merge from the first manager's values used twice
+        cm2 = self._get_offset_coord_manager(cm1, time=time.step * 1.1)
+        cm2 = cm2.update_coords(quality=("time", np.arange(size) + 100))
+        # a tolerance the offset above lands inside, so snapping runs: the
+        # dim coord is snapped and quality, having no step, must be left alone
+        out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
+        quality = out.coord_map["quality"]
+        expected = np.concatenate([np.arange(size), np.arange(size) + 100])
+        # the dim coord's values used to be substituted here, which for a
+        # datetime time dim also silently changed the coord's dtype
+        assert quality.dtype == cm1.coord_map["quality"].dtype
+        assert np.array_equal(quality.values, expected)
+        assert out.dim_map["quality"] == ("time",)
+        assert out.coord_map["time"].shape == quality.shape
+
     def test_merge_offset_close_no_snap(self, cm_basic):
         """When the coordinate don't line up, it should produce monotonic Coord."""
         cm1 = cm_basic

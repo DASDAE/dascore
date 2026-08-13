@@ -994,7 +994,11 @@ class SQLIndexBackend(abc.ABC):
             for mask, flavor in time_flavors:
                 if mask.any():
                     values[mask] = _time_objects(coords[ns_col][mask], flavor)
-            coords[out_col] = values
+            # Assigning the bare array lets pandas re-infer a dtype; a result
+            # whose numeric coords all have null envelopes holds only
+            # Timestamp/Timedelta and None, which would infer a temporal dtype
+            # and silently turn those numeric nulls into NaT.
+            coords[out_col] = pd.Series(values, index=coords.index, dtype=object)
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
