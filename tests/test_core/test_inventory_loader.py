@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -791,27 +792,7 @@ class TestIgnoredEntries:
 
 
 class TestSeams:
-    """The parts of the format which cannot be read yet are refused."""
-
-    def test_track_table_in_an_entity_directory(self, make_inventory):
-        """A track table is refused by name rather than ignored."""
-        files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/coupling.csv": "start_distance\n0\n",
-        }
-        with pytest.raises(InvalidInventoryError, match="track table"):
-            make_inventory(files)
-
-    def test_optical_path_epoch_directory(self, make_inventory):
-        """An optical path epoch is refused by name rather than ignored."""
-        files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/path@2024-05-12T103000/attrs.yaml": (
-                "object_type: OpticalPath\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="optical path epoch"):
-            make_inventory(files)
+    """A table lives where the entity whose tracks it holds does."""
 
     def test_track_table_outside_an_entity_directory(self, make_inventory):
         """A table lives beside the attrs file of the entity it describes."""
@@ -1060,3 +1041,501 @@ class TestModelAssumptions:
                     model(**fields, nonsense_key=1)
                 checked.append(model)
         assert len(checked) == 9
+
+
+# A fiber array whose optical path states every track shape at once. The
+# path is 1000.1 m long, so every interval below sits inside it.
+TRACKS = {
+    "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\nname: array\n",
+    "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\nname: main\n",
+    "fiber_arrays/DAS.L001/path/optical_components.csv": (
+        "sequence,object_type,optical_length,name,fiber_number,fiber_color\n"
+        "2,Splice,0.1,splice 1,,\n"
+        "1,FiberSegment,1000.0,fiber 1,1,blue\n"
+    ),
+    "fiber_arrays/DAS.L001/path/coupling.csv": (
+        "start_distance,end_distance,coupling_type,description\n"
+        "0,340,conduit,\n"
+        "340,355,trench,backfilled\n"
+    ),
+    "fiber_arrays/DAS.L001/path/annotations.csv": (
+        "start_distance,end_distance,group,value\n"
+        "0,340,rock_type,granite\n"
+        "0,120,noisy,true\n"
+        "120,340,frost_depth,1.2\n"
+    ),
+    "fiber_arrays/DAS.L001/path/geometry.csv": (
+        "segment,distance,longitude,latitude,elevation\n"
+        "S100,100.0,-117.0,40.0,687.0\n"
+        "S100,102.0,-117.1,40.1,685.0\n"
+    ),
+}
+
+
+def one_path(inventory):
+    """Return the single optical path of a loaded inventory."""
+    return inventory.networks[0].fiber_arrays[0].optical_paths[0]
+
+
+class TestTrackTables:
+    """Tests for the CSV half of the format."""
+
+    def test_every_shape_at_once(self, make_inventory):
+        """One path states all four tables, and each arrives whole."""
+        path = one_path(make_inventory({**MINIMAL, **TRACKS}))
+        assert [x.name for x in path.optical_components] == ["fiber 1", "splice 1"]
+        assert [x.coupling_type for x in path.coupling] == ["conduit", "trench"]
+        assert {x.group for x in path.annotations} == {
+            "rock_type",
+            "noisy",
+            "frost_depth",
+        }
+        assert [x.name for x in path.geometry] == ["S100"]
+
+    def test_rows_are_read_in_the_order_they_state(self, make_inventory):
+        """Sequence decides the order, never row position."""
+        path = one_path(make_inventory({**MINIMAL, **TRACKS}))
+        # The file lists the splice first; sequence puts it second.
+        assert [x.object_type for x in path.optical_components] == [
+            "FiberSegment",
+            "Splice",
+        ]
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [("granite", "granite"), ("true", True), ("false", False), ("1.2", 1.2)],
+    )
+    def test_a_value_is_read_as_its_text_states(self, make_inventory, text, expected):
+        """A CSV has no types, so an annotation's value is read by content."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                f"start_distance,end_distance,group,value\n0,340,g,{text}\n"
+            ),
+        }
+        value = one_path(make_inventory(files)).annotations[0].value
+        assert value == expected and isinstance(value, type(expected))
+
+    def test_a_group_holding_two_kinds(self, make_inventory):
+        """A group's kind decides its shape, so one group holds one kind."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                "start_distance,end_distance,group,value\n"
+                "0,120,zone,north\n"
+                "120,340,zone,true\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="one group holds one kind"):
+            make_inventory(files)
+
+    def test_an_empty_cell_is_unset(self, make_inventory):
+        """An empty cell means unset, never an empty string."""
+        path = one_path(make_inventory({**MINIMAL, **TRACKS}))
+        splice = path.optical_components[1]
+        # The splice row leaves the fiber columns empty; they are a
+        # FiberSegment's fields, and it is not one.
+        assert splice.description == ""
+        assert path.coupling[0].description == ""
+        assert path.coupling[1].description == "backfilled"
+
+    def test_a_geometry_names_its_axes_the_way_its_frame_does(self, make_inventory):
+        """Coordinates are stored canonically, whatever the CRS calls them."""
+        path = one_path(make_inventory({**MINIMAL, **TRACKS}))
+        geometry = path.geometry[0]
+        assert geometry.distance == (100.0, 102.0)
+        # longitude, latitude, elevation are axes 0, 1, 2 of the default CRS.
+        assert geometry.coordinates[0] == (-117.0, 40.0, 687.0)
+
+    def test_a_declared_frame_renames_the_axes(self, make_inventory):
+        """The envelope decides which headers a geometry table may state."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "inventory.yaml": (
+                "object_type: Inventory\n"
+                "coordinate_reference_system:\n"
+                "  authority: EPSG\n"
+                "  code: '32611'\n"
+                "  coordinate_labels: [x, y, elevation]\n"
+                "  units: [meter, meter, meter]\n"
+            ),
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,x,y,elevation\n"
+                "S100,100.0,2562048.25,1137365.53,687.0\n"
+                "S100,102.0,2562048.17,1137365.63,685.0\n"
+            ),
+        }
+        geometry = one_path(make_inventory(files)).geometry[0]
+        assert geometry.coordinates[0] == (2562048.25, 1137365.53, 687.0)
+
+    def test_a_header_the_frame_does_not_declare(self, make_inventory):
+        """A geometry header disagreeing with the frame raises."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,x,y,z\nS100,100.0,1.0,2.0,3.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="its frame declares"):
+            make_inventory(files)
+
+    def test_a_point_missing_an_axis(self, make_inventory):
+        """A coordinate states every axis its frame declares."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation\n"
+                "S100,100.0,-117.0,40.0,687.0\n"
+                "S100,102.0,-117.1,,685.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="leaves latitude empty"):
+            make_inventory(files)
+
+    def test_a_single_object_table(self, make_inventory):
+        """A map has no grouping column: every point belongs to the one map."""
+        files = {
+            "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
+            ),
+            "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
+                "channel,distance\n512,500.0\n1710,1698.0\n"
+            ),
+        }
+        out = make_inventory(files)
+        acquisition = out.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acquisition.distance_map.channel == (512.0, 1710.0)
+        assert acquisition.channel_to_distance([512])[0] == 500.0
+
+    def test_a_stem_naming_no_attribute(self, make_inventory):
+        """A table is matched to the model by name, so a typo is a typo."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/geometrys.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="names no attribute"):
+            make_inventory(files)
+
+    def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
+        """Only an attribute rows can build may be stated as a table."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/name.csv": "a,b\n1,2\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="not a row-shaped"):
+            make_inventory(files)
+
+    def test_stated_inline_and_as_a_table(self, make_inventory):
+        """One fact is spelled once."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/attrs.yaml": (
+                "object_type: OpticalPath\nname: main\n"
+                "coupling:\n"
+                "  - start_distance: 0.0\n"
+                "    end_distance: 10.0\n"
+                "    coupling_type: trench\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="spelled once"):
+            make_inventory(files)
+
+    def test_a_table_missing_the_column_it_is_read_by(self, make_inventory):
+        """Components are placed by sequence, so a table without one raises."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "object_type,optical_length,name\nFiberSegment,1000.0,fiber 1\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="no sequence column"):
+            make_inventory(files)
+
+    def test_a_column_stated_twice(self, make_inventory):
+        """A repeated header means two columns claim one field."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/coupling.csv": (
+                "start_distance,end_distance,coupling_type,coupling_type\n"
+                "0,340,conduit,trench\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="more than once"):
+            make_inventory(files)
+
+
+class TestPathEpochs:
+    """`path` is the one reserved container stem, and it holds a lineage."""
+
+    def test_a_bare_path_is_the_first_epoch(self, make_inventory):
+        """The bare directory is the blank location, starting where the array does."""
+        path = one_path(make_inventory({**MINIMAL, **TRACKS}))
+        assert path.location_code == ""
+        assert pd.isnull(path.start_time)
+
+    def test_a_location_joins_the_stem_with_a_dot(self, make_inventory):
+        """Each location code is its own lineage."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path.00/attrs.yaml": (
+                "object_type: OpticalPath\nname: first\n"
+            ),
+            "fiber_arrays/DAS.L001/path.01/attrs.yaml": (
+                "object_type: OpticalPath\nname: second\n"
+            ),
+        }
+        paths = make_inventory(files).networks[0].fiber_arrays[0].optical_paths
+        assert {x.location_code: x.name for x in paths} == {
+            "00": "first",
+            "01": "second",
+        }
+
+    def test_an_epoch_ends_where_the_next_begins(self, make_inventory):
+        """Sorted by start, each epoch runs until its successor."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": (
+                "object_type: OpticalPath\nname: first\n"
+            ),
+            "fiber_arrays/DAS.L001/path@2024-05-12T103000/attrs.yaml": (
+                "object_type: OpticalPath\nname: second\n"
+            ),
+        }
+        paths = {
+            x.name: x
+            for x in make_inventory(files).networks[0].fiber_arrays[0].optical_paths
+        }
+        boundary = np.datetime64("2024-05-12T10:30:00", "ns")
+        # The first epoch was left open and the directory closed it.
+        assert paths["first"].end_time == boundary
+        assert paths["second"].start_time == boundary
+        assert pd.isnull(paths["second"].end_time)
+
+    def test_an_epoch_may_end_early(self, make_inventory):
+        """A dark interval: an epoch states an end before its successor."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": (
+                "object_type: OpticalPath\nname: first\nend_time: 2024-01-01\n"
+            ),
+            "fiber_arrays/DAS.L001/path@2024-05-12T103000/attrs.yaml": (
+                "object_type: OpticalPath\nname: second\n"
+            ),
+        }
+        paths = {
+            x.name: x
+            for x in make_inventory(files).networks[0].fiber_arrays[0].optical_paths
+        }
+        assert paths["first"].end_time == np.datetime64("2024-01-01", "ns")
+
+    def test_an_epoch_may_not_end_late(self, make_inventory):
+        """An epoch cannot claim time its successor already holds."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": (
+                "object_type: OpticalPath\nname: first\nend_time: 2025-01-01\n"
+            ),
+            "fiber_arrays/DAS.L001/path@2024-05-12T103000/attrs.yaml": (
+                "object_type: OpticalPath\nname: second\n"
+            ),
+        }
+        with pytest.raises(
+            InvalidInventoryError, match="after the epoch which follows"
+        ):
+            make_inventory(files)
+
+    def test_two_names_for_one_epoch(self, make_inventory):
+        """Epoch-name uniqueness is temporal rather than textual."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path@2024-06-01/attrs.yaml": (
+                "object_type: OpticalPath\nname: first\n"
+            ),
+            "fiber_arrays/DAS.L001/path@2024-06-01T000000/attrs.yaml": (
+                "object_type: OpticalPath\nname: second\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="two spellings of one epoch"):
+            make_inventory(files)
+
+    def test_a_restated_location_must_agree(self, make_inventory):
+        """The directory name is an address like any other."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path.00/attrs.yaml": (
+                "object_type: OpticalPath\nlocation_code: '01'\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="must agree with the name"):
+            make_inventory(files)
+
+    def test_a_path_directory_declaring_something_else(self, make_inventory):
+        """The declared type must agree with the container."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: Acquisition\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="holds an OpticalPath"):
+            make_inventory(files)
+
+    def test_a_path_where_nothing_holds_one(self, make_inventory):
+        """An acquisition has no optical paths, so it cannot hold the epoch."""
+        files = {
+            "acquisitions/DAS.L001..RAW/attrs.yaml": "object_type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW/path/attrs.yaml": "object_type: OpticalPath\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="which holds none"):
+            make_inventory(files)
+
+    def test_paths_stated_inline_and_as_directories(self, make_inventory):
+        """One fact is spelled once."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": (
+                "object_type: FiberArray\noptical_paths:\n  - name: inline\n"
+            ),
+            "fiber_arrays/DAS.L001/path/attrs.yaml": (
+                "object_type: OpticalPath\nname: from a directory\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="spelled once"):
+            make_inventory(files)
+
+    def test_an_object_misfiled_inside_a_path(self, make_inventory):
+        """A path epoch holds its own attrs and tracks, like any entity."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
+            "fiber_arrays/DAS.L001/path/DAS.L002.yaml": "object_type: FiberArray\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="holds only its attrs"):
+            make_inventory(files)
+
+    def test_a_path_resolves_through_the_inventory(self, make_inventory):
+        """A directory-built path is reached the way any other is."""
+        out = make_inventory({**MINIMAL, **TRACKS})
+        resolved = out.resolve("DAS.L001..RAW")
+        assert resolved.optical_path.name == "main"
+        assert len(resolved.optical_path.coupling) == 2
+
+
+class TestUnreadableTables:
+    """A table which claims a place in the format must be readable."""
+
+    def test_a_table_which_is_not_text(self, tmp_path):
+        """A file which cannot be read at all says which one it was."""
+        root = write_inventory(tmp_path / "binary", {**MINIMAL, **TRACKS})
+        (root / "fiber_arrays/DAS.L001/path/coupling.csv").write_bytes(b"\xff\xfe\x00")
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(root)
+
+    def test_a_table_with_no_columns(self, make_inventory):
+        """An empty file states no track."""
+        files = {**MINIMAL, **TRACKS, "fiber_arrays/DAS.L001/path/coupling.csv": ""}
+        with pytest.raises(InvalidInventoryError, match="no columns"):
+            make_inventory(files)
+
+    def test_a_non_numeric_order_column(self, make_inventory):
+        """Rows are placed by their order column, so it must be a number."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "sequence,object_type,optical_length,name\n"
+                "first,FiberSegment,1000.0,fiber 1\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="non-numeric sequence"):
+            make_inventory(files)
+
+    def test_a_column_no_row_states(self, make_inventory):
+        """A column every row leaves empty states nothing, and is not empty."""
+        files = {
+            "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
+            ),
+            "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
+                "channel,instrument_distance,distance\n512,,500.0\n1710,,1698.0\n"
+            ),
+        }
+        acquisition = make_inventory(files).networks[0].fiber_arrays[0].acquisitions[0]
+        # Unset, rather than a tuple of nothing, which the model would refuse.
+        assert acquisition.distance_map.instrument_distance is None
+
+    def test_an_annotation_stating_no_value(self, make_inventory):
+        """A membership group's value is its default, not a parsed cell."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                "start_distance,end_distance,group,value\n0,120,noisy,\n"
+            ),
+        }
+        annotation = one_path(make_inventory(files)).annotations[0]
+        assert annotation.value is True
+
+    def test_a_path_restating_a_start_which_disagrees(self, make_inventory):
+        """A path directory's name is a restated address like any other."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path@2024-06-01/attrs.yaml": (
+                "object_type: OpticalPath\nstart_time: 2024-06-02\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="must agree with the name"):
+            make_inventory(files)
+
+    def test_an_envelope_declaring_an_unreadable_frame(self, make_inventory):
+        """The frame builds once, with the envelope which states it.
+
+        Which is why the loader rebuilds it without a guard of its own: a
+        second check there could only report what this one already has.
+        """
+        files = {
+            **MINIMAL,
+            "inventory.yaml": (
+                "object_type: Inventory\n"
+                "coordinate_reference_system:\n"
+                "  coordinate_labels: [x, x, z]\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
+            make_inventory(files)
+
+    @pytest.mark.parametrize("row", ["0,340,conduit,extra", "0,340"])
+    def test_a_row_which_is_not_its_header_wide(self, make_inventory, row):
+        """A row states one cell per column or it is not a row.
+
+        Pandas refuses neither: a surplus cell silently pushes the first
+        column into the index, so `0,340,conduit,extra` would load as
+        start_distance=340, end_distance=conduit, coupling_type=extra --
+        every value one field left of what it says.
+        """
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/coupling.csv": (
+                f"start_distance,end_distance,coupling_type\n{row}\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="its header names 3 columns"):
+            make_inventory(files)
