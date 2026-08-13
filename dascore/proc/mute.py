@@ -9,16 +9,17 @@ from typing import Any, ClassVar
 import numpy as np
 from numpy.linalg import norm
 from numpy.typing import NDArray
+from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.models import sensible_model_equals, sensible_model_hash
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
 )
-from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 _smooth_param = """
@@ -40,10 +41,22 @@ smooth
 _smooth_type = None | float | int | tuple[float | int, ...] | dict[str, float | int]
 
 
-class _MuteGeometry(ABC, DascoreBaseModel):
+class _MuteGeometry(ABC, BaseModel):
     """
     Parent class for Mute Geometry.
+
+    A plain pydantic model: these carry a mute's geometry from argument
+    parsing to mask construction and are never serialized. Subclassing
+    DascoreBaseModel would only claim each a tag in the model registry,
+    naming them in documents they never appear in.
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # These hold ndarrays, which pydantic's generated __eq__ cannot compare
+    # (it raises on the truth value of an array), so they keep DASCore's.
+    __eq__ = sensible_model_equals
+    __hash__ = sensible_model_hash
 
     dims: tuple[str, ...]
     axes: tuple[int, ...]

@@ -35,6 +35,11 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
+from dascore.models import (
+    ArrayLike,
+    DascoreBaseModel,
+    UnitQuantity,
+)
 from dascore.units import (
     Quantity,
     Unit,
@@ -62,11 +67,6 @@ from dascore.utils.misc import (
     is_strictly_monotonic,
     iterate,
     sanitize_range_param,
-)
-from dascore.utils.models import (
-    ArrayLike,
-    DascoreBaseModel,
-    UnitQuantity,
 )
 from dascore.utils.time import (
     dtype_time_like,

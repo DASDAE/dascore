@@ -66,6 +66,12 @@ from dascore.exceptions import (
     ParameterError,
     PatchBroadcastError,
 )
+from dascore.models import (
+    ArrayLike,
+    DascoreBaseModel,
+    frozen_dict_serializer,
+    frozen_dict_validator,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -74,12 +80,6 @@ from dascore.utils.misc import (
     broadcast_for_index,
     cached_method,
     iterate,
-)
-from dascore.utils.models import (
-    ArrayLike,
-    DascoreBaseModel,
-    frozen_dict_serializer,
-    frozen_dict_validator,
 )
 
 MaybeArray = ArrayLike | np.ndarray | None

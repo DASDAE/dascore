@@ -19,11 +19,11 @@ from dascore.constants import (
     DataType,
     max_lens,
 )
+from dascore.models import DascoreBaseModel, UnitQuantity
 from dascore.utils.misc import (
     to_str,
     validate_acquisition_key,
 )
-from dascore.utils.models import DascoreBaseModel, UnitQuantity
 
 str_validator = PlainValidator(to_str)
 

@@ -7,8 +7,6 @@ from __future__ import annotations
 import warnings
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import (
     float_select_type,
@@ -18,9 +16,9 @@ from dascore.constants import (
 )
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.core import make_scan_payload
+from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
-from dascore.utils.models import UTF8Str
 
 from .a1utils import (
     _get_febus_version_str,
@@ -61,8 +59,8 @@ class FebusPatchAttrs(dc.PatchAttrs):
         The zone designations
     """
 
-    gauge_length: float = np.nan
-    pulse_length: float = np.nan
+    gauge_length: OptionalFiniteFloat = None
+    pulse_length: OptionalFiniteFloat = None
 
     group: str = ""
     source: str = ""

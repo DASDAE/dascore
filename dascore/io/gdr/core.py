@@ -14,13 +14,14 @@ import dascore as dc
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.io.gdr.utils_das import _get_attrs_coords_and_data, _get_version
 from dascore.io.utils import build_patches
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 
 class GDRPatchAttrs(dc.PatchAttrs):
     """Patch attrs for GDR files."""
 
-    gauge_length: float
+    gauge_length: OptionalFiniteFloat
     project_number: str = ""
 
 

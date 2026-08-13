@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core import inventory as inv
@@ -16,14 +17,15 @@ from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
 )
-from dascore.utils.models import InventoryModel, TimeRangedModel
+from dascore.models import InventoryModel, TimeRangedModel
+from dascore.models.registry import TAG_FIELD
 
 pytest.importorskip("yaml")
 
 
 # A minimal directory which loads: one acquisition names everything above it.
 MINIMAL = {
-    "acquisitions/DAS.L001..RAW.yaml": "type: Acquisition\ndata_category: DAS\n",
+    "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ndata_category: DAS\n",
 }
 
 
@@ -116,7 +118,7 @@ class TestLoadDirectory:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001..RAW.yaml": (
-                    "type: Acquisition\ndata_category: DAS\ngauge_length: 10.0\n"
+                    "object_type: Acquisition\ndata_category: DAS\ngauge_length: 10.0\n"
                 ),
             }
         )
@@ -126,15 +128,16 @@ class TestLoadDirectory:
         """Every container contributes to one inventory."""
         out = make_inventory(
             {
-                "inventory.yaml": "type: Inventory\nschema_version: 1\n",
+                "inventory.yaml": "object_type: Inventory\nschema_version: 1\n",
                 "resources/int_01.yaml": (
-                    "type: Interrogator\nmanufacturer: Fake\nmodel: FI-1\n"
+                    "object_type: Interrogator\nmanufacturer: Fake\nmodel: FI-1\n"
                 ),
-                "networks/DAS.yaml": "type: Network\nname: test network\n",
-                "fiber_arrays/DAS.L001.yaml": "type: FiberArray\nname: first\n",
-                "stations/DAS.STA1.yaml": "type: Station\nname: a station\n",
+                "networks/DAS.yaml": "object_type: Network\nname: test network\n",
+                "fiber_arrays/DAS.L001.yaml": "object_type: FiberArray\nname: first\n",
+                "stations/DAS.STA1.yaml": "object_type: Station\nname: a station\n",
                 "acquisitions/DAS.L001..RAW.yaml": (
-                    "type: Acquisition\ndata_category: DAS\ninterrogator: int_01\n"
+                    "object_type: Acquisition\ndata_category: DAS\n"
+                    "interrogator: int_01\n"
                 ),
             }
         )
@@ -152,7 +155,8 @@ class TestLoadDirectory:
                 tmp_path / "yaml_form",
                 {
                     "acquisitions/DAS.L001..RAW.yaml": (
-                        "type: Acquisition\ndata_category: DAS\ngauge_length: 4.0\n"
+                        "object_type: Acquisition\ndata_category: DAS\n"
+                        "gauge_length: 4.0\n"
                     )
                 },
             )
@@ -162,7 +166,7 @@ class TestLoadDirectory:
                 tmp_path / "json_form",
                 {
                     "acquisitions/DAS.L001..RAW.json": (
-                        '{"type": "Acquisition", "data_category": "DAS", '
+                        '{"object_type": "Acquisition", "data_category": "DAS", '
                         '"gauge_length": 4.0}'
                     )
                 },
@@ -172,7 +176,9 @@ class TestLoadDirectory:
 
     def test_yml_suffix(self, make_inventory):
         """The short YAML suffix is the same spelling."""
-        out = make_inventory({"acquisitions/DAS.L001..RAW.yml": "type: Acquisition\n"})
+        out = make_inventory(
+            {"acquisitions/DAS.L001..RAW.yml": "object_type: Acquisition\n"}
+        )
         assert out.networks[0].fiber_arrays[0].acquisitions[0].code == "RAW"
 
     def test_envelope_is_optional(self, make_inventory):
@@ -186,7 +192,7 @@ class TestLoadDirectory:
             {
                 **MINIMAL,
                 "inventory.yaml": (
-                    "type: Inventory\n"
+                    "object_type: Inventory\n"
                     "resource_id: my-inventory\n"
                     "coordinate_reference_system:\n"
                     "  authority: EPSG\n"
@@ -204,7 +210,7 @@ class TestLoadDirectory:
             {
                 **MINIMAL,
                 "fiber_arrays/DAS.L001/attrs.yaml": (
-                    "type: FiberArray\nname: from a directory\n"
+                    "object_type: FiberArray\nname: from a directory\n"
                 ),
             }
         )
@@ -221,7 +227,7 @@ class TestLoadDirectory:
                 "notes/scratch.yaml": "just: a note\n",
                 # Nor is one which does not parse at all.
                 "notes/broken.yaml": "{[unclosed\n",
-                ".hidden/DAS.yaml": "type: Network\n",
+                ".hidden/DAS.yaml": "object_type: Network\n",
                 "acquisitions/README.txt": "a note beside the objects\n",
             }
         )
@@ -232,7 +238,7 @@ class TestLoadDirectory:
         out = make_inventory(
             {
                 **MINIMAL,
-                "resources/cable.01.yaml": "type: Cable\nname: a cable\n",
+                "resources/cable.01.yaml": "object_type: Cable\nname: a cable\n",
             }
         )
         assert out.get_resource("cable.01").name == "a cable"
@@ -242,7 +248,7 @@ class TestLoadDirectory:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001.01.RAW.yaml": (
-                    "type: Acquisition\ncode: RAW\nlocation_code: '01'\n"
+                    "object_type: Acquisition\ncode: RAW\nlocation_code: '01'\n"
                 )
             }
         )
@@ -256,7 +262,7 @@ class TestEpochNames:
     def test_date_only_means_midnight_utc(self, make_inventory):
         """A date-only suffix is valid when that precision suffices."""
         out = make_inventory(
-            {"acquisitions/DAS.L001..RAW@2024-06-01.yaml": "type: Acquisition\n"}
+            {"acquisitions/DAS.L001..RAW@2024-06-01.yaml": "object_type: Acquisition\n"}
         )
         acquisition = out.networks[0].fiber_arrays[0].acquisitions[0]
         assert acquisition.start_time == np.datetime64("2024-06-01T00:00:00", "ns")
@@ -266,7 +272,7 @@ class TestEpochNames:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001..RAW@2024-05-12T103000.12.yaml": (
-                    "type: Acquisition\n"
+                    "object_type: Acquisition\n"
                 )
             }
         )
@@ -279,7 +285,7 @@ class TestEpochNames:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001..RAW@2024-06-01.yaml": (
-                    "type: Acquisition\nstart_time: '2024-06-01'\n"
+                    "object_type: Acquisition\nstart_time: '2024-06-01'\n"
                 )
             }
         )
@@ -291,10 +297,11 @@ class TestEpochNames:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001..RAW.yaml": (
-                    "type: Acquisition\nend_time: '2024-06-01'\ngauge_length: 10.0\n"
+                    "object_type: Acquisition\nend_time: '2024-06-01'\n"
+                    "gauge_length: 10.0\n"
                 ),
                 "acquisitions/DAS.L001..RAW@2024-06-01.yaml": (
-                    "type: Acquisition\ngauge_length: 5.0\n"
+                    "object_type: Acquisition\ngauge_length: 5.0\n"
                 ),
             }
         )
@@ -308,12 +315,14 @@ class TestEpochNames:
         out = make_inventory(
             {
                 "fiber_arrays/DAS.L001.yaml": (
-                    "type: FiberArray\nname: first\nend_time: '2024-06-01'\n"
+                    "object_type: FiberArray\nname: first\nend_time: '2024-06-01'\n"
                 ),
                 "fiber_arrays/DAS.L001@2024-06-01.yaml": (
-                    "type: FiberArray\nname: second\n"
+                    "object_type: FiberArray\nname: second\n"
                 ),
-                "acquisitions/DAS.L001..RAW@2024-07-01.yaml": "type: Acquisition\n",
+                "acquisitions/DAS.L001..RAW@2024-07-01.yaml": (
+                    "object_type: Acquisition\n"
+                ),
             }
         )
         arrays = {x.name: x for x in out.networks[0].fiber_arrays}
@@ -326,37 +335,39 @@ class TestNearMisses:
 
     def test_typo_in_container_name(self, make_inventory):
         """A typo must not quietly load an inventory with no acquisitions."""
-        files = {"aquisitions/DAS.L001..RAW.yaml": "type: Acquisition\n"}
+        files = {"aquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\n"}
         with pytest.raises(InvalidInventoryError, match="nothing contains it"):
             make_inventory(files)
 
     def test_model_file_at_the_root(self, make_inventory):
         """An object at the root is outside every container."""
-        files = {**MINIMAL, "DAS.L001.yaml": "type: FiberArray\n"}
+        files = {**MINIMAL, "DAS.L001.yaml": "object_type: FiberArray\n"}
         with pytest.raises(InvalidInventoryError, match="nothing contains it"):
             make_inventory(files)
 
     def test_missing_type(self, make_inventory):
         """A file which does not say what it is has not participated."""
         files = {"acquisitions/DAS.L001..RAW.yaml": "data_category: DAS\n"}
-        with pytest.raises(InvalidInventoryError, match="declares no type"):
+        with pytest.raises(InvalidInventoryError, match="declares no object_type"):
             make_inventory(files)
 
     def test_wrong_container(self, make_inventory):
         """The container checks the declared type rather than supplying it."""
-        files = {"fiber_arrays/DAS.L001.yaml": "type: Acquisition\n"}
+        files = {"fiber_arrays/DAS.L001.yaml": "object_type: Acquisition\n"}
         with pytest.raises(InvalidInventoryError, match="cannot hold"):
             make_inventory(files)
 
     def test_unknown_type(self, make_inventory):
         """A type which names no model is unknown rather than misfiled."""
-        files = {"fiber_arrays/DAS.L001.yaml": "type: Telescope\n"}
+        files = {"fiber_arrays/DAS.L001.yaml": "object_type: Telescope\n"}
         with pytest.raises(InvalidInventoryError, match="unknown"):
             make_inventory(files)
 
     def test_restated_address_disagrees(self, make_inventory):
         """There is never a precedence rule between two spellings."""
-        files = {"acquisitions/DAS.L001..RAW.yaml": "type: Acquisition\ncode: DEC\n"}
+        files = {
+            "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ncode: DEC\n"
+        }
         with pytest.raises(InvalidInventoryError, match="must agree with the name"):
             make_inventory(files)
 
@@ -364,7 +375,7 @@ class TestNearMisses:
         """The epoch suffix is a restated address, so it must agree."""
         files = {
             "acquisitions/DAS.L001..RAW@2024-06-01.yaml": (
-                "type: Acquisition\nstart_time: '2024-06-02'\n"
+                "object_type: Acquisition\nstart_time: '2024-06-02'\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match="must agree with the name"):
@@ -378,7 +389,7 @@ class TestNearMisses:
     )
     def test_illegal_address_token_names_the_file(self, make_inventory, name, level):
         """The entity a token names is built from every address, not one file."""
-        files = {f"acquisitions/{name}": "type: Acquisition\n"}
+        files = {f"acquisitions/{name}": "object_type: Acquisition\n"}
         with pytest.raises(InvalidInventoryError, match=f"names {level}") as info:
             make_inventory(files)
         # The point of the check is which file to open, so assert the name.
@@ -386,7 +397,7 @@ class TestNearMisses:
 
     def test_wrong_token_count(self, make_inventory):
         """An acquisition name is an address of four tokens."""
-        files = {"acquisitions/DAS.L001.RAW.yaml": "type: Acquisition\n"}
+        files = {"acquisitions/DAS.L001.RAW.yaml": "object_type: Acquisition\n"}
         with pytest.raises(InvalidInventoryError, match="address of 4"):
             make_inventory(files)
 
@@ -394,7 +405,7 @@ class TestNearMisses:
         """The envelope versions the document exactly once."""
         files = {
             "acquisitions/DAS.L001..RAW.yaml": (
-                "type: Acquisition\nschema_version: 1\n"
+                "object_type: Acquisition\nschema_version: 1\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match="envelope versions"):
@@ -404,7 +415,7 @@ class TestNearMisses:
         """A model error says which file could not be read."""
         files = {
             "acquisitions/DAS.L001..RAW.yaml": (
-                "type: Acquisition\ngauge_length: not a number\n"
+                "object_type: Acquisition\ngauge_length: not a number\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match=r"DAS\.L001\.\.RAW\.yaml"):
@@ -435,9 +446,9 @@ class TestOverlookedInput:
     def test_object_filed_inside_an_entity_directory(self, make_inventory):
         """An object one level too deep must not be silently dropped."""
         files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
             "fiber_arrays/DAS.L001/misplaced/DAS.L001..RAW.yaml": (
-                "type: Acquisition\n"
+                "object_type: Acquisition\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="nothing contains it"):
@@ -447,9 +458,9 @@ class TestOverlookedInput:
     def test_upper_case_suffixes(self, make_inventory, suffix):
         """A case-insensitive filesystem holds one file, not two spellings."""
         text = (
-            '{"type": "Acquisition"}'
+            '{"object_type": "Acquisition"}'
             if suffix == "JSON"
-            else "type: Acquisition\ndata_category: DAS\n"
+            else "object_type: Acquisition\ndata_category: DAS\n"
         )
         out = make_inventory({f"acquisitions/DAS.L001..RAW.{suffix}": text})
         assert out.networks[0].fiber_arrays[0].acquisitions[0].code == "RAW"
@@ -457,7 +468,10 @@ class TestOverlookedInput:
     def test_upper_case_envelope(self, make_inventory):
         """The envelope is found however its suffix is spelled."""
         out = make_inventory(
-            {**MINIMAL, "inventory.YAML": "type: Inventory\nresource_id: shouted\n"}
+            {
+                **MINIMAL,
+                "inventory.YAML": "object_type: Inventory\nresource_id: shouted\n",
+            }
         )
         assert out.resource_id == "shouted"
 
@@ -465,12 +479,12 @@ class TestOverlookedInput:
         """Starting inside an epoch is not enough to belong to it."""
         files = {
             "fiber_arrays/DAS.L001.yaml": (
-                "type: FiberArray\nend_time: '2024-06-01'\n"
+                "object_type: FiberArray\nend_time: '2024-06-01'\n"
             ),
-            "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001@2024-06-01.yaml": "object_type: FiberArray\n",
             # Starts inside the first epoch and never ends, so resolution
             # after June would find the second array, which does not hold it.
-            "acquisitions/DAS.L001..RAW@2024-05-01.yaml": "type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW@2024-05-01.yaml": "object_type: Acquisition\n",
         }
         with pytest.raises(InvalidInventoryError, match="runs past"):
             make_inventory(files)
@@ -480,11 +494,11 @@ class TestOverlookedInput:
         out = make_inventory(
             {
                 "fiber_arrays/DAS.L001.yaml": (
-                    "type: FiberArray\nend_time: '2024-06-01'\n"
+                    "object_type: FiberArray\nend_time: '2024-06-01'\n"
                 ),
-                "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+                "fiber_arrays/DAS.L001@2024-06-01.yaml": "object_type: FiberArray\n",
                 "acquisitions/DAS.L001..RAW@2024-05-01.yaml": (
-                    "type: Acquisition\nend_time: '2024-06-01'\n"
+                    "object_type: Acquisition\nend_time: '2024-06-01'\n"
                 ),
             }
         )
@@ -493,7 +507,10 @@ class TestOverlookedInput:
 
     def test_unreadable_envelope_value_names_the_file(self, make_inventory):
         """An envelope error reads like every other error this format raises."""
-        files = {**MINIMAL, "inventory.yaml": "type: Inventory\nschema_version: nope\n"}
+        files = {
+            **MINIMAL,
+            "inventory.yaml": "object_type: Inventory\nschema_version: nope\n",
+        }
         with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
             make_inventory(files)
 
@@ -508,17 +525,17 @@ class TestOverlookedInput:
     def test_nested_collections_are_refused(self, make_inventory, where, field, member):
         """A file may not state what the directory supplies and would replace."""
         declared = "Network" if where.startswith("networks") else "FiberArray"
-        text = f"type: {declared}\n{field}:\n  - {member}\n"
+        text = f"object_type: {declared}\n{field}:\n  - {member}\n"
         with pytest.raises(InvalidInventoryError, match=field):
             make_inventory({**MINIMAL, where: text})
 
     def test_child_predating_its_parent_epoch(self, make_inventory):
         """Containment is checked at the near end as well as the far one."""
         files = {
-            "networks/DAS@2024-01-01.yaml": "type: Network\n",
+            "networks/DAS@2024-01-01.yaml": "object_type: Network\n",
             # No start of its own, so it claims the unbounded past, which is
             # outside a network beginning in 2024.
-            "stations/DAS.STA1.yaml": "type: Station\nend_time: '2020-01-01'\n",
+            "stations/DAS.STA1.yaml": "object_type: Station\nend_time: '2020-01-01'\n",
         }
         with pytest.raises(InvalidInventoryError, match="starts before"):
             make_inventory(files)
@@ -527,11 +544,11 @@ class TestOverlookedInput:
         """The far end refuses a real end time, not only an unset one."""
         files = {
             "fiber_arrays/DAS.L001.yaml": (
-                "type: FiberArray\nend_time: '2024-06-01'\n"
+                "object_type: FiberArray\nend_time: '2024-06-01'\n"
             ),
-            "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001@2024-06-01.yaml": "object_type: FiberArray\n",
             "acquisitions/DAS.L001..RAW@2024-05-01.yaml": (
-                "type: Acquisition\nend_time: '2024-07-01'\n"
+                "object_type: Acquisition\nend_time: '2024-07-01'\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="runs past"):
@@ -549,7 +566,7 @@ class TestOverlookedInput:
     def test_envelope_stating_only_its_type(self, tmp_path):
         """An envelope says the directory is an inventory, whatever it holds."""
         root = write_inventory(
-            tmp_path / "bare", {"inventory.yaml": "type: Inventory\n"}
+            tmp_path / "bare", {"inventory.yaml": "object_type: Inventory\n"}
         )
         assert not dc.inventory(root).networks
 
@@ -568,7 +585,7 @@ class TestOverlookedInput:
         root = write_inventory(
             tmp_path / "json_only",
             {
-                "acquisitions/DAS.L001..RAW.json": '{"type": "Acquisition"}',
+                "acquisitions/DAS.L001..RAW.json": '{"object_type": "Acquisition"}',
                 # Field material the loader must step over without reading.
                 "notes/log.yaml": "note: a deployment log\n",
             },
@@ -578,7 +595,7 @@ class TestOverlookedInput:
 
     def test_hidden_object_file_in_a_container(self, make_inventory):
         """A resource id may hold a dot, but a hidden file names no entity."""
-        files = {**MINIMAL, "resources/.cable.yaml": "type: Cable\n"}
+        files = {**MINIMAL, "resources/.cable.yaml": "object_type: Cable\n"}
         with pytest.raises(InvalidInventoryError, match="hidden"):
             make_inventory(files)
 
@@ -586,7 +603,7 @@ class TestOverlookedInput:
         """A name stating more precision than is kept would load as another instant."""
         files = {
             "acquisitions/DAS.L001..RAW@2024-05-12T103000.1234567899.yaml": (
-                "type: Acquisition\n"
+                "object_type: Acquisition\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match="finer than the nanosecond"):
@@ -597,10 +614,11 @@ class TestOverlookedInput:
         out = make_inventory(
             {
                 "fiber_arrays/DAS.L001.yaml": (
-                    "type: FiberArray\nstart_time: 2024-01-01\nend_time: 2024-07-01\n"
+                    "object_type: FiberArray\nstart_time: 2024-01-01\n"
+                    "end_time: 2024-07-01\n"
                 ),
                 "acquisitions/DAS.L001..RAW@2024-02-01.yaml": (
-                    "type: Acquisition\nend_time: 2024-03-01\n"
+                    "object_type: Acquisition\nend_time: 2024-03-01\n"
                 ),
             }
         )
@@ -610,8 +628,8 @@ class TestOverlookedInput:
 
     def test_type_which_is_not_a_name(self, make_inventory):
         """A type which is not a name at all names no model either."""
-        files = {"acquisitions/DAS.L001..RAW.yaml": "type: [Acquisition]\n"}
-        with pytest.raises(InvalidInventoryError, match="declares no type"):
+        files = {"acquisitions/DAS.L001..RAW.yaml": "object_type: [Acquisition]\n"}
+        with pytest.raises(InvalidInventoryError, match="declares no object_type"):
             make_inventory(files)
 
 
@@ -621,8 +639,8 @@ class TestOneIdentityOneSpelling:
     def test_two_extensions(self, make_inventory):
         """The same name with two extensions is one identity spelled twice."""
         files = {
-            "resources/cable_01.yaml": "type: Cable\n",
-            "resources/cable_01.json": '{"type": "Cable"}',
+            "resources/cable_01.yaml": "object_type: Cable\n",
+            "resources/cable_01.json": '{"object_type": "Cable"}',
         }
         with pytest.raises(InvalidInventoryError, match="two extensions"):
             make_inventory(files)
@@ -636,8 +654,8 @@ class TestOneIdentityOneSpelling:
     def test_case_only_difference(self, make_inventory):
         """A case-insensitive filesystem could not hold both."""
         files = {
-            "fiber_arrays/DAS.L001.yaml": "type: FiberArray\n",
-            "fiber_arrays/das.l001.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/das.l001.yaml": "object_type: FiberArray\n",
         }
         with pytest.raises(InvalidInventoryError, match="differ only by case"):
             make_inventory(files)
@@ -655,8 +673,8 @@ class TestOneIdentityOneSpelling:
     def test_file_and_directory(self, make_inventory):
         """Both spellings of one identity at once raise."""
         files = {
-            "fiber_arrays/DAS.L001.yaml": "type: FiberArray\n",
-            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
         }
         with pytest.raises(InvalidInventoryError, match="file and a directory"):
             make_inventory(files)
@@ -665,8 +683,8 @@ class TestOneIdentityOneSpelling:
         """The envelope is one file however it is spelled."""
         files = {
             **MINIMAL,
-            "inventory.yaml": "type: Inventory\n",
-            "inventory.json": '{"type": "Inventory"}',
+            "inventory.yaml": "object_type: Inventory\n",
+            "inventory.json": '{"object_type": "Inventory"}',
         }
         with pytest.raises(InvalidInventoryError, match="more than once"):
             make_inventory(files)
@@ -674,8 +692,10 @@ class TestOneIdentityOneSpelling:
     def test_two_names_for_one_epoch(self, make_inventory):
         """Epoch-name uniqueness is temporal rather than textual."""
         files = {
-            "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "type: Acquisition\n",
-            "acquisitions/DAS.L001..RAW@2024-06-01T000000.yaml": "type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "object_type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW@2024-06-01T000000.yaml": (
+                "object_type: Acquisition\n"
+            ),
         }
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
             make_inventory(files)
@@ -684,9 +704,9 @@ class TestOneIdentityOneSpelling:
         """Two epochs of one entity may not overlap, not merely coincide."""
         files = {
             "acquisitions/DAS.L001..RAW@2024-01-01.yaml": (
-                "type: Acquisition\nend_time: '2024-08-01'\n"
+                "object_type: Acquisition\nend_time: '2024-08-01'\n"
             ),
-            "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW@2024-06-01.yaml": "object_type: Acquisition\n",
         }
         # Both files are named, since the entity alone would not say which.
         with pytest.raises(InvalidInventoryError, match="RAW@2024-01-01"):
@@ -704,7 +724,7 @@ class TestEntityDirectories:
 
     def test_stray_object_file(self, make_inventory):
         """An entity directory's object file is named attrs."""
-        files = {"fiber_arrays/DAS.L001/array.yaml": "type: FiberArray\n"}
+        files = {"fiber_arrays/DAS.L001/array.yaml": "object_type: FiberArray\n"}
         with pytest.raises(InvalidInventoryError, match="holds only its attrs"):
             make_inventory(files)
 
@@ -714,7 +734,7 @@ class TestEntityDirectories:
             {
                 **MINIMAL,
                 "fiber_arrays/DAS.L001/attrs.yaml": (
-                    "type: FiberArray\nname: from a directory\n"
+                    "object_type: FiberArray\nname: from a directory\n"
                 ),
                 # Declares nothing, so it participates in nothing -- exactly
                 # as it would one directory deeper.
@@ -726,8 +746,8 @@ class TestEntityDirectories:
     def test_attrs_spelled_twice(self, make_inventory):
         """One identity is spelled once inside the directory too."""
         files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
-            "fiber_arrays/DAS.L001/attrs.json": '{"type": "FiberArray"}',
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/attrs.json": '{"object_type": "FiberArray"}',
         }
         with pytest.raises(InvalidInventoryError, match="more than once"):
             make_inventory(files)
@@ -751,7 +771,7 @@ class TestIgnoredEntries:
             {
                 **MINIMAL,
                 "fiber_arrays/DAS.L001/attrs.yaml": (
-                    "type: FiberArray\nname: from a directory\n"
+                    "object_type: FiberArray\nname: from a directory\n"
                 ),
                 "fiber_arrays/DAS.L001/photos/wellhead.jpg": "not text",
                 "fiber_arrays/DAS.L001/notes.txt": "a note\n",
@@ -776,7 +796,7 @@ class TestSeams:
     def test_track_table_in_an_entity_directory(self, make_inventory):
         """A track table is refused by name rather than ignored."""
         files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
             "fiber_arrays/DAS.L001/coupling.csv": "start_distance\n0\n",
         }
         with pytest.raises(InvalidInventoryError, match="track table"):
@@ -785,9 +805,9 @@ class TestSeams:
     def test_optical_path_epoch_directory(self, make_inventory):
         """An optical path epoch is refused by name rather than ignored."""
         files = {
-            "fiber_arrays/DAS.L001/attrs.yaml": "type: FiberArray\n",
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
             "fiber_arrays/DAS.L001/path@2024-05-12T103000/attrs.yaml": (
-                "type: OpticalPath\n"
+                "object_type: OpticalPath\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="optical path epoch"):
@@ -808,7 +828,9 @@ class TestEpochTimestamps:
     )
     def test_malformed(self, make_inventory, stamp):
         """A name which claims an epoch and gets it wrong raises."""
-        files = {f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "type: Acquisition\n"}
+        files = {
+            f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "object_type: Acquisition\n"
+        }
         with pytest.raises(InvalidInventoryError, match="epoch timestamp"):
             make_inventory(files)
 
@@ -817,7 +839,9 @@ class TestEpochTimestamps:
     )
     def test_timezone_designator(self, make_inventory, stamp):
         """Naive means UTC, so a designator is refused rather than ignored."""
-        files = {f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "type: Acquisition\n"}
+        files = {
+            f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "object_type: Acquisition\n"
+        }
         with pytest.raises(InvalidInventoryError, match="timezone designator"):
             make_inventory(files)
 
@@ -825,7 +849,7 @@ class TestEpochTimestamps:
         """An offset in the time portion is a designator, not a malformed time."""
         files = {
             "acquisitions/DAS.L001..RAW@2024-05-12T103000-0600.yaml": (
-                "type: Acquisition\n"
+                "object_type: Acquisition\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match="timezone designator"):
@@ -838,7 +862,9 @@ class TestEpochTimestamps:
     )
     def test_outside_the_representable_range(self, make_inventory, stamp):
         """A nanosecond timestamp wraps silently, so the name is refused."""
-        files = {f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "type: Acquisition\n"}
+        files = {
+            f"acquisitions/DAS.L001..RAW@{stamp}.yaml": "object_type: Acquisition\n"
+        }
         with pytest.raises(InvalidInventoryError, match="outside the range"):
             make_inventory(files)
 
@@ -847,7 +873,7 @@ class TestEpochTimestamps:
         out = make_inventory(
             {
                 "acquisitions/DAS.L001..RAW@2262-04-11T234716.yaml": (
-                    "type: Acquisition\n"
+                    "object_type: Acquisition\n"
                 )
             }
         )
@@ -858,7 +884,7 @@ class TestEpochTimestamps:
         """A name carries at most one epoch."""
         files = {
             "acquisitions/DAS.L001..RAW@2024-06-01@2024-07-01.yaml": (
-                "type: Acquisition\n"
+                "object_type: Acquisition\n"
             )
         }
         with pytest.raises(InvalidInventoryError, match="more than one"):
@@ -866,13 +892,16 @@ class TestEpochTimestamps:
 
     def test_empty_epoch(self, make_inventory):
         """A trailing marker names no epoch."""
-        files = {"acquisitions/DAS.L001..RAW@.yaml": "type: Acquisition\n"}
+        files = {"acquisitions/DAS.L001..RAW@.yaml": "object_type: Acquisition\n"}
         with pytest.raises(InvalidInventoryError, match="names no epoch"):
             make_inventory(files)
 
     def test_resources_have_no_epochs(self, make_inventory):
         """A resource is not time-ranged, so its name states no epoch."""
-        files = {**MINIMAL, "resources/int_01@2024-06-01.yaml": "type: Interrogator\n"}
+        files = {
+            **MINIMAL,
+            "resources/int_01@2024-06-01.yaml": "object_type: Interrogator\n",
+        }
         with pytest.raises(InvalidInventoryError, match="have none"):
             make_inventory(files)
 
@@ -884,9 +913,9 @@ class TestEpochPlacement:
         """A child falling in no epoch of its container is misfiled."""
         files = {
             "fiber_arrays/DAS.L001.yaml": (
-                "type: FiberArray\nend_time: '2024-06-01'\n"
+                "object_type: FiberArray\nend_time: '2024-06-01'\n"
             ),
-            "acquisitions/DAS.L001..RAW@2024-07-01.yaml": "type: Acquisition\n",
+            "acquisitions/DAS.L001..RAW@2024-07-01.yaml": "object_type: Acquisition\n",
         }
         with pytest.raises(InvalidInventoryError, match="0 epochs effective"):
             make_inventory(files)
@@ -895,10 +924,10 @@ class TestEpochPlacement:
         """An unset start beside several container epochs is ambiguous."""
         files = {
             "fiber_arrays/DAS.L001.yaml": (
-                "type: FiberArray\nend_time: '2024-06-01'\n"
+                "object_type: FiberArray\nend_time: '2024-06-01'\n"
             ),
-            "fiber_arrays/DAS.L001@2024-06-01.yaml": "type: FiberArray\n",
-            "acquisitions/DAS.L001..RAW.yaml": "type: Acquisition\n",
+            "fiber_arrays/DAS.L001@2024-06-01.yaml": "object_type: FiberArray\n",
+            "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\n",
         }
         with pytest.raises(InvalidInventoryError, match="2 epochs effective at any"):
             make_inventory(files)
@@ -907,9 +936,9 @@ class TestEpochPlacement:
         """Networks epoch like everything else which is time-ranged."""
         out = make_inventory(
             {
-                "networks/DAS.yaml": "type: Network\nend_time: '2024-06-01'\n",
-                "networks/DAS@2024-06-01.yaml": "type: Network\nname: later\n",
-                "stations/DAS.STA1@2024-07-01.yaml": "type: Station\n",
+                "networks/DAS.yaml": "object_type: Network\nend_time: '2024-06-01'\n",
+                "networks/DAS@2024-06-01.yaml": "object_type: Network\nname: later\n",
+                "stations/DAS.STA1@2024-07-01.yaml": "object_type: Station\n",
             }
         )
         by_name = {x.name: x for x in out.networks}
@@ -922,20 +951,23 @@ class TestEnvelope:
 
     def test_wrong_type(self, make_inventory):
         """The envelope declares its type under the same rule as any file."""
-        files = {**MINIMAL, "inventory.yaml": "type: Network\n"}
+        files = {**MINIMAL, "inventory.yaml": "object_type: Network\n"}
         with pytest.raises(InvalidInventoryError, match="envelope declares"):
             make_inventory(files)
 
     @pytest.mark.parametrize("field", ["networks", "resources"])
     def test_collections_are_refused(self, make_inventory, field):
         """The collections live in the directory structure."""
-        files = {**MINIMAL, "inventory.yaml": f"type: Inventory\n{field}: []\n"}
+        files = {**MINIMAL, "inventory.yaml": f"object_type: Inventory\n{field}: []\n"}
         with pytest.raises(InvalidInventoryError, match="directory structure"):
             make_inventory(files)
 
     def test_unknown_field_names_the_file(self, make_inventory):
         """A typo in the envelope says which file states it."""
-        files = {**MINIMAL, "inventory.yaml": "type: Inventory\nschema_verison: 1\n"}
+        files = {
+            **MINIMAL,
+            "inventory.yaml": "object_type: Inventory\nschema_verison: 1\n",
+        }
         with pytest.raises(InvalidInventoryError, match=r"inventory\.yaml"):
             make_inventory(files)
 
@@ -971,12 +1003,31 @@ class TestFactory:
 class TestModelAssumptions:
     """Pin what this loader assumes about the models it builds."""
 
-    def test_only_union_members_carry_a_type_field(self):
-        """The type tag is a real field only where it discriminates a union."""
+    def test_only_union_members_declare_the_tag_as_a_field(self):
+        """The tag is a real field only where it discriminates a union."""
         checked = []
         for name, container in loader._CONTAINERS.items():
             for model in container.models:
-                assert ("type" in model.model_fields) == (name == "resources")
+                assert (TAG_FIELD in model.model_fields) == (name == "resources")
+                checked.append(model)
+        assert len(checked) == 9
+
+    def test_every_model_reads_its_own_tag(self):
+        """
+        The loader leaves the tag in the data for the model to check.
+
+        Before every model read its own, the loader had to pop the tag for
+        the ones which do not declare it, since they forbid extra fields.
+        """
+        checked = []
+        for container in loader._CONTAINERS.values():
+            for model in container.models:
+                # The addressed models are named by their file, so a code
+                # is the one thing they will not default.
+                fields = {"code": "X"} if "code" in model.model_fields else {}
+                assert isinstance(model(**fields, **{TAG_FIELD: model.__name__}), model)
+                with pytest.raises(ValidationError):
+                    model(**fields, **{TAG_FIELD: "Inventory"})
                 checked.append(model)
         assert len(checked) == 9
 
@@ -991,6 +1042,21 @@ class TestModelAssumptions:
             checked.append(name)
         assert len(checked) == len(loader._CONTAINERS) == 5
 
-    def test_inventory_models_forbid_extra_fields(self):
-        """Type must be popped: an inventory model refuses unknown input."""
+    def test_inventory_models_refuse_unknown_input(self):
+        """
+        An inventory model refuses a key it does not declare.
+
+        Which is why the tag has to be consumed rather than ignored, and is
+        checked on the concrete models rather than on the base, since a
+        subclass may override the config (PatchAttrs does, in the other
+        hierarchy).
+        """
         assert InventoryModel.model_config["extra"] == "forbid"
+        checked = []
+        for container in loader._CONTAINERS.values():
+            for model in container.models:
+                fields = {"code": "X"} if "code" in model.model_fields else {}
+                with pytest.raises(ValidationError, match="not permitted"):
+                    model(**fields, nonsense_key=1)
+                checked.append(model)
+        assert len(checked) == 9

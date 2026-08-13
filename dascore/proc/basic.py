@@ -19,9 +19,9 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
+from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.misc import _get_nullish
-from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,

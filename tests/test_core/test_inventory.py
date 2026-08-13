@@ -14,8 +14,8 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
+from dascore.models import values_equal
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.models import values_equal
 
 
 def build_inventory() -> inv.Inventory:
@@ -874,7 +874,7 @@ class TestInternalReviewRegressions:
         """A dict resource without resource_id adopts its pool key."""
         pytest.importorskip("yaml")
         inventory = inv.Inventory(
-            resources={"cab-1": {"type": "Cable", "name": "mycable"}}
+            resources={"cab-1": {"object_type": "Cable", "name": "mycable"}}
         )
         assert inventory.get_resource("cab-1").resource_id == "cab-1"
         loaded = inv.Inventory.from_yaml(inventory.to_yaml())
@@ -1130,22 +1130,22 @@ class TestCoverageCompleteness:
         assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
-class TestTypeTag:
-    """The serialization type tag is invisible to users."""
+class TestObjectTypeTag:
+    """The union members' own tag field is invisible to users."""
 
     def test_hidden_from_repr(self):
         """Hidden from repr."""
         cable = inv.Cable(resource_id="c1", name="c")
-        assert "type" not in repr(cable)
+        assert "object_type" not in repr(cable)
 
     def test_present_in_dump(self):
-        """Present in dump."""
-        assert inv.Cable(resource_id="c1").model_dump()["type"] == "Cable"
+        """Present in dump, unlike the tag every other model is given."""
+        assert inv.Cable(resource_id="c1").model_dump()["object_type"] == "Cable"
 
     def test_wrong_tag_rejected(self):
         """Wrong tag rejected."""
         with pytest.raises(ValidationError):
-            inv.Cable(resource_id="c1", type="Enclosure")
+            inv.Cable(resource_id="c1", object_type="Enclosure")
 
 
 class TestUniformAttachments:
@@ -1241,7 +1241,7 @@ class TestImmutability:
         """A record is read as a record whatever kind of mapping it is."""
         # Read as an object instead, its resource_id goes unseen and the
         # mismatch only surfaces on the next load.
-        record = FrozenDict({"type": "Cable", "resource_id": "elsewhere"})
+        record = FrozenDict({"object_type": "Cable", "resource_id": "elsewhere"})
         with pytest.raises(ValidationError, match="disagrees with resource_id"):
             inv.Inventory(resources={"cable-01": record})
 

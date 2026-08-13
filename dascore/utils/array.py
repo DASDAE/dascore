@@ -15,9 +15,9 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
+from dascore.models import ArrayLike
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.misc import iterate
-from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,

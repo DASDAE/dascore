@@ -13,7 +13,7 @@ epoch directories which hold them, are refused by name rather than
 skipped, so a directory cannot load as an entity silently missing the
 tracks its own files state.
 
-The contract, in one line: **file declares type, container agrees, name
+The contract, in one line: **file declares object_type, container agrees, name
 implies identity, envelope implies version.** Every object file states what
 it is, its container checks that statement rather than supplying it, its
 name decides which entity it is, and the top-level ``inventory.yaml``
@@ -56,8 +56,9 @@ from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
 )
+from dascore.models import InventoryModel, TimeRangedModel
+from dascore.models.registry import TAG_FIELD
 from dascore.utils.misc import check_code, optional_import
-from dascore.utils.models import InventoryModel, TimeRangedModel
 from dascore.utils.time import to_datetime64
 
 # One data model stands behind all three spellings, so they are accepted
@@ -229,7 +230,7 @@ def _declared_type(path: Path) -> str | None:
         data = _read_object(path)
     except (InvalidInventoryError, MissingOptionalDependencyError):
         return None
-    declared = data.get("type")
+    declared = data.get(TAG_FIELD)
     return declared if isinstance(declared, str) else None
 
 
@@ -317,27 +318,26 @@ def _pick_model(data: dict, container: _Container, source: Path):
     The container never supplies the type: a file which does not say what
     it is has not participated in the format, and one which says something
     its container cannot hold is misfiled rather than reinterpreted.
+
+    The tag is left in the data. Every model reads its own, so the file's
+    statement is checked a second time by the object it builds.
     """
-    declared = data.get("type")
+    declared = data.get(TAG_FIELD)
     legal = tuple(x.__name__ for x in container.models)
     # Not merely absent: a type which is not a name at all -- a list, a
     # mapping -- names no model either, and must not reach the lookups below.
     if not isinstance(declared, str):
         msg = (
-            f"{_quote(source)} declares no type. Every object file states "
-            f"what it is, e.g. 'type: {legal[0]}'."
+            f"{_quote(source)} declares no {TAG_FIELD}. Every object file "
+            f"states what it is, e.g. '{TAG_FIELD}: {legal[0]}'."
         )
         raise InvalidInventoryError(msg)
     for model in container.models:
         if model.__name__ == declared:
-            # The tag is a real, discriminating field only on the models
-            # which share a union; everywhere else it belongs to the format.
-            if "type" not in model.model_fields:
-                data.pop("type")
             return model
     known = "an inventory model" if declared in _model_names() else "unknown"
     msg = (
-        f"{_quote(source)} declares type {declared!r} ({known}), which "
+        f"{_quote(source)} declares {TAG_FIELD} {declared!r} ({known}), which "
         f"{source.parent.name} cannot hold. Expected one of {legal}."
     )
     raise InvalidInventoryError(msg)
@@ -793,10 +793,10 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
         raise InvalidInventoryError(msg)
     source = found[0]
     data = _read_object(source)
-    if (declared := data.pop("type", None)) != Inventory.__name__:
+    if (declared := data.get(TAG_FIELD)) != Inventory.__name__:
         msg = (
-            f"{_quote(source)} declares type {declared!r}; the envelope "
-            f"declares 'type: {Inventory.__name__}'."
+            f"{_quote(source)} declares {TAG_FIELD} {declared!r}; the envelope "
+            f"declares '{TAG_FIELD}: {Inventory.__name__}'."
         )
         raise InvalidInventoryError(msg)
     _refuse_supplied(data, _ENVELOPE_COLLECTIONS, source, "the envelope")
@@ -837,7 +837,8 @@ def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> 
         elif _object_suffix(path) is not None:
             if (declared := _declared_type(path)) in known:
                 msg = (
-                    f"{path.relative_to(root)} declares type {declared!r} but "
+                    f"{path.relative_to(root)} declares {TAG_FIELD} "
+                    f"{declared!r} but "
                     "nothing contains it. An inventory object lives in one of "
                     f"{tuple(_CONTAINERS)}, named for the entity it is."
                 )

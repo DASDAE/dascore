@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_pascal
 
 import dascore as dc
@@ -16,8 +16,8 @@ from dascore.compat import UPath
 from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
 from dascore.io.core import make_scan_payload
+from dascore.models import DateTime64
 from dascore.utils.misc import iterate
-from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.pd import adjust_segments, filter_df
 from dascore.utils.remote_io import ensure_local_file
 from dascore.utils.time import to_float

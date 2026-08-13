@@ -15,11 +15,11 @@ from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
 from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
-from dascore.utils.models import UTF8Str
 
 # --- Getting format/version
 
@@ -77,8 +77,8 @@ _NODE_DATA_PROCESSORS = {}
 class ProdMLRawPatchAttrs(dc.PatchAttrs):
     """Patch attrs for raw data contained in ProdML."""
 
-    pulse_width: float = np.nan
-    gauge_length: float = np.nan
+    pulse_width: OptionalFiniteFloat = None
+    gauge_length: OptionalFiniteFloat = None
     schema_version: UTF8Str = ""
 
 
@@ -86,13 +86,13 @@ class ProdMLFbePatchAttrs(ProdMLRawPatchAttrs):
     """Patch attrs for fbe (frequency band extracted) data in Prodml."""
 
     raw_reference: UTF8Str = ""
-    transform_size: float = np.nan
+    transform_size: OptionalFiniteFloat = None
     transform_type: UTF8Str = ""
     window_size: int | None = None
     window_function: UTF8Str = ""
     window_overlap: int | None = None
-    start_frequency: float = 0
-    end_frequency: float = np.inf
+    start_frequency: OptionalFiniteFloat = 0
+    end_frequency: OptionalFiniteFloat = None
 
 
 @dataclass

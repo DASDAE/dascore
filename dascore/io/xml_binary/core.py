@@ -5,12 +5,11 @@ from __future__ import annotations
 from typing import Literal
 from xml.etree.ElementTree import ParseError
 
-import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
 from dascore.io import FiberIO, ScanPayload
-from dascore.utils.models import UTF8Str
+from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.paths import coerce_to_upath
 
 from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
@@ -19,8 +18,8 @@ from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
-    pulse_width: float = np.nan
-    gauge_length: float = np.nan
+    pulse_width: OptionalFiniteFloat = None
+    gauge_length: OptionalFiniteFloat = None
     zone_name: UTF8Str = ""
 
 

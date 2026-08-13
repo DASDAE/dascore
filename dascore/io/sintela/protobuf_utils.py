@@ -48,7 +48,7 @@ from functools import cache
 from typing import Any
 
 import numpy as np
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -56,8 +56,8 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import ScanPayload, make_scan_payload
+from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
-from dascore.utils.models import DascoreBaseModel, PositiveFiniteFloat, PositiveInt
 
 PBUF_MAGIC = 0x46554250
 META_TAG = "META"
@@ -143,7 +143,7 @@ def _get_fft_data_type(has_complex: bool) -> dict[str, str]:
 class SintelaProtobufAttrs(PatchAttrs):
     """Patch attributes for Sintela protobuf recordings."""
 
-    gauge_length: float = np.nan
+    gauge_length: OptionalFiniteFloat = None
     packet_type: str = ""
     recorder_namespace: str = ""
     metadata_recording_time: np.datetime64 | None = None
@@ -153,14 +153,27 @@ class SintelaProtobufAttrs(PatchAttrs):
     demod_data_type: str = ""
 
 
-class EnvelopeRecord(DascoreBaseModel):
+class _ProtobufModel(BaseModel):
+    """
+    Base for this module's parsing models.
+
+    Plain pydantic: these validate values on the way out of a protobuf
+    payload and are never serialized. Subclassing DascoreBaseModel would
+    only claim each a tag in the model registry, naming them in documents
+    they never appear in.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+
+class EnvelopeRecord(_ProtobufModel):
     """The envelope information for one MTLV record."""
 
     tag: str
     payload: bytes
 
 
-class ParsedMeta(DascoreBaseModel):
+class ParsedMeta(_ProtobufModel):
     """Selected metadata fields promoted from META packets."""
 
     recorder_namespace: str = ""
@@ -823,7 +836,7 @@ def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     return family_cls.from_parsed(parsed, meta).decode(parsed)
 
 
-class _PacketHeaderFields(DascoreBaseModel):
+class _PacketHeaderFields(_ProtobufModel):
     """
     Validated per-packet header fields shared by all families.
 
@@ -871,7 +884,7 @@ def _reduce_common(fields: list[_PacketHeaderFields]):
     )
 
 
-class _PacketMetadata(DascoreBaseModel):
+class _PacketMetadata(_ProtobufModel):
     """
     Base for a validated, decodable Sintela packet family.
 

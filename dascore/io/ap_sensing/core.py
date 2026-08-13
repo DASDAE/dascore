@@ -6,11 +6,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _get_version_string
@@ -19,8 +18,8 @@ from .utils import _get_attrs_dict, _get_coords, _get_patches, _get_version_stri
 class APSensingPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for AP sensing."""
 
-    gauge_length: float = np.nan
-    radians_to_nano_strain: float = np.nan
+    gauge_length: OptionalFiniteFloat = None
+    radians_to_nano_strain: OptionalFiniteFloat = None
 
 
 class APSensingV10(FiberIO):

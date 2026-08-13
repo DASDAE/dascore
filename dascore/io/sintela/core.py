@@ -11,6 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
@@ -26,7 +27,7 @@ from .utils import (
 class SintelaPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for Sintela binary format."""
 
-    gauge_length: float = np.nan
+    gauge_length: OptionalFiniteFloat = None
 
 
 class SintelaBinaryV3(FiberIO):

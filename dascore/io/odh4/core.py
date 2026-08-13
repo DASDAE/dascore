@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_odh4, _read_attrs
@@ -17,8 +16,8 @@ from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_odh4, _read_a
 class ODH4PatchAttrs(dc.PatchAttrs):
     """Patch attributes for ODH4 files."""
 
-    gauge_length: float = np.nan
-    scale_factor_to_strain: float = np.nan
+    gauge_length: OptionalFiniteFloat = None
+    scale_factor_to_strain: OptionalFiniteFloat = None
 
 
 class ODH4V1(FiberIO):

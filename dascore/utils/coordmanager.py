@@ -10,8 +10,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import CoordMergeError
+from dascore.models import ArrayLike
 from dascore.utils.display import get_nice_text
-from dascore.utils.models import ArrayLike
 
 
 def merge_coord_managers(

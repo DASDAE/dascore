@@ -18,6 +18,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.summary import PatchSummary
+from dascore.models import ArrayLike
 from dascore.utils.array import (
     PatchUFunc,
     apply_ufunc,
@@ -25,7 +26,6 @@ from dascore.utils.array import (
     patch_array_ufunc,
 )
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.models import ArrayLike
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float

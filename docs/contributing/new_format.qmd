@@ -192,7 +192,10 @@ name and who may change it later.
    whatever name the format uses. These are welcome, but each new one must be
    listed in the `VENDOR_ATTRS` set in `tests/test_io/test_common_io.py`,
    which is where a reviewer checks that the value is not one of the facts
-   above wearing a vendor's name.
+   above wearing a vendor's name. Declaring them on a `PatchAttrs` subclass
+   gets them validated and coerced; see
+   [format-specific subclasses](`docs/notes/patch_attrs.qmd`) for how one is
+   spelled, and why an optional number is never defaulted to nan or inf.
 
 Stay as close to the file's own spelling as the rules above allow. A value
 that is one of the facts in (2) has to take the canonical name, because two

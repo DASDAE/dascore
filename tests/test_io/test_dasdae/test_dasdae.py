@@ -21,6 +21,7 @@ from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _ATTRS_CLASS_KEY,
     _SEPARATE_ATTRS_KEY,
     _decode_attr_value,
     _decode_legacy_attr_value,
@@ -33,6 +34,7 @@ from dascore.io.dasdae.utils import (
     _save_array,
     _save_patch,
 )
+from dascore.io.odh4.core import ODH4PatchAttrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -335,6 +337,57 @@ class TestScanDASDAE:
         assert set(out["source_format"]) == {"DASDAE"}
         assert set(out["source_version"]) == {"1"}
         assert out["source_patch_id"].notnull().all()
+
+
+class TestAttrsClassRoundTrip:
+    """A file names the attrs class it holds, so a custom one comes back."""
+
+    @pytest.fixture(scope="class")
+    def odh4_patch(self, random_patch):
+        """A patch carrying a format's own attrs class."""
+        attrs = ODH4PatchAttrs(**dict(random_patch.attrs), gauge_length=10.0)
+        return random_patch.update(attrs=attrs)
+
+    @pytest.fixture(scope="class")
+    def odh4_path(self, odh4_patch, tmp_path_factory):
+        """The patch above, written to a DASDAE file."""
+        path = tmp_path_factory.mktemp("attrs_class") / "odh4.h5"
+        odh4_patch.io.write(path, "dasdae")
+        return path
+
+    def test_read_keeps_the_class(self, odh4_path):
+        """Reading rebuilds the class which was written."""
+        attrs = dc.read(odh4_path)[0].attrs
+        assert isinstance(attrs, ODH4PatchAttrs)
+        assert attrs.gauge_length == 10.0
+
+    def test_scan_keeps_the_class(self, odh4_path):
+        """Scanning takes the same path, so it says the same thing."""
+        assert isinstance(dc.scan(odh4_path)[0].attrs, ODH4PatchAttrs)
+
+    def test_a_file_naming_no_class_reads_as_patch_attrs(self, odh4_path, tmp_path):
+        """A file written before the class was recorded still reads."""
+        path = tmp_path / "unnamed.h5"
+        shutil.copy(odh4_path, path)
+        with h5py.File(path, "a") as h5:
+            for group in h5["waveforms"].values():
+                del group.attrs[_ATTRS_CLASS_KEY]
+        attrs = dc.read(path)[0].attrs
+        assert type(attrs) is dc.PatchAttrs
+        # The values were always kept; it is the class which was lost.
+        assert attrs.gauge_length == 10.0
+
+    def test_an_unresolvable_class_warns_and_falls_back(self, odh4_path, tmp_path):
+        """An archive written by a package we lack is still readable."""
+        path = tmp_path / "foreign.h5"
+        shutil.copy(odh4_path, path)
+        with h5py.File(path, "a") as h5:
+            for group in h5["waveforms"].values():
+                group.attrs[_ATTRS_CLASS_KEY] = "absent:ForeignAttrs"
+        with pytest.warns(UserWarning, match="Nothing registers"):
+            attrs = dc.read(path)[0].attrs
+        assert type(attrs) is dc.PatchAttrs
+        assert attrs.gauge_length == 10.0
 
 
 class TestLegacyFixtureCompatibility:
