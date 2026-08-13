@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -520,6 +522,22 @@ class TestOverlookedInput:
         with pytest.raises(InvalidInventoryError, match="runs past"):
             make_inventory(files)
 
+    def test_symlink_pointing_at_the_inventory(self, tmp_path):
+        """Walking a loop would find the inventory's own files uncontained."""
+        root = write_inventory(tmp_path / "looped", MINIMAL)
+        (root / "photos").mkdir()
+        os.symlink(root, root / "photos" / "loop")
+        # Without skipping the link this reports DAS.L001..RAW.yaml, reached
+        # through it, as an object nothing contains.
+        assert dc.inventory(root).networks[0].code == "DAS"
+
+    def test_envelope_stating_only_its_type(self, tmp_path):
+        """An envelope says the directory is an inventory, whatever it holds."""
+        root = write_inventory(
+            tmp_path / "bare", {"inventory.yaml": "type: Inventory\n"}
+        )
+        assert not dc.inventory(root).networks
+
     def test_json_inventory_without_pyyaml(self, tmp_path, monkeypatch):
         """A JSON inventory loads past whatever YAML lies beside it.
 
@@ -656,8 +674,23 @@ class TestEntityDirectories:
     def test_stray_object_file(self, make_inventory):
         """An entity directory's object file is named attrs."""
         files = {"fiber_arrays/DAS.L001/array.yaml": "type: FiberArray\n"}
-        with pytest.raises(InvalidInventoryError, match="not part of an entity"):
+        with pytest.raises(InvalidInventoryError, match="holds only its attrs"):
             make_inventory(files)
+
+    def test_field_note_beside_an_attrs_file(self, make_inventory):
+        """A note which happens to be YAML is not a misfiled object."""
+        out = make_inventory(
+            {
+                **MINIMAL,
+                "fiber_arrays/DAS.L001/attrs.yaml": (
+                    "type: FiberArray\nname: from a directory\n"
+                ),
+                # Declares nothing, so it participates in nothing -- exactly
+                # as it would one directory deeper.
+                "fiber_arrays/DAS.L001/notes.yaml": "site: wellhead\n",
+            }
+        )
+        assert out.networks[0].fiber_arrays[0].name == "from a directory"
 
     def test_attrs_spelled_twice(self, make_inventory):
         """One identity is spelled once inside the directory too."""

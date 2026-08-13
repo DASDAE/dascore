@@ -475,11 +475,18 @@ def _attrs_file(entity: Path) -> Path:
         if _object_suffix(child) is None:
             continue
         if _entry_name(child).casefold() != _ATTRS_STEM:
-            msg = (
-                f"{_quote(child)} is not part of an entity directory, whose "
-                f"object file is named {_ATTRS_STEM}."
-            )
-            raise InvalidInventoryError(msg)
+            # Only a file claiming to be an inventory object is misfiled
+            # here; a field note which happens to be YAML is no more
+            # participating than one nested a directory deeper, which the
+            # stray walk already steps over.
+            if _declared_type(child) in _model_names():
+                msg = (
+                    f"{_quote(child)} declares an inventory object, but an "
+                    f"entity directory holds only its {_ATTRS_STEM} file "
+                    "and its tracks."
+                )
+                raise InvalidInventoryError(msg)
+            continue
         found.append(child)
     if not found:
         msg = (
@@ -757,7 +764,7 @@ def _assemble(entries: Mapping[str, list[_Entry]]) -> tuple[Network, ...]:
     return tuple(out)
 
 
-def _load_envelope(root: Path) -> dict[str, Any]:
+def _load_envelope(root: Path) -> dict[str, Any] | None:
     """
     Read the document-level singletons from the envelope.
 
@@ -775,8 +782,11 @@ def _load_envelope(root: Path) -> dict[str, Any]:
         and _object_suffix(child) is not None
         and _entry_name(child).casefold() == _ENVELOPE_STEM
     ]
+    # None rather than an empty mapping: an envelope stating only its
+    # own type says the directory is an inventory, which is a different
+    # fact from there being no envelope at all.
     if not found:
-        return {}
+        return None
     if len(found) > 1:
         spelled = ", ".join(x.name for x in found)
         msg = f"The envelope is spelled more than once ({spelled})."
@@ -815,6 +825,12 @@ def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> 
     def check(path: Path):
         if path.name.startswith(".") or path == skip:
             return
+        # A symlink is not part of the format, and one pointing at an
+        # ancestor walks the inventory a second time -- where its own files
+        # are found with nothing containing them, so a valid directory
+        # reports itself as stray, and the walk recurses until it cannot.
+        if path.is_symlink():
+            return
         if path.is_dir():
             for child in sorted(path.iterdir()):
                 check(child)
@@ -840,7 +856,7 @@ def _check_strays(root: Path) -> None:
         _refuse_stray_objects(child, root)
 
 
-def load_directory(path) -> Inventory:
+def load_directory(path: str | os.PathLike) -> Inventory:
     """
     Load an inventory from a directory in the authoring format.
 
@@ -860,7 +876,7 @@ def load_directory(path) -> Inventory:
     # After the stray check, which knows why a directory holds no container:
     # a mistyped `aquisitions/` can say so, rather than being reported as a
     # directory holding nothing.
-    if not entries and not envelope:
+    if not entries and envelope is None:
         # Every directory would otherwise be an empty inventory, so a
         # mistyped path would load rather than say it holds nothing.
         msg = (
@@ -873,10 +889,10 @@ def load_directory(path) -> Inventory:
             _check_epoch_duplicates(entries.get(name, []))
     resources = {x.model.resource_id: x.model for x in entries.get("resources", [])}
     networks = _assemble(entries)
-    return Inventory(**envelope, resources=resources, networks=networks).check()
+    return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
 
 
-def inventory(source=None) -> Inventory:
+def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     """
     Load or create a DASDAE inventory.
 
