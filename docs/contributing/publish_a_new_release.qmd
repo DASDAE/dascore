@@ -16,9 +16,7 @@ DASCore keeps no changelog in the repository; the release notes *are* the change
 
 Each PR carries its own entries under a `## Changelog` heading, already written and categorized by its author following [Changelog entries](general_guidelines.qmd#changelog-entries), so drafting mostly means collecting and grouping them. Use these sections, omitting any that end up empty: **Breaking Changes** first, holding every `**breaking**` entry repeated from its own category so upgraders see them immediately, then **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, and **Security**.
 
-Work merged before this policy was instead described in `docs/changelog.qmd`, and that curated text is richer than those PR bodies. For the first release after the change, find the commit that reduced the page to a stub with `git log --oneline -- docs/changelog.qmd`, then read the revision before it.
-
-The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes an agent skill called "draft release" so a coding agent of your choice can help you do this. In the notes, prefer concise descriptions of behavior and API changes over internal implementation details. Include pull request links when they help readers find more context.
+The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes an agent skill called "draft release" so a coding agent of your choice can help you do this. In the notes, prefer concise descriptions of behavior and API changes over internal implementation details. End each entry with its pull request in parentheses, e.g. `(#125)`, which GitHub renders as a link.
 
 Then click 'Publish Release'. This will kick off the doc-build and publishing task automatically, as well as publish the tagged source code to PyPI.
 
