@@ -8,10 +8,11 @@ CSV files a field crew can maintain as a spreadsheet. A directory of these
 files is itself a loadable inventory, and ``to_yaml`` exports the
 single-file interchange artifact for shipping beside a data archive.
 
-This module reads the object half. The track tables, and the optical path
-epoch directories which hold them, are refused by name rather than
-skipped, so a directory cannot load as an entity silently missing the
-tracks its own files state.
+A table is matched to the model by name: ``<name>.csv`` fills the
+attribute ``<name>`` of the type its directory declares. ``path`` is the
+one reserved container stem -- those directories address an optical path
+epoch rather than serializing an attribute, and each location code is a
+lineage in which an epoch runs until its successor begins.
 
 The contract, in one line: **file declares object_type, container agrees, name
 implies identity, envelope implies version.** Every object file states what
@@ -29,6 +30,8 @@ deployment logs -- is ignored where it lies.
 
 from __future__ import annotations
 
+import csv
+import itertools
 import json
 import os
 import re
@@ -42,6 +45,7 @@ import pandas as pd
 from dascore.core.inventory import (
     Acquisition,
     Cable,
+    CoordinateReferenceSystem,
     Enclosure,
     ExternalResource,
     FiberArray,
@@ -49,8 +53,10 @@ from dascore.core.inventory import (
     Inventory,
     Network,
     OpticalMeasurement,
+    OpticalPath,
     Station,
     _overlapping_epochs,
+    _times_equal,
 )
 from dascore.exceptions import (
     InvalidInventoryError,
@@ -418,7 +424,7 @@ def _apply_identity(data: dict, container: _Container, name: str, source: Path):
     return tuple(address)
 
 
-def _load_entry(entry: Path, data_source: Path, container: _Container) -> _Entry:
+def _load_entry(entry: Path, data_source: Path, container: _Container, crs) -> _Entry:
     """Load one entry of a container from its object file."""
     data = _read_object(data_source)
     model = _pick_model(data, container, data_source)
@@ -427,6 +433,11 @@ def _load_entry(entry: Path, data_source: Path, container: _Container) -> _Entry
     address = _apply_identity(data, container, name, data_source)
     if epoch is not None and "start_time" not in data:
         data["start_time"] = epoch
+    # After the epoch, not before: an entity's first path epoch starts
+    # where the entity does, so its own start has to be known by then.
+    if entry.is_dir():
+        _merge_tables(data, entry, model, crs, data_source)
+        _merge_paths(data, entry, model, crs, data_source, data.get("start_time"))
     built = _build(model, data, data_source)
     if epoch is not None and built.start_time != epoch:
         msg = (
@@ -438,30 +449,578 @@ def _load_entry(entry: Path, data_source: Path, container: _Container) -> _Entry
     return _Entry(built, data_source, address)
 
 
-def _refuse_tracks(entity: Path) -> None:
-    """
-    Refuse the parts of an entity directory which cannot be read yet.
+class _Table(NamedTuple):
+    """How the rows of one track table map onto the attribute they fill."""
 
-    Track tables and optical path epochs are the next piece of this
-    format. Refusing them by name beats loading an entity which silently
-    lacks the tracks its own directory states.
+    # False when a row is one object; True when a row is one control point
+    # of an object which holds parallel arrays.
+    points: bool = False
+    # The column assigning points to objects, for a collection of them.
+    # None where the attribute is a single object, or a row is an object.
+    group: str | None = None
+    # The column rows are read in the order of. Where a table names one,
+    # row position decides nothing and re-sorting a spreadsheet is
+    # harmless; where it does not, the rows keep the order they were
+    # written in, which the model reads as a set rather than a sequence.
+    order: str | None = None
+    # True where that column is the table's own scaffolding rather than a
+    # field, so nothing else records where a row sits and it must place
+    # each row unambiguously.
+    places: bool = False
+
+
+# Keyed by CSV stem, which is the attribute the table fills. Held as a
+# registry rather than introspected: how rows map onto objects is a
+# property of the attribute, and stating it is shorter than deducing it.
+# TestTableRegistry pins every key to a field of the model declaring it.
+_TABLES: Mapping[str, _Table] = {
+    "optical_components": _Table(order="sequence", places=True),
+    "coupling": _Table(),
+    "annotations": _Table(),
+    "geometry": _Table(points=True, group="segment", order="distance"),
+    "distance_map": _Table(points=True, order="distance"),
+}
+
+# The one column of a point table which is not a field of the object it
+# builds; components order by it and drop it.
+_SEQUENCE = "sequence"
+
+
+def _read_table(path: Path) -> pd.DataFrame:
     """
-    for child in sorted(entity.iterdir()):
-        if child.name.startswith("."):
-            continue
-        stem = child.name.partition(_EPOCH_MARKER)[0].partition(".")[0].casefold()
-        if child.is_dir() and stem == _PATH_STEM:
+    Read one track table.
+
+    Every cell arrives as text and the models coerce it, so a column's
+    meaning is the field's rather than whatever pandas inferred from the
+    rows it happened to see. Only a truly empty cell is null: an empty
+    cell means unset, and a document which writes ``NA`` means the string.
+    """
+    # The header is read first and by itself, for two reasons: pandas
+    # renames a repeated column rather than refusing it, so by the time a
+    # frame exists the second one is `coupling_type.1` and the clash cannot
+    # be seen; and it raises its own error for a file with no columns,
+    # which would arrive before this one could say what was expected.
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as stream:
+            reader = csv.reader(stream)
+            header = next(reader, [])
+            if header:
+                # Streamed rather than listed: a track table is the part of
+                # this format meant to grow, and holding every cell as a
+                # python object beside the frame pandas builds would cost
+                # several times what the frame itself does.
+                _check_widths(reader, header, path)
+    except (OSError, UnicodeDecodeError) as error:
+        msg = f"Could not read {_quote(path)}: {error}."
+        raise InvalidInventoryError(msg) from error
+    if not header:
+        msg = f"{_quote(path)} has no columns, so it states no track."
+        raise InvalidInventoryError(msg)
+    repeated = sorted({x for x in header if header.count(x) > 1})
+    if repeated:
+        msg = (
+            f"{_quote(path)} names {', '.join(repeated)} more than once; one "
+            "column states one field."
+        )
+        raise InvalidInventoryError(msg)
+    # index_col=False so that no column is ever read as an index; the row
+    # widths above already agree, and this keeps them agreeing.
+    return pd.read_csv(
+        path,
+        dtype=str,
+        keep_default_na=False,
+        na_values=[""],
+        index_col=False,
+        # Both readers decode alike, or the header checked above is not
+        # the header parsed here: a locale-encoded read disagrees with
+        # pandas' UTF-8, and a byte order mark reaches only one of them.
+        encoding="utf-8-sig",
+    )
+
+
+def _check_widths(reader, header: list[str], path: Path) -> None:
+    """
+    Refuse a row which is not its header wide.
+
+    Pandas refuses neither a wide row nor a narrow one: by default the
+    surplus cell pushes the first column into the index, so every value in
+    the row shifts one field left and lands in its neighbour's meaning. A
+    row states one cell per column or it is not a row.
+    """
+    for number, row in enumerate(reader, start=2):
+        if row and len(row) != len(header):
             msg = (
-                f"{_quote(child)} is an optical path epoch, which cannot be "
-                "read yet. State optical_paths in the entity's "
-                f"{_ATTRS_STEM} file for now."
+                f"{_quote(path)} row {number} states {len(row)} cells where "
+                f"its header names {len(header)} columns."
             )
             raise InvalidInventoryError(msg)
-        if child.suffix.casefold() == ".csv":
+
+
+def _cells(row) -> dict[str, str]:
+    """Return a row's stated cells, an empty one meaning unset."""
+    return {str(k): v for k, v in row.items() if not pd.isnull(v)}
+
+
+def _require_columns(frame: pd.DataFrame, needed, path: Path) -> None:
+    """Refuse a table which does not carry a column it is read by."""
+    missing = [x for x in needed if x is not None and x not in frame.columns]
+    if missing:
+        msg = (
+            f"{_quote(path)} states no {', '.join(missing)} column, which its "
+            "rows are read by."
+        )
+        raise InvalidInventoryError(msg)
+
+
+def _require_stated(frame: pd.DataFrame, needed, path: Path) -> None:
+    """
+    Refuse a blank cell in a column the table is read by.
+
+    A column which orders or groups the rows decides where each one goes,
+    so a row leaving it empty has no place. Left to pandas the row would
+    simply disappear -- a null sorts last, and a null grouping key drops
+    its row from every group.
+    """
+    for column in needed:
+        if column is None:
+            continue
+        empty = [
+            str(n) for n, ok in enumerate(frame[column].notna(), start=2) if not ok
+        ]
+        if empty:
             msg = (
-                f"{_quote(child)} is a track table, which cannot be read yet. "
-                f"State {_entry_name(child)} in the entity's {_ATTRS_STEM} "
-                "file for now."
+                f"{_quote(path)} leaves {column} empty at row(s) "
+                f"{', '.join(empty)}, so those rows state no place."
+            )
+            raise InvalidInventoryError(msg)
+
+
+def _ordered(frame: pd.DataFrame, column: str | None, path: Path) -> pd.DataFrame:
+    """
+    Return the rows in the order the named column states, if any.
+
+    A table which names one is read by it rather than by row position, so
+    re-sorting a spreadsheet cannot change what it means. A table which
+    names none keeps the order it was written in.
+    """
+    if column is None:
+        return frame
+    try:
+        keys = pd.to_numeric(frame[column])
+    except (TypeError, ValueError) as error:
+        msg = f"{_quote(path)} has a non-numeric {column}: {error}."
+        raise InvalidInventoryError(msg) from error
+    return frame.assign(**{column: keys}).sort_values(column, kind="stable")
+
+
+def _parse_cell(text: str):
+    """
+    Read a cell's value the way its own text states it.
+
+    A CSV has no types, so an annotation's value -- which the model lets
+    be a string, a boolean or a number -- is decided by what was written.
+    A value which is genuinely a string but looks like one of the others
+    is the one thing this spelling cannot express; that group is authored
+    in YAML, where the types are explicit.
+    """
+    if (folded := text.strip().casefold()) in ("true", "false"):
+        return folded == "true"
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    # int(number) rather than int(text): 1e3 is integral, and only the
+    # number knows that -- the text raises.
+    return int(number) if number.is_integer() and "." not in text else number
+
+
+def _check_places(keys: pd.Series, column: str, path: Path) -> None:
+    """
+    Refuse an ordering which does not place every row.
+
+    Components tile the path, each starting where the previous ends, so
+    two rows sharing a place would be ordered by where they happen to sit
+    in the file -- which is the one thing this column exists to stop
+    deciding anything.
+    """
+    repeated = sorted({str(x) for x in keys[keys.duplicated()]})
+    if repeated:
+        msg = (
+            f"{_quote(path)} states {column} {', '.join(repeated)} more than "
+            "once, so it does not say which row comes first."
+        )
+        raise InvalidInventoryError(msg)
+
+
+def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
+    """Read a table whose every row is one object."""
+    _require_columns(frame, [table.order], path)
+    _require_stated(frame, [table.order], path)
+    ordered = _ordered(frame, table.order, path)
+    if table.places and table.order is not None:
+        _check_places(ordered[table.order], table.order, path)
+    out = []
+    for _, row in ordered.iterrows():
+        cells = _cells(row)
+        # The order column is the table's own scaffolding where the object
+        # has no such field, so it is dropped -- but only where the table
+        # says it has one. Dropped everywhere, a stray sequence column in
+        # coupling.csv would vanish instead of being refused as the
+        # unknown field the model calls it.
+        if table.places:
+            cells.pop(table.order, None)
+        out.append(cells)
+    return out
+
+
+def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[dict]:
+    """
+    Read a table whose every row is one control point.
+
+    Points gather into objects holding parallel arrays: one object per
+    value of the grouping column, or a single object when the attribute
+    is one. Coordinate columns are named by the CRS and are stored on the
+    canonical axes, so the frame decides which column is which.
+    """
+    _require_columns(frame, [table.order, table.group], path)
+    _require_stated(frame, [table.order, table.group], path)
+    frame = _ordered(frame, table.order, path)
+    # dropna=False: a blank grouping cell would otherwise take its row out
+    # of the table without a word. _require_stated has already refused one,
+    # and this keeps that the reason nothing is missing.
+    groups = (
+        frame.groupby(table.group, sort=True, dropna=False)
+        if table.group
+        else [(None, frame)]
+    )
+    out = []
+    for name, rows in groups:
+        point: dict[str, Any] = {} if name is None else {"name": str(name)}
+        for column in rows.columns:
+            if column == table.group or column in axes:
+                continue
+            stated = rows[column].notna()
+            if not stated.any():
+                continue
+            # Each column becomes one array and the arrays are read
+            # together, so a column stated by some rows and not others
+            # would compact past the gap and pair values which never
+            # shared a row: `5,` above `,100` would map channel 5 to a
+            # distance the file never gave it.
+            if not stated.all():
+                # rows.index, not the position in this group: the frame has
+                # been sorted and split by then, so counting here would name
+                # a line the reader would go and find something else on.
+                empty = [
+                    str(i + 2)
+                    for i, ok in zip(rows.index, stated, strict=True)
+                    if not ok
+                ]
+                msg = (
+                    f"{_quote(path)} leaves {column} empty at row(s) "
+                    f"{', '.join(empty)} while other rows state it; a column "
+                    "is stated by every point or by none."
+                )
+                raise InvalidInventoryError(msg)
+            point[column] = tuple(rows[column])
+        if axes:
+            point["coordinates"] = _coordinates(rows, axes, path)
+        out.append(point)
+    return out
+
+
+def _coordinates(rows: pd.DataFrame, axes: Mapping[str, int], path: Path):
+    """
+    Gather a geometry table's labelled columns onto the canonical axes.
+
+    The CRS names the axes and states their order, so a header is read by
+    which axis it names rather than by where it sits in the file.
+    """
+    ordered = sorted(axes, key=lambda label: axes[label])
+    out = []
+    for _, row in rows.iterrows():
+        stated = [row[label] for label in ordered]
+        if any(pd.isnull(x) for x in stated):
+            missing = [x for x, v in zip(ordered, stated, strict=True) if pd.isnull(v)]
+            msg = (
+                f"{_quote(path)} leaves {', '.join(missing)} empty for a point; "
+                "a coordinate states every axis its frame declares."
+            )
+            raise InvalidInventoryError(msg)
+        out.append(tuple(stated))
+    return tuple(out)
+
+
+def _is_path_dir(child: Path) -> bool:
+    """Return True if a directory name claims to be an optical path epoch."""
+    # is_dir() follows a link, and the stray walk steps over one, so a
+    # symlinked `path` would be read from outside the inventory without
+    # anything having looked at what it holds.
+    if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
+        return False
+    stem = child.name.partition(_EPOCH_MARKER)[0].partition(".")[0]
+    return stem.casefold() == _PATH_STEM
+
+
+def _check_one_spelling(directories: list[Path]) -> None:
+    """
+    Refuse two path directories a case-folding filesystem holds as one.
+
+    The same portability rule `_container_entries` applies to every
+    top-level identity: an inventory where `path.aa` and `path.AA` are two
+    lineages loses one of them the moment it is copied somewhere they are
+    the same directory.
+    """
+    seen: dict[str, Path] = {}
+    for directory in directories:
+        key = directory.name.casefold()
+        if (first := seen.get(key)) is not None:
+            msg = (
+                f"{_quote(first)} and {_quote(directory)} differ only by case, "
+                "which a case-insensitive filesystem cannot hold."
+            )
+            raise InvalidInventoryError(msg)
+        seen[key] = directory
+
+
+def _load_path(directory: Path, crs, begins):
+    """
+    Read one optical path epoch from its own directory.
+
+    ``path`` is the one reserved container stem: unlike an attribute
+    table, these directories do not serialize an attribute of the fiber
+    array -- they address a child entity whose name carries its location
+    and the instant it starts.
+    """
+    name, epoch = _split_epoch(directory, epochs_allowed=True)
+    _, _, location = name.partition(".")
+    attrs = _attrs_file(directory)
+    data = _read_object(attrs)
+    declared = data.get(TAG_FIELD)
+    if declared != OpticalPath.__name__:
+        msg = (
+            f"{_quote(attrs)} declares {declared!r}, but a {_PATH_STEM} "
+            f"directory holds an {OpticalPath.__name__}."
+        )
+        raise InvalidInventoryError(msg)
+    stated = data.setdefault("location_code", location)
+    if stated != location:
+        msg = (
+            f"{_quote(attrs)} states location_code={stated!r} but its "
+            f"directory says {location!r}. A restated address must agree "
+            "with the name."
+        )
+        raise InvalidInventoryError(msg)
+    if epoch is not None and "start_time" not in data:
+        data["start_time"] = epoch
+    # The bare `path` directory is the first epoch, and it starts where the
+    # fiber array holding it does -- left unset it would claim the
+    # unbounded past, which is before the array it belongs to exists.
+    if epoch is None and "start_time" not in data and not pd.isnull(begins):
+        data["start_time"] = begins
+    _merge_tables(data, directory, OpticalPath, crs, attrs)
+    built = _build(OpticalPath, data, attrs)
+    if epoch is not None and built.start_time != epoch:
+        msg = (
+            f"{_quote(attrs)} states start_time {built.start_time} but its "
+            f"directory says {epoch}. A restated address must agree with "
+            "the name."
+        )
+        raise InvalidInventoryError(msg)
+    return built
+
+
+def _close_lineages(paths: list, sources: dict) -> list:
+    """
+    End each epoch where the next one of its lineage begins.
+
+    Each location code is its own lineage, non-overlapping by
+    construction: sorted by start, an epoch runs until its successor and
+    the last is ongoing. An epoch may state an earlier end itself -- a
+    dark interval, or a retired lineage -- but not a later one, which
+    would claim time its successor already holds.
+    """
+    out = []
+    by_location = defaultdict(list)
+    for path in paths:
+        by_location[path.location_code].append(path)
+    for location, lineage in by_location.items():
+        # An unset start is the unbounded past, so the bare `path` directory
+        # sorts before every epoch which names an instant, rather than after
+        # them as a null ordinarily would.
+        ordered = sorted(
+            lineage, key=lambda x: (not pd.isnull(x.start_time), x.start_time)
+        )
+        for first, second in itertools.pairwise(ordered):
+            # _times_equal, not ==: NaT equals nothing, itself included,
+            # so two undated epochs of one lineage would never collide.
+            if _times_equal(first.start_time, second.start_time):
+                msg = (
+                    f"{_quote(sources[id(first)])} and "
+                    f"{_quote(sources[id(second)])} start at the same instant, "
+                    "so they are two spellings of one epoch."
+                )
+                raise InvalidInventoryError(msg)
+            if pd.isnull(first.end_time):
+                out.append(first.new(end_time=second.start_time))
+                continue
+            if first.end_time > second.start_time:
+                msg = (
+                    f"{_quote(sources[id(first)])} ends at {first.end_time}, "
+                    f"after the epoch which follows it begins at "
+                    f"{second.start_time}."
+                )
+                raise InvalidInventoryError(msg)
+            out.append(first)
+        out.append(ordered[-1])
+    return out
+
+
+def _merge_paths(data: dict, entity: Path, model, crs, attrs: Path, begins) -> None:
+    """Fill the optical paths an entity directory's epoch directories state."""
+    directories = [x for x in sorted(entity.iterdir()) if _is_path_dir(x)]
+    if not directories:
+        return
+    _check_one_spelling(directories)
+    field = "optical_paths"
+    if field not in model.model_fields:
+        msg = (
+            f"{_quote(directories[0])} is an optical path epoch, but "
+            f"{_quote(attrs)} declares a {model.__name__}, which holds none."
+        )
+        raise InvalidInventoryError(msg)
+    if field in data:
+        msg = (
+            f"{field} is stated both in {_quote(attrs)} and as "
+            f"{_PATH_STEM} directories; one fact is spelled once."
+        )
+        raise InvalidInventoryError(msg)
+    paths, sources = [], {}
+    for directory in directories:
+        built = _load_path(directory, crs, begins)
+        # The file itself, not a name built from the stem: the suffix is
+        # whichever of the three the author used, and an error naming
+        # `path/attrs` sends them looking for a file which is not there.
+        sources[id(built)] = _attrs_file(directory)
+        paths.append(built)
+    data[field] = _close_lineages(paths, sources)
+
+
+def _table_stem(path: Path) -> str:
+    """Return the attribute a table's name states."""
+    return path.name[: -len(path.suffix)]
+
+
+def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
+    """
+    Fill the attributes an entity directory's tables state.
+
+    A table is matched to the model purely by name, so a stem which names
+    no attribute of the declared type is a typo rather than a new track,
+    and an attribute stated both inline and as a table is one fact spelled
+    twice.
+    """
+    for child in sorted(entity.iterdir()):
+        if child.name.startswith(".") or child.is_dir():
+            continue
+        if child.suffix.casefold() != ".csv":
+            continue
+        stem = _table_stem(child)
+        if stem not in model.model_fields:
+            msg = (
+                f"{_quote(child)} names no attribute of {model.__name__}, which "
+                f"{_quote(attrs)} declares."
+            )
+            raise InvalidInventoryError(msg)
+        if (table := _TABLES.get(stem)) is None:
+            # Not "is not row-shaped": Station.channels is as row-shaped as
+            # anything here and still has no table, so saying that would be
+            # telling the author something false about their own model.
+            msg = (
+                f"{_quote(child)} names {stem}, which this format does not "
+                f"read as a table; state it in the {_ATTRS_STEM} file instead."
+            )
+            raise InvalidInventoryError(msg)
+        if stem in data:
+            msg = (
+                f"{stem} is stated both in {_quote(attrs)} and as "
+                f"{_quote(child)}; one fact is spelled once."
+            )
+            raise InvalidInventoryError(msg)
+        data[stem] = _load_table(child, table, stem, crs)
+
+
+def _load_table(path: Path, table: _Table, stem: str, crs):
+    """Read one track table into whatever its attribute holds."""
+    frame = _read_table(path)
+    # Refused here rather than left to the model: a header with nothing
+    # under it claims a track and states none, and for a single-object
+    # table it would otherwise build one object out of no points.
+    if frame.empty:
+        msg = f"{_quote(path)} states no rows, so it describes no {stem}."
+        raise InvalidInventoryError(msg)
+    axes = _geometry_axes(frame, crs, path) if stem == "geometry" else {}
+    if not table.points:
+        rows = _object_rows(frame, table, path)
+        if stem == "annotations":
+            _parse_annotations(rows, path)
+        return rows
+    built = _point_rows(frame, table, path, axes)
+    # A single object rather than a collection: the table has no grouping
+    # column because every point belongs to the one map it describes.
+    return built if table.group is not None else built[0]
+
+
+def _geometry_axes(frame: pd.DataFrame, crs, path: Path) -> dict[str, int]:
+    """
+    Return which column names which canonical axis.
+
+    Coordinates are stored on the canonical axes while a geometry table
+    names them the way its frame does, so the CRS decides both which
+    headers are legal and what each one means.
+    """
+    labels = tuple(crs.coordinate_labels)
+    stated = {x for x in frame.columns} - {"segment", "distance"}
+    if stated != set(labels):
+        msg = (
+            f"{_quote(path)} states the coordinate columns {sorted(stated)}, "
+            f"but its frame declares {list(labels)}."
+        )
+        raise InvalidInventoryError(msg)
+    return {label: index for index, label in enumerate(labels)}
+
+
+def _parse_annotations(rows: list[dict], path: Path) -> None:
+    """
+    Read each annotation's value as its own text states it, in place.
+
+    A group's kind is decided by its values, and the model makes the kind
+    decide the group's shape, so a group which mixes kinds would be two
+    tracks sharing a name.
+    """
+    kinds: dict[str, tuple[str, int]] = {}
+    for number, row in enumerate(rows, start=2):
+        if (text := row.get("value")) is None:
+            continue
+        row["value"] = value = _parse_cell(text)
+        # A boolean is asked about first because a bool IS an int, which
+        # would otherwise let true and 1 share a group whose shape they do
+        # not share. An int and a float, by contrast, are ONE kind: the
+        # model reads them alike, so telling them apart here would make
+        # the order the rows were written in decide whether a group loads.
+        kind = (
+            "a boolean"
+            if isinstance(value, bool)
+            else "a number"
+            if isinstance(value, int | float)
+            else "text"
+        )
+        group = str(row.get("group", ""))
+        first, where = kinds.setdefault(group, (kind, number))
+        if first != kind:
+            msg = (
+                f"{_quote(path)} row {number}: group {group!r} states {kind} "
+                f"where row {where} states {first}; one group holds one kind."
             )
             raise InvalidInventoryError(msg)
 
@@ -561,20 +1120,19 @@ def _container_entries(directory: Path) -> list[Path]:
     return list(seen.values())
 
 
-def _load_container(directory: Path, container: _Container, root: Path):
+def _load_container(directory: Path, container: _Container, root: Path, crs):
     """Load every entry of one top-level container directory."""
     out = []
     for child in _container_entries(directory):
         if child.is_dir():
-            _refuse_tracks(child)
             data_source = _attrs_file(child)
             # An entity directory holds its own attrs and tracks; an object
             # filed inside it belongs to a container and is not loaded from
             # here, so it has to be refused rather than stepped over.
-            _refuse_stray_objects(child, root, skip=data_source)
+            _refuse_stray_objects(child, root, skip=_contained_files(child))
         else:
             data_source = child
-        out.append(_load_entry(child, data_source, container))
+        out.append(_load_entry(child, data_source, container, crs))
     return out
 
 
@@ -811,7 +1369,22 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
     return data
 
 
-def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> None:
+def _contained_files(entity: Path) -> frozenset[Path]:
+    """
+    Return the object files the format itself places inside an entity.
+
+    Its own attrs file, and the attrs file of each optical path epoch,
+    which is an entity in its own right rather than an object filed where
+    nothing holds it.
+    """
+    out = {_attrs_file(entity)}
+    for child in sorted(entity.iterdir()):
+        if _is_path_dir(child):
+            out.add(_attrs_file(child))
+    return frozenset(out)
+
+
+def _refuse_stray_objects(start: Path, root: Path, skip=frozenset()) -> None:
     """
     Refuse a model-declaring file which nothing contains.
 
@@ -823,7 +1396,7 @@ def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> 
     known = _model_names()
 
     def check(path: Path):
-        if path.name.startswith(".") or path == skip:
+        if path.name.startswith(".") or path in skip:
             return
         # A symlink is not part of the format, and one pointing at an
         # ancestor walks the inventory a second time -- where its own files
@@ -847,6 +1420,21 @@ def _refuse_stray_objects(start: Path, root: Path, skip: Path | None = None) -> 
     check(start)
 
 
+def _build_crs(envelope: dict[str, Any] | None):
+    """
+    Return the frame the document declares, or the implicit default.
+
+    Built before anything else is read, since a geometry table's headers
+    are legal or not according to what this states. Whatever the envelope
+    states here already built once, when the envelope was read as a whole,
+    so an unreadable frame is reported there rather than again here.
+    """
+    stated = (envelope or {}).get("coordinate_reference_system")
+    return (
+        CoordinateReferenceSystem(**stated) if stated else CoordinateReferenceSystem()
+    )
+
+
 def _check_strays(root: Path) -> None:
     """Refuse a stray object anywhere outside a recognized container."""
     for child in sorted(root.iterdir()):
@@ -868,8 +1456,11 @@ def load_directory(path: str | os.PathLike) -> Inventory:
     """
     root = Path(path)
     envelope = _load_envelope(root)
+    # A geometry table names its columns the way its frame does, so the
+    # envelope is read first: it is what says which names those are.
+    crs = _build_crs(envelope)
     entries = {
-        name: _load_container(root / name, container, root)
+        name: _load_container(root / name, container, root, crs)
         for name, container in _CONTAINERS.items()
         if (root / name).is_dir()
     }
