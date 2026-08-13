@@ -9,12 +9,12 @@ from typing import Any, ClassVar
 import numpy as np
 from numpy.linalg import norm
 from numpy.typing import NDArray
+from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.models import DascoreBaseModel
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
@@ -40,10 +40,16 @@ smooth
 _smooth_type = None | float | int | tuple[float | int, ...] | dict[str, float | int]
 
 
-class _MuteGeometry(ABC, DascoreBaseModel):
+class _MuteGeometry(ABC, BaseModel):
     """
     Parent class for Mute Geometry.
+
+    A plain pydantic model: these carry a mute's geometry from the argument
+    parsing to the mask and are never serialized, so they want validation
+    and nothing else DascoreBaseModel offers.
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     dims: tuple[str, ...]
     axes: tuple[int, ...]
