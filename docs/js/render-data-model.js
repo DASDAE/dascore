@@ -108,16 +108,36 @@
       scheduleHide();
     });
 
-    cy.on("mouseover", "node", (event) => {
-      isOverNode = true;
-      cancelHide();
-      const rendered = event.target.renderedPosition();
-      renderTooltip(tooltip, event.target.data());
+    const showFor = (node) => {
+      const rendered = node.renderedPosition();
+      renderTooltip(tooltip, node.data());
       tooltip.classList.add("is-visible");
       positionTooltip(tooltip, {
         clientX: container.getBoundingClientRect().left + rendered.x,
         clientY: container.getBoundingClientRect().top + rendered.y,
       });
+    };
+
+    cy.on("mouseover", "node", (event) => {
+      isOverNode = true;
+      cancelHide();
+      showFor(event.target);
+    });
+
+    // A touch device has no hover, so a tap must reach the fields and the
+    // API link as well as folding the node. The tooltip's own close
+    // affordance is a tap anywhere else on the graph.
+    cy.on("tap", "node", (event) => {
+      isOverNode = true;
+      cancelHide();
+      showFor(event.target);
+    });
+
+    cy.on("tap", (event) => {
+      if (event.target === cy) {
+        isOverNode = false;
+        scheduleHide();
+      }
     });
     cy.on("mousemove", "node", (event) => {
       if (isOverTooltip) {
@@ -341,9 +361,30 @@
     ];
   }
 
-  function renderDataModels() {
+  // Roughly ten seconds of 100 ms waits. Bounded because a page whose
+  // cytoscape asset failed to load would otherwise schedule a timer
+  // forever, burning browser work to no end.
+  const MAX_LOAD_ATTEMPTS = 100;
+
+  function reportMissingLibrary() {
+    const containers = document.querySelectorAll(".render-data-model:not([data-processed])");
+    for (const container of containers) {
+      container.dataset.processed = "true";
+      const graph = container.querySelector(".render-data-model-graph");
+      if (graph) {
+        graph.textContent = "The diagram could not be drawn: its layout library did not load.";
+      }
+    }
+  }
+
+  function renderDataModels(attempt) {
+    const attempts = attempt || 0;
     if (!window.cytoscape) {
-      window.setTimeout(renderDataModels, 100);
+      if (attempts >= MAX_LOAD_ATTEMPTS) {
+        reportMissingLibrary();
+        return;
+      }
+      window.setTimeout(() => renderDataModels(attempts + 1), 100);
       return;
     }
     const containers = document.querySelectorAll(".render-data-model:not([data-processed])");

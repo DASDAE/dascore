@@ -347,4 +347,4 @@ spool = dc.spool(patch).attach_inventory(inventory)
 assert len(spool.split_by("zone")) == 2
 ```
 
-A spool opened on a directory which carries an inventory under the name `.inventory` starts out attached to it.
+A spool opened on a directory which carries an inventory under the name `.inventory` — as a directory, or as `.inventory.yaml`, `.inventory.yml`, or `.inventory.json` — starts out attached to it.

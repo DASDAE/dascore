@@ -16,12 +16,14 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import re
 import sys
 import typing
 from pathlib import Path
 
 import pytest
 
+import dascore.core.inventory as inventory_module
 from dascore.core.inventory import (
     Acquisition,
     Cable,
@@ -30,7 +32,6 @@ from dascore.core.inventory import (
     Interrogator,
     Inventory,
     OpticalPath,
-    Station,
     _IntervalModel,
     _OpticalComponentBase,
 )
@@ -137,6 +138,22 @@ class TestNodesFollowTheModels:
         assert "_Resource" not in resources
         for name in ("Interrogator", "Cable", "Enclosure", "OpticalMeasurement"):
             assert name in resources
+
+    def test_no_private_name_reaches_the_page(self, spec):
+        """Across every drawn field, not just the one alias in use today."""
+        for node in spec["nodes"].values():
+            for attribute in node["attributes"]:
+                assert not re.search(r"(?<![\w.])_[A-Za-z]\w*", attribute["type"])
+
+    def test_an_unexpanded_private_name_fails_the_build(self, generator):
+        """
+        Rather than shipping a symbol the reader cannot look up.
+
+        One private alias expanding into text holding another's name is how
+        this would happen, so the check is on the finished text.
+        """
+        with pytest.raises(ValueError, match="private name"):
+            generator._attributes(Acquisition, {"Interrogator": "_Secret"})
 
     def test_summaries_come_from_the_docstrings(self, generator, spec):
         """Every node says what it is, in the model's own words."""
@@ -333,15 +350,26 @@ class TestNodeListIsValidated:
 class TestAnnotationsMustStayText:
     """The type column is source text, which needs the future import."""
 
+    def test_the_models_keep_the_future_import(self):
+        """
+        The type column is source text only while the models defer them.
+
+        This is the requirement itself, stated where it can be checked on
+        any Python: without the import a class stores evaluated objects,
+        and the diagram would print reprs where it promises source.
+        """
+        source = Path(inventory_module.__file__).read_text(encoding="utf-8")
+        assert "from __future__ import annotations" in source
+
     def test_an_evaluated_annotation_is_refused(self, generator):
         """Losing the future import fails loudly rather than printing reprs."""
-
-        class Evaluated(Station):
-            """A model whose annotation was evaluated at class creation."""
-
-        Evaluated.__annotations__ = {"resolved": int}
+        # Built with the annotations in the class namespace rather than
+        # assigned afterwards: since PEP 649 (3.14) an assignment does not
+        # land in vars(), so the class would carry no annotation at all and
+        # the test would pass for the wrong reason.
+        evaluated = type("Evaluated", (), {"__annotations__": {"resolved": int}})
         with pytest.raises(TypeError, match="from __future__ import annotations"):
-            generator._raw_annotation(Evaluated, "resolved")
+            generator._raw_annotation(evaluated, "resolved")
 
     def test_an_unknown_field_is_refused(self, generator):
         """Asking for a field no class in the mro declares is a mistake."""

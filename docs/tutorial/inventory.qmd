@@ -128,7 +128,7 @@ names = inventory.get_names()
 print("attrs:", names.attrs[:4], "...")
 print("coords:", [x for x in names.coords if "." not in x])
 
-# The annotation groups the CSV named are among them.
+# The annotation groups named in the CSV are among them.
 assert {"zone", "noisy"} <= set(names.coords)
 assert "gauge_length" in names.attrs
 ```

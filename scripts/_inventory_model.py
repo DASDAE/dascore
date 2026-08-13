@@ -326,6 +326,16 @@ def _attributes(model: type, expansions: dict[str, str]) -> list[dict[str, str]]
         text = _raw_annotation(model, name)
         for alias, expansion in expansions.items():
             text = re.sub(rf"\b{re.escape(alias)}\b", expansion, text)
+        # A private name reaching the page names a symbol the reader cannot
+        # look up, so it fails the build rather than shipping. One alias
+        # expanding into another's name is the way it would happen.
+        if leaked := re.search(r"(?<![\w.])_[A-Za-z]\w*", text):
+            msg = (
+                f"{model.__name__}.{name} would show the private name "
+                f"{leaked.group()!r} in {text!r}. Expand it in "
+                "_alias_expansions, or draw what it stands for."
+            )
+            raise ValueError(msg)
         out.append(
             {
                 "name": name,
