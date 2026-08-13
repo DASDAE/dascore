@@ -102,7 +102,10 @@ _CONTAINERS: Mapping[str, _Container] = {
 class _Entry(NamedTuple):
     """One loaded entity, with where it came from and what contains it."""
 
-    model: InventoryModel
+    # A resource or one of the time-ranged entities a network contains.
+    # Loosely typed because those two halves share only their base class,
+    # while assembling needs the fields of whichever half it holds.
+    model: Any
     source: Path
     # This entry's _ADDRESS_LEVELS tokens, outermost first.
     address: tuple[str, ...]
@@ -518,7 +521,7 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
     return out
 
 
-def _group(entries: list[_Entry]) -> Mapping[tuple, list[_Entry]]:
+def _group(entries: list[_Entry]) -> dict[tuple, list[_Entry]]:
     """Group entries by the address which names their container."""
     out = defaultdict(list)
     for entry in entries:
@@ -627,6 +630,11 @@ def _load_envelope(root: Path) -> dict[str, Any]:
                 "structure rather than in the envelope."
             )
             raise InvalidInventoryError(msg)
+    # Checked here rather than left to the model, so a typo names its file
+    # like every other error this format raises.
+    if unknown := sorted(set(data) - set(Inventory.model_fields)):
+        msg = f"{_quote(source)} states {unknown}, which an inventory has not."
+        raise InvalidInventoryError(msg)
     return data
 
 

@@ -42,24 +42,39 @@ def make_inventory(tmp_path):
 class TestRegistry:
     """The container registry must stay pinned to the models."""
 
+    def test_containers_are_the_ones_the_format_defines(self):
+        """Pinned so the loops below cannot pass over an empty registry."""
+        assert set(loader._CONTAINERS) == {
+            "resources",
+            "networks",
+            "fiber_arrays",
+            "stations",
+            "acquisitions",
+        }
+
     def test_identity_tokens_are_fields_or_levels(self):
         """Every name token states a field or names a containing entity."""
+        checked = []
         for container in loader._CONTAINERS.values():
             for model in container.models:
                 for token in container.identity:
                     known = token in model.model_fields
                     assert known or token in loader._ADDRESS_LEVELS
+                    checked.append((model, token))
+        assert len(checked) == 14
 
     def test_resource_container_matches_the_union(self):
         """The resources container holds exactly the resource union."""
         union = inv.get_args(inv.get_args(inv._Resource)[0])
         assert set(loader._CONTAINERS["resources"].models) == set(union)
+        assert len(union) == 5
 
     def test_every_model_name_is_known(self):
         """A model this loader can build counts as a model for near-misses."""
         names = loader._model_names()
-        for container in loader._CONTAINERS.values():
-            assert {x.__name__ for x in container.models} <= names
+        built = {x.__name__ for c in loader._CONTAINERS.values() for x in c.models}
+        assert built <= names
+        assert len(built) == 9
         assert "Inventory" in names
 
 
@@ -632,6 +647,12 @@ class TestEnvelope:
         with pytest.raises(InvalidInventoryError, match="directory structure"):
             make_inventory(files)
 
+    def test_unknown_field_names_the_file(self, make_inventory):
+        """A typo in the envelope says which file states it."""
+        files = {**MINIMAL, "inventory.yaml": "type: Inventory\nschema_verison: 1\n"}
+        with pytest.raises(InvalidInventoryError, match=r"inventory\.yaml"):
+            make_inventory(files)
+
 
 class TestFactory:
     """The public factory routes a directory to this loader."""
@@ -659,15 +680,21 @@ class TestModelAssumptions:
 
     def test_only_union_members_carry_a_type_field(self):
         """The type tag is a real field only where it discriminates a union."""
+        checked = []
         for name, container in loader._CONTAINERS.items():
             for model in container.models:
                 assert ("type" in model.model_fields) == (name == "resources")
+                checked.append(model)
+        assert len(checked) == 9
 
     def test_epoch_bearing_models_are_time_ranged(self):
         """Only a time-ranged model can hold the epoch a name states."""
+        checked = []
         for name, container in loader._CONTAINERS.items():
             ranged = all(issubclass(x, TimeRangedModel) for x in container.models)
             assert ranged == (name != "resources")
+            checked.append(name)
+        assert len(checked) == len(loader._CONTAINERS) == 5
 
     def test_inventory_models_forbid_extra_fields(self):
         """Type must be popped: an inventory model refuses unknown input."""
