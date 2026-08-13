@@ -51,6 +51,23 @@ class TestMergeCoordManagers:
         assert new_time.min() == time.min()
         assert new_time.max() == cm2.coord_map["time"].max()
 
+    def test_merge_keeps_associated_coord_values(self, cm_basic):
+        """A coord along the merge dim keeps its own values, not the dim's."""
+        cm1 = cm_basic.update_coords(
+            quality=("time", np.arange(cm_basic.shape[cm_basic.get_axis("time")]))
+        )
+        time = cm1.coord_map["time"]
+        cm2 = self._get_offset_coord_manager(cm1, time=time.step)
+        out = merge_coord_managers([cm1, cm2], dim="time")
+        quality = out.coord_map["quality"]
+        expected = np.concatenate(
+            [cm1.coord_map["quality"].values, cm2.coord_map["quality"].values]
+        )
+        # the dim coord's values used to be substituted here, which for a
+        # datetime time dim also silently changed the coord's dtype
+        assert quality.dtype == cm1.coord_map["quality"].dtype
+        assert np.array_equal(quality.values, expected)
+
     def test_merge_offset_close_no_snap(self, cm_basic):
         """When the coordinate don't line up, it should produce monotonic Coord."""
         cm1 = cm_basic
