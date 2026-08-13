@@ -2102,10 +2102,16 @@ class TestLoadSerializedFile:
         """The suffix picks the parser, so JSON is not YAML's to read."""
         path = tmp_path / "whole.json"
         path.write_text('{"description": "a JSON inventory"}')
-        asked = []
-        monkeypatch.setattr(loader, "optional_import", lambda x, **kw: asked.append(x))
+
+        def _refuse(name, **kwargs):
+            raise MissingOptionalDependencyError(name)
+
+        # Both bindings, because JSON is legal YAML: a fallback to the
+        # YAML route would parse this file and pass a test which only
+        # watched the loader's own import.
+        monkeypatch.setattr(loader, "optional_import", _refuse)
+        monkeypatch.setattr(inv, "optional_import", _refuse)
         assert dc.inventory(path).description == "a JSON inventory"
-        assert not asked
 
     def test_a_document_which_does_not_parse(self, tmp_path):
         """Which is an invalid inventory, not a parser's business."""
