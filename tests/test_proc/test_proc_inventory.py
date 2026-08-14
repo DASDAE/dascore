@@ -21,7 +21,7 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.constants import (
     enrich_attrs_description,
-    enrich_conflicts_description,
+    enrich_conflict_description,
     enrich_coords_description,
     enrich_on_missing_description,
 )
@@ -212,6 +212,35 @@ class TestAttrs:
         )
         assert "pulse_rate" not in dict(out.attrs)
 
+    def test_missing_named_attr_warn(self, patch, inventory):
+        """Or omitted with a warning, the middle of the shared vocabulary."""
+        with pytest.warns(UserWarning, match="defines no 'pulse_rate'"):
+            out = patch.enrich(
+                inventory, attrs=("pulse_rate",), coords=False, on_missing="warn"
+            )
+        assert "pulse_rate" not in dict(out.attrs)
+
+    def test_missing_named_coord_warn(self, patch, inventory):
+        """The coordinate half honors the same policy."""
+        with pytest.warns(UserWarning, match="defines no 'nope'"):
+            out = patch.enrich(
+                inventory, attrs=False, coords=("nope",), on_missing="warn"
+            )
+        assert "nope" not in out.coords.coord_map
+
+    @pytest.mark.parametrize("kwargs", [{"attrs": None}, {"coords": None}])
+    def test_none_is_not_the_off_switch(self, patch, inventory, kwargs):
+        """False turns a half off; None is no longer a second spelling."""
+        with pytest.raises(ParameterError, match="pass False to copy none"):
+            patch.enrich(inventory, **kwargs)
+
+    @pytest.mark.parametrize("kwargs", [{"attrs": None}, {"coords": None}])
+    def test_spool_refuses_none_when_it_is_passed(self, patch, inventory, kwargs):
+        """And the spool says so now rather than on the first patch out."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(ParameterError, match="pass False to copy none"):
+            spool.enrich(**kwargs)
+
     def test_adds_nothing_unasked(self, patch, inventory):
         """Enrich never leaves the patch holding inventory state."""
         out = patch.enrich(inventory, attrs=False, coords=False)
@@ -236,23 +265,23 @@ class TestConflicts:
         """The misresolution guard says what disagreed and how."""
         stale = patch.update_attrs(gauge_length=99.0)
         with pytest.raises(PatchError, match=r"99\.0.*10\.0"):
-            stale.enrich(inventory, coords=False, conflicts="raise")
+            stale.enrich(inventory, coords=False, conflict="raise")
 
     def test_drop_removes_the_attr(self, patch, inventory):
         """A dropped conflict leaves neither value behind."""
         stale = patch.update_attrs(gauge_length=99.0)
-        out = stale.enrich(inventory, coords=False, conflicts="drop")
+        out = stale.enrich(inventory, coords=False, conflict="drop")
         assert "gauge_length" not in dict(out.attrs)
 
     def test_equal_values_are_not_conflicts(self, patch, inventory):
         """Agreement is not disagreement, whatever the policy."""
         agreeing = patch.update_attrs(gauge_length=10.0)
-        out = agreeing.enrich(inventory, coords=False, conflicts="raise")
+        out = agreeing.enrich(inventory, coords=False, conflict="raise")
         assert out.attrs.gauge_length == 10.0
 
     def test_filling_is_not_a_conflict(self, patch, inventory):
         """An attr the patch does not have cannot disagree with one it lacks."""
-        out = patch.enrich(inventory, coords=False, conflicts="raise")
+        out = patch.enrich(inventory, coords=False, conflict="raise")
         assert out.attrs.gauge_length == 10.0
 
     def test_re_enrich_is_a_refresh(self, patch, inventory):
@@ -264,7 +293,7 @@ class TestConflicts:
     def test_bad_conflicts_raises(self, patch, inventory):
         """The flag shares chunking's vocabulary and its validation."""
         with pytest.raises(ParameterError, match="conflict"):
-            patch.enrich(inventory, conflicts="whatever")
+            patch.enrich(inventory, conflict="whatever")
 
     def test_bad_on_missing_raises(self, patch, inventory):
         """An unknown policy is a caller error, not a silent default."""
@@ -524,7 +553,7 @@ class TestEdgeCases:
         """An attr which cannot be compared has not been shown to agree."""
         odd = patch.update_attrs(gauge_length=np.array([1.0, 2.0]))
         with pytest.raises(PatchError, match="inventory says"):
-            odd.enrich(inventory, coords=False, conflicts="raise")
+            odd.enrich(inventory, coords=False, conflict="raise")
 
     def test_multidimensional_channel_coord_raises(self, patch, inventory):
         """One channel coordinate maps to one dimension of the patch."""
@@ -590,14 +619,14 @@ class TestRemoveInventory:
 
     def test_removes_inventory_and_enrichment(self, patch, inventory):
         """Nothing is left to enrich from, so nothing is enriched."""
-        spool = dc.spool(patch).enrich(inventory).remove_inventory()
+        spool = dc.spool(patch).attach_inventory(inventory).enrich().remove_inventory()
         assert spool._inventory is None
         assert spool._enrich_kwargs is None
         assert "gauge_length" not in dict(spool[0].attrs)
 
     def test_original_is_unchanged(self, patch, inventory):
         """Removal is a new spool; the one it came from still enriches."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         spool.remove_inventory()
         assert spool[0].attrs.gauge_length == 10.0
 
@@ -608,7 +637,7 @@ class TestRemoveInventory:
 
     def test_keeps_the_patches(self, patch, inventory):
         """Only the metadata goes; the spool's contents do not."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert spool.remove_inventory()[0].equals(patch)
 
 
@@ -784,7 +813,7 @@ class TestLazyInventory:
         (tmp_path / f"{BLESSED_NAME}.yaml").write_text("[]\n")
         spool = dc.spool(tmp_path).update()
         with pytest.raises(InvalidInventoryError, match="when the spool was opened"):
-            spool.split_by("zone")
+            spool.expand_by("zone")
 
     def test_an_ambiguous_name_waits_for_a_question(self, tmp_path, patch):
         """Two spellings of the name are still no reason to refuse data."""
@@ -951,17 +980,18 @@ class TestAttachInventoryPath:
             os.chdir(here)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
-    def test_enrich_takes_a_path(self, tmp_path, patch, inventory):
-        """Both inventory verbs attach what they are given."""
+    def test_conform_uses_an_attached_path(self, tmp_path, patch, inventory):
+        """A lazily attached path is read by the eager verb too."""
         path = tmp_path / "somewhere.yaml"
         inventory.to_yaml(path)
-        assert dc.spool(patch).enrich(path)[0].attrs.gauge_length == 10.0
+        assert len(dc.spool(patch).attach_inventory(path).conform_to_inventory()) == 1
 
-    def test_conform_takes_a_path(self, tmp_path, patch, inventory):
-        """The same, for the verb which makes the index truthful."""
-        path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
-        assert len(dc.spool(patch).conform_to_inventory(path)) == 1
+    @pytest.mark.parametrize("verb", ["enrich", "conform_to_inventory"])
+    def test_the_verbs_take_no_inventory(self, patch, inventory, verb):
+        """Attaching is the only way in, so neither verb accepts one."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(TypeError, match="positional argument"):
+            getattr(spool, verb)(inventory)
 
     def test_no_argument_needs_a_directory(self, patch):
         """There is nowhere an in-memory spool could have carried one."""
@@ -1084,7 +1114,7 @@ class TestOnUnresolved:
     def test_warns_and_leaves_the_patch(self, mixed, inventory):
         """Enriching decides metadata, so the patch itself still comes out."""
         with pytest.warns(UserWarning, match="does not describe every patch"):
-            out = list(mixed.enrich(inventory))
+            out = list(mixed.attach_inventory(inventory).enrich())
         assert len(out) == len(mixed)
         assert out[0].attrs.gauge_length == 10.0
         assert "gauge_length" not in dict(out[1].attrs)
@@ -1098,7 +1128,7 @@ class TestOnUnresolved:
         ]
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("default")
-            list(dc.spool(strangers).enrich(inventory))
+            list(dc.spool(strangers).attach_inventory(inventory).enrich())
         assert len(caught) == 1
 
     def test_each_spool_says_it_once(self, patch, inventory):
@@ -1109,27 +1139,27 @@ class TestOnUnresolved:
         second = dc.spool([patch.update_attrs(acquisition_key="XX.B2..RAW")])
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("default")
-            list(first.enrich(inventory))
-            list(second.enrich(inventory))
+            list(first.attach_inventory(inventory).enrich())
+            list(second.attach_inventory(inventory).enrich())
         assert len(caught) == 2
 
     def test_ignore_is_silent(self, mixed, inventory):
         """The same, without saying so."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            out = list(mixed.enrich(inventory, on_unresolved="ignore"))
+            out = list(mixed.attach_inventory(inventory).enrich(on_unresolved="ignore"))
         assert len(out) == len(mixed)
 
     def test_raise_fails(self, mixed, inventory):
         """A spool which must be fully described can say so."""
         with pytest.raises(UnresolvedPatchError, match="no acquisition_key"):
-            list(mixed.enrich(inventory, on_unresolved="raise"))
+            list(mixed.attach_inventory(inventory).enrich(on_unresolved="raise"))
 
     def test_unknown_id_is_unresolved(self, patch, inventory):
         """Naming an entry the inventory lacks is not being described either."""
         stranger = patch.update_attrs(acquisition_key="XX.R2D1..RAW")
         with pytest.warns(UserWarning, match="does not describe every patch"):
-            out = dc.spool(stranger).enrich(inventory)[0]
+            out = dc.spool(stranger).attach_inventory(inventory).enrich()[0]
         assert "gauge_length" not in dict(out.attrs)
 
     def test_straddling_patch_still_raises(self, patch, inventory):
@@ -1147,31 +1177,38 @@ class TestOnUnresolved:
                 )
             ),
         )
-        spool = dc.spool(patch).enrich(split, on_unresolved="ignore")
+        spool = dc.spool(patch).attach_inventory(split).enrich(on_unresolved="ignore")
         with pytest.raises(PatchError, match="spans a change of acquisition"):
             spool[0]
 
     def test_malformed_explicit_id_is_not_swallowed(self, patch, inventory):
         """A caller getting the argument wrong is not the inventory's silence."""
         bare = dc.spool(patch.update_attrs(acquisition_key=""))
-        spool = bare.enrich(inventory, acquisition_key="broken", on_unresolved="ignore")
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key="broken", on_unresolved="ignore"
+        )
         with pytest.raises(ValueError, match="Invalid acquisition_key"):
             spool[0]
 
     def test_bad_policy_raises(self, patch, inventory):
         """An unknown policy names no behavior."""
         with pytest.raises(ParameterError, match="on_unresolved must be one of"):
-            dc.spool(patch).enrich(inventory, on_unresolved="nope")
+            dc.spool(patch).attach_inventory(inventory).enrich(on_unresolved="nope")
 
     def test_policy_is_part_of_the_spool(self, patch, inventory):
         """Two policies mean two different behaviors on extraction."""
         plain = dc.spool(patch)
-        assert plain.enrich(inventory) != plain.enrich(inventory, on_unresolved="raise")
-        assert plain.enrich(inventory) == plain.enrich(inventory, on_unresolved="warn")
+        assert plain.attach_inventory(inventory).enrich() != plain.attach_inventory(
+            inventory
+        ).enrich(on_unresolved="raise")
+        attached = plain.attach_inventory(inventory)
+        assert attached.enrich() == attached.enrich(on_unresolved="warn")
 
     def test_policy_survives_a_union(self, patch, inventory):
         """The policy is part of the enrichment, so it carries with it."""
-        enriched = dc.spool(patch).enrich(inventory, on_unresolved="raise")
+        enriched = (
+            dc.spool(patch).attach_inventory(inventory).enrich(on_unresolved="raise")
+        )
         assert (enriched + dc.spool(patch))._on_unresolved == "raise"
 
 
@@ -1201,48 +1238,47 @@ class TestSpoolEnrich:
 
     def test_getitem_is_enriched(self, patch, inventory):
         """A patch pulled by index arrives with its metadata."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert spool[0].attrs.gauge_length == 10.0
 
     def test_iteration_is_enriched(self, patch, inventory):
         """So does one pulled by iteration."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert all(x.attrs.gauge_length == 10.0 for x in spool)
 
-    def test_uses_attached_inventory(self, patch, inventory):
-        """With one already carried, enrich needs no argument."""
-        spool = dc.spool(patch).attach_inventory(inventory).enrich()
-        assert spool[0].attrs.gauge_length == 10.0
-
-    def test_enrich_attaches_its_inventory(self, patch, inventory):
+    def test_enrich_keeps_the_attached_inventory(self, patch, inventory):
         """The spool carries what it enriches from."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert spool._inventory is inventory
 
     def test_kwargs_pass_through(self, patch, inventory):
         """Enrich's arguments are the spool's arguments."""
-        spool = dc.spool(patch).enrich(inventory, attrs=("gauge_length",), coords=False)
+        spool = (
+            dc.spool(patch)
+            .attach_inventory(inventory)
+            .enrich(attrs=("gauge_length",), coords=False)
+        )
         out = spool[0]
         assert out.attrs.gauge_length == 10.0
         assert set(out.coords.coord_map) == set(patch.coords.coord_map)
 
     def test_derived_spool_stays_enriched(self, patch, inventory):
         """A selection is still the spool it came from."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert spool.select(tag="random")[0].attrs.gauge_length == 10.0
 
     def test_original_is_unchanged(self, patch, inventory):
         """Setting up enrichment leaves the spool it came from alone."""
         plain = dc.spool(patch)
-        plain.enrich(inventory)
+        plain.attach_inventory(inventory).enrich()
         assert "gauge_length" not in dict(plain[0].attrs)
 
     def test_equality_includes_arguments(self, patch, inventory):
         """Different arguments mean different patches come out."""
-        plain = dc.spool(patch)
-        assert plain.enrich(inventory) != plain.attach_inventory(inventory)
-        assert plain.enrich(inventory) == plain.enrich(inventory)
-        assert plain.enrich(inventory) != plain.enrich(inventory, coords=False)
+        attached = dc.spool(patch).attach_inventory(inventory)
+        assert attached.enrich() != attached
+        assert attached.enrich() == attached.enrich()
+        assert attached.enrich() != attached.enrich(coords=False)
 
     def test_requires_an_inventory(self, patch):
         """With none attached and none given there is nothing to copy."""
@@ -1252,11 +1288,12 @@ class TestSpoolEnrich:
     def test_unknown_kwarg_raises_now(self, patch, inventory):
         """A misspelled argument fails here, not on a patch pulled later."""
         with pytest.raises(ParameterError, match="unknown argument"):
-            dc.spool(patch).enrich(inventory, attr=True)
+            dc.spool(patch).attach_inventory(inventory).enrich(attr=True)
 
     def test_re_enriching_replaces_arguments(self, patch, inventory):
         """The last call says what enrichment means."""
-        spool = dc.spool(patch).enrich(inventory, coords=False).enrich(inventory)
+        attached = dc.spool(patch).attach_inventory(inventory)
+        spool = attached.enrich(coords=False).enrich()
         assert "zone" in set(spool[0].coords.coord_map)
 
     def test_documents_the_arguments_it_forwards(self):
@@ -1276,7 +1313,7 @@ class TestSpoolEnrich:
             enrich_attrs_description,
             enrich_coords_description,
             enrich_on_missing_description,
-            enrich_conflicts_description,
+            enrich_conflict_description,
         ):
             # Indentation differs between a function and a method body, so
             # the shared text is compared with it removed.
@@ -1359,15 +1396,15 @@ class TestReviewFindings:
 
     def test_union_carries_the_inventory(self, patch, inventory):
         """Combining spools keeps metadata the operands already had."""
-        enriched = dc.spool(patch).enrich(inventory)
+        enriched = dc.spool(patch).attach_inventory(inventory).enrich()
         combined = enriched + dc.spool(patch)
         assert combined[0].attrs.gauge_length == 10.0
         assert (dc.spool(patch) + enriched)[0].attrs.gauge_length == 10.0
 
     def test_union_of_different_enrichment_raises(self, patch, inventory):
         """Two ways of enriching have no combined meaning."""
-        first = dc.spool(patch).enrich(inventory)
-        second = dc.spool(patch).enrich(inventory, coords=False)
+        first = dc.spool(patch).attach_inventory(inventory).enrich()
+        second = dc.spool(patch).attach_inventory(inventory).enrich(coords=False)
         with pytest.raises(InvalidSpoolError, match="different enrich arguments"):
             first + second
 
@@ -1420,7 +1457,7 @@ class TestSecondReviewFindings:
     def test_nan_attr_is_filled_not_conflicted(self, patch, inventory):
         """NaN is how a reader spells unknown, so the inventory fills it."""
         unknown = patch.update_attrs(gauge_length=np.nan)
-        out = unknown.enrich(inventory, coords=False, conflicts="raise")
+        out = unknown.enrich(inventory, coords=False, conflict="raise")
         assert out.attrs.gauge_length == 10.0
 
     def test_nan_marker_round_trips(self, patch, inventory):
@@ -1433,7 +1470,7 @@ class TestSecondReviewFindings:
             attrs=("pulse_rate",),
             coords=False,
             on_missing="null",
-            conflicts="raise",
+            conflict="raise",
         )
         assert np.isnan(twice.attrs.pulse_rate)
 
@@ -1580,7 +1617,7 @@ class TestSecondReviewFindings:
 
     def test_attached_spool_survives_pickle(self, patch, inventory):
         """A spool and its pickle are the same spool, inventory and all."""
-        spool = dc.spool(patch).enrich(inventory)
+        spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert pickle.loads(pickle.dumps(spool)) == spool
 
     def test_update_coords_stays_safe_to_bypass(self):
@@ -1619,34 +1656,42 @@ class TestSplitReviewFindings:
         """Swapping the source under a configured enrichment would rewrite
         every patch's metadata without being asked.
         """
-        spool = dc.spool(patch).enrich(inventory).attach_inventory(inventory)
+        spool = (
+            dc.spool(patch)
+            .attach_inventory(inventory)
+            .enrich()
+            .attach_inventory(inventory)
+        )
         assert spool._enrich_kwargs is None
         assert "gauge_length" not in dict(spool[0].attrs)
 
     def test_attaching_the_same_inventory_keeps_a_union_working(self, patch, inventory):
         """Supplying more information must not break what already worked."""
-        enriched = dc.spool(patch).enrich(inventory)
+        enriched = dc.spool(patch).attach_inventory(inventory).enrich()
         attached = dc.spool(patch).attach_inventory(inventory)
         assert (enriched + attached)[0].attrs.gauge_length == 10.0
 
     def test_stating_a_default_does_not_change_the_spool(self, patch, inventory):
         """Spools which enrich identically are the same spool."""
         plain = dc.spool(patch)
-        assert plain.enrich(inventory) == plain.enrich(
-            inventory, attrs=True, coords=True, conflicts="keep_first"
+        attached = plain.attach_inventory(inventory)
+        assert attached.enrich() == attached.enrich(
+            attrs=True, coords=True, conflict="keep_first"
         )
 
     def test_name_collections_compare_by_content(self, patch, inventory):
         """A list of names asks for what a tuple of them asks for."""
         plain = dc.spool(patch)
-        tupled = plain.enrich(inventory, attrs=("gauge_length",))
-        assert tupled == plain.enrich(inventory, attrs=["gauge_length"])
+        tupled = plain.attach_inventory(inventory).enrich(attrs=("gauge_length",))
+        assert tupled == plain.attach_inventory(inventory).enrich(
+            attrs=["gauge_length"]
+        )
 
     def test_update_keeps_the_inventory(self, patch, inventory, tmp_path):
         """Re-reading the file is no reason to stop enriching."""
         path = tmp_path / "patch.h5"
         dc.write(patch, path, "dasdae")
-        spool = dc.spool(path).enrich(inventory)
+        spool = dc.spool(path).attach_inventory(inventory).enrich()
         updated = spool.update()
         assert updated._inventory is inventory
         assert updated[0].attrs.gauge_length == 10.0
@@ -1738,8 +1783,9 @@ class TestThirdReviewFindings:
         long_key = "DAS." + "A" * 70 + "..RAW"
         with pytest.raises(InvalidInventoryError, match="characters"):
             inventory.resolve(long_key)
-        spool = dc.spool(patch.update_attrs(acquisition_key="")).enrich(
-            inventory, acquisition_key=long_key, on_unresolved="ignore"
+        bare = dc.spool(patch.update_attrs(acquisition_key=""))
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key=long_key, on_unresolved="ignore"
         )
         with pytest.raises(InvalidInventoryError, match="characters"):
             spool[0]
@@ -1902,7 +1948,7 @@ class TestInventorySelect:
 
     def test_enrichment_survives(self, two_patch_spool, inventory):
         """The derived spool is the same spool, inventory and all."""
-        spool = two_patch_spool.enrich(inventory)
+        spool = two_patch_spool.attach_inventory(inventory).enrich()
         out = spool.select(gauge_length=10.0)
         assert out[0].attrs.gauge_length == 10.0
 
@@ -2443,7 +2489,7 @@ class TestConformBoundaryPolicy:
         data, so a sample dropped or duplicated at the seam would be the
         one failure the whole operation cannot afford.
         """
-        spool = dc.spool(patch).conform_to_inventory(path_epochs)
+        spool = dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
         assert len(spool) == 2
         first, second = spool[0], spool[1]
         times = np.concatenate(
@@ -2467,7 +2513,7 @@ class TestConformBoundaryPolicy:
         coord = patch.get_coord("time")
         naive = off_grid_boundary - coord.step
         (_, first_end), (second_start, _) = _pieces(
-            dc.spool(patch).conform_to_inventory(path_epochs)
+            dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
         )
         # the sample the naive convention would have dropped
         assert naive < first_end < off_grid_boundary
@@ -2485,7 +2531,7 @@ class TestConformBoundaryPolicy:
         on_grid = coord.min() + coord.step * 10
         split = _split_epochs(inventory, on_grid, second={"name": "moved"})
         (_, first_end), (second_start, _) = _pieces(
-            dc.spool(patch).conform_to_inventory(split)
+            dc.spool(patch).attach_inventory(split).conform_to_inventory()
         )
         assert second_start == on_grid
         assert first_end == on_grid - coord.step
@@ -2507,7 +2553,7 @@ class TestConformBoundaryPolicy:
         spool = dc.spool(uneven)
         named = re.escape(spool.get_contents()["source_path"].iloc[0])
         with pytest.raises(PatchError, match=f"no time step.*{named}"):
-            spool.conform_to_inventory(split)
+            spool.attach_inventory(split).conform_to_inventory()
 
     def test_a_row_with_no_instants_is_undescribed(self, patch, path_epochs):
         """
@@ -2525,7 +2571,7 @@ class TestConformBoundaryPolicy:
         # instants rather than a time column of another kind entirely
         spool = dc.spool([patch, undated]).attach_inventory(path_epochs)
         assert pd.isnull(spool.get_contents()["time_min"]).any()
-        out = spool.conform_to_inventory(on_unresolved="drop")
+        out = spool.conform_to_inventory(on_unresolved="ignore")
         assert set(out.get_contents()["tag"]) == {"random"}
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
@@ -2539,7 +2585,7 @@ class TestConformBoundaryPolicy:
         """
         bare = patch.update_attrs(acquisition_key="", tag="bare")
         spool = dc.spool([patch, bare]).attach_inventory(path_epochs)
-        out = spool.conform_to_inventory(on_unresolved="drop")
+        out = spool.conform_to_inventory(on_unresolved="ignore")
         assert set(out.get_contents()["tag"]) == {"random"}
 
     def test_a_relative_time_axis_is_undescribed(self, patch, path_epochs):
@@ -2553,7 +2599,7 @@ class TestConformBoundaryPolicy:
         coord = patch.get_coord("time")
         lags = patch.update_coords(time=coord.values - coord.min())
         spool = dc.spool(lags).attach_inventory(path_epochs)
-        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+        assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
@@ -2574,7 +2620,9 @@ class TestConformBoundaryPolicy:
             "DAS.R2D1..OTHER",
             "DAS.R2D1..RAW",
         ]
-        conformed = merged.conform_to_inventory(path_epochs, on_unresolved="drop")
+        conformed = merged.attach_inventory(path_epochs).conform_to_inventory(
+            on_unresolved="ignore"
+        )
         assert set(conformed.get_contents()["acquisition_key"]) == {"DAS.R2D1..RAW"}
         with pytest.raises(CoordMergeError, match="acquisition_key"):
             spool.chunk(time=None, group="tag")
@@ -2591,7 +2639,7 @@ class TestConformBoundaryPolicy:
         merged = dc.spool([patch, other]).chunk(time=None, group="tag", conflict="drop")
         assert "acquisition_key" not in merged.get_contents().columns
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
-            merged.conform_to_inventory(path_epochs)
+            merged.attach_inventory(path_epochs).conform_to_inventory()
 
 
 class TestConformMembership:
@@ -2606,7 +2654,7 @@ class TestConformMembership:
         """A patch naming an entry the inventory lacks is not conformable."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="other")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        out = spool.conform_to_inventory(on_unresolved="drop")
+        out = spool.conform_to_inventory(on_unresolved="ignore")
         assert out.get_contents()["tag"].tolist() == ["random"]
 
     def test_warn_drops_and_names_them(self, patch, inventory):
@@ -2640,7 +2688,7 @@ class TestConformMembership:
         # so an agreement of zeroes cannot stand in for the real thing
         filtered = dc.spool([patch, other]).attach_inventory(inventory)
         for out, expected in ((subdivided, 2), (filtered, 1)):
-            out = out.conform_to_inventory(on_unresolved="drop")
+            out = out.conform_to_inventory(on_unresolved="ignore")
             assert len(out) == len(out.get_contents()) == len(list(out)) == expected
 
     def test_needs_an_inventory(self, patch):
@@ -2650,17 +2698,17 @@ class TestConformMembership:
 
     def test_an_empty_spool_conforms_to_nothing(self, inventory):
         """No rows to resolve is not a reason to fail."""
-        assert len(dc.spool([]).conform_to_inventory(inventory)) == 0
+        assert len(dc.spool([]).attach_inventory(inventory).conform_to_inventory()) == 0
 
     def test_policy_is_checked(self, patch, inventory):
         """A misspelled policy is caught before any row is resolved."""
         spool = dc.spool(patch).attach_inventory(inventory)
         with pytest.raises(ParameterError, match="on_unresolved must be"):
-            spool.conform_to_inventory(on_unresolved="ignore")
+            spool.conform_to_inventory(on_unresolved="drop")
 
-    def test_a_passed_inventory_attaches(self, patch, inventory):
-        """Passing one is also how to attach it, as with enrich."""
-        out = dc.spool(patch).conform_to_inventory(inventory)
+    def test_conform_keeps_the_attached_inventory(self, patch, inventory):
+        """Conforming leaves the spool carrying what it conformed to."""
+        out = dc.spool(patch).attach_inventory(inventory).conform_to_inventory()
         assert out._inventory is inventory
         assert out.enrich()[0].attrs.gauge_length == 10.0
 
@@ -2668,7 +2716,7 @@ class TestConformMembership:
         """A spool whose rows name no entry has nothing to resolve with."""
         spool = dc.spool([dc.get_example_patch()]).attach_inventory(inventory)
         assert "acquisition_key" not in spool.get_contents().columns
-        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+        assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
 
 
 class TestConformSubdivision:
@@ -2719,7 +2767,7 @@ class TestConformSubdivision:
             old.new(start_time=edges[1], name="last"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
-        out = dc.spool(patch).conform_to_inventory(split)
+        out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
         assert len(out) == 3
         starts = [x[0] for x in _pieces(out)]
         assert starts[1] == edges[0] and starts[2] == edges[1]
@@ -2742,7 +2790,7 @@ class TestConformSubdivision:
             old.new(start_time=edges[1], name="after"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
-        out = dc.spool(patch).conform_to_inventory(split)
+        out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
         assert len(out) == 2
         assert _pieces(out)[1][0] == edges[1]
         assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
@@ -2753,7 +2801,7 @@ class TestConformSubdivision:
         split = _split_epochs(
             inventory, coord.max() + coord.step * 10, second={"name": "later"}
         )
-        assert len(dc.spool(patch).conform_to_inventory(split)) == 1
+        assert len(dc.spool(patch).attach_inventory(split).conform_to_inventory()) == 1
 
     def test_a_boundary_which_changes_nothing_cuts_nothing(self, patch, inventory):
         """
@@ -2780,7 +2828,9 @@ class TestConformSubdivision:
         ).check()
         # the bound really does fall inside the row
         assert coord.min() < when <= coord.max()
-        assert len(dc.spool(patch).conform_to_inventory(renamed)) == 1
+        assert (
+            len(dc.spool(patch).attach_inventory(renamed).conform_to_inventory()) == 1
+        )
         # and enrich agrees, which is the point of comparing by value
         assert patch.enrich(renamed).attrs.gauge_length == 10.0
 
@@ -2827,7 +2877,7 @@ class TestConformSubdivision:
         )
         spool = dc.spool(patch).attach_inventory(split)
         named = re.escape(spool.get_contents()["source_path"].iloc[0])
-        for policy in ("raise", "warn", "drop"):
+        for policy in ("raise", "warn", "ignore"):
             with pytest.raises(
                 PatchError, match=f"change of acquisition.*{named} \\(at .*"
             ):
@@ -2839,7 +2889,7 @@ class TestConformComposition:
 
     def test_conform_is_idempotent(self, patch, path_epochs):
         """The pieces of a conformed spool each sit inside one epoch."""
-        once = dc.spool(patch).conform_to_inventory(path_epochs)
+        once = dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
         twice = once.conform_to_inventory()
         assert len(twice) == len(once) == 2
         assert _pieces(twice) == _pieces(once)
@@ -2856,14 +2906,14 @@ class TestConformComposition:
         split = _split_epochs(inventory, when, second={"name": "moved"})
         chunked = dc.spool(patch).chunk(time=4)
         assert len(chunked) == 2
-        out = chunked.conform_to_inventory(split)
+        out = chunked.attach_inventory(split).conform_to_inventory()
         assert len(out) == 3
         assert [x[0] for x in _pieces(out)][2] == when
         assert out[2].get_coord("time").min() == when
 
     def test_selecting_after_conforming(self, patch, path_epochs, off_grid_boundary):
         """The pieces are ordinary rows, so ordinary selection reaches them."""
-        out = dc.spool(patch).conform_to_inventory(path_epochs)
+        out = dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
         late = out.select(time=(off_grid_boundary, None))
         assert len(late) == 1
         assert late[0].get_coord("time").min() >= off_grid_boundary
@@ -2887,7 +2937,7 @@ class TestConformComposition:
         split = _split_epochs(
             inventory, coord.min() + coord.step * 500, second={"name": "moved"}
         )
-        out = dc.spool(path).update().conform_to_inventory(split)
+        out = dc.spool(path).update().attach_inventory(split).conform_to_inventory()
         assert len(out) == 2
         first, second = out[0], out[1]
         assert first.shape[1] == 500
@@ -2919,7 +2969,7 @@ class TestConformPartialCoverage:
             ),
         ).check()
         spool = dc.spool(patch).attach_inventory(lapsed)
-        assert len(spool.conform_to_inventory(on_unresolved="drop")) == 0
+        assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
@@ -2943,7 +2993,7 @@ class TestConformPartialCoverage:
                 optical_paths=(array.optical_paths[0].new(end_time=off_grid_boundary),)
             ),
         ).check()
-        out = dc.spool(patch).conform_to_inventory(lapsed)
+        out = dc.spool(patch).attach_inventory(lapsed).conform_to_inventory()
         assert len(out) == 2
         first, second = out.enrich(coords=True)
         assert "zone" in first.coords.coord_map
@@ -2980,22 +3030,22 @@ class TestConformAndEnrichment:
 
     def test_conforming_keeps_enrichment(self, patch, path_epochs):
         """The spool's own inventory is not a new one, so nothing is swapped."""
-        spool = dc.spool(patch).enrich(path_epochs, coords=False)
+        spool = dc.spool(patch).attach_inventory(path_epochs).enrich(coords=False)
         out = spool.conform_to_inventory()
         assert out._enrich_kwargs is not None
         assert out[0].attrs.gauge_length == 10.0
 
-    def test_passing_an_inventory_clears_enrichment(self, patch, path_epochs):
+    def test_reattaching_clears_enrichment(self, patch, path_epochs):
         """
-        Passing one attaches it, and attaching always clears enrichment.
+        Attaching always clears enrichment, and conform sees that.
 
         Swapping the source underneath a configured enrichment would
         rewrite every patch's metadata, so the new one has to be asked
-        for — the rule `attach_inventory` sets, which conform inherits
-        by taking its inventory the same way `enrich` does.
+        for. `attach_inventory` is the only way a spool gets an
+        inventory, so it is the only place that rule is needed.
         """
-        spool = dc.spool(patch).enrich(path_epochs, coords=False)
-        out = spool.conform_to_inventory(path_epochs)
+        spool = dc.spool(patch).attach_inventory(path_epochs).enrich(coords=False)
+        out = spool.attach_inventory(path_epochs).conform_to_inventory()
         assert out._enrich_kwargs is None
         assert "gauge_length" not in dict(out[0].attrs)
 
@@ -3345,7 +3395,7 @@ class TestSplitBy:
     def test_one_patch_per_value(self, patch, inventory):
         """The example path annotates two zones, so two patches come out."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone")
+        out = spool.expand_by("zone")
         assert len(out) == 2
         assert out.get_contents()["zone"].tolist() == ["north", "south"]
 
@@ -3353,7 +3403,7 @@ class TestSplitBy:
         """Each output holds the rows its value covers, and no others."""
         spool = dc.spool(patch).attach_inventory(inventory)
         whole = patch.get_array("distance")
-        pieces = list(spool.split_by("zone"))
+        pieces = list(spool.expand_by("zone"))
         assert len(pieces) == 2
         for piece in pieces:
             rows = np.searchsorted(whole, piece.get_array("distance"))
@@ -3362,12 +3412,12 @@ class TestSplitBy:
     def test_the_value_is_stamped_on_the_patch(self, patch, inventory):
         """So overlapping siblings stay apart once they are patches."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        assert [x.attrs.zone for x in spool.split_by("zone")] == ["north", "south"]
+        assert [x.attrs.zone for x in spool.expand_by("zone")] == ["north", "south"]
 
     def test_stamp_false_leaves_the_attrs_alone(self, patch, inventory):
         """Which is what a nested split wants of the second one."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone", stamp=False)
+        out = spool.expand_by("zone", stamp=False)
         assert len(out) == 2  # the split still happened; only the stamp is off
         assert "zone" not in out.get_contents().columns
         assert not any(dict(x.attrs).get("zone") for x in out)
@@ -3381,7 +3431,7 @@ class TestSplitBy:
         while resolving `zone` along the fiber again would trim it.
         """
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone")
+        out = spool.expand_by("zone")
         north = out.select(zone="north")
         assert len(north) == 1
         assert north[0].shape == out[0].shape
@@ -3389,7 +3439,7 @@ class TestSplitBy:
     def test_a_membership_group_splits_in_two(self, patch, inventory):
         """Both sides come out: the channels included and those not."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("noisy")
+        out = spool.expand_by("noisy")
         assert sorted(out.get_contents()["noisy"].tolist()) == [False, False, True]
 
     def test_one_split_partitions_the_channels(self, patch, inventory):
@@ -3404,31 +3454,31 @@ class TestSplitBy:
         """
         spool = dc.spool(patch).attach_inventory(inventory)
         for group in ("zone", "noisy"):
-            channels = _channels(spool.split_by(group))
+            channels = _channels(spool.expand_by(group))
             assert sorted(channels) == sorted(patch.get_array("distance"))
             assert len(channels) == len(set(channels.tolist()))
         # The two groups do not agree about where the fiber divides.
-        zoned = {tuple(x.get_array("distance")) for x in spool.split_by("zone")}
-        noisy = {tuple(x.get_array("distance")) for x in spool.split_by("noisy")}
+        zoned = {tuple(x.get_array("distance")) for x in spool.expand_by("zone")}
+        noisy = {tuple(x.get_array("distance")) for x in spool.expand_by("noisy")}
         assert zoned != noisy
 
     def test_a_disjoint_value_becomes_several_patches(self, patch, two_zones):
         """One value covering two stretches keeps them apart."""
         spool = dc.spool(patch).attach_inventory(two_zones)
-        out = spool.split_by("hole")
+        out = spool.expand_by("hole")
         assert len(out) == 2
         assert out.get_contents()["hole"].tolist() == ["a", "a"]
 
     def test_include_keeps_only_what_it_names(self, patch, inventory):
         """The globs read the value written as a string."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone", include="nor*")
+        out = spool.expand_by("zone", include="nor*")
         assert out.get_contents()["zone"].tolist() == ["north"]
 
     def test_exclude_wins_over_include(self, patch, inventory):
         """So naming a family and carving one out of it reads either way."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone", include=("nor*", "sou*"), exclude="north")
+        out = spool.expand_by("zone", include=("nor*", "sou*"), exclude="north")
         assert out.get_contents()["zone"].tolist() == ["south"]
 
     def test_a_name_the_inventory_lacks_raises(self, patch, inventory):
@@ -3441,17 +3491,17 @@ class TestSplitBy:
         """
         spool = dc.spool(patch).attach_inventory(inventory)
         with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):
-            spool.split_by("not_a_group")
+            spool.expand_by("not_a_group")
 
     def test_needs_an_inventory(self, patch):
         """The values it expands into are ones an inventory states."""
         with pytest.raises(ParameterError, match="needs an inventory"):
-            dc.spool(patch).split_by("zone")
+            dc.spool(patch).expand_by("zone")
 
     def test_a_nested_split_keeps_the_first_stamp(self, patch, inventory):
         """Which is what `stamp=False` is for."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        out = spool.split_by("zone").split_by("noisy", stamp=False)
+        out = spool.expand_by("zone").expand_by("noisy", stamp=False)
         assert set(out.get_contents()["zone"]) == {"north", "south"}
 
 
@@ -3560,13 +3610,13 @@ class TestChannelSelectEdges:
         """No fiber to split on means no output, not an error."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool(other).attach_inventory(inventory)
-        assert len(spool.split_by("zone")) == 0
+        assert len(spool.expand_by("zone")) == 0
 
     def test_splitting_skips_a_row_it_cannot_place(self, patch, inventory):
         """A described patch splits; one the inventory is silent about does not."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="second")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        out = spool.split_by("zone")
+        out = spool.expand_by("zone")
         assert out.get_contents()["zone"].tolist() == ["north", "south"]
 
     def test_splitting_an_unevenly_sampled_patch_refuses(self, patch, inventory):
@@ -3574,7 +3624,7 @@ class TestChannelSelectEdges:
         holed = patch.unselect(distance=(50, 200))
         spool = dc.spool(holed).attach_inventory(inventory)
         with pytest.raises(PatchError, match="no channel spacing"):
-            spool.split_by("zone")
+            spool.expand_by("zone")
 
     def test_one_patch_carrying_two_channel_axes_refuses(self, patch, inventory):
         """
@@ -3612,7 +3662,7 @@ class TestChannelSelectEdges:
         """Without instants there is no context to read a group from."""
         lags = patch.get_coord("time").values - patch.get_coord("time").min()
         spool = dc.spool(patch.update_coords(time=lags)).attach_inventory(inventory)
-        assert len(spool.split_by("zone")) == 0
+        assert len(spool.expand_by("zone")) == 0
 
 
 @pytest.fixture(scope="module")
@@ -3698,11 +3748,11 @@ class TestChannelSelectAlignment:
         assert sorted(dropped["unknown"]) == whole
 
     def test_splitting_keeps_each_patch_with_its_value(self, uneven_spool):
-        """split_by builds the same plan, so it aligns the same way."""
+        """expand_by builds the same plan, so it aligns the same way."""
         spool, patches = uneven_spool
         sources = {x.attrs.tag: x for x in patches}
         whole = patches[0].get_array("distance")
-        out = spool.split_by("hole")
+        out = spool.expand_by("hole")
         assert out.get_contents()["hole"].tolist() == ["a", "a", "a"]
         for piece in out:
             source = sources[piece.attrs.tag]
@@ -3791,7 +3841,7 @@ class TestChannelReviewFindings:
         spool = dc.spool(patch).attach_inventory(pathless)
         assert "x" in pathless.get_names().coords
         assert len(spool.select(x=(-1e9, 1e9))) == 0
-        assert len(spool.split_by("x")) == 0
+        assert len(spool.expand_by("x")) == 0
 
     def test_a_unit_bearing_selector_is_converted(self, patch, inventory):
         """
@@ -3880,7 +3930,7 @@ class TestChannelReviewFindings:
         because chunking a derived catalog is broken on dev already
         (#871) and would fail here for a reason of its own.
         """
-        conformed = dc.spool(patch).conform_to_inventory(path_epochs)
+        conformed = dc.spool(patch).attach_inventory(path_epochs).conform_to_inventory()
         assert len(conformed) == 2
         assert not conformed._catalog.resolver.lossy
         selected = dc.spool(patch).attach_inventory(inventory).select(coupling="trench")
@@ -3909,9 +3959,9 @@ class TestChannelReviewFindings:
         )
         spool = dc.spool(patch).attach_inventory(clash)
         with pytest.raises(InvalidSpoolQueryError, match="overwrite"):
-            spool.split_by("output_id")
+            spool.expand_by("output_id")
         # Splitting on it is still legal; only recording the value is not.
-        assert len(spool.split_by("output_id", stamp=False)) == 1
+        assert len(spool.expand_by("output_id", stamp=False)) == 1
 
     def test_a_no_op_channel_selector_does_not_veto_a_flag(self, patch, inventory):
         """

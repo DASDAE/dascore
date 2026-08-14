@@ -1319,7 +1319,7 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
         One sequence of inclusive `(low, high)` envelopes per row, in the
         row's own units and already on its sample grid. They must be
         disjoint within a row but need not be in envelope order —
-        `Spool.split_by` emits them grouped by value. `subdivision_pieces`
+        `Spool.expand_by` emits them grouped by value. `subdivision_pieces`
         builds them from cut values, and a mask over the row's samples
         gives them directly.
     name

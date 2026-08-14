@@ -517,7 +517,7 @@ class PlanResolver(PatchResolver):
 
         An output is assembled from its members, so it carries their
         attrs and knows nothing of why it was cut out. `stamped` is how
-        an operation which does know says so -- `Spool.split_by`
+        an operation which does know says so -- `Spool.expand_by`
         recording which value each patch was split on -- and it keeps
         the patch which comes out agreeing with the row `get_contents`
         shows for it.

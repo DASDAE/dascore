@@ -26,6 +26,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     align_patch_coords,
+    check_dims,
     concatenate_patches,
     get_dim_axis_value,
     get_patch_names,
@@ -784,14 +785,35 @@ class TestStackPatches:
         # Or a warning issued.
         with pytest.warns(UserWarning, match=msg):
             stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # Or the incompatible patch skipped without a word -- skipped
+        # being the point: a quiet policy must not stack it anyway.
+        with suppress_warnings(action="error"):
+            quiet = stack_patches(spool, dim_vary="time", check_behavior="ignore")
+        assert np.allclose(quiet.data, patch1.data)
+
+    def test_retired_check_behavior_raises(self, random_spool):
+        """None used to mean "ignore"; one spelling of it survives."""
+        patch1, patch2 = random_spool[0], random_spool[1]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            stack_patches(spool, dim_vary="time", check_behavior=None)
+
+    def test_retired_check_behavior_raises_on_compatible_patches(self, random_patch):
+        """Acceptance must not wait for data which happens to disagree."""
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            check_dims(random_patch, random_patch, check_behavior=None)
 
     def test_different_dimensions(self, random_spool):
         """Tests for when the spool has patches with different dimensions."""
+        first = random_spool[1]
         new_patch = random_spool[0].rename_coords(time="money")
-        spool = dc.spool([random_spool[1], new_patch])
+        spool = dc.spool([first, new_patch])
         msg = "not compatible for merging"
         with pytest.warns(UserWarning, match=msg):
-            stack_patches(spool, dim_vary="time", check_behavior="warn")
+            out = stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # The mismatched patch is left out rather than summed in.
+        assert np.allclose(out.data, first.data)
 
     def test_bad_dim_vary(self, random_spool):
         """Ensure when dim_vary is not in patch an error is raised."""

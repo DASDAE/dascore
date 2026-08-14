@@ -13,7 +13,7 @@ from dascore.constants import (
     INVENTORY_ATTRS,
     PatchType,
     enrich_attrs_description,
-    enrich_conflicts_description,
+    enrich_conflict_description,
     enrich_coords_description,
     enrich_on_missing_description,
 )
@@ -40,7 +40,7 @@ from dascore.proc.coords import update_coords
 from dascore.units import get_quantity_str
 from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import iterate, validate_acquisition_key
+from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
@@ -56,7 +56,7 @@ _DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 # as-acquired value.
 _COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
-OnMissing = Literal["raise", "null", "ignore"]
+OnMissing = Literal["raise", "warn", "ignore", "null"]
 _VALID_ON_MISSING = get_args(OnMissing)
 
 # Tracks whose fields enrich can project. The inventory names them, so a
@@ -447,7 +447,7 @@ def _get_system_attrs(inventory, context) -> dict:
 
 def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
     """Return the attrs to copy, honoring on_missing for named requests."""
-    if attrs is False or attrs is None:
+    if attrs is False:
         return {}
     system = _get_system_attrs(inventory, context)
     if attrs is True:
@@ -461,15 +461,20 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
     for name in iterate(attrs):
         if name in available:
             out[name] = available[name]
-        elif on_missing == "raise":
-            msg = (
-                f"The inventory defines no {name!r} for "
-                f"{context.acquisition.code!r}; use on_missing to allow it."
-            )
-            raise PatchError(msg)
         elif on_missing == "null":
             out[name] = _missing_marker(context, name)
+        else:
+            _report_missing(context, name, on_missing)
     return out
+
+
+def _report_missing(context, name, on_missing, subject: str = "") -> None:
+    """Raise or warn about a requested name the inventory does not define."""
+    msg = (
+        f"The inventory defines no {name!r} for {subject}"
+        f"{context.acquisition.code!r}; use on_missing to allow it."
+    )
+    warn_or_raise(msg, PatchError, behavior=on_missing)
 
 
 def _missing_marker(context, name):
@@ -505,7 +510,7 @@ def _is_unset(value) -> bool:
     return isinstance(value, float | np.floating) and bool(np.isnan(value))
 
 
-def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
+def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
 
@@ -518,14 +523,14 @@ def _apply_conflicts(patch, new_attrs, conflicts) -> tuple[dict, list]:
         old = current.get(name, None)
         if _is_unset(old) or values_equal(old, value):
             updates[name] = value
-        elif conflicts == "raise":
+        elif conflict == "raise":
             msg = (
                 f"The patch's {name!r} is {old!r} but the inventory says "
                 f"{value!r}. A disagreement here usually means the "
                 "acquisition_key resolved to the wrong place."
             )
             raise PatchError(msg)
-        elif conflicts == "drop":
+        elif conflict == "drop":
             drops.append(name)
         else:  # keep_first: enrichment puts the inventory's value first
             updates[name] = value
@@ -1180,18 +1185,27 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             )
             raise PatchError(msg)
         if values is None:
-            if blanket or on_missing == "ignore":
+            # A blanket request asks for the names the path itself lists,
+            # so one of those without values would be the inventory
+            # disagreeing with itself rather than a gap to have a policy about.
+            assert not blanket, f"blanket name {name!r} resolved to nothing"
+            if on_missing != "null":
+                _report_missing(context, name, on_missing, "the optical path of ")
                 continue
-            if on_missing == "raise":
-                msg = (
-                    f"The inventory defines no {name!r} for the optical path "
-                    f"of {context.acquisition.code!r}; use on_missing to "
-                    "allow it."
-                )
-                raise PatchError(msg)
             values = np.full(len(distances), np.nan)
         out[name] = (dim, values)
     return out
+
+
+def validate_enrich_selection(attrs, coords) -> None:
+    """Refuse None, the retired spelling of enrich's False off switch."""
+    for label, value in (("attrs", attrs), ("coords", coords)):
+        if value is None:
+            msg = (
+                f"enrich's {label} must be True, False, or a collection of "
+                "names; pass False to copy none."
+            )
+            raise ParameterError(msg)
 
 
 @patch_function()
@@ -1199,7 +1213,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     attrs_desc=enrich_attrs_description,
     coords_desc=enrich_coords_description,
     on_missing_desc=enrich_on_missing_description,
-    conflicts_desc=enrich_conflicts_description,
+    conflict_desc=enrich_conflict_description,
 )
 def enrich(
     patch: PatchType,
@@ -1209,7 +1223,7 @@ def enrich(
     acquisition_key: str | None = None,
     time=None,
     on_missing: OnMissing = "raise",
-    conflicts: Literal["drop", "raise", "keep_first"] = "keep_first",
+    conflict: Literal["drop", "raise", "keep_first"] = "keep_first",
 ) -> PatchType:
     """
     Copy inventory metadata onto a patch.
@@ -1235,7 +1249,7 @@ def enrich(
         physical. A patch with a real time coordinate resolves at its own
         time and passing this raises.
     {on_missing_desc}
-    {conflicts_desc}
+    {conflict_desc}
 
     Examples
     --------
@@ -1250,17 +1264,18 @@ def enrich(
     ...     inventory, attrs=("gauge_length",), coords=("x", "y", "z"),
     ... )
     """
-    validate_conflict(conflicts)
+    validate_conflict(conflict)
     if on_missing not in _VALID_ON_MISSING:
         msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
+    validate_enrich_selection(attrs, coords)
     source_id = _get_acquisition_key(patch, acquisition_key)
     times = _get_resolution_times(patch, time)
     context = _resolve_context(inventory, source_id, times)
     new_attrs = _get_attr_values(inventory, context, attrs, on_missing)
-    updates, drops = _apply_conflicts(patch, new_attrs, conflicts)
+    updates, drops = _apply_conflict(patch, new_attrs, conflict)
     new_coords = {}
-    if coords is not False and coords is not None:
+    if coords is not False:
         new_coords = _get_coords(inventory, context, patch, coords, on_missing)
     out = patch
     if drops:

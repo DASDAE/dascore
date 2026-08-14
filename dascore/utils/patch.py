@@ -43,6 +43,7 @@ from dascore.utils.misc import (
     get_middle_value,
     iterate,
     to_object_array,
+    validate_warn_level,
     warn_or_raise,
     yield_sub_sequences,
 )
@@ -537,7 +538,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
-    conf = attr_kwargs.get("conflicts", None)
+    conf = attr_kwargs.get("conflict", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_merged_coord(
         df, merge_dim, coords, drop_conf_coords, **coord_kwargs
@@ -1121,14 +1122,14 @@ def check_dims(
         second patch
     check_behavior
         String with 'raise' will raise an error if incompatible,
-        'warn' will provide a warning, None will do nothing.
+        'warn' will provide a warning, 'ignore' will do nothing.
     intersection
         If True, allow any intersection of dimensions to pass. This is useful
         when only broadcastability needs to be checked. If false require dims
         to be equal.
     """
+    validate_warn_level(check_behavior)
     dims1, dims2 = patch1.dims, patch2.dims
-    dims_ok = True
     if not intersection and patch1.dims == patch2.dims:
         return True
     dset1, dset2 = set(dims1), set(dims2)
@@ -1139,7 +1140,9 @@ def check_dims(
         f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
-    return dims_ok
+    # The quiet policies skip the patch rather than accept it, as
+    # check_coords does; saying True here stacked it anyway.
+    return False
 
 
 def check_coords(
@@ -1169,6 +1172,7 @@ def check_coords(
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
     """
+    validate_warn_level(check_behavior)
     cm1 = patch1.coords
     cm2 = patch2.coords
     cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
@@ -1244,7 +1248,7 @@ def _merge_models(attrs1, attrs2, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
             f"are not equal. {ne_attrs}"
         )
         raise IncompatiblePatchError(msg)
-    return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+    return combine_patch_attrs([dict1, dict2], conflict="keep_first")
 
 
 def merge_compatible_coords_attrs(

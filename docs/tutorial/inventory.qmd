@@ -168,6 +168,8 @@ Listing a name is not promising a value for it. This example states no geometry,
 
 [`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and touches no data. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for. Attaching a *different* inventory does clear any enrichment set up from the old one, since applying the old instructions to new metadata would rewrite every patch behind your back.
 
+It is also the only way a spool gets an inventory: `enrich` and `conform_to_inventory` read the attached one rather than taking their own, so the spool has one answer to which inventory it means.
+
 ```{python}
 spool = dc.spool(patch).attach_inventory(example_inventory)
 
@@ -175,14 +177,14 @@ spool = dc.spool(patch).attach_inventory(example_inventory)
 assert "gauge_length" not in dict(spool[0].attrs)
 ```
 
-What attaching *does* change is which names resolve. The coordinates the inventory defines along the fiber become selectable, and [`Spool.split_by`](`dascore.core.spool.Spool.split_by`) can expand the spool by the values of one:
+What attaching *does* change is which names resolve. The coordinates the inventory defines along the fiber become selectable, and [`Spool.expand_by`](`dascore.core.spool.Spool.expand_by`) can expand the spool by the values of one:
 
 ```{python}
 # Keep only the channels the inventory places in the northern zone.
 northern = spool.select(zone="north")
 
 # Or get one patch per zone, each holding that zone's channels.
-zones = spool.split_by("zone")
+zones = spool.expand_by("zone")
 assert len(zones) == 2
 assert set(zones.get_contents()["zone"]) == {"north", "south"}
 ```
@@ -203,7 +205,7 @@ assert "zone" in patch_out.coords.coord_map
 
 Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
 
-A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state:
+A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state. It takes the inventory as an argument, since only a spool carries one:
 
 ```{python}
 one = patch.enrich(example_inventory)
@@ -212,7 +214,7 @@ assert one.attrs.gauge_length == 10.0
 
 # Conforming a spool
 
-[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, refuses patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink. Pass `on_unresolved="drop"` (or `"warn"`) to drop the undescribed patches instead of raising, which is what an inventory deliberately covering part of an archive wants.
+[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, refuses patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink. Pass `on_unresolved="ignore"` (or `"warn"`) to drop the undescribed patches instead of raising, which is what an inventory deliberately covering part of an archive wants.
 
 ```{python}
 # A second patch this inventory says nothing about.
@@ -221,7 +223,7 @@ mixed = dc.spool([patch, stranger]).attach_inventory(example_inventory)
 assert len(mixed) == 2
 
 # Conforming keeps only what the inventory describes.
-conformed = mixed.conform_to_inventory(on_unresolved="drop")
+conformed = mixed.conform_to_inventory(on_unresolved="ignore")
 assert len(conformed) == 1
 assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
 ```
@@ -271,7 +273,7 @@ refreshed = carrying.attach_inventory()
 assert refreshed.enrich()[0].attrs.gauge_length == 12.0
 ```
 
-`attach_inventory`, `enrich`, and `conform_to_inventory` all accept a path as well as an `Inventory`, read on the same terms.
+`attach_inventory` accepts a path as well as an `Inventory`, read on the same terms — and it is the only one of the three that takes either, since `enrich` and `conform_to_inventory` read what it attached.
 
 # Serializing
 

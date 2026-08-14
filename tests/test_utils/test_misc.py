@@ -16,7 +16,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import (
     _get_install_name,
     _iter_filesystem,
@@ -681,11 +681,16 @@ class TestWarnOrRaise:
             warn_or_raise(msg, exception=ValueError, behavior="raise")
 
     def test_nothing(self):
-        """Ensure when  None does nothing."""
+        """Ensure "ignore" does nothing."""
         msg = "Big nothing burger"
         # Now exceptions or warnings will crash the program.
         with suppress_warnings(action="error"):
-            warn_or_raise(msg, behavior=None)
+            warn_or_raise(msg, behavior="ignore")
+
+    def test_unknown_behavior_raises(self):
+        """A behavior outside the vocabulary says so rather than warning."""
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            warn_or_raise("nope", behavior=None)
 
 
 class TestSuppressWarnings:
@@ -717,7 +722,7 @@ class TestSpoolMap:
         out = _spool_map(
             spool,
             lambda patch, value=1: len(patch.dims) + value,
-            progress=False,
+            progress=None,
         )
         assert out == [3, 3, 3]
 
@@ -725,7 +730,7 @@ class TestSpoolMap:
         """A client should receive split spools and flatten mapped outputs."""
         seen = []
 
-        def fake_track(iterable, desc):
+        def fake_track(iterable, desc, progress="standard"):
             seen.append(desc)
             return iterable
 
@@ -740,7 +745,7 @@ class TestSpoolMap:
             lambda patch, value=1: len(patch.dims) + value,
             client=DummyClient(),
             size=None,
-            progress=True,
+            progress="standard",
         )
         assert out == [3, 3, 3]
         assert seen == ["Applying <lambda> to spool"]
@@ -756,7 +761,7 @@ class TestSpoolMap:
             dc.spool([]),
             lambda patch: patch,
             client=DummyClient(),
-            progress=False,
+            progress=None,
         )
         assert out == []
 

@@ -24,7 +24,7 @@ _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 
 
 def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
-    """Ensure a conflict(s) argument is a supported value."""
+    """Ensure a conflict argument is a supported value."""
     if conflict not in _VALID_CONFLICT_VALUES:
         msg = f"conflict must be one of {_VALID_CONFLICT_VALUES}, got {conflict!r}."
         raise ParameterError(msg)
@@ -34,7 +34,7 @@ def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
 @compose_docstring(conflict_desc=attr_conflict_description)
 def combine_patch_attrs(
     model_list: Sequence[dc.PatchAttrs],
-    conflicts: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
     drop_attrs: Sequence[str] | None = None,
 ) -> dc.PatchAttrs:
     """
@@ -44,12 +44,12 @@ def combine_patch_attrs(
     ----------
     model_list
         A list of models.
-    conflicts
+    conflict
         {conflict_desc}
     drop_attrs
         If provided, attributes which should be dropped.
     """
-    validate_conflict(conflicts)
+    validate_conflict(conflict)
 
     def _to_patch_attrs(model):
         """Normalize supported attr-like inputs to PatchAttrs."""
@@ -100,14 +100,14 @@ def combine_patch_attrs(
         return out
 
     def _handle_other_attrs(mod_dict_list):
-        """Check the other attributes and handle based on conflicts param."""
-        if conflicts == "keep_first":
+        """Check the other attributes and handle based on conflict param."""
+        if conflict == "keep_first":
             return [dict(ChainMap(*mod_dict_list))]
         no_null_ = _replace_null_with_none(mod_dict_list)
         all_eq = all(no_null_[0] == x for x in no_null_[1:])
         if all_eq:
             return mod_dict_list
-        if conflicts == "raise":
+        if conflict == "raise":
             # determine which keys are not equal to help debug.
             uneq_keys = _dict_list_diffs(mod_dict_list)
             msg = (

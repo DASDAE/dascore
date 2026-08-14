@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 from rich.progress import Progress
 
+import dascore as dc
 from dascore.config import config_context
+from dascore.exceptions import ParameterError
 from dascore.utils.progress import get_progress_instance, get_track_length, track
 
 
@@ -60,6 +64,31 @@ class TestProgressBar:
         """Ensure we can return a basic progress bar."""
         pbar = get_progress_instance("basic")
         assert isinstance(pbar, Progress)
+
+    def test_none_disables_the_bar(self):
+        """None is the off switch, and iteration is unaffected."""
+        with config_context(debug=False):
+            assert list(track([1, 2, 3], "off_tracker", None)) == [1, 2, 3]
+
+    @pytest.mark.parametrize("bad", [False, True, "quiet"])
+    def test_a_value_outside_the_levels_raises(self, bad):
+        """Anything else would fall through to the standard bar."""
+        with pytest.raises(ParameterError, match="progress must be one of"):
+            list(track([1, 2, 3], "bad_tracker", bad))
+
+    def test_an_empty_spool_still_refuses_a_bad_level(self):
+        """Acceptance must not depend on there being data to track."""
+        client = ThreadPoolExecutor()
+        try:
+            with pytest.raises(ParameterError, match="progress must be one of"):
+                dc.spool([]).map(lambda patch: patch, client=client, progress=False)
+        finally:
+            client.shutdown()
+
+    def test_a_progress_instance_is_accepted(self):
+        """A caller's own bar is not a level, and is still allowed."""
+        with config_context(debug=False):
+            assert list(track([1, 2, 3], "own_tracker", Progress())) == [1, 2, 3]
 
     def test_basic_progress_refresh_rate_comes_from_config(self, monkeypatch):
         """The basic progress bar should honor the configured refresh rate."""

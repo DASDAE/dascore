@@ -1579,16 +1579,34 @@ def find_inventory(directory: str | os.PathLike) -> Path | None:
     return only
 
 
+def _looks_like_a_path(source: str) -> bool:
+    """
+    Return whether a string which names nothing was meant as a path.
+
+    An inventory is a mapping, so a document holds a key -- a newline or
+    a `key: value` -- and a bare name ending in one of the suffixes the
+    format writes holds neither. `resource_id: archive.yaml` is a
+    document whose value happens to look like a filename, and a Windows
+    drive letter is a colon this test must not read as a key.
+    """
+    document = "\n" in source or ": " in source or source.endswith(":")
+    return not document and _object_suffix(Path(source)) is not None
+
+
 def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     """
     Load or create a DASDAE inventory.
+
+    The one door every source goes through: what a source is decides how
+    it is read, so nothing else has to guess.
 
     Parameters
     ----------
     source
         An existing Inventory (returned as is), a directory in the
-        authoring format, a YAML file path or YAML text, or None for an
-        empty inventory.
+        authoring format, the path of a serialized document, the text of
+        one, or None for an empty inventory. A path is a path when it
+        exists; a string naming nothing is read as the document itself.
 
     Examples
     --------
@@ -1603,13 +1621,19 @@ def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     if isinstance(source, str | os.PathLike):
         if os.path.isdir(source):
             return load_directory(source)
-        # A serialized document is read the way the format reads its own
-        # object files: the suffix picks the parser, so a JSON inventory
-        # loads where PyYAML is not installed, and a file which does not
-        # parse says so as an invalid inventory rather than as whatever
-        # the parser happened to raise.
-        if os.path.isfile(source) and _object_suffix(Path(source)) is not None:
+        if os.path.isfile(source):
+            # A serialized document is read the way the format reads its
+            # own object files: the suffix picks the parser, so a JSON
+            # inventory loads where PyYAML is not installed, a document
+            # named nothing in particular is the format's own YAML, and
+            # every failure names the file it came from.
             return _load_file(Path(source))
+        # Nothing exists there, so it is the text of a document -- unless
+        # it is spelled like the path of one, which is the mistake worth
+        # a better error than "that is not an inventory".
+        if isinstance(source, os.PathLike) or _looks_like_a_path(source):
+            msg = f"No such inventory file: {str(source)!r}."
+            raise InvalidInventoryError(msg)
         return Inventory.from_yaml(source)
     msg = f"Could not get an inventory from {source!r}."
     raise InvalidInventoryError(msg)
