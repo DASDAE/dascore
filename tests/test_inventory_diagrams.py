@@ -54,7 +54,10 @@ def _read_diagrams():
     if not _DOCS_PRESENT:  # nothing to read; every test here is skipped
         return (), ()
     edges, unread = [], []
-    for block in _BLOCK.findall(_PAGE_PATH.read_text()):
+    # Explicitly utf-8: the page is, and the separator this splits labels on is
+    # not ascii, so reading it under a locale which is not utf-8 -- windows --
+    # decodes the separator to something else and quietly stops splitting.
+    for block in _BLOCK.findall(_PAGE_PATH.read_text(encoding="utf-8")):
         for line in block.splitlines():
             if (match := _EDGE.match(line)) is None:
                 if _ARROW.search(line):
