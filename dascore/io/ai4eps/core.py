@@ -73,7 +73,7 @@ class AI4EPSV1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read an AI4EPS file into a spool."""
         patches = _get_patches(
             resource, time=time, distance=distance, attr_cls=AI4EPSPatchAttrs

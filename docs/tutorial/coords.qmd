@@ -14,7 +14,7 @@ In order to manage coordinate labels and array manipulations, DASCore implements
 
 Coordinates usually keep track of labels along an associated dimension of an array, but they can also be independent of array data. They provide methods for slicing, re-ordering, filtering etc. and are used internally by DASCore for such operations.
 
-Much like DASCore's [`Spool`](`dascore.core.spool.BaseSpool`), Coordinates are a collection of classes which implement a common interface. 
+Coordinates are a collection of classes which implement a common interface. 
 
 
 :::{.callout-note}

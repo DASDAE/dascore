@@ -353,7 +353,7 @@ def patch_function(
 
 
 def patches_to_df(
-    patches: Sequence[dc.Patch] | dc.BaseSpool | pd.DataFrame,
+    patches: Sequence[dc.Patch] | dc.Spool | pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Return a dataframe.
@@ -406,11 +406,11 @@ def patches_to_df(
     removed_in="0.2.0",
 )
 def merge_patches(
-    patches: Sequence[dc.Patch] | pd.DataFrame | dc.BaseSpool,
+    patches: Sequence[dc.Patch] | pd.DataFrame | dc.Spool,
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,
-) -> dc.BaseSpool:
+) -> dc.Spool:
     """
     Merge all compatible patches in spool or patch list together.
 
@@ -564,7 +564,7 @@ def get_patch_names(
     # io.core.ScanInput: importing that is circular, and hiding it behind
     # TYPE_CHECKING leaves the annotation unresolvable at runtime, which
     # breaks get_type_hints and the API doc renderer.
-    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool | Iterable[dc.Patch],
+    patch_data: pd.DataFrame | dc.Patch | dc.Spool | Iterable[dc.Patch],
     prefix="DAS",
     attrs=("acquisition_key", "tag"),
     coords=("time",),
@@ -603,7 +603,7 @@ def get_patch_names(
     See Also
     --------
     - [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`)
-    - [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`)
+    - [`Spool.get_patch_names`](`dascore.Spool.get_patch_names`)
 
     Examples
     --------
@@ -1331,7 +1331,7 @@ def _spool_up(func):
 
 @compose_docstring(check_bev=check_behavior_description)
 def concatenate_patches(
-    patches: Sequence[dc.Patch] | dc.BaseSpool,
+    patches: Sequence[dc.Patch] | dc.Spool,
     check_behavior: WARN_LEVELS = "warn",
     **kwargs,
 ) -> Sequence[dc.Patch]:
@@ -1373,7 +1373,7 @@ def concatenate_patches(
 
     Notes
     -----
-    - [`Spool.chunk`](`dascore.BaseSpool.chunk`) performs a similar operation
+    - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
       [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)

@@ -44,7 +44,7 @@ class GDR_V1(FiberIO):  # noqa
 
     def read(
         self, resource: H5Reader, snap=True, time=None, distance=None, **kwargs
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """
         Read a resource belonging to this format.
 

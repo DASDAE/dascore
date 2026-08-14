@@ -129,7 +129,7 @@ class Febus2(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         source_patch_id=(),
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a febus spool of patches."""
         patches = _read_febus(
             resource,
@@ -181,7 +181,7 @@ class FebusG1CSV1(FiberIO):
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
         return [make_scan_payload(attrs=attrs, coords=coords, dtype="float64")]
 
-    def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:
+    def read(self, resource: TextReader, **kwargs) -> dc.Spool:
         """Read a G1 file, return a Patch object."""
         pa = _get_g1_patch(resource, attr_cls=FebusBOTDRStrainAttrs)
         return dc.spool([pa])
@@ -229,7 +229,7 @@ class FebusMTXH5V1(FiberIO):
         time: _time_select_type | None = None,
         distance: _float_select_type | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a Febus MTX HDF5 file into a spool."""
         select_kwargs = {
             key: value
@@ -292,7 +292,7 @@ class FebusBSLH5V1(FiberIO):
         time: _time_select_type | None = None,
         distance: _float_select_type | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a Febus BSL HDF5 file into a spool."""
         select_kwargs = {
             key: value
@@ -348,7 +348,7 @@ class FebusT1V1(FiberIO):
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """
         Read temperature data into a list containing one Patch.
 

@@ -63,7 +63,7 @@ class APSensingV10(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a single file with APSensing data inside."""
         patches = _get_patches(
             resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs

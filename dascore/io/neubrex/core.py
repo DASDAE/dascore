@@ -62,7 +62,7 @@ class NeubrexRFSV1(FiberIO):
 
     def read(
         self, resource: H5Reader, snap=True, time=None, distance=None, **kwargs
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """
         Read a resource belonging to this format.
 
@@ -115,9 +115,7 @@ class NeubrexDASV1(FiberIO):
             return self.name, self.version
         return False
 
-    def read(
-        self, resource: H5Reader, time=None, distance=None, **kwargs
-    ) -> dc.BaseSpool:
+    def read(self, resource: H5Reader, time=None, distance=None, **kwargs) -> dc.Spool:
         """
         Read a resource of this format.
 

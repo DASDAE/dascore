@@ -68,7 +68,7 @@ class ODH4V1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read an ODH4 file into a spool."""
         patches = _get_patches(
             resource, time=time, distance=distance, attr_cls=ODH4PatchAttrs

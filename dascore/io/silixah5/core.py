@@ -74,7 +74,7 @@ class SilixaH5V1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a single file with Silixa H5 data inside."""
         patches = self._patch_getter(
             resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs

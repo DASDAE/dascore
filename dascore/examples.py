@@ -717,7 +717,7 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     return EXAMPLE_PATCHES[example_name](**kwargs)
 
 
-def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
+def get_example_spool(example_name="random_das", **kwargs) -> dc.Spool:
     """
     Load an example Spool.
 

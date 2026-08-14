@@ -79,7 +79,7 @@ class DASVaderV1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a DASVader spool of patches."""
         patches = _read_dasvader(resource, time=time, distance=distance)
         return dc.spool(patches)

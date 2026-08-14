@@ -64,7 +64,7 @@ class TDMSFormatterV4713(FiberIO):
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a silixa tdms file, return a DataArray."""
         # get all data, total amount of samples and associated attributes
         data, _channel_length, attrs_full = _get_data(resource, lead_in_length=28)

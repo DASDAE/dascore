@@ -12,7 +12,6 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.spool import BaseSpool
 from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.index.planned import (
     PlanResolver,
@@ -179,34 +178,6 @@ class TestDerivedComposition:
         spool._catalog.resolver._registry.clear()
         with pytest.raises(MissingPatchError, match="not available"):
             spool[0]
-
-    def test_union_with_third_party_spool(self, patches):
-        """The BaseSpool fallback materializes third-party members."""
-
-        class MiniSpool(BaseSpool):
-            def __init__(self, inner):
-                self._inner = list(inner)
-
-            def __getitem__(self, item):
-                return self._inner[item]
-
-            def __iter__(self):
-                return iter(self._inner)
-
-            def __len__(self):
-                return len(self._inner)
-
-            def chunk(self, **kwargs):
-                raise NotImplementedError
-
-            def select(self, **kwargs):
-                raise NotImplementedError
-
-            def get_contents(self):
-                raise NotImplementedError
-
-        combined = dc.spool(patches[:1]) + MiniSpool(patches[1:])
-        assert len(combined) == len(patches)
 
     def test_samples_negative_index_skips_envelope_adjust(self, patches):
         """Negative samples windows stay candidacy supersets (no crash)."""

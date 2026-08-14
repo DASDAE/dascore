@@ -6,13 +6,15 @@ This page explains how to extend DASCore with `Patch` and `Spool` namespaces. Us
 
 ## When to use a namespace
 
-A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `BaseSpool`. Good candidates include:
+A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `Spool`. Good candidates include:
 
 - Optional integrations that should live in a separate package.
 - Domain-specific processing that is useful to a subset of users.
 - Functionality that needs extra dependencies which should not become core DASCore dependencies.
 
 If you are adding support for a new file format, see [Adding a New Format](new_format.qmd). File formats use `FiberIO` plugins, not method namespaces.
+
+Namespaces and `FiberIO` plugins are the extension points; subclassing `Patch` or `Spool` is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so copying a subclass instance which never ran that `__init__` is refused rather than silently accepted.
 
 ## The namespace model
 

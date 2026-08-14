@@ -204,6 +204,14 @@ def parse_project(obj, key=None):
             # another would claim as its own everything it merely imports.
             if key != base_address and not key.startswith(f"{base_address}."):
                 return
+            # A second module-level name bound to the same object (eg
+            # BaseSpool = Spool) is an alias, not its own entity. The
+            # getmembers call above yields names alphabetically, so
+            # BaseSpool would arrive first, claim the page, and leave
+            # every cross ref to Spool dangling.
+            name = key.split(".")[-1]
+            if not parent_is_class and getattr(obj, "__name__", name) != name:
+                return
 
             data_dict[str(id(obj))] = get_data(obj, key, base_path, parent_is_class)
             # recurse attributes and methods of classes

@@ -42,7 +42,7 @@ class SR4731V200(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read an SR-4731 SOR file."""
         patches = _get_patches(
             resource,

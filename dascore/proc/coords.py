@@ -953,7 +953,7 @@ def get_axis(self: PatchType, dim: str) -> int:
     return self.coords.get_axis(dim)
 
 
-def split_gaps(self: PatchType, dim: str | None = None) -> dc.BaseSpool:
+def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 

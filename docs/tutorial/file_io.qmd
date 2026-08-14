@@ -115,7 +115,7 @@ print(time_coord.get_discontinuities("gaps"))
 
 ## Directory spools
 
-A spool over a directory of dascore-readable files is created with the [`dascore.spool`](`dascore.spool`) function. It has the same interface as every other spool; the only difference is how it was constructed.
+A spool over a directory of dascore-readable files is created with the [`dascore.spool`](`dascore.spool`) function. It is the same class as any other spool; the only difference is how it was constructed.
 
 For example:
 

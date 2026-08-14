@@ -53,7 +53,7 @@ class XMLBinaryV1(FiberIO):
             attr_cls=BinaryPatchAttrs,
         )
 
-    def read(self, resource, time=None, distance=None, **kwargs) -> dc.BaseSpool:
+    def read(self, resource, time=None, distance=None, **kwargs) -> dc.Spool:
         """
         Load data from the directory structure.
 

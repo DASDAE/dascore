@@ -336,7 +336,7 @@ class TestDirectoryIndex:
         path = tmp_path / "test.h5"
         new.io.write(path, "dasdae")
         spool = dc.spool(path).update()
-        isinstance(spool, dc.BaseSpool)
+        assert isinstance(spool, dc.Spool)
 
     def test_specify_index_path(self, random_patch, tmp_path_factory):
         """Ensure an external path can be specified for the index. See #129."""

@@ -23,7 +23,7 @@ class WavIO(FiberIO):
 
     def write(
         self,
-        spool: dc.Patch | dc.BaseSpool,
+        spool: dc.Patch | dc.Spool,
         resource: str | Path | UPath,
         resample_frequency=None,
         **kwargs,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import abc
 import inspect
 import os
 import threading
@@ -570,8 +569,32 @@ def _combine_inventories(first, second) -> tuple:
     return inventory, enrichment
 
 
-class BaseSpool(NamespaceOwner, abc.ABC):
-    """Spool Abstract Base Class (ABC) for defining Spool interface."""
+class Spool(NamespaceOwner):
+    """
+    A container of patches: a view over a `PatchCatalog`.
+
+    Constructed from in-memory patches directly (or via
+    [`dascore.spool`](`dascore.spool`)), from a directory of files with
+    [`Spool.from_directory`](`dascore.core.spool.Spool.from_directory`),
+    or from a single file with
+    [`Spool.from_file`](`dascore.core.spool.Spool.from_file`).
+
+    Parameters
+    ----------
+    data
+        A patch or sequence of patches this spool should hold, or
+        another spool, whose catalog and provenance the new spool shares
+        rather than copies; None creates an empty spool.
+
+    Notes
+    -----
+    The catalog is the spool's entire state: live patches sit in its
+    resolver registry, file-backed patches in its index tables, and
+    restructured views (chunk/concat) are derived in-memory catalogs
+    whose rows are the plan outputs. Selection, ordering, and windowing
+    are lazy specs composed on the catalog; one engine serves every
+    construction path.
+    """
 
     _rich_style = "bold"
     _namespace_entry_point_group = "dascore.spool_namespace"
@@ -583,19 +606,124 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
         )
     }
+    # synthetic catalog identity columns must not join patch kwargs
+    # comparisons or chunk merge-compatibility checks
+    _drop_columns = (
+        "patch",
+        "source_path",
+        "source_format",
+        "source_version",
+        "source_patch_id",
+    )
+    # The catalog backing this spool; every construction path sets one.
+    _catalog: PatchCatalog
+    # An attached inventory -- itself, or a reference which reads it when
+    # something asks -- the enrich kwargs to apply on extraction (None
+    # means attached without automatic enrichment), and what to do with a
+    # patch the inventory does not describe.
+    _inventory = None
+    _enrich_kwargs: dict | None = None
+    _on_unresolved: str = "warn"
+    # Whether this spool has already said its inventory covers only part of
+    # it; the warning is worth making once, not once per patch.
+    _warned_unresolved: bool = False
+    # single-file provenance (set by from_file; drives update())
+    _file_path = None
+    _file_format = None
+    _file_version = None
+
+    def __init__(
+        self,
+        data: PatchType | Sequence[PatchType] | Spool | None = None,
+    ):
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+
+        if isinstance(data, Spool):
+            # copy-construction: share the catalog and provenance. A
+            # subclass which never ran this __init__ has no catalog, and
+            # copying its state would defer the failure to some later call.
+            if not hasattr(data, "_catalog"):
+                msg = f"{type(data).__name__} has no catalog; Spool.__init__ never ran."
+                raise InvalidSpoolError(msg)
+            self.__dict__.update(data.__dict__)
+            return
+        if data is None:
+            patches = ()
+        elif isinstance(data, dc.Patch):
+            patches = (data,)
+        elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
+            patches = data
+        else:
+            msg = (
+                "Spool accepts a Patch, a sequence of patches, or a "
+                f"spool; got {type(data)}."
+            )
+            raise InvalidSpoolError(msg)
+        self._catalog = PatchCatalog.from_patches(patches)
+
+    # --- presented relation --------------------------------------------
+
+    @property
+    def _df(self) -> pd.DataFrame:
+        """The realized flat relation (cached by the catalog)."""
+        return self._catalog.to_df()
+
+    def get_contents(self) -> pd.DataFrame:
+        """
+        Get a dataframe of the spool contents.
+
+        Notes
+        -----
+        Each call returns a caller-owned dataframe; mutating it never
+        changes the spool. Use ``frame.copy(deep=True)`` when an eager
+        block copy is needed.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das")
+        >>> df = spool.get_contents()
+        """
+        return present_units_columns(_copy_public_dataframe(self._df))
+
+    def __len__(self) -> int:
+        """Return len of spool."""
+        # counting pushes to SQL (or the cold live registry); the flat
+        # relation is never realized just for a length
+        return len(self._catalog)
 
     # An int selects one patch; a slice or array selects a sub-spool.
     @overload
     def __getitem__(self, item: int) -> dc.Patch: ...
 
     @overload
-    def __getitem__(self, item: slice | np.ndarray) -> BaseSpool: ...
+    def __getitem__(self, item: slice | np.ndarray) -> Spool: ...
 
-    @abc.abstractmethod
-    def __getitem__(self, item: int | slice | np.ndarray) -> dc.Patch | BaseSpool:
+    def __getitem__(self, item) -> dc.Patch | Spool:
         """Return a patch, or a spool for a slice or array of indices."""
+        if isinstance(item, slice):
+            # a lazy id-membership window (D2); never realizes the flat
+            # relation, and keeps split()/map() parts cheap
+            return self._new_from_catalog(self._catalog.window(item))
+        if is_array(item):
+            array = np.asarray(item)
+            if not (
+                np.issubdtype(array.dtype, np.bool_)
+                or np.issubdtype(array.dtype, np.integer)
+            ):
+                msg = "Only bool or int dtypes are supported for spool array selection."
+                raise ValueError(msg)
+            return self._new_from_catalog(self._catalog.restrict(array))
+        try:
+            return self._maybe_enrich(self._catalog.get_patch(int(item)))
+        except MissingPatchError:
+            # MissingPatchError subclasses IndexError for backwards
+            # compatibility; it must never masquerade as out-of-bounds
+            raise
+        except IndexError:
+            msg = f"index of [{item}] is out of bounds for spool."
+            raise IndexError(msg) from None
 
-    @abc.abstractmethod
     def __iter__(self) -> Iterator[dc.Patch]:
         """
         Iterate through the Patches in the spool.
@@ -606,33 +734,12 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         mismatches occur as described in issue #583). Therefore, the number
         of patches yielded during iteration may differ from len(spool).
         """
+        # The catalog snapshots the relation once and skips patches which
+        # cannot be resolved (see #583).
+        for patch in self._catalog:
+            yield self._maybe_enrich(patch)
 
-    @abc.abstractmethod
-    def __len__(self) -> int:
-        """Return len of spool."""
-
-    def __rich__(self):
-        """Rich rep. of spool."""
-        text = get_dascore_text() + Text(" ")
-        text += Text(self.__class__.__name__, style=self._rich_style)
-        text += Text(" 🧵 ")
-        patch_len = len(self)
-        text += Text(f"({patch_len:d}")
-        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        return text
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
-
-    def __eq__(self, other) -> bool:
-        """Simple equality checks on spools."""
-        my_dict = self.__dict__
-        other_dict = getattr(other, "__dict__", {})
-        return deep_equality_check(my_dict, other_dict)
-
-    def __add__(self, other) -> BaseSpool:
+    def __add__(self, other) -> Spool:
         """
         Combine two spools into one containing the patches of both.
 
@@ -650,7 +757,7 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         >>> combined = sp1 + sp2
         >>> assert len(combined) == len(sp1) + len(sp2)
         """
-        if not isinstance(other, BaseSpool):
+        if not isinstance(other, Spool):
             return NotImplemented
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
@@ -665,105 +772,8 @@ class BaseSpool(NamespaceOwner, abc.ABC):
             new._enrich_kwargs, new._on_unresolved = enrichment
         return new
 
-    def _as_catalog_member(self):
-        """
-        Return (catalog, patch_ids) describing this spool for a union.
+    # --- selection and presentation specs -------------------------------
 
-        `patch_ids` limits membership to the spool's current rows; None
-        means the whole catalog (or the catalog view itself carries the
-        selection). The base implementation materializes the patches.
-        """
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
-
-        return PatchCatalog.from_patches(list(self)), None
-
-    @abc.abstractmethod
-    @compose_docstring(conflict_desc=attr_conflict_description)
-    def chunk(
-        self,
-        overlap: numeric_types | timeable_types | None = None,
-        keep_partial: bool = False,
-        snap_coords: bool = True,
-        tolerance: float = 1.5,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
-        group: str | Sequence[str] | None = None,
-        missing_dim: Literal["raise", "drop"] = "raise",
-        **kwargs,
-    ) -> Self:
-        """
-        Chunk the data in the spool along specified dimension.
-
-        Parameters
-        ----------
-        overlap
-            The amount of overlap between each segment, starting with the end of
-            first patch. Negative values can be used to create gaps.
-        keep_partial
-            If True, keep the segments which are smaller than chunk size.
-            This often occurs because of data gaps or at end of chunks.
-        snap_coords
-            If True (default), simplify the coordinates of joined patches to
-            an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` samples. Merges whose gaps exceed that
-            keep an exact segmented coordinate instead.
-        tolerance
-            The maximum number of samples a block of data can be spaced (gap)
-            and still be considered contiguous.
-        conflict
-            {conflict_desc}
-        group
-            Attributes which partition patches into separate outputs (their
-            values differing is never an error). Defaults to the config
-            option `groupby_attrs`; unlike the default, explicitly passed
-            names must exist on at least one patch. Dimensions and
-            coordinate identities always partition implicitly.
-        missing_dim
-            What to do when patches lack the chunked dimension: "raise"
-            (default) or "drop" (exclude them from the output).
-        kwargs
-            kwargs are used to specify the dimension along which to chunk, eg:
-            `time=10` chunks along the time axis in 10 second increments.
-            The value may also be a quantity: one of the coordinate's own
-            units (`time=10 * s`) or a data size (`time=25 * megabytes`),
-            which chunks so each patch's data array is about that large.
-            `overlap` accepts the same forms.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> from dascore.units import s, megabytes
-        >>>
-        >>> spool = dc.get_example_spool("random_das")
-        >>> # get spools with time duration of 10 seconds
-        >>> time_chunked = spool.chunk(time=10, overlap=1)
-        >>> # the same, with the units stated explicitly
-        >>> unit_chunked = spool.chunk(time=10 * s)
-        >>> # get patches whose data arrays are at most ~1 MB
-        >>> size_chunked = spool.chunk(time=1 * megabytes)
-        >>> # merge along time axis
-        >>> time_merged = spool.chunk(time=...)
-
-        Notes
-        -----
-        A data size measures the patch's data array only; coordinates and
-        attrs are extra, as are any copies a later processing step makes,
-        so the patch as a whole is somewhat larger. The sample count is
-        rounded down, so the data never exceeds the requested size, and a
-        merge of patches with different dtypes is sized against the dtype
-        they upcast to.
-
-        [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) performs a
-        similar operation but disregards the coordinate values.
-
-        To inspect what a chunk call will do before running it — which
-        output patches it produces and which slice of which source patch
-        feeds each one — use
-        [`Spool.chunk_plan`](`dascore.core.spool.Spool.chunk_plan`),
-        which takes the same arguments and returns the plan without
-        touching any data.
-        """
-
-    @abc.abstractmethod
     def select(
         self,
         *,
@@ -811,29 +821,22 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         >>> # subselect based on matching tag parameter
         >>> tag_spool = spool.select(tag='some*')
         """
-
-    @abc.abstractmethod
-    def get_contents(self) -> pd.DataFrame:
-        """
-        Get a dataframe of the spool contents.
-
-        Notes
-        -----
-        Each call returns a caller-owned dataframe; mutating it never
-        changes the spool. Use ``frame.copy(deep=True)`` when an eager
-        block copy is needed.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> spool = dc.get_example_spool("random_das")
-        >>> df = spool.get_contents()
-        """
-
-    # Bind get_patch names as a spool method.
-    get_patch_names = get_patch_names
-
-    # --- optional methods
+        attr_query, channel_query, _attrs, _coords, kwargs = (
+            self._split_inventory_query(_attrs, _coords, kwargs, samples, relative)
+        )
+        catalog = self._catalog.select(
+            _attrs=_attrs,
+            _coords=_coords,
+            samples=samples,
+            relative=relative,
+            **kwargs,
+        )
+        out = self._new_from_catalog(catalog)
+        if attr_query:
+            out = out._select_from_inventory(attr_query)
+        if channel_query := _stated_channels(channel_query):
+            out = out._select_channels(channel_query)
+        return out
 
     def unselect(
         self,
@@ -890,314 +893,6 @@ class BaseSpool(NamespaceOwner, abc.ABC):
         >>> rest = spool.unselect(tag='some_tag')
         >>> assert len(rest) + len(spool.select(tag='some_tag')) == len(spool)
         """
-        msg = f"spool of type {self.__class__} has no unselect implementation"
-        raise NotImplementedError(msg)
-
-    def sort(self, attribute) -> Self:
-        """
-        Sort the Spool based on a specific attribute.
-
-        Parameters
-        ----------
-        attribute
-            The attribute or coordinate used for sorting. If a coordinate name
-            is used, the sorting will be based on the minimum value.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> spool = dc.get_example_spool()
-        >>> # sort spool based on values in time coordinate.
-        >>> spool_time_sorted = spool.sort("time")
-        >>> # sort spool based on values in tag
-        >>> spool_tag_sorted = spool.sort("tag")
-        """
-        msg = f"spool of type {self.__class__} has no sort implementation"
-        raise NotImplementedError(msg)
-
-    def split(
-        self,
-        size: int | None = None,
-        count: int | None = None,
-    ) -> Generator[BaseSpool, None, None]:
-        """
-        Yield sub-patches based on specified parameters.
-
-        Parameters
-        ----------
-        size
-            The number of patches desired in each output spool. The last
-            spool may have fewer patches. Must be greater than zero.
-        count
-            The number of spools to include. If count is greater than
-            the length of the spool then the output will be smaller than
-            count, with one patch per spool. Must be greater than zero.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> spool = dc.get_example_spool("diverse_das")
-        >>> # split spool into list of spools each with 3 patches.
-        >>> split = spool.split(size=3)
-        >>> # split spool into 3 evenly sized (if possible) spools
-        >>> split = spool.split(count=3)
-        """
-        msg = f"spool of type {self.__class__} has no split implementation"
-        raise NotImplementedError(msg)
-
-    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
-        """
-        Updates the contents of the spool, return the updated spool.
-
-        Parameters
-        ----------
-        progress
-            Controls the progress bar. "standard" produces the standard
-            progress bar. "basic" is a simplified version with lower refresh
-            rates, best for high-latency environments, and None disables
-            the progress bar.
-        """
-        return self
-
-    @compose_docstring(desc=get_docstring(concatenate_patches))
-    def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs):
-        """{desc}"""
-        msg = f"spool of type {self.__class__} has no concatenate implementation"
-        raise NotImplementedError(msg)
-
-    def map(
-        self,
-        func: Callable[..., T],
-        *,
-        client: ExecutorType | None = None,
-        size: int | None = None,
-        progress: bool = True,
-        **kwargs,
-    ) -> list[T]:
-        """
-        Map a function of all the contents of the spool.
-
-        Parameters
-        ----------
-        func
-            A callable which takes a patch as its first argument.
-        client
-            A client, or executor, which has a `map` method.
-        size
-            The number of patches in each spool mapped to a client.
-            If not set, defaults to the number of processors on the host.
-            Does nothing unless client is defined.
-        progress
-            If True, display a progress bar.
-        **kwargs
-            kwargs passed to func.
-
-        Notes
-        -----
-        When a client is specified, the spool is split then passed to the
-        client's map method. This is to avoid serializing loaded patches.
-        See [`Spool.split`](`dascore.core.spool.BaseSpool.split`) for more
-        details about the `spool_count` and `spool_size` parameters.
-
-        Examples
-        --------
-        import numpy as np
-        import dascore as dc
-
-        spool = dc.get_example_spool("random_das")
-
-        # Calculate the std for each channel in 5 second chunks
-        results = (
-             spool.chunk(time=5)
-             .map(lambda x: np.std(x.data, axis=0))
-        )
-        # stack back into array. dims are (distance, time chunk)
-        out = np.stack(results, axis=-1)
-        """
-        return _spool_map(
-            self,
-            func,
-            client=client,
-            size=size,
-            progress=progress,
-            **kwargs,
-        )
-
-    # Add method for stacking (adding the data arrays) patches in spool.
-    stack = stack_patches
-
-
-class Spool(BaseSpool):
-    """
-    The concrete spool: a view over a `PatchCatalog`.
-
-    Constructed from in-memory patches directly (or via
-    [`dascore.spool`](`dascore.spool`)), from a directory of files with
-    [`Spool.from_directory`](`dascore.core.spool.Spool.from_directory`),
-    or from a single file with
-    [`Spool.from_file`](`dascore.core.spool.Spool.from_file`).
-
-    Parameters
-    ----------
-    data
-        A patch, sequence of patches, or another spool whose (in-memory)
-        patches this spool should hold; None creates an empty spool.
-
-    Notes
-    -----
-    The catalog is the spool's entire state: live patches sit in its
-    resolver registry, file-backed patches in its index tables, and
-    restructured views (chunk/concat) are derived in-memory catalogs
-    whose rows are the plan outputs. Selection, ordering, and windowing
-    are lazy specs composed on the catalog; one engine serves every
-    construction path.
-    """
-
-    # synthetic catalog identity columns must not join patch kwargs
-    # comparisons or chunk merge-compatibility checks
-    _drop_columns = (
-        "patch",
-        "source_path",
-        "source_format",
-        "source_version",
-        "source_patch_id",
-    )
-    # The catalog backing this spool; every construction path sets one.
-    _catalog: PatchCatalog
-    # An attached inventory -- itself, or a reference which reads it when
-    # something asks -- the enrich kwargs to apply on extraction (None
-    # means attached without automatic enrichment), and what to do with a
-    # patch the inventory does not describe.
-    _inventory = None
-    _enrich_kwargs: dict | None = None
-    _on_unresolved: str = "warn"
-    # Whether this spool has already said its inventory covers only part of
-    # it; the warning is worth making once, not once per patch.
-    _warned_unresolved: bool = False
-    # single-file provenance (set by from_file; drives update())
-    _file_path = None
-    _file_format = None
-    _file_version = None
-
-    def __init__(
-        self,
-        data: PatchType | Sequence[PatchType] | BaseSpool | None = None,
-    ):
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
-
-        if isinstance(data, Spool):
-            # copy-construction: share the catalog and provenance
-            self.__dict__.update(data.__dict__)
-            return
-        if data is None:
-            patches = ()
-        elif isinstance(data, dc.Patch):
-            patches = (data,)
-        elif isinstance(data, BaseSpool):
-            # e.g. wrapping dc.read output; the patches are in memory
-            patches = tuple(data)
-        elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
-            patches = data
-        else:
-            msg = (
-                "Spool accepts a Patch, a sequence of patches, or a "
-                f"spool; got {type(data)}."
-            )
-            raise InvalidSpoolError(msg)
-        self._catalog = PatchCatalog.from_patches(patches)
-
-    # --- presented relation --------------------------------------------
-
-    @property
-    def _df(self) -> pd.DataFrame:
-        """The realized flat relation (cached by the catalog)."""
-        return self._catalog.to_df()
-
-    @compose_docstring(doc=get_docstring(BaseSpool.get_contents))
-    def get_contents(self) -> pd.DataFrame:
-        """{doc}."""
-        return present_units_columns(_copy_public_dataframe(self._df))
-
-    def __len__(self):
-        # counting pushes to SQL (or the cold live registry); the flat
-        # relation is never realized just for a length
-        return len(self._catalog)
-
-    @overload
-    def __getitem__(self, item: int) -> dc.Patch: ...
-
-    @overload
-    def __getitem__(self, item: slice | np.ndarray) -> BaseSpool: ...
-
-    def __getitem__(self, item) -> dc.Patch | BaseSpool:
-        if isinstance(item, slice):
-            # a lazy id-membership window (D2); never realizes the flat
-            # relation, and keeps split()/map() parts cheap
-            return self._new_from_catalog(self._catalog.window(item))
-        if is_array(item):
-            array = np.asarray(item)
-            if not (
-                np.issubdtype(array.dtype, np.bool_)
-                or np.issubdtype(array.dtype, np.integer)
-            ):
-                msg = "Only bool or int dtypes are supported for spool array selection."
-                raise ValueError(msg)
-            return self._new_from_catalog(self._catalog.restrict(array))
-        try:
-            return self._maybe_enrich(self._catalog.get_patch(int(item)))
-        except MissingPatchError:
-            # MissingPatchError subclasses IndexError for backwards
-            # compatibility; it must never masquerade as out-of-bounds
-            raise
-        except IndexError:
-            msg = f"index of [{item}] is out of bounds for spool."
-            raise IndexError(msg) from None
-
-    def __iter__(self):
-        # The catalog snapshots the relation once and skips patches which
-        # cannot be resolved (see #583).
-        for patch in self._catalog:
-            yield self._maybe_enrich(patch)
-
-    # --- selection and presentation specs -------------------------------
-
-    @compose_docstring(doc=get_docstring(BaseSpool.select))
-    def select(
-        self,
-        *,
-        _attrs: namespace_select_type = None,
-        _coords: namespace_select_type = None,
-        samples: bool = False,
-        relative: bool = False,
-        **kwargs,
-    ) -> Self:
-        """{doc}."""
-        attr_query, channel_query, _attrs, _coords, kwargs = (
-            self._split_inventory_query(_attrs, _coords, kwargs, samples, relative)
-        )
-        catalog = self._catalog.select(
-            _attrs=_attrs,
-            _coords=_coords,
-            samples=samples,
-            relative=relative,
-            **kwargs,
-        )
-        out = self._new_from_catalog(catalog)
-        if attr_query:
-            out = out._select_from_inventory(attr_query)
-        if channel_query := _stated_channels(channel_query):
-            out = out._select_channels(channel_query)
-        return out
-
-    @compose_docstring(doc=get_docstring(BaseSpool.unselect))
-    def unselect(
-        self,
-        *,
-        _attrs: namespace_select_type = None,
-        _coords: namespace_select_type = None,
-        **kwargs,
-    ) -> Self:
-        """{doc}."""
         requested = _requested_names(_attrs, _coords, kwargs)
         known_attrs, known_coords = self._index_names()
         channels, selectable = self._inventory_query(
@@ -2096,20 +1791,56 @@ class Spool(BaseSpool):
                 )
             return patch
 
-    @compose_docstring(doc=get_docstring(BaseSpool.sort))
     def sort(self, attribute) -> Self:
-        """{doc}."""
+        """
+        Sort the Spool based on a specific attribute.
+
+        Parameters
+        ----------
+        attribute
+            The attribute or coordinate used for sorting. If a coordinate name
+            is used, the sorting will be based on the minimum value.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>> # sort spool based on values in time coordinate.
+        >>> spool_time_sorted = spool.sort("time")
+        >>> # sort spool based on values in tag
+        >>> spool_tag_sorted = spool.sort("tag")
+        """
         # a lazy ORDER BY spec (D2): no copy, no realization; the
         # ordinal contract supplies the deterministic tiebreak
         return self._new_from_catalog(self._catalog.order_by(attribute))
 
-    @compose_docstring(doc=get_docstring(BaseSpool.split))
     def split(
         self,
         size: int | None = None,
         count: int | None = None,
-    ) -> Generator[BaseSpool, None, None]:
-        """{doc}."""
+    ) -> Generator[Spool, None, None]:
+        """
+        Yield sub-patches based on specified parameters.
+
+        Parameters
+        ----------
+        size
+            The number of patches desired in each output spool. The last
+            spool may have fewer patches. Must be greater than zero.
+        count
+            The number of spools to include. If count is greater than
+            the length of the spool then the output will be smaller than
+            count, with one patch per spool. Must be greater than zero.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # split spool into list of spools each with 3 patches.
+        >>> split = spool.split(size=3)
+        >>> # split spool into 3 evenly sized (if possible) spools
+        >>> split = spool.split(count=3)
+        """
         if not ((count is not None) ^ (size is not None)):
             msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)
@@ -2128,6 +1859,70 @@ class Spool(BaseSpool):
         while start < len(self):
             yield self[start : start + step]
             start += step
+
+    def map(
+        self,
+        func: Callable[..., T],
+        *,
+        client: ExecutorType | None = None,
+        size: int | None = None,
+        progress: bool = True,
+        **kwargs,
+    ) -> list[T]:
+        """
+        Map a function of all the contents of the spool.
+
+        Parameters
+        ----------
+        func
+            A callable which takes a patch as its first argument.
+        client
+            A client, or executor, which has a `map` method.
+        size
+            The number of patches in each spool mapped to a client.
+            If not set, defaults to the number of processors on the host.
+            Does nothing unless client is defined.
+        progress
+            If True, display a progress bar.
+        **kwargs
+            kwargs passed to func.
+
+        Notes
+        -----
+        When a client is specified, the spool is split then passed to the
+        client's map method. This is to avoid serializing loaded patches.
+        See [`Spool.split`](`dascore.core.spool.Spool.split`) for more
+        details about the `size` and `count` parameters.
+
+        Examples
+        --------
+        import numpy as np
+        import dascore as dc
+
+        spool = dc.get_example_spool("random_das")
+
+        # Calculate the std for each channel in 5 second chunks
+        results = (
+             spool.chunk(time=5)
+             .map(lambda x: np.std(x.data, axis=0))
+        )
+        # stack back into array. dims are (distance, time chunk)
+        out = np.stack(results, axis=-1)
+        """
+        return _spool_map(
+            self,
+            func,
+            client=client,
+            size=size,
+            progress=progress,
+            **kwargs,
+        )
+
+    # Bind get_patch names as a spool method.
+    get_patch_names = get_patch_names
+
+    # Add method for stacking (adding the data arrays) patches in spool.
+    stack = stack_patches
 
     def _new_from_catalog(self, catalog) -> Self:
         """Create a spool view over a (possibly derived) catalog."""
@@ -2258,7 +2053,7 @@ class Spool(BaseSpool):
         feeds each output, and `params` records every resolved parameter
         (including the group attributes and sampling tolerance in effect).
         Accepts the same arguments as
-        [`chunk`](`dascore.BaseSpool.chunk`).
+        [`chunk`](`dascore.Spool.chunk`).
 
         Examples
         --------
@@ -2283,7 +2078,7 @@ class Spool(BaseSpool):
             **kwargs,
         )
 
-    @compose_docstring(doc=get_docstring(BaseSpool.chunk))
+    @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(
         self,
         overlap: numeric_types | timeable_types | None = None,
@@ -2295,7 +2090,78 @@ class Spool(BaseSpool):
         missing_dim: Literal["raise", "drop"] = "raise",
         **kwargs,
     ) -> Self:
-        """{doc}"""
+        """
+        Chunk the data in the spool along specified dimension.
+
+        Parameters
+        ----------
+        overlap
+            The amount of overlap between each segment, starting with the end of
+            first patch. Negative values can be used to create gaps.
+        keep_partial
+            If True, keep the segments which are smaller than chunk size.
+            This often occurs because of data gaps or at end of chunks.
+        snap_coords
+            If True (default), simplify the coordinates of joined patches to
+            an evenly sampled range when doing so moves no coordinate value
+            by more than `tolerance` samples. Merges whose gaps exceed that
+            keep an exact segmented coordinate instead.
+        tolerance
+            The maximum number of samples a block of data can be spaced (gap)
+            and still be considered contiguous.
+        conflict
+            {conflict_desc}
+        group
+            Attributes which partition patches into separate outputs (their
+            values differing is never an error). Defaults to the config
+            option `groupby_attrs`; unlike the default, explicitly passed
+            names must exist on at least one patch. Dimensions and
+            coordinate identities always partition implicitly.
+        missing_dim
+            What to do when patches lack the chunked dimension: "raise"
+            (default) or "drop" (exclude them from the output).
+        kwargs
+            kwargs are used to specify the dimension along which to chunk, eg:
+            `time=10` chunks along the time axis in 10 second increments.
+            The value may also be a quantity: one of the coordinate's own
+            units (`time=10 * s`) or a data size (`time=25 * megabytes`),
+            which chunks so each patch's data array is about that large.
+            `overlap` accepts the same forms.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.units import s, megabytes
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>> # get spools with time duration of 10 seconds
+        >>> time_chunked = spool.chunk(time=10, overlap=1)
+        >>> # the same, with the units stated explicitly
+        >>> unit_chunked = spool.chunk(time=10 * s)
+        >>> # get patches whose data arrays are at most ~1 MB
+        >>> size_chunked = spool.chunk(time=1 * megabytes)
+        >>> # merge along time axis
+        >>> time_merged = spool.chunk(time=...)
+
+        Notes
+        -----
+        A data size measures the patch's data array only; coordinates and
+        attrs are extra, as are any copies a later processing step makes,
+        so the patch as a whole is somewhat larger. The sample count is
+        rounded down, so the data never exceeds the requested size, and a
+        merge of patches with different dtypes is sized against the dtype
+        they upcast to.
+
+        [`Spool.concatenate`](`dascore.Spool.concatenate`) performs a
+        similar operation but disregards the coordinate values.
+
+        To inspect what a chunk call will do before running it — which
+        output patches it produces and which slice of which source patch
+        feeds each one — use
+        [`Spool.chunk_plan`](`dascore.core.spool.Spool.chunk_plan`),
+        which takes the same arguments and returns the plan without
+        touching any data.
+        """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
         source_rows, working = self._plan_frames(next(iter(kwargs), None))
@@ -2480,10 +2346,9 @@ class Spool(BaseSpool):
         """True when any of this spool's patches live in memory."""
         return bool(self._catalog.resolver.live_entries())
 
-    @compose_docstring(doc=get_docstring(BaseSpool.update))
     def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
-        {doc}
+        Updates the contents of the spool, return the updated spool.
 
         Update is allowed only on a root spool — one no operation has
         been applied to. Directory roots re-index their directory,
@@ -2491,6 +2356,14 @@ class Spool(BaseSpool):
         are trivially current (no-op). Any derived spool (the result of
         select, slicing, sort, chunk, concatenate, or combining spools)
         raises: update the root and re-apply the operations.
+
+        Parameters
+        ----------
+        progress
+            Controls the progress bar. "standard" produces the standard
+            progress bar. "basic" is a simplified version with lower refresh
+            rates, best for high-latency environments, and None disables
+            the progress bar.
         """
         from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 
@@ -2540,7 +2413,8 @@ class Spool(BaseSpool):
         if self is other:
             return True
         if not isinstance(other, Spool):
-            return super().__eq__(other)
+            other_dict = getattr(other, "__dict__", {})
+            return deep_equality_check(self.__dict__, other_dict)
         # Models compare with ==; deep_equality_check walks their fields,
         # where an unset (NaT) time never equals itself.
         if (self._inventory, self._enrichment()) != (
@@ -2615,7 +2489,13 @@ class Spool(BaseSpool):
         return {"rows": _strip_identity(rows)}
 
     def __rich__(self):
-        base = super().__rich__()
+        """Rich rep. of spool."""
+        base = get_dascore_text() + Text(" ")
+        base += Text(self.__class__.__name__, style=self._rich_style)
+        base += Text(" 🧵 ")
+        patch_len = len(self)
+        base += Text(f"({patch_len:d}")
+        base += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
         path = self.spool_path
         if path is not None:
             base += Text(f"\n    Path: {path}")
@@ -2635,9 +2515,20 @@ class Spool(BaseSpool):
                     )
         return base
 
+    def __str__(self):
+        return str(self.__rich__())
+
+    __repr__ = __str__
+
+
+# There is one spool class; the old ABC name stays as an alias so
+# annotations and isinstance checks written against it keep working.
+# `Spool` is the name to use in new code.
+BaseSpool = Spool
+
 
 @singledispatch
-def spool(obj: path_types | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
+def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
     """
     Create a spool from a data source.
 
@@ -2696,7 +2587,7 @@ def _spool_from_str(path, **kwargs):
         raise InvalidSpoolError(msg)
 
 
-@spool.register(BaseSpool)
+@spool.register(Spool)
 def _spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool

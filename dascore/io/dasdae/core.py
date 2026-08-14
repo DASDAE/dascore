@@ -55,7 +55,7 @@ class DASDAEV1(FiberIO):
 
     def write(
         self,
-        spool: dc.Patch | dc.BaseSpool,
+        spool: dc.Patch | dc.Spool,
         resource: H5Writer,
         **kwargs,
     ):
@@ -116,7 +116,7 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> dc.BaseSpool:
+    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> dc.Spool:
         """Read a dascore file."""
         patches = []
         source_patch_ids = _normalize_source_patch_ids(source_patch_id)

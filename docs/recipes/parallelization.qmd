@@ -7,7 +7,7 @@ execute:
 This recipe shows a few strategies to parallelize "embarrassingly parallel" spool processing workflows.
 
 # Processes and Threads
-[`Spool.map`](`dascore.core.spool.BaseSpool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
+[`Spool.map`](`dascore.core.spool.Spool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
 
 ```{python}
 from concurrent.futures import ProcessPoolExecutor
@@ -37,7 +37,7 @@ DASCore's core test suite — no optional dependencies, no network tests — run
 
 Patches are immutable, so any number of threads may read the same patch. Spools may also be read concurrently: iterating, selecting, chunking, indexing and taking their length are safe from several threads at once, because the underlying metadata caches are synchronized internally.
 
-[`Spool.get_contents`](`dascore.core.spool.BaseSpool.get_contents`) hands back a dataframe you own. Mutating it never changes the spool, so each thread may modify its own copy freely. Arrays reached through coordinates go the other way: they are shared and read-only, so copy one before writing to it.
+[`Spool.get_contents`](`dascore.core.spool.Spool.get_contents`) hands back a dataframe you own. Mutating it never changes the spool, so each thread may modify its own copy freely. Arrays reached through coordinates go the other way: they are shared and read-only, so copy one before writing to it.
 
 The process-wide registries take care of themselves. The file-format (`FiberIO`) registry, the method-namespace registry and the [pint](https://pint.readthedocs.io) unit registry are each guarded by a single lock, so first use from several threads at once is safe. Loading the plugins for one format is serialized: the first thread to need a format loads it while the others wait, and none of them can observe a partially registered format.
 
@@ -55,7 +55,7 @@ Third-party `FiberIO` plugins are responsible for their own thread safety. DASCo
 
 Configuration has two tiers, described in [runtime configuration](../tutorial/configuration.qmd). `set_config` changes the process-wide base and is visible from every thread. `config_context` overrides the config for the current context only, and a newly started thread begins with a fresh context, so a scoped override does not automatically reach threads started inside it.
 
-[`Spool.map`](`dascore.core.spool.BaseSpool.map`) handles this for you: it binds the configuration active when `map` is called and re-applies it inside each worker, for thread pools and process pools alike. When starting threads yourself, either set the configuration permanently before starting them or re-apply the scoped override inside each thread.
+[`Spool.map`](`dascore.core.spool.Spool.map`) handles this for you: it binds the configuration active when `map` is called and re-applies it inside each worker, for thread pools and process pools alike. When starting threads yourself, either set the configuration permanently before starting them or re-apply the scoped override inside each thread.
 
 # MPI4Py
 
