@@ -4,7 +4,7 @@ Tests which keep the inventory tutorial's mermaid diagrams honest.
 The diagrams are hand-written, so nothing stops them describing a model that no
 longer looks like that. These tests read the diagrams back out of the page and
 check each edge against the models: that the source is a model, that the field
-labelling the edge exists on it, that the target is a type that field can
+labelling the edge exists on it, that the target is a model that field can
 actually hold, and that a dashed edge is drawn exactly where the field accepts a
 resource_id string in place of the object.
 """
@@ -19,6 +19,7 @@ from typing import Union, get_args, get_origin, get_type_hints
 import pytest
 
 import dascore.core.inventory as inventory_module
+from dascore.core.inventory import InventoryModel
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DOC_PATH = _REPO_ROOT / "docs"
@@ -40,22 +41,34 @@ _BLOCK = re.compile(r"^```\{mermaid\}\n(.*?)^```", re.MULTILINE | re.DOTALL)
 _EDGE = re.compile(
     r"^\s*(\w+)\s*(-->|-\.->)\s*\|(\w+)\|\s*(\w+)(?:\[\"([^\"]+)\"\])?\s*$"
 )
+_ARROW = re.compile(r"-\.?->")
 
 
-def _diagram_edges():
-    """Yield (source, dashed, field, targets) for every edge in the page."""
+def _read_diagrams():
+    """Return the page's edges, and the edge lines which could not be read.
+
+    The unread lines matter as much as the edges: an edge this module cannot
+    parse is an edge it cannot check, and dropping it silently is how the whole
+    file goes vacuous one arrow at a time.
+    """
+    if not _DOCS_PRESENT:  # nothing to read; every test here is skipped
+        return (), ()
+    edges, unread = [], []
     for block in _BLOCK.findall(_PAGE_PATH.read_text()):
         for line in block.splitlines():
             if (match := _EDGE.match(line)) is None:
+                if _ARROW.search(line):
+                    unread.append(line.strip())
                 continue
             source, arrow, field, node, label = match.groups()
             # A labelled node stands for the several types its label names.
             targets = tuple(label.split(" · ")) if label else (node,)
-            yield source, arrow == "-.->", field, targets
+            edges.append((source, arrow == "-.->", field, targets))
+    return tuple(edges), tuple(unread)
 
 
-def _accepted_types(model, field):
-    """Return the types the field holds, and whether it accepts a reference.
+def _accepted_models(model, field):
+    """Return the models the field holds, and whether it accepts a reference.
 
     A reference is a `str` in the same union as a model, which is how the
     inventory spells "this may be a resource_id instead of the object".
@@ -74,15 +87,15 @@ def _accepted_types(model, field):
         elif origin is not None:
             for arg in get_args(node):
                 _walk(arg, in_reference_union)
-        elif isinstance(node, type):
+        elif isinstance(node, type) and issubclass(node, InventoryModel):
             found.add(node)
-            referenced = referenced or (in_reference_union and node is not str)
+            referenced = referenced or in_reference_union
 
     _walk(annotation, False)
     return found, referenced
 
 
-_EDGES = tuple(_diagram_edges())
+_EDGES, _UNREAD = _read_diagrams()
 
 
 class TestDiagramEdges:
@@ -92,14 +105,20 @@ class TestDiagramEdges:
         """A regex which quietly matched nothing would pass every test below."""
         assert len(_EDGES) >= 12
 
+    def test_every_edge_line_is_read(self):
+        """An arrow this module cannot parse is an arrow it cannot check."""
+        assert not _UNREAD, f"Unparsed mermaid edges: {_UNREAD}"
+
     @pytest.mark.parametrize(("source", "dashed", "field", "targets"), _EDGES)
     def test_an_edge_matches_the_models(self, source, dashed, field, targets):
         """The source, the field, the targets, and the arrow all have to agree."""
         model = getattr(inventory_module, source, None)
-        assert model is not None, f"{source} is not an inventory model."
+        assert isinstance(model, type) and issubclass(model, InventoryModel), (
+            f"{source} is not an inventory model."
+        )
         assert field in model.model_fields, f"{source} has no field {field!r}."
 
-        accepted, referenced = _accepted_types(model, field)
+        accepted, referenced = _accepted_models(model, field)
         names = {x.__name__ for x in accepted}
         for target in targets:
             assert target in names, f"{source}.{field} cannot hold a {target}."

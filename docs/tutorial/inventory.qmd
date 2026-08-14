@@ -36,7 +36,7 @@ flowchart LR
   OpticalPath -->|annotations| OpticalPathAnnotation
 ```
 
-The components are the ordered physical pieces that make up the path's length, the geometry says where each distance is in space, the coupling says how the fiber is attached to the ground there, and the annotations name anything else worth recording per interval. Each track covers what it covers; none of them has to cover the whole path.
+The components are the ordered physical pieces the light passes through, and they are what gives the path its length: each one tiles the interval after the last, so the path ends where the final component does. The other three describe intervals of that length — the geometry says where each distance is in space, the coupling says how the fiber is attached to the ground there, and the annotations name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
 
 Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
 
