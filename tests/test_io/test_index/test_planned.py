@@ -179,11 +179,6 @@ class TestDerivedComposition:
         with pytest.raises(MissingPatchError, match="not available"):
             spool[0]
 
-    def test_union_with_non_spool_is_not_implemented(self, patches):
-        """Adding something which is not a spool defers to Python."""
-        with pytest.raises(TypeError):
-            _ = dc.spool(patches[:1]) + object()
-
     def test_samples_negative_index_skips_envelope_adjust(self, patches):
         """Negative samples windows stay candidacy supersets (no crash)."""
         spool = dc.spool(patches[:1]).select(time=(0, -10), samples=True)

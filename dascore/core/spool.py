@@ -571,7 +571,7 @@ def _combine_inventories(first, second) -> tuple:
 
 class Spool(NamespaceOwner):
     """
-    The concrete spool: a view over a `PatchCatalog`.
+    A container of patches: a view over a `PatchCatalog`.
 
     Constructed from in-memory patches directly (or via
     [`dascore.spool`](`dascore.spool`)), from a directory of files with
@@ -582,8 +582,9 @@ class Spool(NamespaceOwner):
     Parameters
     ----------
     data
-        A patch, sequence of patches, or another spool whose (in-memory)
-        patches this spool should hold; None creates an empty spool.
+        A patch or sequence of patches this spool should hold, or
+        another spool, whose catalog and provenance the new spool shares
+        rather than copies; None creates an empty spool.
 
     Notes
     -----
@@ -638,7 +639,12 @@ class Spool(NamespaceOwner):
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         if isinstance(data, Spool):
-            # copy-construction: share the catalog and provenance
+            # copy-construction: share the catalog and provenance. A
+            # subclass which never ran this __init__ has no catalog, and
+            # copying its state would defer the failure to some later call.
+            if not hasattr(data, "_catalog"):
+                msg = f"{type(data).__name__} has no catalog; Spool.__init__ never ran."
+                raise InvalidSpoolError(msg)
             self.__dict__.update(data.__dict__)
             return
         if data is None:
@@ -1886,7 +1892,7 @@ class Spool(NamespaceOwner):
         When a client is specified, the spool is split then passed to the
         client's map method. This is to avoid serializing loaded patches.
         See [`Spool.split`](`dascore.core.spool.Spool.split`) for more
-        details about the `spool_count` and `spool_size` parameters.
+        details about the `size` and `count` parameters.
 
         Examples
         --------
@@ -2517,6 +2523,7 @@ class Spool(NamespaceOwner):
 
 # There is one spool class; the old ABC name stays as an alias so
 # annotations and isinstance checks written against it keep working.
+# `Spool` is the name to use in new code.
 BaseSpool = Spool
 
 

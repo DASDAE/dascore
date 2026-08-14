@@ -44,3 +44,8 @@ class TestAliases:
         """BaseSpool is an alias of Spool; only Spool gets documented."""
         data = parse_project(dc)
         assert data[str(id(dc.Spool))]["name"] == "Spool"
+
+    def test_non_alias_still_documented(self):
+        """A name matching its object's own name is not treated as an alias."""
+        data = parse_project(dc)
+        assert data[str(id(dc.Patch))]["name"] == "Patch"

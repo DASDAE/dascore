@@ -127,7 +127,7 @@ A few details worth knowing:
 - Removing a `key=value` pair from a path triggers a rescan of the affected files (the file's own value has to be recovered), while adding or changing pairs does not.
 - A path key that matches a coordinate name (e.g. `distance=...`) resolves attrs-first in bare `select` kwargs; use the `_coords` argument to target the coordinate explicitly.
 
-Despite some implementation differences, all spools have common behavior/methods.
+However they were constructed, all spools are the same class and share the same behavior and methods.
 
 :::{.callout-note}
 Remote file resources work with `dc.spool(...)`, `dc.read(...)`, `dc.scan(...)`, and `dc.scan_payloads(...)`.
@@ -195,7 +195,7 @@ new = spool[index_array]
 
 # get_contents
 
-The [`get_contents`](`dascore.core.spool.Spool.get_contents`) method returns a dataframe listing the spool contents. This method may not be supported on all spools, especially those interfacing with large remote resources.
+The [`get_contents`](`dascore.core.spool.Spool.get_contents`) method returns a dataframe listing the spool contents. It realizes the whole relation, so it can be expensive over a large remote archive.
 
 ```{python}
 #| output: false
@@ -288,7 +288,7 @@ size_chunked = spool.chunk(time=1 * megabytes)
 A data size measures the data array only; coordinates, attrs, and any copies made later during processing are extra, so the patch as a whole is somewhat larger. The sample count is rounded down, so the patch's data never exceeds the requested size, and `MB` is 10^6^ bytes while `MiB` is 2^20^. `overlap` accepts the same forms.
 
 # concatenate
-Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it is available on every spool and produces a lazy, plan-backed result.
+Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it produces a lazy, plan-backed result.
 
 ```python 
 import dascore as dc

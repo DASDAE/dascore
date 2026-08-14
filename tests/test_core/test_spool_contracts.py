@@ -155,7 +155,6 @@ class TestTypeSurface:
         file_spool = dc.spool(file_path)
         for spool in (live, dir_spool, file_spool, live.chunk(time=2)):
             assert type(spool) is dc.Spool
-            assert isinstance(spool, dc.BaseSpool)
 
     def test_removed_names_gone(self):
         """The old concrete class names are deleted outright."""
