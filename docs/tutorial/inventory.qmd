@@ -137,7 +137,7 @@ else:
     raise AssertionError("a directory of acquisitions is no inventory")
 ```
 
-Inventories can also be built in memory from the model classes directly, which is what the tests and the examples below do:
+Inventories can also be built in memory from the model classes directly, which is how the tests build theirs. The examples below take one already built that way, along with a patch it describes:
 
 ```{python}
 from dascore.examples import inventory_patch_pair
@@ -228,7 +228,7 @@ assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
 
 Subdivision is exact: each piece begins at the first sample at or after the change that opens it, so together the pieces hold every sample the patch held and hold none of them twice. `len` and `get_contents` describe the pieces.
 
-This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, raises by default on a patch the inventory does not describe, and raises whatever the policy when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
+This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, raises by default on a patch the inventory does not describe, and raises, whatever the policy, when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
 
 # An inventory a directory carries
 
