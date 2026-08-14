@@ -79,6 +79,15 @@ resources = {
         "manufacturer: Corning\n"
         "model: MIC tight-buffered 4F OS2\n"
         "fiber_count: 4\n"
+        "description: The run in from the instrument room.\n"
+    ),
+    "connecting-cable": (
+        "object_type: Cable\n"
+        "name: tunnel connecting cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The links between boxes, couplers, and borehole heads.\n"
     ),
     "borehole-cable": (
         "object_type: Cable\n"
@@ -95,14 +104,6 @@ resources = {
         "model: HWC\n"
         "fiber_count: 1\n"
     ),
-    "splice-box": (
-        "object_type: Enclosure\nname: tunnel splice box\nenclosure_type: box\n"
-    ),
-    "turnaround": (
-        "object_type: Enclosure\n"
-        "name: downhole turnaround housing\n"
-        "enclosure_type: housing\n"
-    ),
     "das-interrogator": (
         "object_type: Interrogator\n"
         "name: tunnel DAS interrogator\n"
@@ -111,6 +112,20 @@ resources = {
         "instrument_type: DAS interrogator\n"
     ),
 }
+# One enclosure per housing, because a resource_id names an asset rather
+# than a kind: box A and box E are two boxes, and each borehole has its own
+# turnaround down the hole.
+for label, name in [
+    ("splice-box-a", "splice box at A"),
+    ("splice-box-e", "splice box at E"),
+    ("turnaround-1", "borehole 1 turnaround housing"),
+    ("turnaround-2", "borehole 2 turnaround housing"),
+    ("turnaround-3", "borehole 3 turnaround housing"),
+]:
+    kind = "box" if "splice" in label else "housing"
+    resources[label] = (
+        f"object_type: Enclosure\nname: tunnel {name}\nenclosure_type: {kind}\n"
+    )
 for name, text in resources.items():
     write(f"resources/{name}.yaml", text)
 ```
@@ -149,30 +164,30 @@ This is @tbl-path with the parts named, and it goes in `path.00` — the directo
 components_csv = dedent("""\
 sequence,object_type,optical_length,name,container
 1,FiberSegment,1500.0,telemetry lead-in,telemetry-cable
-2,Splice,0.0,splice at box A,splice-box
+2,Splice,0.0,splice at box A,splice-box-a
 3,FiberSegment,2.5,drop into the trench,trench-cable
 4,FiberSegment,25.0,trench B to the coil,trench-cable
 5,FiberSegment,10.0,cable coil at C,trench-cable
 6,FiberSegment,25.0,trench from the coil to D,trench-cable
 7,FiberSegment,2.5,rise out of the trench,trench-cable
-8,Splice,0.0,splice at box E,splice-box
-9,FiberSegment,15.0,link E to borehole 3,telemetry-cable
+8,Splice,0.0,splice at box E,splice-box-e
+9,FiberSegment,15.0,link E to borehole 3,connecting-cable
 10,FiberSegment,20.0,borehole 3 down,borehole-cable
-11,Splice,0.0,borehole 3 turnaround,turnaround
+11,Splice,0.0,borehole 3 turnaround,turnaround-3
 12,FiberSegment,20.0,borehole 3 up,borehole-cable
-13,FiberSegment,15.0,link borehole 3 to coupler G,telemetry-cable
-14,Connector,0.0,coupler G,splice-box
-15,FiberSegment,15.0,link coupler G to borehole 2,telemetry-cable
+13,FiberSegment,15.0,link borehole 3 to coupler G,connecting-cable
+14,Connector,0.0,coupler G,
+15,FiberSegment,15.0,link coupler G to borehole 2,connecting-cable
 16,FiberSegment,20.0,borehole 2 down,borehole-cable
-17,Splice,0.0,borehole 2 turnaround,turnaround
+17,Splice,0.0,borehole 2 turnaround,turnaround-2
 18,FiberSegment,20.0,borehole 2 up,borehole-cable
-19,FiberSegment,15.0,link borehole 2 to coupler H,telemetry-cable
-20,Connector,0.0,coupler H,splice-box
-21,FiberSegment,15.0,link coupler H to borehole 1,telemetry-cable
+19,FiberSegment,15.0,link borehole 2 to coupler H,connecting-cable
+20,Connector,0.0,coupler H,
+21,FiberSegment,15.0,link coupler H to borehole 1,connecting-cable
 22,FiberSegment,20.0,borehole 1 down,borehole-cable
-23,Splice,0.0,borehole 1 turnaround,turnaround
+23,Splice,0.0,borehole 1 turnaround,turnaround-1
 24,FiberSegment,20.0,borehole 1 up,borehole-cable
-25,FiberSegment,15.0,link borehole 1 back to box A,telemetry-cable
+25,FiberSegment,15.0,link borehole 1 back to box A,connecting-cable
 26,Terminator,0.0,path end,
 """)
 
@@ -254,7 +269,7 @@ geometry.to_csv(root / PATH / "geometry.csv", index=False)
 geometry.head(8)
 ```
 
-The coil and the six 15 m links appear nowhere in that table, so their channels get no position at all. That is the honest answer rather than a gap: the links are slack cable in a tray, and ten meters of fiber wound into a one-meter loop has no useful position per channel. A made-up polyline would be worse than a `nan`.
+The coil and the six 15 m links appear nowhere in that table, so their interiors get no position at all — only the channel at the very start of a link, which is the surveyed point the run before it ended on. That is the honest answer rather than a gap: the links are slack cable in a tray, and ten meters of fiber wound into a one-meter loop has no useful position per channel. A made-up polyline would be worse than a `nan`.
 
 Notice also what the table does *not* say. It never mentions the wind angle. Two control points state that 25 m of fiber runs from B to C, every channel between them is placed by interpolating that, and $\cos\phi$ stops being anyone's problem at this line.
 
@@ -388,7 +403,7 @@ patch = dc.get_example_patch(
     "random_das",
     acquisition_key="XT.TUN1.00.DAS",
     time_min="2024-06-01",
-    shape=(1780, 200),
+    shape=(1776, 200),
 )
 spool = dc.spool(patch).attach_inventory(inventory)
 ```
@@ -428,24 +443,35 @@ assert np.isnan(depth[1000])
 
 # A repair, and what it does to the data
 
-In September a contractor puts a bucket through the trench cable, fifteen meters of fiber past box A. It is repaired with two splices and a two-meter patch cord, and every channel beyond the repair now sits two meters further along the fiber than it used to.
+In September a contractor puts a bucket through the trench cable, fifteen meters of fiber into the trench. It is repaired with two splices and a two-meter patch cord, and every channel beyond the repair now sits two meters further along the fiber than it used to.
 
 This is what epochs are for. The old description is not edited. A second directory is added, named for the day of the repair, and the first path runs until the second begins.
 
 The components table is where the repair happens: one row becomes five, and the table is renumbered.
 
 ```{python}
+# The repair is new hardware, so it is new resources: a patch cord, and the
+# box holding the slack.
+write(
+    "resources/repair-cord.yaml",
+    "object_type: Cable\nname: trench repair patch cord\nfiber_count: 1\n",
+)
+write(
+    "resources/repair-box.yaml",
+    "object_type: Enclosure\nname: trench repair box\nenclosure_type: box\n",
+)
+
 rows = pd.read_csv(io.StringIO(components_csv)).to_dict("records")
 index = next(i for i, row in enumerate(rows) if row["name"] == "trench B to the coil")
 rows[index : index + 1] = [
     dict(object_type="FiberSegment", optical_length=15.0,
          name="trench B to the break", container="trench-cable"),
     dict(object_type="Splice", optical_length=0.0,
-         name="repair splice near side", container="splice-box"),
+         name="repair splice near side", container="repair-box"),
     dict(object_type="FiberSegment", optical_length=2.0,
-         name="repair patch cord", container="trench-cable"),
+         name="repair patch cord", container="repair-cord"),
     dict(object_type="Splice", optical_length=0.0,
-         name="repair splice far side", container="splice-box"),
+         name="repair splice far side", container="repair-box"),
     dict(object_type="FiberSegment", optical_length=10.0,
          name="trench from the break to the coil", container="trench-cable"),
 ]
@@ -505,7 +531,7 @@ straddling = dc.get_example_patch(
     "random_das",
     acquisition_key="XT.TUN1.00.DAS",
     time_min="2024-08-31T23:59:59",
-    shape=(1780, 500),
+    shape=(1776, 500),
 )
 crossed = dc.spool(straddling).attach_inventory(repaired)
 
@@ -544,7 +570,7 @@ print(f"{len(text.splitlines())} lines of yaml")
 assert dc.inventory(text) == repaired
 ```
 
-Dropping either into the data directory means every spool opened there finds it without being told: the authoring directory as `.inventory/`, or the single file as `.inventory.yaml`, `.inventory.yml`, or `.inventory.json`. The name states the format, so a file called plainly `.inventory` is not one of the spellings.
+Dropping either into the data directory means every spool opened there finds it without being told: the authoring directory as `.inventory/`, or the single file as `.inventory.yaml` or `.inventory.yml`. The suffix states the format rather than decorating it, so a file called plainly `.inventory` is not one of the spellings, and the third one — `.inventory.json` — holds what `model_dump_json` writes rather than what `to_yaml` does.
 
 # Where the boundaries fell
 
