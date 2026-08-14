@@ -14,7 +14,7 @@ A namespace is appropriate when you want to group related functionality under a 
 
 If you are adding support for a new file format, see [Adding a New Format](new_format.qmd). File formats use `FiberIO` plugins, not method namespaces.
 
-Namespaces and `FiberIO` plugins are the extension points; subclassing `Patch` or `Spool` is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so a subclass which replaces that state is refused rather than silently accepted.
+Namespaces and `FiberIO` plugins are the extension points; subclassing `Patch` or `Spool` is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so copying a subclass instance which never ran that `__init__` is refused rather than silently accepted.
 
 ## The namespace model
 
