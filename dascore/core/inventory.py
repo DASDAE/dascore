@@ -15,7 +15,6 @@ Each object documents the rules it enforces.
 from __future__ import annotations
 
 import itertools
-import os
 from collections.abc import Mapping, Sized
 from functools import cache
 from types import MappingProxyType, UnionType
@@ -1782,6 +1781,18 @@ _SYSTEM_FACT_NAMES = tuple(
 )
 
 
+def _yaml_label(text) -> str:
+    """
+    Name YAML text in an error without quoting a whole document at it.
+
+    A one-line string is nearly always a path someone expected to be
+    read, so it is worth showing and worth a word about why it was not.
+    """
+    if isinstance(text, str) and "\n" not in text:
+        return f"{text!r} (read as YAML text; no such file or directory)"
+    return "the given YAML text"
+
+
 class Inventory(InventoryModel):
     """
     Top-level DASDAE inventory manifest.
@@ -2278,9 +2289,9 @@ class Inventory(InventoryModel):
         return out
 
     @classmethod
-    def from_yaml(cls, source) -> Self:
+    def from_yaml(cls, text: str) -> Self:
         """
-        Load an inventory from a YAML string or file path.
+        Load an inventory from YAML text.
 
         A loaded document is checked before it is returned: reading one asks
         whether it is a valid inventory, and a document which fails should
@@ -2290,23 +2301,11 @@ class Inventory(InventoryModel):
 
         Parameters
         ----------
-        source
-            A path to a YAML file, or YAML text (must contain a newline to
-            be treated as text rather than a missing path).
+        text
+            YAML text. Paths — a file or an authoring directory — load
+            through [`dascore.inventory`](`dascore.inventory`), which is
+            the one door every source goes through.
         """
-        text = source
-        if isinstance(source, os.PathLike) or (
-            isinstance(source, str) and "\n" not in source
-        ):
-            if not os.path.exists(source):
-                msg = f"No such inventory file: {source!r}."
-                raise InvalidInventoryError(msg)
-            try:
-                with open(source) as fh:
-                    text = fh.read()
-            except (OSError, UnicodeDecodeError) as error:
-                msg = f"Could not read {source!r}: {error}."
-                raise InvalidInventoryError(msg) from error
         yaml = optional_import("yaml", required_for="YAML inventory serialization")
         try:
             data = yaml.safe_load(text)
@@ -2314,9 +2313,9 @@ class Inventory(InventoryModel):
             # A document which does not parse is an invalid inventory, and
             # says so as one: a caller who asked for an inventory should
             # not have to know which parser was reaching for the file.
-            msg = f"Could not parse YAML from {source!r}: {error}."
+            msg = f"Could not parse YAML from {_yaml_label(text)}: {error}."
             raise InvalidInventoryError(msg) from error
-        return cls._from_mapping(data, f"{source!r}")
+        return cls._from_mapping(data, _yaml_label(text))
 
     @classmethod
     def _from_mapping(cls, data, source: str) -> Self:

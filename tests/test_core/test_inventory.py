@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -552,7 +553,7 @@ class TestInventory:
         inventory = build_inventory()
         path = tmp_path / "inventory.yaml"
         inventory.to_yaml(path)
-        loaded = inv.Inventory.from_yaml(path)
+        loaded = dc.inventory(path)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
     def test_resources_accept_iterable(self):
@@ -911,8 +912,12 @@ class TestInternalReviewRegressions:
 
     def test_inventory_function_dispatch(self):
         """dc.inventory handles bad input with clear errors."""
-        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+        # A string naming nothing is the document itself, and a mistyped
+        # path is the common way to land there, so the error says both.
+        with pytest.raises(InvalidInventoryError, match="no such file"):
             dc.inventory("does_not_exist.yaml")
+        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+            dc.inventory(Path("does_not_exist.yaml"))
         with pytest.raises(InvalidInventoryError, match="Could not get"):
             dc.inventory(123)
         existing = build_inventory()

@@ -2178,3 +2178,26 @@ class TestLoadSerializedFile:
         path = tmp_path / "whole.yaml"
         original.to_yaml(path)
         assert dc.inventory(path) == original
+
+
+class TestOneLoadingDoor:
+    """`dc.inventory` decides what a source is; `from_yaml` reads text."""
+
+    def test_text_and_file_agree(self, tmp_path):
+        """The same document loads the same from either side of the door."""
+        original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
+        text = original.to_yaml()
+        path = tmp_path / "whole.yaml"
+        path.write_text(text)
+        assert dc.inventory(text) == dc.inventory(path) == original
+
+    def test_from_yaml_does_not_read_paths(self, tmp_path):
+        """A path handed to the text reader is text, not a file to open."""
+        path = tmp_path / "whole.yaml"
+        path.write_text(dc.inventory().to_yaml())
+        with pytest.raises(InvalidInventoryError, match="no such file"):
+            inv.Inventory.from_yaml(str(path))
+
+    def test_one_line_document_is_text(self):
+        """Existence decides, so a newline is not what makes text text."""
+        assert dc.inventory("networks: []").networks == ()

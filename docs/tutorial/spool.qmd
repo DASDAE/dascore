@@ -255,7 +255,9 @@ subspool = spool.unselect(tag='some_tag')
 assert len(subspool) + len(spool.select(tag='some_tag')) == len(spool)
 ```
 
-Coordinates are not accepted yet. Selecting on a coordinate trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering, and `unselect` does not do it yet; select the ranges to keep instead.
+The patches' own coordinates are not accepted. Selecting on one trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering; select the ranges to keep instead, or use [`Patch.unselect`](`dascore.Patch.unselect`) on each patch.
+
+The coordinates an attached [inventory](inventory.qmd) defines along the fiber are different, and *are* accepted: removing one of those chooses which channels a patch holds, so `len` can grow here as well.
 
 # chunk
 
@@ -334,7 +336,7 @@ See the [parallel processing recipe](../recipes/parallelization.qmd) for more ex
 
 # Inventory
 
-A spool can carry a DASDAE [inventory](inventory.qmd): a description of the observing system its data was recorded through — the fiber, where it goes, and how the interrogator was configured over time. Attaching one adds nothing to the patches, but makes the names the inventory defines along the fiber available to `select` and [`split_by`](`dascore.core.spool.Spool.split_by`), and lets [`enrich`](`dascore.core.spool.Spool.enrich`) copy that metadata onto patches as they are extracted.
+A spool can carry a DASDAE [inventory](inventory.qmd): a description of the observing system its data was recorded through — the fiber, where it goes, and how the interrogator was configured over time. Attaching one adds nothing to the patches, but makes the names the inventory defines along the fiber available to `select` and [`expand_by`](`dascore.core.spool.Spool.expand_by`), and lets [`enrich`](`dascore.core.spool.Spool.enrich`) copy that metadata onto patches as they are extracted.
 
 ```{python}
 import dascore as dc
@@ -344,7 +346,7 @@ patch, inventory = inventory_patch_pair()
 spool = dc.spool(patch).attach_inventory(inventory)
 
 # The inventory annotates two zones along the fiber, so they can be selected.
-assert len(spool.split_by("zone")) == 2
+assert len(spool.expand_by("zone")) == 2
 ```
 
 A spool opened on a directory which carries an inventory under the name `.inventory` — as a directory, or as `.inventory.yaml`, `.inventory.yml`, or `.inventory.json` — starts out attached to it.

@@ -752,7 +752,5 @@ class TestDirectorySpoolSerialization:
     def test_process_pool_map(self, basic_file_spool):
         """Spool.map works with a process pool executor."""
         with ProcessPoolExecutor(max_workers=1) as client:
-            out = list(
-                basic_file_spool.map(_patch_shape, client=client, progress=False)
-            )
+            out = list(basic_file_spool.map(_patch_shape, client=client, progress=None))
         assert len(out) == len(basic_file_spool)

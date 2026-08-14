@@ -537,7 +537,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
-    conf = attr_kwargs.get("conflicts", None)
+    conf = attr_kwargs.get("conflict", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_merged_coord(
         df, merge_dim, coords, drop_conf_coords, **coord_kwargs
@@ -1244,7 +1244,7 @@ def _merge_models(attrs1, attrs2, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
             f"are not equal. {ne_attrs}"
         )
         raise IncompatiblePatchError(msg)
-    return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+    return combine_patch_attrs([dict1, dict2], conflict="keep_first")
 
 
 def merge_compatible_coords_attrs(

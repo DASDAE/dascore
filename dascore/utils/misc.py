@@ -16,7 +16,7 @@ from functools import cache
 from io import IOBase
 from pathlib import Path
 from types import ModuleType
-from typing import Literal, TypeVar, overload
+from typing import Literal, TypeVar, get_args, overload
 
 import numpy as np
 import pandas as pd
@@ -25,7 +25,12 @@ from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
 from dascore.config import config_context, get_config
-from dascore.constants import WARN_LEVELS, WARNING_ACTIONS, max_lens
+from dascore.constants import (
+    PROGRESS_LEVELS,
+    WARN_LEVELS,
+    WARNING_ACTIONS,
+    max_lens,
+)
 from dascore.exceptions import (
     FilterValueError,
     InvalidInventoryError,
@@ -118,12 +123,15 @@ def warn_or_raise(
         The type of warning to use. Must be a subclass of Warning.
     behavior
         "warn" to issue the warning, "raise" to raise the exception, and
-        "ignore" (or None) to do nothing.
+        "ignore" to do nothing.
     """
-    if not behavior or behavior == "ignore":
+    if behavior == "ignore":
         return
     if behavior == "raise":
         raise exception(msg)
+    if behavior != "warn":
+        msg_ = f"behavior must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
+        raise ParameterError(msg_)
     warnings.warn(msg, warning)
 
 
@@ -797,7 +805,7 @@ def cached_method(func):
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
-    def __init__(self, func, kwargs, config, progress=True):
+    def __init__(self, func, kwargs, config, progress: PROGRESS_LEVELS = "standard"):
         self._func = func
         self._kwargs = kwargs
         self._progress = progress
@@ -815,11 +823,18 @@ class _MapFuncWrapper:
             # way? See #265.
             if not getattr(spool, "_no_progress", False):
                 desc = f"Applying {self._func.__name__} to spool"
-                iterable = track(spool, desc) if self._progress else spool
+                iterable = track(spool, desc, self._progress)
             return [self._func(x, **self._kwargs) for x in iterable]
 
 
-def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
+def _spool_map(
+    spool,
+    func,
+    size=None,
+    client=None,
+    progress: PROGRESS_LEVELS = "standard",
+    **kwargs,
+):
     """
     Map a func over a spool.
 
@@ -832,15 +847,14 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     client
         An object with a map method for applying concurrency.
     progress
-        If True, display a progress bar.
+        Controls the progress bar; see `PROGRESS_LEVELS`.
     **kwargs
         Keywords passed to func.
     """
     # no client; simple for loop.
     desc = f"Applying {func.__name__} to spool"
     if client is None:
-        iterable = track(spool, desc) if progress else spool
-        return [func(patch, **kwargs) for patch in iterable]
+        return [func(patch, **kwargs) for patch in track(spool, desc, progress)]
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
     if size is None:

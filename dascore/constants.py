@@ -184,7 +184,7 @@ PROGRESS_LEVELS = Literal["standard", "basic", None]
 
 # Options for handling specific warnings. "ignore" and None both mean
 # "do nothing"; warn_or_raise has always accepted either.
-WARN_LEVELS = Literal["warn", "raise", "ignore", None]
+WARN_LEVELS = Literal["warn", "raise", "ignore"]
 
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
 # Spelled out because the standard library's alias for them is stub-only.
@@ -281,16 +281,17 @@ coords
 enrich_on_missing_description = """
 on_missing
     What to do when an explicitly requested name is one the inventory does
-    not define: "raise" (the default), "null" to fill the dtype-appropriate
-    missing marker, or "ignore" to leave it off. Blanket requests copy what
-    is applicable and never trigger it, and per-channel coverage gaps are
-    always missing values rather than errors.
+    not define: "raise" (the default), "warn" to say so and leave it off,
+    "ignore" to leave it off silently, or "null" to fill the
+    dtype-appropriate missing marker so the name is present either way.
+    Blanket requests copy what is applicable and never trigger it, and
+    per-channel coverage gaps are always missing values rather than errors.
 """.strip()
 
 # One paragraph, not two: a blank line inside a parameter description
 # reads as the start of the next parameter when the API docs are built.
-enrich_conflicts_description = f"""
-conflicts
+enrich_conflict_description = f"""
+conflict
 {textwrap.indent(attr_conflict_description.strip(), "    ")}
     Enrichment combines the inventory's values with the patch's own, so
     the default `keep_first` lets the inventory win and re-enriching is

@@ -1583,12 +1583,16 @@ def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     """
     Load or create a DASDAE inventory.
 
+    The one door every source goes through: what a source is decides how
+    it is read, so nothing else has to guess.
+
     Parameters
     ----------
     source
         An existing Inventory (returned as is), a directory in the
-        authoring format, a YAML file path or YAML text, or None for an
-        empty inventory.
+        authoring format, the path of a serialized document, the text of
+        one, or None for an empty inventory. A path is a path when it
+        exists; a string naming nothing is read as the document itself.
 
     Examples
     --------
@@ -1603,13 +1607,27 @@ def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     if isinstance(source, str | os.PathLike):
         if os.path.isdir(source):
             return load_directory(source)
-        # A serialized document is read the way the format reads its own
-        # object files: the suffix picks the parser, so a JSON inventory
-        # loads where PyYAML is not installed, and a file which does not
-        # parse says so as an invalid inventory rather than as whatever
-        # the parser happened to raise.
-        if os.path.isfile(source) and _object_suffix(Path(source)) is not None:
-            return _load_file(Path(source))
+        if os.path.isfile(source):
+            # A serialized document is read the way the format reads its
+            # own object files: the suffix picks the parser, so a JSON
+            # inventory loads where PyYAML is not installed, and a file
+            # which does not parse says so as an invalid inventory rather
+            # than as whatever the parser happened to raise. A document
+            # named nothing in particular is the format's own YAML.
+            path = Path(source)
+            if _object_suffix(path) is not None:
+                return _load_file(path)
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError) as error:
+                msg = f"Could not read {str(source)!r}: {error}."
+                raise InvalidInventoryError(msg) from error
+            return Inventory.from_yaml(text)
+        # Not a path that exists, so it is the text of a document. A
+        # mistyped path lands here too, which the error says.
+        if isinstance(source, os.PathLike):
+            msg = f"No such inventory file: {str(source)!r}."
+            raise InvalidInventoryError(msg)
         return Inventory.from_yaml(source)
     msg = f"Could not get an inventory from {source!r}."
     raise InvalidInventoryError(msg)

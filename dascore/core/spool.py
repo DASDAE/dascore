@@ -28,7 +28,7 @@ from dascore.constants import (
     PatchType,
     attr_conflict_description,
     enrich_attrs_description,
-    enrich_conflicts_description,
+    enrich_conflict_description,
     enrich_coords_description,
     enrich_on_missing_description,
     namespace_select_type,
@@ -106,7 +106,7 @@ _VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
 # Conform decides membership, not metadata, so where enrich's quiet option
 # is "ignore" -- leave the patch as it was -- conform's is "drop": every
 # policy here removes the patch, and only the noise differs.
-_VALID_ON_UNRESOLVED_CONFORM = ("raise", "warn", "drop")
+_VALID_ON_UNRESOLVED_CONFORM = ("raise", "warn", "ignore")
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.
@@ -155,15 +155,15 @@ def _report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
     inventory which covers an archive apart from a handful of patches is
     reporting a gap in itself as often as a stray file.
     """
-    if on_unresolved == "drop":
+    if on_unresolved == "ignore":
         return
     paths = list(rows["source_path"])
     advice = (
-        "Pass on_unresolved='warn' to drop them with a warning, or 'drop' "
-        "to drop them silently."
+        "Pass on_unresolved='warn' to drop them with a warning, or "
+        "'ignore' to drop them silently."
         if on_unresolved == "raise"
-        else "Pass on_unresolved='drop' to silence this, or 'raise' to fail "
-        "on the gap instead."
+        else "Pass on_unresolved='ignore' to silence this, or 'raise' to "
+        "fail on the gap instead."
     )
     msg = (
         f"The inventory does not describe {len(paths)} patch(es) in this "
@@ -297,7 +297,7 @@ def _check_stampable(name: str, rows: pd.DataFrame) -> None:
     msg = (
         f"{name!r} is how the spool itself describes a patch, so stamping "
         "it would overwrite what binds each output to the data it came "
-        "from. Rename the group, or pass stamp=False to split on it "
+        "from. Rename the group, or pass stamp=False to expand by it "
         "without recording the value."
     )
     raise InvalidSpoolQueryError(msg)
@@ -1274,7 +1274,7 @@ class Spool(NamespaceOwner):
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
         is what makes it so. Once attached, the coordinates the
         inventory defines along the fiber become selectable, and
-        [`split_by`](`dascore.core.spool.Spool.split_by`) can expand the
+        [`expand_by`](`dascore.core.spool.Spool.expand_by`) can expand the
         spool by the values of one.
 
         A spool opened on a directory which carries an inventory under
@@ -1352,7 +1352,7 @@ class Spool(NamespaceOwner):
         >>> from dascore.examples import inventory_patch_pair
         >>>
         >>> patch, inventory = inventory_patch_pair()
-        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> spool = dc.spool(patch).attach_inventory(inventory).enrich()
         >>> plain = spool.remove_inventory()
         >>> assert "gauge_length" not in dict(plain[0].attrs)
         >>> assert spool[0].attrs.gauge_length == 10.0  # the original stands
@@ -1366,11 +1366,10 @@ class Spool(NamespaceOwner):
         attrs_desc=enrich_attrs_description,
         coords_desc=enrich_coords_description,
         on_missing_desc=enrich_on_missing_description,
-        conflicts_desc=enrich_conflicts_description,
+        conflict_desc=enrich_conflict_description,
     )
     def enrich(
         self,
-        inventory=None,
         *,
         on_unresolved: Literal["warn", "raise", "ignore"] = "warn",
         **kwargs,
@@ -1392,12 +1391,12 @@ class Spool(NamespaceOwner):
         job, and leaving it there is what keeps this lazy — nothing
         resolves until a patch is pulled.
 
+        The inventory is the one
+        [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`)
+        put on the spool, which is the only way a spool gets one.
+
         Parameters
         ----------
-        inventory
-            The inventory to enrich from, or the path of one. Defaults to
-            the spool's attached inventory; given one, it is attached as
-            well.
         on_unresolved
             What to do with a patch the inventory does not describe — one
             naming no entry, or naming one the inventory does not resolve
@@ -1426,7 +1425,7 @@ class Spool(NamespaceOwner):
             physical. A patch with a real time coordinate resolves at its
             own time and passing this raises.
         {on_missing_desc}
-        {conflicts_desc}
+        {conflict_desc}
 
         Examples
         --------
@@ -1434,23 +1433,22 @@ class Spool(NamespaceOwner):
         >>> from dascore.examples import inventory_patch_pair
         >>>
         >>> patch, inventory = inventory_patch_pair()
-        >>> spool = dc.spool(patch).enrich(inventory)
+        >>> spool = dc.spool(patch).attach_inventory(inventory).enrich()
         >>> assert spool[0].attrs.gauge_length == 10.0
         >>>
         >>> # Or name what is wanted, as with Patch.enrich.
-        >>> spool = dc.spool(patch).enrich(inventory, coords=False)
+        >>> attached = dc.spool(patch).attach_inventory(inventory)
+        >>> spool = attached.enrich(coords=False)
         """
         # Settled now rather than on extraction: a misspelled argument
         # should be an error here, not on some patch pulled much later.
         enrich_kwargs = _normalize_enrich_kwargs(kwargs)
-        new = self._with_inventory(
-            inventory, on_unresolved, _VALID_ON_UNRESOLVED, "enrich"
-        )
+        new = self._checked_inventory(on_unresolved, _VALID_ON_UNRESOLVED, "enrich")
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
         return new
 
-    def split_by(
+    def expand_by(
         self,
         name: str,
         *,
@@ -1499,18 +1497,18 @@ class Spool(NamespaceOwner):
         >>> spool = dc.spool(patch).attach_inventory(inventory)
         >>>
         >>> # The example path annotates two zones along the fiber.
-        >>> zones = spool.split_by("zone")
+        >>> zones = spool.expand_by("zone")
         >>> assert len(zones) == 2
         >>> assert set(zones.get_contents()["zone"]) == {"north", "south"}
         >>>
         >>> # Which can be narrowed by a glob over the values.
-        >>> assert len(spool.split_by("zone", include="nor*")) == 1
+        >>> assert len(spool.expand_by("zone", include="nor*")) == 1
         """
         from dascore.proc.inventory import resolve_split_pieces  # noqa: PLC0415
 
         if self._inventory is None:
             msg = (
-                "Spool.split_by needs an inventory to split on: the values "
+                "Spool.expand_by needs an inventory to expand by: the values "
                 "it expands into are the ones an inventory states along the "
                 "fiber. Attach one with Spool.attach_inventory."
             )
@@ -1522,7 +1520,7 @@ class Spool(NamespaceOwner):
         if name not in set(self._resolved_inventory().get_names().coords):
             msg = (
                 f"{name!r} is not a coordinate the attached inventory defines "
-                "along the fiber, so there is nothing to split on. "
+                "along the fiber, so there is nothing to expand by. "
                 "Inventory.get_names().coords lists the names it could."
             )
             raise InvalidSpoolQueryError(msg)
@@ -1557,9 +1555,8 @@ class Spool(NamespaceOwner):
 
     def conform_to_inventory(
         self,
-        inventory=None,
         *,
-        on_unresolved: Literal["raise", "warn", "drop"] = "raise",
+        on_unresolved: Literal["raise", "warn", "ignore"] = "raise",
     ) -> Self:
         """
         Return a spool the inventory describes exactly, patch for patch.
@@ -1577,15 +1574,12 @@ class Spool(NamespaceOwner):
         sample the patch held and hold none of them twice, and `len` and
         `get_contents` describe the pieces rather than the original.
 
+        The inventory is the one
+        [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`)
+        put on the spool, which is the only way a spool gets one.
+
         Parameters
         ----------
-        inventory
-            The inventory to conform to, or the path of one. Defaults to
-            the spool's attached
-            inventory; given one, it is attached as well — and attaching
-            clears enrichment set up from the old one, as it does
-            everywhere. Conforming to the spool's own inventory leaves
-            enrichment alone, since nothing was swapped.
         on_unresolved
             What to do with a patch the inventory does not describe — one
             carrying no `acquisition_key`, one carrying a key the
@@ -1595,7 +1589,7 @@ class Spool(NamespaceOwner):
             judged over its whole span, so one described at its start but
             not at its end is undescribed. "raise" (the default)
             fails and names them, "warn" drops them and says so, and
-            "drop" discards them silently, which is what an inventory
+            "ignore" discards them silently, which is what an inventory
             deliberately covering part of an archive wants.
 
         Raises
@@ -1621,15 +1615,14 @@ class Spool(NamespaceOwner):
         >>> # A patch the inventory says nothing about can be dropped.
         >>> other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         >>> mixed = dc.spool([patch, other]).attach_inventory(inventory)
-        >>> assert len(mixed.conform_to_inventory(on_unresolved="drop")) == 1
+        >>> assert len(mixed.conform_to_inventory(on_unresolved="ignore")) == 1
         """
         from dascore.proc.inventory import (  # noqa: PLC0415
             _NO_EPOCHS,
             resolve_row_epochs,
         )
 
-        new = self._with_inventory(
-            inventory,
+        new = self._checked_inventory(
             on_unresolved,
             _VALID_ON_UNRESOLVED_CONFORM,
             "conform_to_inventory",
@@ -1704,27 +1697,24 @@ class Spool(NamespaceOwner):
         )
         return self._new_from_catalog(catalog)
 
-    def _with_inventory(self, inventory, on_unresolved, valid, method) -> Self:
+    def _checked_inventory(self, on_unresolved, valid, method) -> Self:
         """
         Return the spool an inventory verb works on, arguments checked.
 
-        Both verbs take an inventory the same way — the attached one by
-        default, and one passed explicitly is attached as well — and both
-        police their own policy vocabulary before doing any work. Sharing
-        the entry keeps the two from drifting into saying it differently.
+        Both verbs read the attached inventory and police their own policy
+        vocabulary before doing any work. Sharing the entry keeps the two
+        from drifting into saying it differently.
         """
         if on_unresolved not in valid:
             msg = f"on_unresolved must be one of {valid}, got {on_unresolved!r}."
             raise ParameterError(msg)
-        if inventory is None and self._inventory is None:
+        if self._inventory is None:
             msg = (
-                f"Spool.{method} needs an inventory: pass one, or attach one "
-                "first with Spool.attach_inventory."
+                f"Spool.{method} needs an inventory; attach one first with "
+                "Spool.attach_inventory."
             )
             raise ParameterError(msg)
-        if inventory is None:
-            return self.__class__(self)
-        return self.attach_inventory(inventory)
+        return self.__class__(self)
 
     def _restrict_to_rows(self, patch_ids, keep: bool = True) -> Self:
         """
@@ -1866,7 +1856,7 @@ class Spool(NamespaceOwner):
         *,
         client: ExecutorType | None = None,
         size: int | None = None,
-        progress: bool = True,
+        progress: PROGRESS_LEVELS = "standard",
         **kwargs,
     ) -> list[T]:
         """
@@ -1883,7 +1873,10 @@ class Spool(NamespaceOwner):
             If not set, defaults to the number of processors on the host.
             Does nothing unless client is defined.
         progress
-            If True, display a progress bar.
+            Controls the progress bar. "standard" produces the standard
+            progress bar. "basic" is a simplified version with lower refresh
+            rates, best for high-latency environments, and None disables
+            the progress bar.
         **kwargs
             kwargs passed to func.
 
@@ -2177,7 +2170,7 @@ class Spool(NamespaceOwner):
             **kwargs,
         )
         merge_kwargs = {
-            "conflicts": conflict,
+            "conflict": conflict,
             "snap_coords": snap_coords,
             "tolerance": tolerance,
         }
