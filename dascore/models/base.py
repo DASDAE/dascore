@@ -100,8 +100,6 @@ def sensible_model_hash(self: BaseModel) -> int:
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
 
-    _cache = {}
-
     model_config = ConfigDict(
         extra="ignore",  # TODO: change to raise, then let subclass overwrite
         validate_assignment=True,

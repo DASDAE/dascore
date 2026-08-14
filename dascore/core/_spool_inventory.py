@@ -592,10 +592,10 @@ def _fill_from_intervals(distances, intervals, values, kind):
     ):
         if not np.any(covered):
             continue
-        # Anything with a length except a string holds more than one thing:
-        # a tuple of measurements, or a mapping like the `extra_fields`
-        # every track model carries. Caught here so the numeric branch
-        # below cannot raise a bare TypeError out of float().
+        # A mapping like the `extra_fields` every track model carries can
+        # be asked for by name even though the blanket list skips it.
+        # Caught here so the numeric branch below cannot raise a bare
+        # TypeError out of float().
         if isinstance(value, Sized) and not isinstance(value, str):
             msg = (
                 f"Cannot project the multi-valued {value!r} onto channels; "

@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import (
+    DATA_STATE_ATTRS,
     INVENTORY_ATTRS,
     PatchType,
     enrich_attrs_description,
@@ -39,11 +40,6 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
-
-# Attrs describing the data as it now stands rather than the system which
-# recorded it. Processing functions maintain them, so blanket enrichment
-# leaves them alone; naming one explicitly restores the as-acquired value.
-_DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
 
 # Facts the patch's own coordinates already state: the time coordinate has
 # the sample rate and the distance coordinate the channel spacing, and
@@ -160,7 +156,7 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
     if attrs is True:
         return {i: v for i, v in system.items() if i not in _COORD_REDUNDANT_ATTRS}
     available = dict(system)
-    for name in _DATA_STATE_ATTRS:
+    for name in DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
         if not is_unset(value):
             available[name] = value

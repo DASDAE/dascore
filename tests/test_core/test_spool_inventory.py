@@ -42,7 +42,6 @@ from dascore.core.inventory import (
     FiberSegment,
     Inventory,
     Network,
-    OpticalMeasurement,
     OpticalPath,
     OpticalPathAnnotation,
 )
@@ -1530,40 +1529,6 @@ class TestSharedNames:
             kwargs = {} if isinstance(form, Mapping) else {"gauge_length": "odd"}
             out = spool.select(_coords=form, **kwargs)
             assert out.get_contents()["distance_max"].tolist() == [0.0]
-
-    def test_a_field_scalar_on_another_path_is_kept(self):
-        """
-        One path stating several values does not silence the others.
-
-        A field is only unusable where nothing states it as one value; a
-        path which records a scalar can still give it to a channel.
-        """
-
-        def path(loss, measurement):
-            return OpticalPath(
-                location_code="",
-                optical_components=(
-                    FiberSegment(
-                        name="c",
-                        optical_length=100.0,
-                        loss_db=loss,
-                        loss_measurement=measurement,
-                    ),
-                ),
-            )
-
-        def build(*paths):
-            array = FiberArray(code="R2D1", optical_paths=paths)
-            return Inventory(
-                networks=(Network(code="DAS", fiber_arrays=(array,)),),
-                resources={"m1": OpticalMeasurement(resource_id="m1")},
-            )
-
-        many = path((0.2, 0.25), ("m1", "m1"))
-        one = path(0.3, "m1")
-        assert "optical_components.loss_db" not in build(many).get_names().coords
-        assert "optical_components.loss_db" in build(many, one).get_names().coords
-        assert "optical_components.loss_db" in build(one).get_names().coords
 
 
 def _split_epochs(inventory, when, *, acquisitions=False, second=None):

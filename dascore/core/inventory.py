@@ -15,9 +15,8 @@ Each object documents the rules it enforces.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping, Sized
-from functools import cache
-from types import MappingProxyType, UnionType
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import (
     Annotated,
     Any,
@@ -25,9 +24,7 @@ from typing import (
     Literal,
     NamedTuple,
     TypeAlias,
-    Union,
     get_args,
-    get_origin,
 )
 from uuid import uuid4
 
@@ -41,7 +38,12 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from dascore.constants import DataCategory, DataType
+from dascore.constants import (
+    DATA_STATE_ATTRS,
+    INVENTORY_ATTRS,
+    DataCategory,
+    DataType,
+)
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import (
     DateTime64,
@@ -196,34 +198,27 @@ class CoordinateReferenceSystem(InventoryModel):
         ),
     )
 
-    @field_validator("coordinate_labels")
-    @classmethod
-    def _check_labels(cls, value):
-        """Labels are unique; the vocabulary itself is enforced by the type."""
-        if len(set(value)) != len(value):
-            msg = f"coordinate_labels must be unique; got {value}."
-            raise InvalidInventoryError(msg)
-        return value
+    @model_validator(mode="after")
+    def _check_axes(self) -> Self:
+        """
+        The axes are unique, canonical in number, and paired with units.
 
-    @field_validator("coordinate_labels")
-    @classmethod
-    def _check_label_count(cls, value):
-        """Coordinates are stored on the canonical (x, y, z) axes."""
-        if not 1 <= len(value) <= 3:
+        Three statements about one thing -- what this CRS's axes are --
+        so a document naming its axes badly hears every way at once.
+        """
+        labels = self.coordinate_labels
+        if len(set(labels)) != len(labels):
+            msg = f"coordinate_labels must be unique; got {labels}."
+            raise InvalidInventoryError(msg)
+        if not 1 <= len(labels) <= 3:
             msg = (
                 "A CRS declares one to three axes, matching the canonical "
-                f"(x, y, z) storage; got {value}."
+                f"(x, y, z) storage; got {labels}."
             )
             raise InvalidInventoryError(msg)
-        return value
-
-    @model_validator(mode="after")
-    def _check_units_length(self) -> Self:
-        """Units pair with the axes, one per coordinate label."""
-        if len(self.units) != len(self.coordinate_labels):
+        if len(self.units) != len(labels):
             msg = (
-                f"units {self.units} must have one entry per coordinate "
-                f"label {self.coordinate_labels}."
+                f"units {self.units} must have one entry per coordinate label {labels}."
             )
             raise InvalidInventoryError(msg)
         return self
@@ -372,9 +367,10 @@ class _OpticalComponentBase(InventoryModel):
 
     Every component carries a unified one-way transmission ``loss_db`` and
     return ``reflectance_db`` (the two quantities an OTDR trace shows per
-    event), each paired with the measurement record that produced it.
-    Multi-wavelength values are equal-length tuples paired elementwise
-    with their measurements, which carry the wavelengths.
+    event), each paired with the measurement record that produced it. One
+    value each: a component measured at several wavelengths is several
+    components' worth of facts, and the inventory has no channel to give
+    them to.
     """
 
     _identity_field: ClassVar[str] = "name"
@@ -385,49 +381,22 @@ class _OpticalComponentBase(InventoryModel):
         description="Optical component length along the optical path in meters.",
     )
     name: str = Field(default="", description="Human-readable component name.")
-    loss_db: FiniteFloat | tuple[FiniteFloat, ...] | None = Field(
+    loss_db: FiniteFloat | None = Field(
         default=None,
         description="One-way transmission loss across this component in dB.",
     )
-    loss_measurement: (
-        OpticalMeasurement | str | tuple[OpticalMeasurement | str, ...] | None
-    ) = Field(
+    loss_measurement: OpticalMeasurement | str | None = Field(
         default=None,
-        description="Measurement record(s) the loss value(s) came from.",
+        description="Measurement record the loss value came from.",
     )
-    reflectance_db: FiniteFloat | tuple[FiniteFloat, ...] | None = Field(
+    reflectance_db: FiniteFloat | None = Field(
         default=None,
         description="Return loss (reflectance) of this component in dB.",
     )
-    reflectance_measurement: (
-        OpticalMeasurement | str | tuple[OpticalMeasurement | str, ...] | None
-    ) = Field(
+    reflectance_measurement: OpticalMeasurement | str | None = Field(
         default=None,
-        description="Measurement record(s) the reflectance value(s) came from.",
+        description="Measurement record the reflectance value came from.",
     )
-
-    @model_validator(mode="after")
-    def _check_measurement_pairing(self) -> Self:
-        """Tuple values pair elementwise with tuple measurement records."""
-        for quantity in ("loss", "reflectance"):
-            value = getattr(self, f"{quantity}_db")
-            meas = getattr(self, f"{quantity}_measurement")
-            value_seq = isinstance(value, tuple)
-            meas_seq = isinstance(meas, tuple)
-            if value_seq != meas_seq:
-                msg = (
-                    f"Multi-valued {quantity}_db requires an equal-length "
-                    f"{quantity}_measurement tuple (each value needs the "
-                    "record carrying its wavelength), and vice versa."
-                )
-                raise InvalidInventoryError(msg)
-            if value_seq and len(value) != len(meas):
-                msg = (
-                    f"{quantity}_db has {len(value)} values but "
-                    f"{quantity}_measurement has {len(meas)}."
-                )
-                raise InvalidInventoryError(msg)
-        return self
 
 
 class FiberSegment(_OpticalComponentBase):
@@ -459,14 +428,11 @@ class FiberSegment(_OpticalComponentBase):
     )
 
     @property
-    def attenuation_db_per_km(self) -> float | tuple[float, ...] | None:
+    def attenuation_db_per_km(self) -> float | None:
         """The familiar per-length loss rate, derived from loss_db."""
         if self.loss_db is None or not self.optical_length:
             return None
-        km = self.optical_length / 1000.0
-        if isinstance(self.loss_db, tuple):
-            return tuple(x / km for x in self.loss_db)
-        return self.loss_db / km
+        return self.loss_db / (self.optical_length / 1000.0)
 
 
 class Connector(_OpticalComponentBase):
@@ -931,21 +897,6 @@ class Acquisition(TimeRangedModel):
         description="True when the interrogator is attached to both path ends.",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_start_distance(cls, data):
-        """Explain the removed affine form rather than 'extra inputs'."""
-        if isinstance(data, Mapping) and "start_distance" in data:
-            msg = (
-                "Acquisition no longer takes start_distance; the distance_map "
-                "is the one channel-resolution mechanism. Write "
-                f"start_distance: {data['start_distance']} as distance_map: "
-                f"{{channel: [0], distance: [{data['start_distance']}]}}, which "
-                "states the same origin and takes spatial_interval as its slope."
-            )
-            raise InvalidInventoryError(msg)
-        return data
-
     def channel_to_distance(self, values, axis: str | None = None) -> np.ndarray:
         """
         Map channel-like patch coordinates onto optical path distance.
@@ -986,32 +937,6 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 
 _MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
-
-
-def _track_identity_fields() -> Mapping[str, str]:
-    """
-    Map each typed track of an optical path to the field its name means.
-
-    `coupling="trench"` asks about coupling_type; every other field of a
-    track is reached by its qualified name (`coupling.medium`). Each
-    track model declares which of its fields is its identity, so the
-    pairing lives beside the field rather than in a list to keep in step
-    with it.
-    """
-    out = {}
-    for track, info in OpticalPath.model_fields.items():
-        # A track is a tuple of items; the path's scalar fields are not.
-        if get_origin(info.annotation) is not tuple:
-            continue
-        for model in _annotation_members(get_args(info.annotation)[0]):
-            field = getattr(model, "_identity_field", None)
-            if field is None:
-                continue
-            # The model names one of its own fields, or the map it builds
-            # would point at nothing.
-            assert field in model.model_fields, (model, field)
-            out[track] = field
-    return MappingProxyType(out)
 
 
 # Names an annotation group may not take: a group becomes a patch coordinate
@@ -1632,19 +1557,14 @@ class Network(TimeRangedModel):
         return self
 
 
-# Fields whose default is not the empty value; dropping them would reload as
-# something else. An annotation value defaults to True, so a pruned empty
-# string would come back as a boolean and change its group's kind.
-_UNPRUNED_KEYS = frozenset({"value"})
-
-
 def _drop_empty(value, _in_extras=False):
     """
     Recursively drop empty strings, mappings, and sequences from a dump.
 
     Pruned fields default to the empty value they held, so reload is
-    lossless; fields in ``_UNPRUNED_KEYS`` and user-supplied ``extra_fields``
-    contents are kept verbatim.
+    lossless; user-supplied ``extra_fields`` contents are kept verbatim.
+    An annotation value cannot be pruned into a different kind: it is a
+    scalar, and `_reject_empty_string` refuses the one empty form.
     """
     if isinstance(value, dict):
         out = {}
@@ -1654,7 +1574,7 @@ def _drop_empty(value, _in_extras=False):
                 if _in_extras
                 else _drop_empty(item, _in_extras=key == "extra_fields")
             )
-            empty = pruned in ("", {}, []) and key not in _UNPRUNED_KEYS
+            empty = pruned in ("", {}, [])
             if empty and not _in_extras:
                 continue
             out[key] = pruned
@@ -1703,82 +1623,93 @@ _EXTENT_FIELDS = frozenset(_IntervalModel.model_fields) - frozenset(
 _COLLECTION_ORIGINS = (tuple, list, set, frozenset, dict)
 
 
-def _annotation_members(annotation) -> list:
-    """
-    Return the alternatives a possibly-optional union annotation admits.
-
-    `Annotated` is transparent: this file writes several of its unions as
-    `Annotated[A | B, Field(discriminator=...)]`, and the wrapper must not
-    hide what they hold. `None` is dropped, since "or nothing" says what
-    the field does when it is unset rather than what it can hold.
-    """
-    if get_origin(annotation) is Annotated:
-        return _annotation_members(get_args(annotation)[0])
-    if get_origin(annotation) in (Union, UnionType):
-        out = [
-            x for member in get_args(annotation) for x in _annotation_members(member)
-        ]
-        return [x for x in out if x is not type(None)]
-    return [annotation]
-
-
-def _is_value_field(info) -> bool:
-    """
-    Return True when a field could hold one value describing one thing.
-
-    A field which may hold another inventory model is a reference to a
-    second record rather than a fact of this one, and one which can only
-    hold a collection has no single value to state, or to give a channel.
-    """
-    members = _annotation_members(info.annotation)
-    if any(isinstance(x, type) and issubclass(x, InventoryModel) for x in members):
-        return False
-    return any(get_origin(x) not in _COLLECTION_ORIGINS for x in members)
-
-
-def _value_shape(item, field: str) -> str | None:
-    """
-    Return how an item states a field: as one value, several, or not at all.
-
-    A field stated as several values -- a multi-wavelength loss, say --
-    has none to give a channel, however scalar its annotation reads.
-    """
-    value = getattr(item, field, None)
-    if value is None or (isinstance(value, str) and not value):
-        return None
-    return "many" if isinstance(value, Sized) and not isinstance(value, str) else "one"
-
-
-@cache
-def _value_field_names(model) -> tuple[str, ...]:
-    """
-    Return the fields of a model which state a fact about one thing.
-
-    Cached on the class: the answer is a property of the model, and an
-    inventory asked for its names walks every item of every track.
-    """
-    structural = frozenset(TimeRangedModel.model_fields) | _IDENTITY_FIELDS
-    structural |= _EXTENT_FIELDS
-    return tuple(
-        name
-        for name, info in model.model_fields.items()
-        if name not in structural and _is_value_field(info)
-    )
-
-
-TRACK_IDENTITY_FIELDS = _track_identity_fields()
-
-
-# The observing-system facts, read off the models rather than listed, so a
-# field added to either automatically becomes something an inventory can
-# contribute. Pinned to INVENTORY_ATTRS by a test: the two are one
-# vocabulary, and a new field has to reach the readers as well.
-_SYSTEM_FACT_NAMES = tuple(
-    sorted(
-        list(_value_field_names(Acquisition))
-        + [f"interrogator.{x}" for x in _value_field_names(Interrogator)]
-    )
+# What each typed track and its models state, written out rather than
+# read off the annotations. `coupling="trench"` asks about coupling_type;
+# every other field is reached by its qualified name (`coupling.medium`).
+# A model field added or renamed without touching these is caught by the
+# drift tests in tests/test_core/test_inventory.py, which do the walking
+# this file used to do at import time.
+TRACK_IDENTITY_FIELDS = MappingProxyType(
+    {
+        "optical_components": "name",
+        "geometry": "name",
+        "coupling": "coupling_type",
+    }
 )
+
+# Which fields of which models hold a shareable resource, and what each
+# may hold. `_normalize_resources` moves an inline object here into the
+# flat pool and leaves the id behind, so a resource-valued field missing
+# from this table keeps its object where an id belongs -- nothing
+# resolves it, and `replace` cannot reach it. Pinned by a drift test.
+_MEASUREMENT_REFS = MappingProxyType(
+    {
+        "loss_measurement": (OpticalMeasurement,),
+        "reflectance_measurement": (OpticalMeasurement,),
+    }
+)
+RESOURCE_REF_FIELDS = MappingProxyType(
+    {
+        FiberSegment: {"container": (Cable,), **_MEASUREMENT_REFS},
+        Connector: {"container": (Enclosure,), **_MEASUREMENT_REFS},
+        Splice: {"container": (Enclosure,), **_MEASUREMENT_REFS},
+        Terminator: {"container": (Enclosure,), **_MEASUREMENT_REFS},
+        Cable: {
+            "container": (Enclosure, Cable),
+            "specification": (ExternalResource,),
+        },
+        Enclosure: {"specification": (ExternalResource,)},
+        Acquisition: {"interrogator": (Interrogator,)},
+        OpticalMeasurement: {"data": (ExternalResource,)},
+    }
+)
+
+
+# The fields of each track model which state one fact about one thing --
+# what an inventory can give a channel. Reference fields (another model)
+# and collections are not among them: they are a second record, or have
+# no single value to hand over.
+TRACK_VALUE_FIELDS = MappingProxyType(
+    {
+        FiberSegment: (
+            "optical_length",
+            "name",
+            "loss_db",
+            "reflectance_db",
+            "fiber_number",
+            "fiber_color",
+            "fiber_type",
+            "fiber_standard",
+            "refractive_index",
+            "buffer_type",
+        ),
+        Connector: (
+            "optical_length",
+            "name",
+            "loss_db",
+            "reflectance_db",
+            "connector_type",
+        ),
+        Splice: ("optical_length", "name", "loss_db", "reflectance_db", "splice_type"),
+        Terminator: (
+            "optical_length",
+            "name",
+            "loss_db",
+            "reflectance_db",
+            "termination_type",
+        ),
+        Geometry: ("name",),
+        CouplingCondition: ("coupling_type", "medium", "attachment", "depth"),
+    }
+)
+
+
+# The observing-system facts an inventory can contribute: the vocabulary
+# constants.py declares, plus the three attrs which describe the data as
+# it now stands rather than the system which recorded it (blanket enrich
+# leaves those alone, but they can be asked for by name). A model field
+# missing from the vocabulary is caught by the drift test.
+_SYSTEM_FACT_NAMES = tuple(sorted(INVENTORY_ATTRS + DATA_STATE_ATTRS))
 
 
 def _yaml_label(text: str) -> str:
@@ -1865,23 +1796,7 @@ class Inventory(InventoryModel):
         """
         pool: dict[str, Any] = {}
         string_refs: list[tuple[str, str, tuple]] = []
-        measurement_refs = {
-            "loss_measurement": (OpticalMeasurement,),
-            "reflectance_measurement": (OpticalMeasurement,),
-        }
-        ref_fields = {
-            FiberSegment: {"container": (Cable,), **measurement_refs},
-            Connector: {"container": (Enclosure,), **measurement_refs},
-            Splice: {"container": (Enclosure,), **measurement_refs},
-            Terminator: {"container": (Enclosure,), **measurement_refs},
-            Cable: {
-                "container": (Enclosure, Cable),
-                "specification": (ExternalResource,),
-            },
-            Enclosure: {"specification": (ExternalResource,)},
-            Acquisition: {"interrogator": (Interrogator,)},
-            OpticalMeasurement: {"data": (ExternalResource,)},
-        }
+        ref_fields = RESOURCE_REF_FIELDS
 
         def pool_add(rid, resource):
             if rid in pool and pool[rid] != resource:
@@ -1906,15 +1821,9 @@ class Inventory(InventoryModel):
             updates = {}
             for field, allowed in fields.items():
                 value = getattr(obj, field)
-                if isinstance(value, tuple):
-                    new_value = tuple(register(x, field, allowed) for x in value)
-                    if new_value == value:
-                        continue
-                else:
-                    new_value = register(value, field, allowed)
-                    if new_value is value:
-                        continue
-                updates[field] = new_value
+                new_value = register(value, field, allowed)
+                if new_value is not value:
+                    updates[field] = new_value
             return obj.model_copy(update=updates) if updates else obj
 
         for rid, resource in self.resources.items():
@@ -2029,25 +1938,15 @@ class Inventory(InventoryModel):
         out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
-        shapes: dict[str, set[str]] = {}
         for path in self._optical_paths():
             groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
             for track in TRACK_IDENTITY_FIELDS:
                 for item in getattr(path, track):
                     fields = tracks.setdefault(track, {})
-                    names = _value_field_names(type(item))
-                    fields.update(dict.fromkeys(names))
-                    for field in names:
-                        if (shape := _value_shape(item, field)) is not None:
-                            shapes.setdefault(f"{track}.{field}", set()).add(shape)
-        # Dropped only where nothing states it as one value: another path
-        # may record a scalar where this one records several, and that
-        # path can still give it to a channel.
-        unusable = {x for x, kinds in shapes.items() if kinds == {"many"}}
+                    fields.update(dict.fromkeys(TRACK_VALUE_FIELDS[type(item)]))
         for track, fields in tracks.items():
             out[track] = None
-            names = (f"{track}.{x}" for x in fields)
-            out.update(dict.fromkeys(x for x in names if x not in unusable))
+            out.update(dict.fromkeys(f"{track}.{x}" for x in fields))
         out.update(groups)
         return tuple(out)
 
@@ -2141,18 +2040,16 @@ class Inventory(InventoryModel):
             ],
             "fiber arrays",
         )
-        acqs = [
-            exactly_one(
-                [
-                    x
-                    for x in array.acquisitions
-                    if x.code == acq_code
-                    and x.location_code == location
-                    and x.is_effective_at(time)
-                ],
-                "acquisitions",
-            )
-        ]
+        acquisition = exactly_one(
+            [
+                x
+                for x in array.acquisitions
+                if x.code == acq_code
+                and x.location_code == location
+                and x.is_effective_at(time)
+            ],
+            "acquisitions",
+        )
         paths = [
             x
             for x in array.optical_paths
@@ -2162,7 +2059,7 @@ class Inventory(InventoryModel):
             msg = f"{acquisition_key!r} resolves to {len(paths)} optical paths."
             raise InvalidInventoryError(msg)
         path = paths[0] if paths else None
-        return ResolvedContext(network, array, acqs[0], path)
+        return ResolvedContext(network, array, acquisition, path)
 
     def replace(self, old, new) -> Self:
         """

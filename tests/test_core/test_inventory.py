@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import pickle
 from pathlib import Path
+from types import UnionType
+from typing import Annotated, Union, get_args, get_origin
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS
+from dascore.constants import DATA_STATE_ATTRS, INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
@@ -62,6 +64,57 @@ def build_inventory() -> inv.Inventory:
     )
     network = inv.Network(code="DAS", fiber_arrays=(array,))
     return inv.Inventory(networks=(network,))
+
+
+# The annotation walking the models used to do at import time. It lives
+# here now: the source states its vocabulary as literals, and these tests
+# are what catch a model field the literals were never told about.
+_COLLECTIONS = (tuple, list, set, frozenset, dict)
+
+
+def _annotation_members(annotation):
+    """The alternatives a possibly-optional, possibly-Annotated union admits."""
+    if get_origin(annotation) is Annotated:
+        return _annotation_members(get_args(annotation)[0])
+    if get_origin(annotation) in (Union, UnionType):
+        members = [x for m in get_args(annotation) for x in _annotation_members(m)]
+        return [x for x in members if x is not type(None)]
+    return [annotation]
+
+
+def _inventory_models():
+    """
+    Every concrete inventory model declared in the module.
+
+    Underscore-named bases are never instantiated; their fields reach the
+    table through the concrete subclasses, which are listed there.
+    """
+    return [
+        x
+        for name, x in vars(inv).items()
+        if isinstance(x, type)
+        and issubclass(x, inv.InventoryModel)
+        and x.__module__ == inv.__name__
+        and not name.startswith("_")
+    ]
+
+
+def _value_fields(model) -> tuple[str, ...]:
+    """The fields of a model which state one fact about one thing."""
+    structural = frozenset(inv.TimeRangedModel.model_fields) | inv._IDENTITY_FIELDS
+    structural |= inv._EXTENT_FIELDS
+    out = []
+    for name, info in model.model_fields.items():
+        if name in structural:
+            continue
+        members = _annotation_members(info.annotation)
+        if any(
+            isinstance(x, type) and issubclass(x, inv.InventoryModel) for x in members
+        ):
+            continue  # a reference to a second record, not a fact of this one
+        if any(get_origin(x) not in _COLLECTIONS for x in members):
+            out.append(name)
+    return tuple(out)
 
 
 class TestGeometry:
@@ -988,22 +1041,17 @@ class TestCoverageCompleteness:
         assert cond.optical_length == 50.0
 
     def test_normalize_keeps_existing_id_tuple(self):
-        """A tuple ref field already holding id strings is left untouched."""
+        """A tuple of ids on a path is left as ids."""
         m1 = inv.OpticalMeasurement(resource_id="m1", method="otdr", wavelength=1550.0)
         m2 = inv.OpticalMeasurement(resource_id="m2", method="otdr", wavelength=1310.0)
-        segment = inv.FiberSegment(
-            optical_length=10.0,
-            loss_db=(0.4, 0.5),
-            loss_measurement=("m1", "m2"),
-        )
-        path = inv.OpticalPath(optical_components=(segment,))
+        path = inv.OpticalPath(measurements=("m1", "m2"))
         array = inv.FiberArray(code="L001", optical_paths=(path,))
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
             resources={"m1": m1, "m2": m2},
         )
         got = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        assert got.optical_components[0].loss_measurement == ("m1", "m2")
+        assert got.measurements == ("m1", "m2")
 
     def test_duplicate_coordinate_labels_raise(self):
         """Duplicate coordinate labels raise."""
@@ -1464,34 +1512,16 @@ class TestOpticalLoss:
         assert comps[0].loss_measurement == "otdr-1"
         assert comps[1].reflectance_measurement == "otdr-1"
 
-    def test_multi_wavelength_pairs(self):
-        """Tuple losses pair elementwise with their measurements."""
-        sheet_1550 = inv.OpticalMeasurement(
-            resource_id="ds-1550", method="datasheet", wavelength=1550.0
-        )
-        sheet_1310 = inv.OpticalMeasurement(
-            resource_id="ds-1310", method="datasheet", wavelength=1310.0
-        )
-        seg = inv.FiberSegment(
-            optical_length=2000.0,
-            loss_db=(0.6, 0.7),
-            loss_measurement=(sheet_1550, sheet_1310),
-        )
-        assert seg.attenuation_db_per_km == (0.3, 0.35)
+    def test_one_value_per_component(self):
+        """
+        A component states one loss, not one per wavelength.
 
-    def test_tuple_loss_requires_tuple_measurements(self):
-        """Tuple loss requires tuple measurements."""
-        with pytest.raises(ValidationError, match="equal-length"):
+        Several wavelengths are several components' worth of facts with
+        no channel to give them to; the component measured at each is
+        the thing to state.
+        """
+        with pytest.raises(ValidationError):
             inv.FiberSegment(optical_length=10.0, loss_db=(0.1, 0.2))
-
-    def test_length_mismatch_raises(self):
-        """Length mismatch raises."""
-        with pytest.raises(ValidationError, match="has 2 values"):
-            inv.FiberSegment(
-                optical_length=10.0,
-                loss_db=(0.1, 0.2),
-                loss_measurement=("m1", "m2", "m3"),
-            )
 
     def test_dangling_measurement_ref_raises(self):
         """Dangling measurement ref raises."""
@@ -1556,9 +1586,9 @@ class TestPrReviewFindings:
         with pytest.raises(ValidationError):
             inv.Acquisition(code="RAW", spatial_interval=np.nan)
 
-    def test_start_distance_explains_its_removal(self):
-        """An inventory written against the affine form says what to do."""
-        with pytest.raises(ValidationError, match="no longer takes start_distance"):
+    def test_acquisition_refuses_unknown_fields(self):
+        """The model is closed; a stray name is a mistake, not an extra."""
+        with pytest.raises(ValidationError, match="xtra"):
             inv.Acquisition(code="RAW", start_distance=100.0)
 
     def test_duplicate_channel_identity_raises(self):
@@ -1896,8 +1926,12 @@ class TestGetNames:
         data-state trio is the only difference: enrichment copies it when
         asked by name rather than in the blanket form.
         """
-        data_state = {"data_type", "data_category", "data_units"}
-        assert set(names.attrs) == set(INVENTORY_ATTRS) | data_state
+        assert set(names.attrs) == set(INVENTORY_ATTRS) | set(DATA_STATE_ATTRS)
+        # and the vocabulary covers the models, so a new field must be
+        # added to it rather than quietly going uncontributed
+        reflected = set(_value_fields(inv.Acquisition))
+        reflected |= {f"interrogator.{x}" for x in _value_fields(inv.Interrogator)}
+        assert reflected == set(INVENTORY_ATTRS) | set(DATA_STATE_ATTRS)
 
     def test_attrs_are_model_fields(self, names):
         """Every attr name is a field of the model it is read from."""
@@ -1919,17 +1953,18 @@ class TestGetNames:
         excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
         assert not set(names.attrs) & excluded
 
-    def test_a_declaration_naming_nothing_is_refused(self, monkeypatch):
+    def test_identity_fields_name_real_fields(self):
         """
-        The map is derived, and the derivation checks what it derives.
+        The map is written out; these check what it claims.
 
-        A model declaring an identity field it does not have would build
-        an entry pointing at nothing, so it fails where it is built
-        rather than somewhere a bare track name quietly resolves to NaN.
+        An entry pointing at a field no model has would leave a bare
+        track name quietly resolving to nothing.
         """
-        monkeypatch.setattr(inv.CouplingCondition, "_identity_field", "not_a_field")
-        with pytest.raises(AssertionError):
-            inv._track_identity_fields()
+        for track, field in inv.TRACK_IDENTITY_FIELDS.items():
+            ann = inv.OpticalPath.model_fields[track].annotation
+            for model in _annotation_members(get_args(ann)[0]):
+                assert field in model.model_fields, (track, model, field)
+                assert model._identity_field == field, (track, model)
 
     def test_coords_hold_the_tracks_and_groups(self, names):
         """The path's tracks, their fields, and its annotation groups."""
@@ -2019,56 +2054,58 @@ class TestGetNamesRoundTrip:
                 qualified.get_coord(f"{track}.{field}").values,
             ), track
 
-    def test_multi_valued_field_is_not_listed(self):
+    def test_track_value_fields_match_the_models(self):
         """
-        A field stated as several values has none to give a channel.
+        The table is written out; this walks the models to check it.
 
-        A multi-wavelength loss is a legitimate thing for a component to
-        record and an impossible thing to project, so the name is not one
-        this inventory contributes however scalar its annotation reads.
+        A field added, renamed, or retyped without updating the table
+        would be silently absent from (or wrongly present in) the names
+        an inventory says it can contribute.
         """
-        base = build_inventory()
-        path = base.networks[0].fiber_arrays[0].optical_paths[0]
-        component = path.optical_components[0]
-        measured = base.new(
-            resources={"m1": inv.OpticalMeasurement(resource_id="m1")}
-        ).replace(
-            component,
-            component.new(loss_db=(0.2, 0.25), loss_measurement=("m1", "m1")),
-        )
-        coords = set(measured.get_names().coords)
-        assert "optical_components.loss_db" not in coords
-        assert "optical_components.name" in coords
-        assert "optical_components.loss_db" in set(base.get_names().coords)
+        for model, fields in inv.TRACK_VALUE_FIELDS.items():
+            assert fields == _value_fields(model), model
 
-    def test_optional_collection_is_not_a_value(self):
+    def test_annotation_value_survives_a_dump(self):
         """
-        "A tuple or nothing" is still a tuple, not a value.
+        A pruned value would reload as the default, changing its kind.
 
-        `tuple[float, ...] | None` is how this file spells several of its
-        fields, so reading the `None` arm as the scalar would list them.
+        Nothing can be pruned into that: the value is a scalar and the
+        one empty form is refused, so `_drop_empty` has no empty value
+        of this field to find.
         """
+        for value in (False, True, 0.0, 0, "north"):
+            note = inv.OpticalPathAnnotation(
+                group="g", value=value, start_distance=0.0, end_distance=1.0
+            )
+            dumped = inv._drop_empty(note.model_dump(mode="json", exclude_none=True))
+            assert dumped["value"] == value
+        with pytest.raises(ValidationError, match="empty string"):
+            inv.OpticalPathAnnotation(
+                group="g", value="", start_distance=0.0, end_distance=1.0
+            )
 
-        class _Probe(inv.InventoryModel):
-            """A model shaped like the optional collections here."""
-
-            wavelengths: tuple[float, ...] | None = None
-            plain: float | None = None
-
-        assert inv._value_field_names(_Probe) == ("plain",)
-
-    def test_annotated_unions_are_transparent(self):
+    def test_ref_fields_cover_every_resource_field(self):
         """
-        A discriminated union is written Annotated, and holds models.
+        `RESOURCE_REF_FIELDS` names the fields which hold a resource.
 
-        The models here spell their unions that way, so a field holding
-        one must read as a reference rather than as a value.
+        A resource-valued field the table never heard of keeps its inline
+        object where an id belongs: it never reaches the pool, so nothing
+        resolves it and `replace` cannot reach it either.
         """
+        resource_types = tuple(_annotation_members(inv._Resource))
+        for model in _inventory_models():
+            for name, info in model.model_fields.items():
+                members = _annotation_members(info.annotation)
+                holds = any(
+                    isinstance(x, type) and issubclass(x, resource_types)
+                    for x in members
+                )
+                declared = name in inv.RESOURCE_REF_FIELDS.get(model, {})
+                assert holds == declared, (model.__name__, name, holds, declared)
 
-        class _Probe(inv.InventoryModel):
-            """A model whose reference is spelled the way this file does."""
-
-            resource: inv._Resource | None = None
-            plain: float | None = None
-
-        assert inv._value_field_names(_Probe) == ("plain",)
+    def test_every_track_model_is_in_the_table(self):
+        """A new track model has to be added to the table to be seen."""
+        for track in inv.TRACK_IDENTITY_FIELDS:
+            ann = inv.OpticalPath.model_fields[track].annotation
+            for model in _annotation_members(get_args(ann)[0]):
+                assert model in inv.TRACK_VALUE_FIELDS, model

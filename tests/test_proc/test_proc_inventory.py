@@ -15,7 +15,6 @@ from dascore.core.inventory import (
     Geometry,
     Inventory,
     Network,
-    OpticalMeasurement,
     OpticalPath,
     OpticalPathAnnotation,
 )
@@ -686,19 +685,6 @@ class TestEnrichContracts:
         out = patch.enrich(inv, attrs=False, coords=("x",))
         # channel 100 is path distance 200, the last point of the first segment
         assert out.get_coord("x").values[100] == 1.0
-
-    def test_multivalued_track_field_raises(self, patch, inventory):
-        """A per-wavelength loss is not one value per channel."""
-        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        component = path.optical_components[0]
-        measurements = (
-            OpticalMeasurement(wavelength=1550.0),
-            OpticalMeasurement(wavelength=1625.0),
-        )
-        multi = component.new(loss_db=(0.5, 0.3), loss_measurement=measurements)
-        inv = _replace_path(inventory, optical_components=(multi,))
-        with pytest.raises(PatchError, match="multi-valued"):
-            patch.enrich(inv, attrs=False, coords=("optical_components.loss_db",))
 
     def test_nan_attr_is_filled_not_conflicted(self, patch, inventory):
         """NaN is how a reader spells unknown, so the inventory fills it."""
