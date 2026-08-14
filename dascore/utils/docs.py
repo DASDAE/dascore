@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
+import logging
 import os
+import pkgutil
+import re
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -165,3 +169,258 @@ def objs_to_doc_df(doc_dict, cross_reference=True):
     df = pd.Series(out).to_frame().reset_index()
     df.columns = ["Name", "Description"]
     return df
+
+
+# ---------------------------------------------------------------------------
+# Rendering a module's public API onto a single documentation page.
+#
+# Modules of small helpers get one page each rather than a page per function:
+# the summary and signature stay visible while the parameter table, examples
+# and notes sit in a collapsed callout. Every entry keeps an explicit anchor so
+# cross references can link straight to it.
+# ---------------------------------------------------------------------------
+
+
+def get_doc_anchor(dotted: str) -> str:
+    """Return the html anchor used for a dotted path on a rendered API page."""
+    return dotted.replace(".", "-").replace("_", "-").lower()
+
+
+def _fmt_annotation(anno) -> str:
+    """Render an annotation the way it was written in the source."""
+    if isinstance(anno, str):
+        return anno
+    return getattr(anno, "__name__", None) or str(anno).replace("typing.", "")
+
+
+def _fmt_default(value) -> str:
+    """Render a default value compactly (classes by name, not repr)."""
+    if inspect.isclass(value) or inspect.isfunction(value):
+        return value.__name__
+    return repr(value)
+
+
+def _signature(obj) -> str:
+    """Render a signature without the quoting artifacts of string annotations."""
+    sig = inspect.signature(obj)
+    parts, seen_kw_only = [], False
+    for p in sig.parameters.values():
+        if p.kind is p.KEYWORD_ONLY and not seen_kw_only:
+            parts.append("*")
+            seen_kw_only = True
+        text = p.name
+        if p.kind is p.VAR_POSITIONAL:
+            text = f"*{text}"
+        elif p.kind is p.VAR_KEYWORD:
+            text = f"**{text}"
+        if p.annotation is not p.empty:
+            text += f": {_fmt_annotation(p.annotation)}"
+        if p.default is not p.empty:
+            text += f" = {_fmt_default(p.default)}"
+        parts.append(text)
+    ret = ""
+    if sig.return_annotation is not sig.empty:
+        ret = f" -> {_fmt_annotation(sig.return_annotation)}"
+    return f"{obj.__name__}({', '.join(parts)}){ret}"
+
+
+def _param_types(obj) -> dict[str, str]:
+    """Map parameter name to its annotation, for the parameter table."""
+    sig = inspect.signature(obj)
+    return {
+        p.name: _fmt_annotation(p.annotation)
+        for p in sig.parameters.values()
+        if p.annotation is not p.empty
+    }
+
+
+def _parse(doc: str):
+    """Parse a numpydoc docstring into griffe sections."""
+    from dascore.utils.misc import optional_import  # noqa: PLC0415
+
+    # griffe ships with the doc build rather than with dascore.
+    griffe = optional_import("griffe", required_for="rendering the API docs")
+
+    # Griffe logs a warning for every parameter documented without a type,
+    # which is DASCore's house style (types come from the annotations).
+    logging.getLogger("griffe").setLevel(logging.ERROR)
+    return griffe.Docstring(doc, parser="numpy").parse("numpy")
+
+
+def _fence(text: str, char: str = "`") -> str:
+    """
+    Return a fence long enough to enclose text carrying fences of its own.
+
+    Docstrings are markdown, so one may hold a code block or a callout; a
+    fence of the usual three would be closed by the first one inside and the
+    rest of the page would render as its contents.
+    """
+    longest = max((len(m) for m in re.findall(f"{char}+", text)), default=0)
+    return char * max(3, longest + 1)
+
+
+def _render_sections(sections, types: dict[str, str]) -> tuple[str, list[str]]:
+    """Return the summary line and the collapsible body blocks."""
+    summary, blocks = "", []
+    for sec in sections:
+        kind = sec.kind.value
+        if kind == "text":
+            text = str(sec.value).strip()
+            if not summary:  # the first line of the first block is the summary
+                first, _, rest = text.partition("\n\n")
+                summary = " ".join(first.split())
+                text = rest.strip()
+            if text:
+                blocks.append(text)
+        elif kind == "parameters":
+            rows = ["| Parameter | Type | Description |", "|---|---|---|"]
+            for p in sec.value:
+                anno = types.get(p.name) or (
+                    "" if p.annotation is None else str(p.annotation)
+                )
+                anno = f"`{anno}`" if anno else ""
+                desc = " ".join(str(p.description).split())
+                rows.append(f"| `{p.name}` | {anno} | {desc} |")
+            blocks.append("\n".join(rows))
+        elif kind in {"returns", "yields"}:
+            items = []
+            for r in sec.value:
+                anno = "" if r.annotation is None else f"`{r.annotation}` — "
+                items.append(f"{anno}{' '.join(str(r.description).split())}")
+            blocks.append(f"**{kind.title()}:** " + "; ".join(items))
+        elif kind == "raises":
+            items = [
+                f"`{r.annotation}` — {' '.join(str(r.description).split())}"
+                for r in sec.value
+            ]
+            blocks.append("**Raises:** " + "; ".join(items))
+        elif kind == "examples":
+            for _, text in sec.value:
+                body = str(text).strip()
+                # An example which is already a code block keeps its own
+                # fence; wrapping it would show the fence as content. A
+                # `{python}` cell is demoted to a plain block, since the page
+                # displays examples rather than running them.
+                if body.startswith("```"):
+                    blocks.append(re.sub(r"^(`{3,})\{python\}", r"\1python", body))
+                else:
+                    fence = _fence(body)
+                    blocks.append(f"{fence}python\n{body}\n{fence}")
+        elif kind in {"attributes", "other parameters"}:
+            label = "Attribute" if kind == "attributes" else "Parameter"
+            rows = [f"| {label} | Type | Description |", "|---|---|---|"]
+            for a in sec.value:
+                anno = types.get(a.name) or (
+                    "" if a.annotation is None else str(a.annotation)
+                )
+                anno = f"`{anno}`" if anno else ""
+                desc = " ".join(str(a.description).split())
+                rows.append(f"| `{a.name}` | {anno} | {desc} |")
+            blocks.append("\n".join(rows))
+        elif kind == "admonition":
+            body = getattr(sec.value, "description", sec.value)
+            blocks.append(f"**{sec.title or 'Note'}:** {str(body).strip()}")
+        # Any other section is dropped rather than rendered: griffe parses
+        # several into models of their own, whose repr on the page would be
+        # worse than their absence.
+    return summary, blocks
+
+
+def iter_public(module_name: str):
+    """
+    Yield (name, object) for public objects defined in the module.
+
+    Decorated helpers (e.g. functools.cache) are callables rather than plain
+    functions, so unwrap before deciding what a name is and where it was
+    defined; skipping them would drop both their docs and their anchor.
+    """
+    mod = importlib.import_module(module_name)
+    for name in sorted(dir(mod)):
+        if name.startswith("_"):
+            continue
+        obj = getattr(mod, name)
+        unwrapped = inspect.unwrap(obj)
+        is_documentable = (
+            inspect.isfunction(unwrapped)
+            or inspect.isclass(unwrapped)
+            or (callable(obj) and inspect.isroutine(unwrapped))
+        )
+        if not is_documentable or inspect.ismodule(obj):
+            continue
+        if getattr(unwrapped, "__module__", "") != module_name:
+            continue
+        yield name, obj
+
+
+def render_module_api(module_name: str) -> str:
+    """Render every public object defined in a module as markdown."""
+    out: list[str] = []
+    for name, obj in iter_public(module_name):
+        dotted = f"{module_name}.{name}"
+        doc = inspect.getdoc(obj) or ""
+        summary, blocks = (
+            _render_sections(_parse(doc), _param_types(obj)) if doc else ("", [])
+        )
+        out.append(f"#### {name} {{#{get_doc_anchor(dotted)}}}\n")
+        out.append(f"```python\n{_signature(obj)}\n```\n")
+        if summary:
+            out.append(f"{summary}\n")
+        if blocks:
+            fence = _fence("\n".join(blocks), ":")
+            out.append(
+                f'{fence} {{.callout-note collapse="true" appearance="simple" '
+                'title="Details"}\n'
+            )
+            out.extend(b + "\n" for b in blocks)
+            out.append(f"{fence}\n")
+    return "\n".join(out)
+
+
+def iter_package_modules(package_name: str):
+    """
+    Yield the importable name of a package and each public module in it.
+
+    The package itself is included: a helper defined in its ``__init__`` is
+    as public as one in a submodule, and leaving it out would document
+    neither it nor an anchor to link to it.
+    """
+    package = importlib.import_module(package_name)
+    yield package_name
+    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package_name}."):
+        if not any(part.startswith("_") for part in info.name.split(".")):
+            yield info.name
+
+
+def render_package_api(package_name: str, skip_empty: bool = True) -> str:
+    """
+    Render the public API of every module in a package as markdown.
+
+    Each module becomes a level-two heading and each object a level-three
+    heading below it, so the page table of contents lists modules while every
+    object still has an anchor to link to.
+
+    Parameters
+    ----------
+    package_name
+        The importable name of the package, e.g. "dascore.utils".
+    skip_empty
+        If True, omit modules which define no public objects.
+    """
+    out = []
+    for name in iter_package_modules(package_name):
+        try:
+            module = importlib.import_module(name)
+        except ImportError:  # an optional dependency the doc env lacks
+            continue
+        # Rendering is deliberately outside the guard: a module which cannot
+        # be imported is skipped, but a renderer which cannot run would
+        # otherwise empty the page without saying so.
+        body = render_module_api(name)
+        if skip_empty and not body.strip():
+            continue
+        out.append(f"### {name} {{#{get_doc_anchor(name)}}}\n")
+        module_doc = inspect.getdoc(module) or ""
+        if module_doc:
+            out.append(" ".join(module_doc.split("\n\n")[0].split()) + "\n")
+        out.append(body)
+    return "\n".join(out)

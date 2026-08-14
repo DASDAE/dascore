@@ -1,0 +1,129 @@
+---
+title: DASCore
+execute:
+    warning: false
+---
+
+DASCore is a Python library for distributed acoustic sensing (DAS). It provides:
+
+1. IO support for [many DAS data formats](about/supported_formats.qmd)
+2. Common processing routines
+3. Basic visualizations
+
+:::{.callout-note}
+DASCore is part of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org).
+Version-specific documentation builds are attached to the
+[release pages](https://github.com/DASDAE/dascore/releases).
+:::
+
+# Installation
+
+Use pip or conda to install DASCore:
+
+```bash
+pip install dascore
+```
+
+```bash
+conda install dascore -c conda-forge
+```
+
+See [this recipe](recipes/docker_basic.qmd) for installation with Docker, and
+the [contributing docs](contributing/contributing.qmd) for development
+installations.
+
+# Introductory usage
+
+## Read a file
+
+```{python}
+import dascore as dc
+# Import fetch to read DASCore example files
+from dascore.utils.downloader import fetch
+
+# Fetch a sample file path from DASCore
+file_path = fetch('terra15_das_1_trimmed.hdf5')
+# To read DAS data stored locally on your machine, simply replace the above line with:
+# file_path = "/path/to/data/directory/data.EXT"
+
+spool = dc.spool(file_path)
+patch = spool[0]
+```
+
+## Working with a directory of DAS files
+
+```{python}
+#| eval: false
+import dascore as dc
+
+# Point this at a directory of DAS files on your machine.
+directory_path = "/path/to/data/directory/"
+
+spool = (
+    # Create a spool to interact with directory data
+    dc.spool(directory_path)
+    # Index the directory contents
+    .update()
+    # Sub-select a specific time range
+    .select(time_min=('2020-01-01', ...))
+    # Specify chunk of the output patches
+    .chunk(time=60, overlap=10)
+)
+```
+
+## Get patches (array w/ metadata)
+
+```{python}
+import dascore as dc
+
+spool = dc.get_example_spool('diverse_das')
+
+# Spools are like lists, you can get patches through iteration
+for patch in spool:
+    ...
+
+# or through indexing
+patch = spool[0]
+```
+
+## Perform processing
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch('random_das')
+
+out = (
+    # Decimate along time axis (keep every 8th sample)
+    patch.decimate(time=8)
+    # Detrend along the distance dimension
+    .detrend(dim='distance')
+    # Apply 10Hz low-pass filter along time dimension
+    .pass_filter(time=(..., 10))
+)
+```
+
+## Visualize
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch('example_event_2')
+
+patch.viz.waterfall(show=True);
+```
+
+# Citation
+
+If you use DASCore in your work, please cite the
+[Seismica article](https://seismica.library.mcgill.ca/article/view/1184):
+
+> Chambers, D., Jin, G., Tourei, A., Issah, A. H. S., Lellouch, A., Martin, E., Zhu, D., Girard, A., Yuan, S., Cullison, T., Snyder, T., Kim, S., Danes, N., Pnithan, N., Boltz, M. S. & Mendoza, M. M. (2024). DASCore: a Python Library for Distributed Fiber Optic Sensing. Seismica, 3(2).
+
+# Feedback and Support
+
+Use the [project discussions](https://github.com/DASDAE/dascore/discussions) to ask a question.
+
+Use the [project issues](https://github.com/DASDAE/dascore/issues) to report an issue.
+
+[![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)

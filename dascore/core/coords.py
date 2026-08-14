@@ -1,6 +1,6 @@
 """Machinery for coordinates.
 
-See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+See [Coordinate Internals](/notes/coordinate_internals.qmd) for the
 current coord-family and string-coordinate design notes.
 """
 
@@ -2739,7 +2739,7 @@ def _raise_string_coord_error(operation: str) -> None:
 class CoordString(BaseCoord):
     """A coordinate implementation for string/categorical values.
 
-    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+    See [Coordinate Internals](/notes/coordinate_internals.qmd) for the
     constraints that make string coords differ from numeric and time-like
     coords. Plain string selectors use exact matching unless they contain `*`
     or `?`, in which case they are treated as unix-style wildcard patterns.
@@ -2943,7 +2943,7 @@ def get_coord(
 
     Notes
     -----
-    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for
+    See [Coordinate Internals](/notes/coordinate_internals.qmd) for
     dispatch and coord-family design notes.
 
     The following combinations of input parameters are typical:

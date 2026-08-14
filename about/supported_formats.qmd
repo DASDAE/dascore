@@ -1,0 +1,17 @@
+---
+title: Supported File Formats
+description: "File formats DASCore can read and write."
+execute:
+    warning: false
+---
+
+```{python}
+#| echo: false
+#| output: asis
+import pandas as pd
+from dascore.io.core import FiberIO
+out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌').to_markdown(index=False, stralign="center")
+
+out_str += '\n: {.striped}'
+print(out_str)
+```

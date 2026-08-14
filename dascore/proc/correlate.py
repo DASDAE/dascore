@@ -52,7 +52,7 @@ def correlate_shift(
     undo_weighting
         If True, also undo the weighting artifact caused by DASCore's dft
         weighting. This is done by simply dividing by the coordinate step.
-        See [dft note](`docs/notes/dft_notes.qmd`) for more details.
+        See [dft note](/notes/dft_notes.qmd) for more details.
 
     Examples
     --------
@@ -103,7 +103,7 @@ def correlate(
 
     While a 2D patch is required for input, a 3D patch is returned where the
     3rd dimension corresponds to the source rows/columns. For the case of a
-    single source, the [`Patch.squeeze`](`dascore.Patch.squeeze`) method
+    single source, the [`Patch.squeeze`](`dascore.proc.squeeze`) method
     can be helpful to remove length 1 dimensions.
 
     Parameters

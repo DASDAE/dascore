@@ -49,12 +49,17 @@ jobs:
           python-version: ${{ steps.shared-vars.outputs.python-default }}
           prepare-test-data: "true"
 
-      - uses: ./.github/actions/prep_doc_build
+      - uses: ./.github/actions/build-docs
 
       - name: publish docs to netlify
         shell: bash
         env:
-          QUARTO_PRINT_STACK: true
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
         run: |
-            quarto publish docs --no-prompt --no-browser
+            # The site id previously lived in docs/_publish.yml, which
+            # `quarto publish` read; great-docs emits a plain directory, so
+            # deploy it with netlify's own CLI instead.
+            npx --yes netlify-cli@23 deploy \
+              --prod --no-build \
+              --dir great-docs/_site \
+              --site da79b12f-cb25-4fcc-aeb6-f19705848130

@@ -1,0 +1,136 @@
+---
+title: Concepts
+execute:
+  warning: false
+---
+
+This page highlights some concepts helpful for working with DASCore.
+
+## Data structures
+
+For most uses of DASCore, only two data structures are directly involved.
+These are the [Patch](patch.qmd) and the [Spool](spool.qmd).
+
+The `Patch` contains a contiguous block of N dimensional data and metadata.
+The `Spool` manages a group of `Patch`es. These can be in memory, on
+disk, or a remote resource.
+
+![Patch (blue) and Spool (red)](../assets/patch_n_spool.png){#fig-patch_n_spool}
+
+You will read more about Patches and Spools later on in the tutorial.
+
+## Time
+
+Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time constructs, which include [datetime64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.datetime64) and [timedelta64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.timedelta64).
+
+For example:
+
+```{python}
+import numpy as np
+
+# Create a datetime64 with an iso8601 time string.
+time_1 = np.datetime64('2022-01-01T15:12:11.172455')
+
+# Create a new time by adding some time to time_1.
+time_2 = time_1 + np.timedelta64(60, 's')
+
+# Get the number of hours separating them:
+delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
+```
+
+DASCore provides two convenience functions for working with times:
+
+- [to_datetime64](`dascore.utils.time.to_datetime64`) converts different inputs to numpy datetime64 arrays or instances.
+- [to_timedelta64](`dascore.utils.time.to_timedelta64`) converts different inputs to numpy timedelta64 arrays or instances.
+
+For example:
+
+```{python}
+import dascore as dc
+
+# Convert a time string to a datetime64 object.
+time_1 = dc.to_datetime64('2022-01-01T12:12:12.1212')
+
+# Convert a timestamp (seconds from 1970-01-01) to a datetime object
+time_2 = dc.to_datetime64(610243200)
+```
+
+
+## Dimension Selection
+
+Most of DASCore's processing methods can be applied along any dimension. Typically, the dimension is selected with keyword, and the method specific data are passed as values. For example, applying [pass_filter](`dascore.proc.filter.pass_filter`) to a patch with `distance` and `time` dimensions works like this:
+
+```{python}
+import dascore as dc
+patch = dc.get_example_patch()
+
+filtered_time = patch.pass_filter(time=(1, 5))
+filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
+```
+
+However, the meaning of the values depends on the function, e.g. both frequency and period might make sense in the example above. For [pass_filter](`dascore.proc.filter.pass_filter`), bare numbers mean frequency along `time` and wavenumber along `distance`. In both cases the number is the inverse of *that coordinate's own units*, so it is Hz and 1/m only while the coordinates are in seconds and meters. The example patch's distance is in meters, so `distance=(0.1, 0.2)` above keeps spatial wavelengths of 5 m to 10 m.
+
+Datetime and timedelta coordinates are always in seconds, so a `time` coordinate of that dtype always takes Hz. A numeric `time` coordinate does not: `example_event_2` stores time as float seconds, and converting it to milliseconds makes bare numbers mean 1/ms.
+
+Attaching units removes the guesswork, and lets the same band be stated as a wavelength instead:
+
+```{python}
+import dascore as dc
+import numpy as np
+from dascore.units import m
+
+patch = dc.get_example_patch()
+
+# This patch's distance is in meters, so bare numbers are 1/m.
+# Wavenumbers of 0.01 to 0.1 and wavelengths of 10 m to 100 m are two
+# ways of describing the same band.
+by_wavenumber = patch.pass_filter(distance=(0.01, 0.1))
+by_wavelength = patch.pass_filter(distance=(10 * m, 100 * m))
+
+assert np.allclose(by_wavenumber.data, by_wavelength.data)
+
+# With units attached the query means the same thing regardless of what
+# units the coordinate happens to be in.
+in_feet = patch.convert_units(distance="ft")
+assert np.allclose(in_feet.pass_filter(distance=(10 * m, 100 * m)).data, by_wavelength.data)
+
+# The time axis behaves the same way when its coordinate is numeric.
+# example_event_2 stores time as float seconds, so bare numbers are Hz,
+# but in milliseconds the same band needs numbers 1000 times smaller.
+event = dc.get_example_patch("example_event_2")
+in_ms = event.convert_units(time="ms")
+
+assert np.allclose(
+    in_ms.pass_filter(time=(0.01, 0.05)).data,
+    event.pass_filter(time=(10, 50)).data,
+)
+```
+
+When in doubt, be explicit with units and read the docs for the function in question!
+
+## Units
+
+DASCore provides first class support for units through the [`units`](`dascore.units`) module. Units (or rather quantities) can be imported directly or can be created with the [get_quantity](`dascore.units.get_quantity`) function.
+
+```{python}
+from dascore.units import get_quantity, m, ft
+
+meters = get_quantity("meters")
+
+# Now meters should be equal to 1 meter.
+assert meters == 1 * m
+
+# Convert 10 meters to ft.
+ten_m = meters * 10
+print(ten_m.to(ft))
+
+# get_quantity can handle a lot of complexity!
+quantity = get_quantity("10 * (PI / 10^3) (millifurlongs)/(tesla)")
+print(quantity)
+```
+
+Many of DASCore's Patch methods support units/quantities as shown above. See the [units section](patch.qmd#units) in the Patch tutorial for examples.
+
+:::{.callout-note}
+DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) for unit parsing/conversions. See its documentation for more info on units and quantities.
+:::

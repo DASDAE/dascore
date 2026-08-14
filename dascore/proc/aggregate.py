@@ -47,10 +47,10 @@ def aggregate(
         The aggregation to apply along dimension. Options are:
             {options}
 
-    See Also
-    --------
-    - See also the aggregation shortcut methods in the
-      [aggregate module](`dascore.proc.aggregate`).
+    Notes
+    -----
+    The aggregation shortcut methods (`patch.mean`, `patch.std`, ...) live in
+    the [aggregate module](`dascore.proc.aggregate`) and call this function.
 
     Examples
     --------

@@ -1,0 +1,48 @@
+---
+title: Guidelines
+description: "A few guidelines to follow when developing DASCore."
+---
+This page highlights a few guidelines for DASCore development.
+
+## Branching and versioning
+
+We create new features or bug fixes in their own branches and merge them into `dev` via pull requests. `dev` is the
+integration branch; it is merged into `master` at release time. We may switch to a more complex branching model if
+the need arises.
+
+If substantial new features have been added since the last release we will bump the minor version.  If only bug
+fixes/minor changes have been made, only the patch version will be bumped. Like most Python projects, we loosely
+follow [semantic versioning](https://semver.org/), meaning we will not bump the major version until DASCore
+is more stable.
+
+
+## Changelog entries
+
+DASCore keeps no changelog file; the [release notes](https://github.com/DASDAE/dascore/releases) are assembled from
+merged pull requests. Every pull request therefore needs a `## Changelog` section, which CI checks. Write one bullet
+per user-facing change, each starting with `added`, `changed`, `deprecated`, `removed`, `fixed`, or `security`, or just
+`none` if nothing user-facing changes. Add `**breaking**` after the category when the change can break code
+written against the last released version; breaking only against unreleased work on `dev` does not count.
+
+```markdown
+- added: `Patch.enrich` copies inventory metadata onto a patch.
+- changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
+```
+
+Write the text after the colon as a complete sentence, with a subject and a verb, ending in a period; both entries above do, while a bare noun phrase such as `removed: the tran namespace` does not stand on its own once it is lifted into the release notes.
+
+`none` may be written bare or as the section's only bullet (`- none`); both pass.
+
+## Paths
+
+Prefer `pathlib.Path` to strings when working with paths. However, when dealing with many many files (e.g., indexers)
+strings may be preferred for efficiency.
+
+## Working with dataframes
+
+Column names should be snake_cased whenever possible.
+
+Always access columns with getitem and not getattr (i.e., use `df['column_name']` not `df.column_name`).
+
+Prefer creating a new `DataFrame`/`Series` to modifying them inplace. Inplace modifications should require opting in
+(usually through an `inplace` key word argument).

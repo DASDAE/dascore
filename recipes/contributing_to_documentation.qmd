@@ -1,0 +1,67 @@
+---
+title: Contributing to Documentation
+description: "Build the docs locally and make changes to DASCore's documentation."
+---
+
+Here, we elaborate on how you can build new documentation or make changes to existing DASCore documentation.
+
+## Building/Editing documentation
+
+The site is built by [great-docs](https://posit-dev.github.io/great-docs/), which renders the narrative pages and the API reference with [Quarto](https://quarto.org/docs/get-started/).
+
+First, install Quarto. To ensure it is installed properly and to get the installation version:
+
+```bash
+quarto --version
+```
+
+If you have not already installed jupyter in your environment, install it using conda:
+
+```bash
+conda install jupyter
+```
+
+Then install great-docs:
+
+```bash
+pip install "great-docs>=0.16"
+```
+
+Go to the DASCore directory on your machine and build the site:
+
+```bash
+cd dascore
+great-docs build
+```
+
+:::{.note}
+This will take several minutes the first time you run it. After that, the results are cached and only the changed files are re-rendered.
+:::
+
+:::{.callout-warning}
+The cache is keyed on the `.qmd` source, not on the DASCore code a page imports. A page which builds its content by calling DASCore — the utilities page, the supported formats and plugins tables, the example listings — will keep showing its previous output after you change the underlying function. Delete the page's cache entry to force it to run again:
+
+```bash
+rm -rf _freeze/utilities
+```
+
+A fresh checkout has no cache, so CI never sees stale output; this only bites while developing locally.
+:::
+
+The built site lands in `great-docs/_site`. To read it in a browser:
+
+```bash
+great-docs preview
+```
+
+## Documenting new public API
+
+The API reference is curated rather than generated: `great-docs.yml` lists the objects it documents, grouped by task. That means adding a public function does not add it to the docs, so `tests/test_doc_coverage.py` walks the public functions and classes DASCore defines and fails when one is represented nowhere. Its failure message names the missing objects and your options, which are to add a `reference:` entry, let it be rendered on the utilities page by putting it in `dascore.utils`, or record it as deliberately undocumented in that test file with a reason.
+
+The same test checks that reference entries still resolve, that class `members:` lists name real methods, and that every public method and property of a documented class is covered. Run it on its own while editing docs:
+
+```bash
+pytest tests/test_doc_coverage.py
+```
+
+Narrative pages live in the top-level section directories (`tutorial/`, `recipes/`, `notes/`, `contributing/`, `about/`), and `index.qmd` is the landing page. Adding a `.qmd` file to one of those directories adds a page to that section. The API reference is generated from DASCore's docstrings, so changing a docstring is enough to change the reference; which objects appear there, along with the site's structure and styling, is configured in `great-docs.yml`.

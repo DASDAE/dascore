@@ -148,9 +148,8 @@ def hampel_filter(
     - Installing `bottleneck` package can further improve approximate-mode
       performance.
 
-    See Also
-    --------
-    - [Despiking recipe](`docs/recipes/despiking.qmd`)
+    The [despiking recipe](/recipes/despiking.qmd) shows this filter used on
+    an example dataset.
 
     Examples
     --------

@@ -73,7 +73,8 @@ extras = [
 ]
 
 docs = [
-    "jinja2",
+    # renders utils docstrings onto the utilities page
+    "griffe",
     "ipywidgets",
     "tabulate",
     # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
@@ -93,6 +94,7 @@ test = [
     "pytest-cov>=4",
     "pre-commit",
     "pytest",
+    "pyyaml",  # test_doc_coverage.py reads great-docs.yml
     "pytest-timeout",
     "pytest-codeblocks",
     "s3fs",
@@ -247,6 +249,9 @@ convention = "numpy"
 # F401: a notebook often imports a name only used inside an IPython magic,
 # which ruff cannot see, and its autofix would delete the import.
 "*.ipynb" = ["D103", "F401"]
+# The doc-build hooks report progress on stdout (T201), and import dascore
+# only after re-execing with the environment it is installed in (PLC0415).
+"scripts/greatdocs_*.py" = ["T201", "PLC0415"]
 
 [tool.pytest.ini_options]
 norecursedirs = [
@@ -300,7 +305,13 @@ include = ["dascore"]
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
-include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+# griffe (docs extra) is imported only while rendering the utilities page.
+include = [
+    "dascore/compat.py",
+    "dascore/utils/docs.py",
+    "dascore/utils/jit.py",
+    "dascore/io/dasvader/utils.py",
+]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

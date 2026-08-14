@@ -1,0 +1,52 @@
+---
+title: Spool Selection
+description: "How Spool.select filters memory and directory spools."
+---
+
+`Spool.select` uses one selector model for memory and directory spools. Patch-list and directory spools compose selections in a `PatchCatalog`; ordinary metadata predicates are pushed into SQLite and remain lazy until contents, length, indexing, or iteration requires rows.
+
+Bare selector names resolve to attributes first and then coordinates. `_attrs` and `_coords` provide explicit namespaces when needed: either a `name -> selector` mapping (the fully general form, required when a name cannot be a Python keyword) or a name/collection of names tagging which bare keyword arguments belong to that namespace (e.g. `select(sensor=(1, 10), _coords="sensor")`). Unknown names raise immediately instead of being ignored.
+
+Attribute equality, membership, ranges, and glob predicates are evaluated by the index. Regular expressions use a SQL candidate predicate and an exact residual filter; chained regular expressions are combined with AND. Quantities are converted to the canonical unit recorded by the index, and dimensionally incompatible queries raise rather than silently returning incorrect matches. Values stored without units can never be proven incompatible, so they remain candidates for quantity selectors rather than being silently excluded.
+
+Coordinate predicates select by range — a `(start, stop)` tuple or slice, with `None`/`...` for an open end. Scalar, value-membership, and boolean-sample-mask coordinate selectors have no exact patch-level meaning spool-wide and are rejected (apply masks per patch, e.g. `spool.map(lambda p: p.select(...))`; boolean arrays over patches, `spool[mask]`, still select membership). Numeric coordinate envelopes are stored in each coordinate's original units, so bare numeric range bounds mean the coordinate's own units — exactly what `Patch.select` means by them — and quantities convert themselves to whatever units each stored definition uses. In an archive whose files state different units for one coordinate, a bare range therefore selects a per-file interval; pass a quantity to mean one physical interval. The exact per-patch trim defers its representation until each patch is known, so a mixed archive of unit-bearing and unitless patches is handled correctly in one selection.
+
+Coordinate predicates first select patches whose summary envelopes can overlap the request. The loaded patch is then selected exactly. `samples=True` is always patch-local and therefore never excludes a patch at the index stage. `relative=True` resolves coordinate ranges against the current spool view's global envelope; attribute predicates in the same call remain unchanged.
+
+Restructuring operations that create new patch identities (chunking, concatenation) materialize a derived in-memory catalog whose rows are the plan outputs, so selection on a chunked spool runs the identical catalog engine. Sorting, slicing, and array selection never restructure: they compose lazy order and membership specs on the current catalog. Exact selections already attached to a parent view still apply when member source patches load.
+
+Catalog views share their source state. Adding, removing, or rescanning sources invalidates realized metadata so existing views observe the updated catalog under their composed predicates.
+
+The core contract, executed here so drift fails the doc build: names resolve attributes-first then coordinates, unknown names raise, and coordinate ranges are exact on the loaded patches (candidacy by envelope at the index, exactness at load):
+
+```{python}
+import pytest
+
+import dascore as dc
+from dascore.exceptions import InvalidSpoolQueryError
+
+spool = dc.get_example_spool("diverse_das")
+with pytest.raises(InvalidSpoolQueryError):
+    spool.select(not_a_name="anything")
+
+selected = spool.select(acquisition_key="DAS2.*")
+assert all(p.attrs.acquisition_key.startswith("DAS2.") for p in selected)
+
+df = spool.get_contents()
+t0 = df["time_min"].min()
+window = (t0, t0 + dc.to_timedelta64(1))
+for patch in spool.select(time=window):
+    coord = patch.get_coord("time")
+    assert coord.min() >= window[0] and coord.max() <= window[1]
+```
+
+Bare numeric coordinate bounds mean the coordinate's own units, matching `Patch.select`, and scalar/membership coordinate selectors raise:
+
+```{python}
+ft_patch = dc.get_example_patch().convert_units(distance="ft")
+coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
+assert float(coord.min()) >= 20 and float(coord.max()) <= 60  # 20-60 ft
+
+with pytest.raises(InvalidSpoolQueryError):
+    dc.spool([ft_patch]).select(distance=100)  # scalar has no range meaning
+```

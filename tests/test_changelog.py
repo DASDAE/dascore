@@ -2,61 +2,91 @@
 Test which enforces that DASCore keeps no changelog.
 
 Release notes are assembled from the pull requests merged since the last tag,
-each of which describes its own user-facing and breaking changes. The changelog
-page survives only as a stub preserving its published URL, so this test pins its
-contents exactly and fails if anything is added to it.
+each of which describes its own user-facing and breaking changes. The site's
+changelog page is generated at build time from the GitHub releases, so no
+changelog source belongs in the repository and this test fails if one appears.
 """
 
 from __future__ import annotations
 
-# E501: the expected text below is a byte-for-byte copy of a markdown page whose
-# prose is deliberately not hard-wrapped; rewrapping it would break the match.
-# ruff: noqa: E501
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DOC_PATH = _REPO_ROOT / "docs"
-_CHANGELOG_PATH = _DOC_PATH / "changelog.qmd"
 _CHECKER_PATH = _REPO_ROOT / ".github" / "scripts" / "check_pr_changelog.py"
+_CONFIG_PATH = _REPO_ROOT / "great-docs.yml"
+
+# The directories the docs are written in, read from the configuration so a new
+# section is searched too, plus `docs` (assets the sections draw on) and the
+# repository root, which is where a hand-written changelog would most likely
+# land.
+_SECTION_RE = re.compile(r"^\s+dir:\s*(\S+)\s*$", re.MULTILINE)
 
 # Run wherever the docs are, skip where they are not. The sdist grafts tests but
-# ships only docs/LICENSE, so the directory existing is not enough to tell the
-# two apart; index.qmd is present iff the real docs tree is. Deliberately not
-# keyed on changelog.qmd, or deleting the page would skip rather than fail.
-_DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
-
-_EXPECTED = """# Changelog
-
-DASCore's changelog is the [releases page](https://github.com/DASDAE/dascore/releases), which tracks changes from one version to another.
-
-This page remains only so that existing links to it keep working; it is not part of the site navigation and is never updated per pull request. Each pull request describes its own user-facing and breaking changes, and those descriptions are collected into the release notes when a version is tagged. See [publish a new release](contributing/publish_a_new_release.qmd) for that workflow.
-"""
+# ships only docs/LICENSE, so a directory existing is not enough to tell the two
+# apart; the landing page is present iff the real docs tree is.
+_DOCS_PRESENT = (_REPO_ROOT / "index.qmd").is_file()
 
 _POLICY = (
     "DASCore does not keep a changelog. Describe user-facing and breaking "
     "changes in the pull request that makes them, under the headings in "
     ".github/pull_request_template.md; they are collected into the release "
-    "notes when a version is tagged. See .agents/agents.md. The page itself "
-    "must stay exactly as pinned here, since it is published as "
-    "dascore.org/changelog.html."
+    "notes when a version is tagged. See .agents/agents.md. The published "
+    "dascore.org/changelog.html page is generated from those releases by "
+    "great-docs, so writing one here would collide with it."
 )
+
+
+def _doc_directories() -> list[Path]:
+    """Return the repository root and every directory a section is built from."""
+    config = _CONFIG_PATH.read_text(encoding="utf-8")
+    dirs = {"docs", *_SECTION_RE.findall(config)}
+    return [_REPO_ROOT, *(_REPO_ROOT / name for name in sorted(dirs))]
+
+
+def _changelog_sources() -> list[Path]:
+    """Return any file in the docs which is a changelog of its own."""
+    out = []
+    for directory in _doc_directories():
+        # The root is searched shallowly (its subdirectories are the sections,
+        # searched in their own right); a section, all the way down.
+        paths = directory.glob("*") if directory == _REPO_ROOT else directory.rglob("*")
+        for path in paths:
+            name = path.name.lower()
+            if name.startswith(("changelog", "change_log")):
+                out.append(path)
+    return sorted(out)
 
 
 @pytest.mark.skipif(
     not _DOCS_PRESENT,
     reason="the docs are not present (e.g. running from an sdist)",
 )
-class TestChangelogIsAStub:
-    """The changelog page must stay a pointer to the releases page."""
+class TestNoChangelogSource:
+    """The changelog must come from the releases, not from a file."""
 
-    def test_contents_are_unchanged(self):
-        """The page must match the expected stub exactly."""
-        assert _CHANGELOG_PATH.exists(), f"{_CHANGELOG_PATH} is missing. {_POLICY}"
-        contents = _CHANGELOG_PATH.read_text(encoding="utf-8")
-        assert contents.strip() == _EXPECTED.strip(), _POLICY
+    def test_no_changelog_page(self):
+        """No changelog source file may exist in the docs or repo root."""
+        found = _changelog_sources()
+        assert not found, f"{[str(p) for p in found]} should not exist. {_POLICY}"
+
+    def test_release_notes_are_configured(self):
+        """
+        The generated page needs the repository it draws releases from.
+
+        Dropping `repo` from the configuration would silently take the
+        changelog page with it, leaving dascore.org/changelog.html a 404.
+        """
+        text = _CONFIG_PATH.read_text(encoding="utf-8")
+        match = re.search(r'^repo:\s*"?(\S+?)"?\s*$', text, re.MULTILINE)
+        repo = match.group(1) if match else ""
+        assert "github.com" in repo, (
+            f"great-docs.yml must set `repo:` to the GitHub repository the "
+            f"changelog page is generated from, not {repo!r}. {_POLICY}"
+        )
 
 
 def _load_checker():

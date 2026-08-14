@@ -1,0 +1,6 @@
+---
+title: Contributors
+description: "Thanks to everyone who has contributed to DASCore."
+---
+
+A huge thanks to [all the DASCore contributors](https://github.com/DASDAE/dascore/graphs/contributors)!

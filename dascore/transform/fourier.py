@@ -262,12 +262,12 @@ def dft(
     - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
 
-    - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.
+    - See the [FFT notes](/notes/dft_notes.qmd) for more details.
 
     See Also
     --------
-    - [idft](`dascore.transform.fourier.idft`)
-    - [stft](`dascore.transform.fourier.stft`)
+    dascore.transform.fourier.idft
+    dascore.transform.fourier.stft
 
     Examples
     --------
@@ -418,7 +418,7 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     Currently, only patches that have been transformed with
     [dft](`dascore.transform.fourier.dft`) can be used with this function.
     After transformation with dft, the transformed coordinates cannot change
-    (e.g., with [select]('dascore.proc.basic.select`) otherwise idft won't
+    (e.g., with [select](`dascore.proc.select`)) otherwise idft won't
     work.
 
     Parameters
@@ -436,13 +436,12 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     - Real transforms are determined by transformed coordinates which have
       no negative values.
 
-    - See the [FFT note](dascore.org/notes/fft_notes.html) in Notes section
-      of DASCore's documentation.
+    - See the [FFT note](/notes/dft_notes.qmd) for more details.
 
     See Also
     --------
-    - [dft](`dascore.transform.fourier.dft`)
-    - [istft](`dascore.transform.fourier.istft`)
+    dascore.transform.fourier.dft
+    dascore.transform.fourier.istft
 
     Examples
     --------

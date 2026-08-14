@@ -42,16 +42,18 @@ pytest dascore --doctest-modules
 
 ## Docs
 
-- `.qmd` under `docs/`; API docs come from docstrings. Update with any behavior or API change. Do not hard-wrap prose.
-- Edit `scripts/_templates/_quarto.yml` for site structure; `docs/_quarto.yml` is generated.
+- `.qmd` in the top-level section directories (`tutorial/`, `recipes/`, `notes/`, `contributing/`, `about/`), with `index.qmd` as the landing page. API docs come from docstrings. Update with any behavior or API change. Do not hard-wrap prose.
+- Site structure, styling and the curated API reference are configured in `great-docs.yml`; the `great-docs/` directory is generated. New public API needs a reference entry, and `tests/test_doc_coverage.py` fails when it has none.
 
 ```bash
-python scripts/build_api_docs.py && quarto render docs
+pip install "great-docs>=0.16"
+great-docs build      # writes great-docs/_site
+great-docs preview    # serves the built site
 ```
 
 ### Changelog
 
-No changelog file, and do not add one — no `CHANGELOG.md`, `changelog.d/`, or "unreleased" sections. `docs/changelog.qmd` is a stub pinned by `tests/test_changelog.py`. Put the summary in the PR's required `## Changelog` section, formatted per "Changelog entries" in `docs/contributing/general_guidelines.qmd`; `.github/scripts/check_pr_changelog.py` is the parser CI runs.
+No changelog file, and do not add one — no `CHANGELOG.md`, `changelog.d/`, or "unreleased" sections; the site's changelog page is generated from the GitHub releases at build time, and `tests/test_changelog.py` fails if a source page appears. Put the summary in the PR's required `## Changelog` section, formatted per "Changelog entries" in `contributing/general_guidelines.qmd`; `.github/scripts/check_pr_changelog.py` is the parser CI runs.
 
 ## Before handing off
 

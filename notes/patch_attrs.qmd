@@ -1,0 +1,86 @@
+---
+title: PatchAttrs
+description: "How PatchAttrs stores identity, coordinate, and data metadata for a patch."
+---
+
+[`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) stores non-coordinate metadata about a [`Patch`](`dascore.Patch`), including measurement labels, instrument identity, data units, processing history, and format-specific fields. Coordinate values and summaries are deliberately owned elsewhere.
+
+This note explains how DASCore interprets a few important attributes, and its internal policies around these attributes.
+
+## Metadata boundaries
+
+`Patch.coords` is the authoritative source for coordinate values, dimensions, units, and sampling. `Patch.summary` combines `PatchAttrs` with `CoordSummary` envelopes derived from those live coordinates. Scan-created `PatchSummary` objects additionally carry reload provenance in `source_path`, `source_format`, `source_version`, and `source_patch_id`.
+
+`PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping these values out of attrs prevents coordinate edits from leaving stale duplicated metadata. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
+
+## `data_type`
+
+`data_type` is an optional label for the kind of data contained in a patch. It is useful for display defaults, plotting choices, grouping, and quick inspection, but it is not the canonical source of physical meaning, rather the data and coordinate units, as well as the patch history serve this purpose.
+
+:::{.callout-note}
+A stale or misleading `data_type` is much worse than an empty one.
+:::
+
+| Situation | `data_type` behavior |
+|---|---|
+| Output is still the same measured quantity, just filtered/resampled/selected/reordered | Preserve existing `data_type`. |
+| Output is a known derived product with a stable meaning | Set a specific snake_case `data_type`. |
+| Output changes physical meaning but no stable label is appropriate | Clear `data_type` to `""`. |
+
+DASCore-assigned `data_type` values should be snake_case and listed in `VALID_DATA_TYPES` in [`dascore.constants`](/reference/index.qmd). Correctness-critical code should prefer units, coordinates, and explicit validation.
+
+### Patch functions
+
+[`patch_function`](`dascore.utils.patch.patch_function`) can manage output `data_type` for patch methods.
+
+| Decorator value | Behavior |
+|---|---|
+| `data_type=None` | Preserve the returned patch's `data_type`. This is the default for backward compatibility. |
+| `data_type=""` | Clear the returned patch's `data_type`. |
+| `data_type="some_value"` | Set the returned patch's `data_type` to that value. |
+
+Functions may still require a specific input label with `required_attrs`, for example `required_attrs={"data_type": "velocity"}`. This should only be used when the function's assumptions truly depend on that label and are documented.
+
+## Format-specific subclasses
+
+A format whose files carry fields the base class does not model declares a
+`PatchAttrs` subclass for them; there are more than a dozen under
+`dascore/io/`. Since the fields are declared, they are validated and coerced
+like any other, rather than surviving as untyped extras.
+
+A serialized patch names the class it holds, so the subclass comes back:
+
+```python
+import dascore as dc
+from dascore.io.odh4.core import ODH4PatchAttrs
+
+patch = dc.get_example_patch()
+patch = patch.update(attrs=ODH4PatchAttrs(**dict(patch.attrs), gauge_length=10.0))
+patch.io.write("example.h5", "dasdae")
+
+type(dc.read("example.h5")[0].attrs)  # ODH4PatchAttrs
+```
+
+The name is a registered one rather than an import path, so moving a class
+between modules does not break files already written, and reading a file
+never imports a path it names. A file naming a class which is not installed
+— written, say, by a plugin this environment lacks — reads as the base
+`PatchAttrs` with a warning rather than failing.
+
+### Spelling an optional number
+
+An absent number is spelled `OptionalFiniteFloat`, defaulting to `None`:
+
+```python
+from dascore.models import OptionalFiniteFloat
+
+class JingleV1PatchAttrs(dc.PatchAttrs):
+    """Attrs for the jingle format."""
+
+    gauge_length: OptionalFiniteFloat = None
+```
+
+Not `float = np.nan`, and not `float = np.inf`. JSON spells neither, so such
+a field writes `null` and then refuses to read it back, which means the class
+cannot reconstruct from its own `model_dump_json()`. A non-finite value read
+from a file is taken as an absent one rather than refused.

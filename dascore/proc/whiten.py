@@ -90,7 +90,7 @@ def whiten(
 
     The whitened signal is returned in the same domain (eq frequency or
     time domain) as the input signal. See also the
-    [Whiten Processing Section](`docs/tutorial/processing.qmd`#whiten).
+    [Whiten Processing Section](/tutorial/processing.qmd#whiten).
 
     Parameters
     ----------

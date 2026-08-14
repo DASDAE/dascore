@@ -1,5 +1,0 @@
-# Changelog
-
-DASCore's changelog is the [releases page](https://github.com/DASDAE/dascore/releases), which tracks changes from one version to another.
-
-This page remains only so that existing links to it keep working; it is not part of the site navigation and is never updated per pull request. Each pull request describes its own user-facing and breaking changes, and those descriptions are collected into the release notes when a version is tagged. See [publish a new release](contributing/publish_a_new_release.qmd) for that workflow.

@@ -1,0 +1,83 @@
+---
+title: DASCore Development Installation
+description: "Set up DASCore for local development."
+---
+
+The following steps are needed to set up `DASCore` for development:
+
+### 1. Clone DASCore
+
+```bash
+git clone https://github.com/dasdae/dascore
+cd dascore
+```
+
+### 2. Pull tags
+
+Make sure to pull all of the latest git tags.
+
+
+```bash
+git pull origin master --tags
+```
+
+### 3. Create a virtual environment (optional)
+
+Create and activate a virtual environment so DASCore will not mess with the base (or system) python installation.
+
+If you are using [uv](https://docs.astral.sh/uv/), which is what most of DASCore's CI uses:
+
+```bash
+uv venv
+source .venv/bin/activate
+```
+
+If you are using [Anaconda](https://www.anaconda.com/), simply use the environment provided:
+
+```bash
+conda env create -f environment.yml
+conda activate dascore
+```
+
+### 4. Install DASCore in development mode
+
+```bash
+pip install -e ".[dev]"
+```
+
+If you created the environment with `uv venv`, use `uv pip` instead. A uv virtual environment has no `pip` of its own, so a bare `pip install` would fall through to whichever `pip` is next on your `PATH` and install DASCore somewhere else entirely:
+
+```bash
+uv pip install -e ".[dev]"
+```
+
+### 5. Setup pre-commit hooks
+
+dascore uses several [pre-commit](https://pre-commit.com/) hooks to ensure the code stays tidy. Please install and use them!
+
+```bash
+pre-commit install -f
+```
+
+## Refresh
+
+If you have already installed dascore but it has been a while, please do the following before creating a new branch:
+
+```bash
+conda activate dascore
+```
+```bash
+git checkout master
+```
+```bash
+git pull origin master --tags
+```
+```bash
+pip install -e ".[dev]"
+```
+
+The first line ensures you are on the master branch, the second line will pull the latest changes and tags, and the last line
+will install again in developer mode. This is only required if DASCore's entry points or requirements have changed, but
+won't hurt anything if not.
+
+For a uv environment, activate it with `source .venv/bin/activate` rather than `conda activate dascore`, and finish with `uv pip install -e ".[dev]"`.

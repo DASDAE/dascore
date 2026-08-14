@@ -1,6 +1,6 @@
 """DASDAE format utilities.
 
-See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+See [Coordinate Internals](/notes/coordinate_internals.qmd) for the
 coord serialization and string-serialization design notes used here.
 """
 
