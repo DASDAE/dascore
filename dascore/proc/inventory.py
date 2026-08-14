@@ -1197,6 +1197,17 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     return out
 
 
+def validate_enrich_selection(attrs, coords) -> None:
+    """Refuse None, the retired spelling of enrich's False off switch."""
+    for label, value in (("attrs", attrs), ("coords", coords)):
+        if value is None:
+            msg = (
+                f"enrich's {label} must be True, False, or a collection of "
+                "names; pass False to copy none."
+            )
+            raise ParameterError(msg)
+
+
 @patch_function()
 @compose_docstring(
     attrs_desc=enrich_attrs_description,
@@ -1257,15 +1268,7 @@ def enrich(
     if on_missing not in _VALID_ON_MISSING:
         msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
-    # False is the off switch; None used to mean the same thing, and two
-    # spellings of "copy none" is one more than the parameter needs.
-    for label, value in (("attrs", attrs), ("coords", coords)):
-        if value is None:
-            msg = (
-                f"enrich's {label} must be True, False, or a collection of "
-                "names; pass False to copy none."
-            )
-            raise ParameterError(msg)
+    validate_enrich_selection(attrs, coords)
     source_id = _get_acquisition_key(patch, acquisition_key)
     times = _get_resolution_times(patch, time)
     context = _resolve_context(inventory, source_id, times)

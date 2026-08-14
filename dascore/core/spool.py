@@ -407,6 +407,8 @@ def _normalize_enrich_kwargs(kwargs) -> dict:
     argument stated explicitly at its own default, or given as a list
     where a tuple would do, must reach the same stored form.
     """
+    from dascore.proc.inventory import validate_enrich_selection  # noqa: PLC0415
+
     signature = inspect.signature(dc.Patch.enrich)
     valid = set(signature.parameters) - {"patch", "inventory"}
     if bad := sorted(set(kwargs) - valid):
@@ -417,16 +419,10 @@ def _normalize_enrich_kwargs(kwargs) -> dict:
         raise ParameterError(msg)
     bound = signature.bind_partial(**kwargs)
     bound.apply_defaults()
-    # False is enrich's off switch, and None is not a second spelling of
-    # it -- said here so the refusal lands on this call rather than on
-    # whichever patch is pulled first.
-    for label in ("attrs", "coords"):
-        if bound.arguments.get(label, False) is None:
-            msg = (
-                f"enrich's {label} must be True, False, or a collection of "
-                "names; pass False to copy none."
-            )
-            raise ParameterError(msg)
+    # Refused on this call rather than on whichever patch is pulled first.
+    validate_enrich_selection(
+        bound.arguments.get("attrs", False), bound.arguments.get("coords", False)
+    )
     # A collection of names means what it holds, not which container holds it.
     return {
         name: tuple(value) if isinstance(value, list) else value
