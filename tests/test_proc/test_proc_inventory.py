@@ -25,6 +25,7 @@ from dascore.constants import (
     enrich_coords_description,
     enrich_on_missing_description,
 )
+from dascore.core._spool_inventory import InventoryRef, resolve_row_epochs
 from dascore.core.inventory import (
     _SYSTEM_FACT_NAMES,
     Acquisition,
@@ -41,7 +42,6 @@ from dascore.core.inventory import (
     OpticalPathAnnotation,
 )
 from dascore.core.inventory_loader import BLESSED_NAME
-from dascore.core.spool import _InventoryRef
 from dascore.examples import get_example_patch, inventory_patch_pair
 from dascore.exceptions import (
     CoordMergeError,
@@ -53,7 +53,6 @@ from dascore.exceptions import (
     UnitError,
     UnresolvedPatchError,
 )
-from dascore.proc.inventory import resolve_row_epochs
 from dascore.units import cm, get_quantity, m
 
 
@@ -1044,7 +1043,7 @@ class TestLazyInventoryEquality:
         spool = dc.spool(data_directory).update()
         named = spool.attach_inventory(data_directory / f"{BLESSED_NAME}.yaml")
         assert spool._inventory != named._inventory
-        assert spool._inventory != _InventoryRef(data_directory)
+        assert spool._inventory != InventoryRef(data_directory)
 
     def test_something_which_is_no_kind_of_inventory(self, data_directory):
         """Which the comparison declines rather than answers."""

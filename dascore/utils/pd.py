@@ -218,6 +218,55 @@ def resolve_selector_namespaces(
     return attrs, coords
 
 
+def selector_spec_names(spec: namespace_select_type) -> set[str]:
+    """
+    Return the names an `_attrs`/`_coords` argument designates.
+
+    Either form: a mapping of name -> selector, or a name (or names)
+    tagging bare kwargs. A malformed spec keeps only what is a name, so
+    `resolve_selector_namespaces` is left to complain about the rest
+    properly.
+    """
+    if spec is None:
+        return set()
+    if isinstance(spec, str):
+        return {spec}
+    return {x for x in spec if isinstance(x, str)}
+
+
+def requested_selector_names(_attrs, _coords, kwargs) -> set[str]:
+    """
+    Return every name a selection call names, whatever form it arrives in.
+
+    A tag-form `_attrs`/`_coords` names bare kwargs, so a requested name
+    is always either a bare kwarg or a key of a mapping form.
+    """
+    out = set(kwargs)
+    for spec in (_attrs, _coords):
+        if isinstance(spec, Mapping):
+            out |= set(spec)
+    return out
+
+
+def drop_selector_names(spec: namespace_select_type, names) -> namespace_select_type:
+    """
+    Return an `_attrs`/`_coords` argument with some names taken out.
+
+    Callers use this to peel off the names another namespace answers
+    (e.g. coordinates an inventory defines along the fiber) — and the tag
+    form as well as the mapping one, since a tag left behind designates a
+    bare keyword which went with it.
+    """
+    if not names or spec is None:
+        return spec
+    if isinstance(spec, Mapping):
+        return {str(k): v for k, v in spec.items() if k not in names}
+    if isinstance(spec, str):
+        return None if spec in names else spec
+    kept = [x for x in spec if x not in names]
+    return kept or None
+
+
 def _get_min_max_query(kwargs, df):
     """
     Get a dict of {column_name: Optional[min_val], Optional[max_val]}.
