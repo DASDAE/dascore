@@ -71,6 +71,8 @@ target/
 
 # docs
 docs/api/*
+# Where a local `quarto render docs` puts the built site.
+docs/_site/
 _autosummary
 .quarto/
 docs/site_libs

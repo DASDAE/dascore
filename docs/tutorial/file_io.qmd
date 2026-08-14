@@ -150,6 +150,8 @@ The `Patch.io` namespace also includes functionality for converting `Patch` inst
 ## Directory Indexer
 The `DBDirectoryIndexer` tracks the contents of a directory which contains fiber data. It creates a small, hidden SQLite index named `.dascore_index.sqlite3` at the top of the directory. Directory spools use this index internally and push metadata selections into SQLite before loading patch data. See the [spool index note](../notes/spool_index.qmd) for the schema and lifecycle.
 
+`.dascore_index.sqlite3` is one of two hidden names DASCore gives a meaning at the top of a data directory. The other is `.inventory`, which is where a directory may keep the [inventory](inventory.qmd) describing the observing system its data was recorded through. Both are companions the directory keeps rather than content it holds, which is why both are hidden and neither is scanned as data.
+
 
 ```{python}
 #| output: false

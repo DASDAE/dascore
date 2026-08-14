@@ -124,6 +124,9 @@ website:
         - text: Coordinates
           href: tutorial/coords.qmd
 
+        - text: Inventory
+          href: tutorial/inventory.qmd
+
     - id: Recipes
       title: 'Recipes'
       collapse-level: 1

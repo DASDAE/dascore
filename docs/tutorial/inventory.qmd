@@ -1,0 +1,290 @@
+---
+title: Inventory
+execute:
+  warning: false
+---
+
+A DASDAE **inventory** describes the observing system a fiber archive was recorded through: the cables and fibers the light travelled down, the interrogators that lit them, where the fiber physically goes, and how all of it was configured over time. It plays the role StationXML plays in seismology, extended to the things a fiber deployment has and a seismic station does not — an optical path with components along it, and channels whose meaning is a position on that path.
+
+The data files stay as they are. An inventory is written once, beside the archive, and DASCore joins the two on demand: patches carry an `acquisition_key` (`network.fiber_array.location.acquisition`) which, together with the time they cover, resolves to exactly one entry in the inventory.
+
+Nothing here changes patch data. Everything an inventory contributes is metadata — attributes on a patch, coordinates along the fiber, and names you can select and group by.
+
+# The model
+
+An inventory is a tree of DASCore models. Its spine is containment, and each edge below is labelled with the field that holds the thing it points at.
+
+```{mermaid}
+flowchart TD
+  Inventory -->|networks| Network
+  Network -->|fiber_arrays| FiberArray
+  Network -->|stations| Station
+  FiberArray -->|acquisitions| Acquisition
+  FiberArray -->|optical_paths| OpticalPath
+  Station -->|channels| Channel
+```
+
+An [`Inventory`](`dascore.core.inventory.Inventory`) holds networks; a [`Network`](`dascore.core.inventory.Network`) holds fiber arrays, and stations for the conventional instruments recorded alongside them; a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the durable observing identity, which holds both [`Acquisition`](`dascore.core.inventory.Acquisition`) objects — how an interrogator was set up — and [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects — what the light actually travelled through.
+
+The optical path is the part with no seismological analog. It is described by four independent tracks along optical distance.
+
+```{mermaid}
+flowchart LR
+  OpticalPath -->|optical_components| Components["FiberSegment · Splice · Connector · Terminator"]
+  OpticalPath -->|geometry| Geometry
+  OpticalPath -->|coupling| CouplingCondition
+  OpticalPath -->|annotations| OpticalPathAnnotation
+```
+
+The components are the ordered physical pieces the light passes through, and they are what gives the path its length: each one tiles the interval after the last, so the path ends where the final component does. The other three describe intervals of that length — the geometry says where each distance is in space, the coupling says how the fiber is attached to the ground there, and the annotations name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
+
+Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
+
+```{mermaid}
+flowchart LR
+  Acquisition -.->|interrogator| Interrogator
+  FiberSegment -.->|container| Cable
+  Cable -.->|container| Enclosure
+  OpticalPath -.->|measurements| OpticalMeasurement
+```
+
+These three diagrams are the shape of the model, not the whole of it; each class's own API page lists every field it has.
+
+# Writing an inventory
+
+An inventory can be a single YAML file, but the format it is usually authored in is a **directory**, which splits the metadata along its natural grain: small heterogeneous objects as YAML (or JSON) files matching the models, and long row-shaped track data as CSV files a field crew can maintain in a spreadsheet.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import dascore as dc
+
+files = {
+    # The envelope: the document's own facts. Optional.
+    "inventory.yaml": "object_type: Inventory\n",
+    # Shared objects, named by the resource_id others refer to them by.
+    "resources/fi-1.yaml": (
+        "object_type: Interrogator\n"
+        "manufacturer: Fake Interrogators\n"
+        "model: FI-1\n"
+    ),
+    # A file's name states the identity: network.fiber_array.location.code
+    "acquisitions/DAS.R2D1..RAW.yaml": (
+        "object_type: Acquisition\n"
+        "data_category: DAS\n"
+        "data_type: velocity\n"
+        "gauge_length: 10.0\n"
+        "spatial_interval: 1.0\n"
+        "interrogator: fi-1\n"
+        # Where the interrogator's own axis lands on the optical path.
+        "distance_map:\n"
+        "  instrument_distance: [0.0, 299.0]\n"
+        "  distance: [100.0, 399.0]\n"
+    ),
+    # An entity is a file until it needs tracks, and then a directory.
+    "fiber_arrays/DAS.R2D1/attrs.yaml": (
+        "object_type: FiberArray\nname: the north array\n"
+    ),
+    "fiber_arrays/DAS.R2D1/path/attrs.yaml": (
+        "object_type: OpticalPath\nname: main\n"
+    ),
+    # The tracks along the path, as tables.
+    "fiber_arrays/DAS.R2D1/path/optical_components.csv": (
+        "sequence,object_type,optical_length,name\n"
+        "1,FiberSegment,100.0,lead-in\n"
+        "2,Splice,0.0,wellhead splice\n"
+        "3,FiberSegment,400.0,trench cable\n"
+    ),
+    "fiber_arrays/DAS.R2D1/path/coupling.csv": (
+        "start_distance,end_distance,coupling_type,medium\n"
+        "100,400,trench,soil\n"
+    ),
+    "fiber_arrays/DAS.R2D1/path/annotations.csv": (
+        "start_distance,end_distance,group,value\n"
+        "100,250,zone,north\n"
+        "250,400,zone,south\n"
+        "150,300,noisy,true\n"
+    ),
+}
+
+inventory_path = Path(tempfile.mkdtemp()) / "north_array"
+for name, text in files.items():
+    path = inventory_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+inventory = dc.inventory(inventory_path)
+```
+
+A few rules make that directory readable without a schema in front of you:
+
+- **The file declares what it is.** Every object file states its `object_type`, and its container checks that statement rather than supplying it.
+- **The name states the identity.** `acquisitions/DAS.R2D1..RAW.yaml` *is* the acquisition `DAS.R2D1..RAW` — network `DAS`, fiber array `R2D1`, blank location code, code `RAW`. Restating a part of it inside the file is allowed, as long as the two agree; there is never a precedence rule between two spellings of one fact.
+- **`path` is the one reserved *container* name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path". (`attrs` and `inventory` are reserved as file stems — an entity's own object file, and the envelope — and the top-level directory names above are fixed.)
+- **Files that participate in no convention are ignored.** Photos, field notes, and deployment logs can live in the inventory directory undisturbed.
+
+Loading checks the document, so a directory that is not a valid inventory says so at the point it is read:
+
+```{python}
+from dascore.exceptions import InvalidInventoryError
+
+try:
+    dc.inventory(inventory_path / "acquisitions")
+except InvalidInventoryError as error:
+    print(error)
+else:
+    raise AssertionError("a directory of acquisitions is no inventory")
+```
+
+Inventories can also be built in memory from the model classes directly, which is how the tests build theirs. The examples below take one already built that way, along with a patch it describes:
+
+```{python}
+from dascore.examples import inventory_patch_pair
+
+patch, example_inventory = inventory_patch_pair()
+```
+
+# What an inventory can contribute
+
+[`Inventory.get_names`](`dascore.core.inventory.Inventory.get_names`) lists the names an inventory could put on a patch, split by where each one lands. `attrs` are the observing-system facts, which are one value per patch; `coords` take a value per channel, because they describe a position along the fiber.
+
+```{python}
+names = inventory.get_names()
+
+print("attrs:", names.attrs[:4], "...")
+print("coords:", [x for x in names.coords if "." not in x])
+
+# The annotation groups named in the CSV are among them.
+assert {"zone", "noisy"} <= set(names.coords)
+assert "gauge_length" in names.attrs
+```
+
+`zone` and `noisy` are there because the annotations CSV named them: an annotation group becomes a coordinate under its own name. `coupling` and `optical_components` are there for the same reason — a track contributes its name only where a path actually describes it. `distance` is where each channel sits on the optical path, and `x`/`y`/`z` and `longitude`/`latitude`/`elevation` are the two spellings of the axes the inventory's coordinate reference system declares, which a geometry track resolves to.
+
+Listing a name is not promising a value for it. This example states no geometry, so the spatial names resolve to nothing until it gets one.
+
+# Attaching an inventory to a spool
+
+[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and touches no data. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for. Attaching a *different* inventory does clear any enrichment set up from the old one, since applying the old instructions to new metadata would rewrite every patch behind your back.
+
+```{python}
+spool = dc.spool(patch).attach_inventory(example_inventory)
+
+# Attaching alone adds nothing to the patches.
+assert "gauge_length" not in dict(spool[0].attrs)
+```
+
+What attaching *does* change is which names resolve. The coordinates the inventory defines along the fiber become selectable, and [`Spool.split_by`](`dascore.core.spool.Spool.split_by`) can expand the spool by the values of one:
+
+```{python}
+# Keep only the channels the inventory places in the northern zone.
+northern = spool.select(zone="north")
+
+# Or get one patch per zone, each holding that zone's channels.
+zones = spool.split_by("zone")
+assert len(zones) == 2
+assert set(zones.get_contents()["zone"]) == {"north", "south"}
+```
+
+Selecting on an inventory coordinate trims channels rather than cutting the patch at the spool level, since the inventory is what says which channel is which. A patch left with no matching channels at all drops out, there being nothing to keep.
+
+# Enriching patches
+
+[`Spool.enrich`](`dascore.core.spool.Spool.enrich`) is how the inventory's metadata actually reaches the patches. It is set up once and applied as each patch is extracted, so it stays cheap on a large spool.
+
+```{python}
+enriched = spool.enrich()
+
+patch_out = enriched[0]
+assert patch_out.attrs.gauge_length == 10.0
+assert "zone" in patch_out.coords.coord_map
+```
+
+Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
+
+A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state:
+
+```{python}
+one = patch.enrich(example_inventory)
+assert one.attrs.gauge_length == 10.0
+```
+
+# Conforming a spool
+
+[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, refuses patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink. Pass `on_unresolved="drop"` (or `"warn"`) to drop the undescribed patches instead of raising, which is what an inventory deliberately covering part of an archive wants.
+
+```{python}
+# A second patch this inventory says nothing about.
+stranger = dc.get_example_patch("random_das", acquisition_key="XX.NOPE..RAW")
+mixed = dc.spool([patch, stranger]).attach_inventory(example_inventory)
+assert len(mixed) == 2
+
+# Conforming keeps only what the inventory describes.
+conformed = mixed.conform_to_inventory(on_unresolved="drop")
+assert len(conformed) == 1
+assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
+```
+
+Subdivision is exact: each piece begins at the first sample at or after the change that opens it, so together the pieces hold every sample the patch held and hold none of them twice. `len` and `get_contents` describe the pieces.
+
+This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, raises by default on a patch the inventory does not describe, and raises, whatever the policy, when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
+
+# An inventory a directory carries
+
+A directory of data can keep the inventory that describes it, under the name `.inventory`, and a spool opened on that directory starts out attached to it. The metadata is then found where it lies, rather than named again by every script that reads the archive.
+
+```{python}
+data_path = Path(tempfile.mkdtemp()) / "archive"
+data_path.mkdir()
+patch.io.write(data_path / "patch.h5", "DASDAE")
+
+# Either form works: the directory .inventory/, or a serialized file
+# naming its format -- .inventory.yaml, .inventory.yml, or .inventory.json.
+example_inventory.to_yaml(data_path / ".inventory.yaml")
+
+carrying = dc.spool(data_path).update()
+assert carrying.enrich()[0].attrs.gauge_length == 10.0
+```
+
+The name is hidden for the same reason `.dascore_index.sqlite3` is: it is a companion the directory keeps rather than content it holds, so the file scanner skips it. Both forms present at once is two spellings of one fact, and is refused. The visible spelling `inventory.yaml` is deliberately *not* it — in the authoring format that name is the envelope, so a data directory holding one would be claiming to be an inventory directory itself.
+
+Three things happen at three different times, and keeping them apart is the point:
+
+- **Discovery is eager.** Whether the directory carries an inventory is settled when the spool is opened, by a stat of each spelling and nothing more.
+- **Reading is lazy.** The file is read at the first question only an inventory can answer — never for `len`, `get_contents`, `sort`, `chunk`, extracting a patch, or a selection on names the index already knows. A malformed inventory therefore cannot stop you loading data; only the inventory-backed calls fail, and they name the directory the inventory came from and say that the spool picked it up on opening.
+- **Refreshing is explicit.** An inventory is an input, not a cache, so it is read once and held with no modification-time check. `attach_inventory()` with no argument means "the one this directory carries, read it again", which is the whole authoring loop:
+
+```{python}
+# Correct the gauge length in the file the directory carries.
+old_acquisition = example_inventory.networks[0].fiber_arrays[0].acquisitions[0]
+corrected = example_inventory.replace(
+    old_acquisition, old_acquisition.new(gauge_length=12.0)
+)
+corrected.to_yaml(data_path / ".inventory.yaml")
+
+# The spool which already read it still reports what it read.
+assert carrying.enrich()[0].attrs.gauge_length == 10.0
+
+# Asking again is what picks the correction up.
+refreshed = carrying.attach_inventory()
+assert refreshed.enrich()[0].attrs.gauge_length == 12.0
+```
+
+`attach_inventory`, `enrich`, and `conform_to_inventory` all accept a path as well as an `Inventory`, read on the same terms.
+
+# Serializing
+
+[`Inventory.to_yaml`](`dascore.core.inventory.Inventory.to_yaml`) writes the single-file interchange form — the artifact to ship beside a data archive — and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads any of the forms back.
+
+```{python}
+text = inventory.to_yaml()
+assert dc.inventory(text) == inventory
+
+# JSON works everywhere YAML does, and needs no YAML library installed.
+json_path = data_path / "inventory.json"
+json_path.write_text(inventory.model_dump_json())
+assert dc.inventory(json_path) == inventory
+```
+
+A document that cannot be parsed, cannot be decoded, or keys a field with something that is not a name (`1: 2` is legal YAML) raises `InvalidInventoryError` rather than whatever the parser happened to raise, wherever it is read from.
