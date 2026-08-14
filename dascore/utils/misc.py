@@ -43,7 +43,7 @@ from dascore.utils.paths import (
     is_local_path,
     is_pathlike,
 )
-from dascore.utils.progress import track
+from dascore.utils.progress import track, validate_progress_level
 
 _T = TypeVar("_T")
 
@@ -104,6 +104,20 @@ def suppress_warnings(
         yield caught if record else None
 
 
+def validate_warn_level(behavior) -> WARN_LEVELS:
+    """
+    Ensure a warn-level argument is one of the supported values.
+
+    Called where the argument arrives rather than where it is acted on:
+    only an incompatible patch reaches `warn_or_raise`, so validating
+    there would accept a retired spelling until the data made it matter.
+    """
+    if behavior not in get_args(WARN_LEVELS):
+        msg = f"behavior must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
+        raise ParameterError(msg)
+    return behavior
+
+
 def warn_or_raise(
     msg: str,
     exception: type[Exception] = Exception,
@@ -126,13 +140,11 @@ def warn_or_raise(
         "ignore" to do nothing. Anything else raises a ParameterError,
         so a retired spelling cannot quietly pick a behavior.
     """
+    validate_warn_level(behavior)
     if behavior == "ignore":
         return
     if behavior == "raise":
         raise exception(msg)
-    if behavior != "warn":
-        msg_ = f"behavior must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
-        raise ParameterError(msg_)
     warnings.warn(msg, warning)
 
 
@@ -852,6 +864,10 @@ def _spool_map(
     **kwargs
         Keywords passed to func.
     """
+    # Checked before branching: with a client and an empty spool no
+    # patch is ever tracked, so a retired `progress=False` would be
+    # accepted or refused depending on how much data there was.
+    validate_progress_level(progress)
     # no client; simple for loop.
     desc = f"Applying {func.__name__} to spool"
     if client is None:

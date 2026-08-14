@@ -1185,8 +1185,10 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             )
             raise PatchError(msg)
         if values is None:
-            if blanket:
-                continue
+            # A blanket request asks for the names the path itself lists,
+            # so one of those without values would be the inventory
+            # disagreeing with itself rather than a gap to have a policy about.
+            assert not blanket, f"blanket name {name!r} resolved to nothing"
             if on_missing != "null":
                 _report_missing(context, name, on_missing, "the optical path of ")
                 continue

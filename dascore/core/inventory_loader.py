@@ -1583,12 +1583,14 @@ def _looks_like_a_path(source: str) -> bool:
     """
     Return whether a string which names nothing was meant as a path.
 
-    A document is a mapping, so it holds a colon and usually a newline;
-    a bare name ending in one of the suffixes the format writes is a
-    path that is not there rather than the smallest inventory anyone
-    ever wrote.
+    An inventory is a mapping, so a document holds a key -- a newline or
+    a `key: value` -- and a bare name ending in one of the suffixes the
+    format writes holds neither. `resource_id: archive.yaml` is a
+    document whose value happens to look like a filename, and a Windows
+    drive letter is a colon this test must not read as a key.
     """
-    return "\n" not in source and _object_suffix(Path(source)) is not None
+    document = "\n" in source or ": " in source or source.endswith(":")
+    return not document and _object_suffix(Path(source)) is not None
 
 
 def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:

@@ -26,6 +26,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     align_patch_coords,
+    check_dims,
     concatenate_patches,
     get_dim_axis_value,
     get_patch_names,
@@ -795,6 +796,11 @@ class TestStackPatches:
         spool = dc.spool([patch1, patch2])
         with pytest.raises(ParameterError, match="behavior must be one of"):
             stack_patches(spool, dim_vary="time", check_behavior=None)
+
+    def test_retired_check_behavior_raises_on_compatible_patches(self, random_patch):
+        """Acceptance must not wait for data which happens to disagree."""
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            check_dims(random_patch, random_patch, check_behavior=None)
 
     def test_different_dimensions(self, random_spool):
         """Tests for when the spool has patches with different dimensions."""

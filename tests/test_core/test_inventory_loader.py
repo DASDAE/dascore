@@ -2213,3 +2213,12 @@ class TestOneLoadingDoor:
     def test_one_line_document_is_text(self):
         """Existence decides, so a newline is not what makes text text."""
         assert dc.inventory("networks: []").networks == ()
+
+    def test_a_document_whose_value_looks_like_a_file(self):
+        """A key makes it a document, whatever its value resembles."""
+        assert dc.inventory("description: read from archive.yaml").networks == ()
+
+    def test_unparsable_text_fails_as_an_inventory(self):
+        """The text reader refuses in the format's own words."""
+        with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
+            dc.inventory("this: [is not: yaml\nnor is this\n")

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 from rich.progress import Progress
 
+import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
 from dascore.utils.progress import get_progress_instance, get_track_length, track
@@ -72,6 +75,15 @@ class TestProgressBar:
         """Anything else would fall through to the standard bar."""
         with pytest.raises(ParameterError, match="progress must be one of"):
             list(track([1, 2, 3], "bad_tracker", bad))
+
+    def test_an_empty_spool_still_refuses_a_bad_level(self):
+        """Acceptance must not depend on there being data to track."""
+        client = ThreadPoolExecutor()
+        try:
+            with pytest.raises(ParameterError, match="progress must be one of"):
+                dc.spool([]).map(lambda patch: patch, client=client, progress=False)
+        finally:
+            client.shutdown()
 
     def test_a_progress_instance_is_accepted(self):
         """A caller's own bar is not a level, and is still allowed."""

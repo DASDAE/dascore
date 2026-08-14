@@ -43,6 +43,7 @@ from dascore.utils.misc import (
     get_middle_value,
     iterate,
     to_object_array,
+    validate_warn_level,
     warn_or_raise,
     yield_sub_sequences,
 )
@@ -1127,6 +1128,7 @@ def check_dims(
         when only broadcastability needs to be checked. If false require dims
         to be equal.
     """
+    validate_warn_level(check_behavior)
     dims1, dims2 = patch1.dims, patch2.dims
     dims_ok = True
     if not intersection and patch1.dims == patch2.dims:
@@ -1169,6 +1171,7 @@ def check_coords(
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
     """
+    validate_warn_level(check_behavior)
     cm1 = patch1.coords
     cm2 = patch2.coords
     cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)

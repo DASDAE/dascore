@@ -234,6 +234,13 @@ class TestAttrs:
         with pytest.raises(ParameterError, match="pass False to copy none"):
             patch.enrich(inventory, **kwargs)
 
+    @pytest.mark.parametrize("kwargs", [{"attrs": None}, {"coords": None}])
+    def test_spool_refuses_none_when_it_is_passed(self, patch, inventory, kwargs):
+        """And the spool says so now rather than on the first patch out."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(ParameterError, match="pass False to copy none"):
+            spool.enrich(**kwargs)
+
     def test_adds_nothing_unasked(self, patch, inventory):
         """Enrich never leaves the patch holding inventory state."""
         out = patch.enrich(inventory, attrs=False, coords=False)
