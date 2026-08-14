@@ -157,6 +157,11 @@ website:
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
 
+        - section: "Inventory"
+          contents:
+
+            - recipes/tunnel_inventory.qmd
+
         - section: "IO"
           contents:
 
