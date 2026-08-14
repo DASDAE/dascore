@@ -2313,7 +2313,7 @@ class Inventory(InventoryModel):
                 "Load a path with dascore.inventory."
             )
             raise InvalidInventoryError(msg)
-        yaml = optional_import("yaml", required_for="YAML inventory serialization")
+        yaml = optional_import("yaml", required_for="YAML inventory parsing")
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as error:

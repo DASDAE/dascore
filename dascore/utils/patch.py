@@ -1130,7 +1130,6 @@ def check_dims(
     """
     validate_warn_level(check_behavior)
     dims1, dims2 = patch1.dims, patch2.dims
-    dims_ok = True
     if not intersection and patch1.dims == patch2.dims:
         return True
     dset1, dset2 = set(dims1), set(dims2)
@@ -1141,7 +1140,9 @@ def check_dims(
         f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
-    return dims_ok
+    # The quiet policies skip the patch rather than accept it, as
+    # check_coords does; saying True here stacked it anyway.
+    return False
 
 
 def check_coords(

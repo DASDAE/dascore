@@ -785,9 +785,11 @@ class TestStackPatches:
         # Or a warning issued.
         with pytest.warns(UserWarning, match=msg):
             stack_patches(spool, dim_vary="time", check_behavior="warn")
-        # Or the incompatible patch skipped without a word.
+        # Or the incompatible patch skipped without a word -- skipped
+        # being the point: a quiet policy must not stack it anyway.
         with suppress_warnings(action="error"):
-            stack_patches(spool, dim_vary="time", check_behavior="ignore")
+            quiet = stack_patches(spool, dim_vary="time", check_behavior="ignore")
+        assert np.allclose(quiet.data, patch1.data)
 
     def test_retired_check_behavior_raises(self, random_spool):
         """None used to mean "ignore"; one spelling of it survives."""
@@ -804,11 +806,14 @@ class TestStackPatches:
 
     def test_different_dimensions(self, random_spool):
         """Tests for when the spool has patches with different dimensions."""
+        first = random_spool[1]
         new_patch = random_spool[0].rename_coords(time="money")
-        spool = dc.spool([random_spool[1], new_patch])
+        spool = dc.spool([first, new_patch])
         msg = "not compatible for merging"
         with pytest.warns(UserWarning, match=msg):
-            stack_patches(spool, dim_vary="time", check_behavior="warn")
+            out = stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # The mismatched patch is left out rather than summed in.
+        assert np.allclose(out.data, first.data)
 
     def test_bad_dim_vary(self, random_spool):
         """Ensure when dim_vary is not in patch an error is raised."""
