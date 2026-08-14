@@ -332,7 +332,7 @@ class Spool(NamespaceOwner):
             return NotImplemented
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        members = [self._as_catalog_member(), other._as_catalog_member()]
+        members = [self._as_union_member(), other._as_union_member()]
         union = PatchCatalog.union(members)
         new = Spool()
         new._catalog = union
@@ -546,7 +546,7 @@ class Spool(NamespaceOwner):
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
         if not query.channels:
-            removed = self.select(_attrs=stated)._catalog._ordered_ids()
+            removed = self.select(_attrs=stated)._catalog.ordered_ids()
             return self._restrict_to_rows(removed, keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
@@ -556,7 +556,7 @@ class Spool(NamespaceOwner):
         return self._select_channels(
             stated_channels(query.channels),
             complement=True,
-            applies_to=matched._catalog._ordered_ids(),
+            applies_to=matched._catalog.ordered_ids(),
         )
 
     def _classify_query(self, _attrs, _coords, kwargs) -> _InventoryQuery:
@@ -720,7 +720,7 @@ class Spool(NamespaceOwner):
         the row as it now stands, so a range which has already trimmed a
         row inside one epoch leaves it resolvable.
         """
-        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
         if not len(ids):
             return self
         backend = self._catalog.backend
@@ -739,7 +739,7 @@ class Spool(NamespaceOwner):
             # the verdict for the stated rows and False everywhere else.
             index_ids = (
                 np.asarray(
-                    self._catalog.select(_attrs={name: selector})._ordered_ids(),
+                    self._catalog.select(_attrs={name: selector}).ordered_ids(),
                     dtype=np.int64,
                 )
                 if name in known
@@ -1266,7 +1266,7 @@ class Spool(NamespaceOwner):
         which rows a spool holds without saying anything about how they
         come out.
         """
-        ids = np.asarray(self._catalog._ordered_ids(), dtype=np.int64)
+        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
         named = np.isin(ids, np.asarray(patch_ids, dtype=np.int64))
         mask = named if keep else ~named
         if mask.all():
@@ -1462,39 +1462,16 @@ class Spool(NamespaceOwner):
         new._catalog = catalog
         return new
 
-    def _as_catalog_member(self):
+    def _as_union_member(self):
         """
-        Return (catalog, patch_ids) describing this spool for a union.
+        Return the catalog which represents this spool in a union.
 
-        Row membership (attr predicates, windows, id arrays) survives a
-        table union as-is, but residual trims and order specs live
-        Python-side and would silently vanish; a spool carrying those
-        first bakes them into a derived catalog (tables only — no patch
-        data is loaded). A catalog default order (directory time
-        presentation) bakes only when the source-record transfer would
-        actually present rows differently — an interleaved multi-patch
-        file — so ordinary archives keep record-grain transfer and its
-        same-source deduplication.
+        A view whose state a table transfer would lose first bakes it
+        into a derived catalog (tables only — no patch data is loaded);
+        `PatchCatalog.transfer_is_lossy` is what knows which those are.
         """
         catalog = self._catalog
-        if catalog._residuals or catalog._order is not None:
-            return self._materialize_lossy(), None
-        if catalog._default_order is not None and not self._transfer_keeps_order():
-            return self._materialize_lossy(), None
-        return catalog, None
-
-    def _transfer_keeps_order(self) -> bool:
-        """True when ordinal-grain transfer matches the presented order."""
-        catalog = self._catalog
-        presented = catalog._ordered_ids()
-        by_ordinal = tuple(
-            catalog.backend.query_ids(
-                list(catalog._queries) or None,
-                order_by=None,
-                patch_ids=catalog._ids,
-            )
-        )
-        return tuple(presented) == by_ordinal
+        return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
     def _materialize_lossy(self):
         """
@@ -1508,7 +1485,7 @@ class Spool(NamespaceOwner):
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
         rows = self._df.reset_index(drop=True)
-        working = samples_adjusted_envelopes(rows, self._catalog._residuals)
+        working = samples_adjusted_envelopes(rows, self._catalog.residuals)
         working = working.reset_index(drop=True)
         ids = np.arange(len(working), dtype=np.int64)
         # outputs are not file rows: source bookkeeping stays on the
@@ -1560,7 +1537,7 @@ class Spool(NamespaceOwner):
             base = self._catalog.to_df().reset_index(drop=True)
         base = _ensure_patch_id(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
-        working = samples_adjusted_envelopes(working, self._catalog._residuals)
+        working = samples_adjusted_envelopes(working, self._catalog.residuals)
         base = base[base["_patch_id"].isin(working["_patch_id"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -1861,7 +1838,7 @@ class Spool(NamespaceOwner):
     @property
     def indexer(self):
         """The directory syncer, or None for non-directory spools."""
-        return self._catalog._syncer
+        return self._catalog.syncer
 
     @property
     def spool_path(self):
@@ -1905,7 +1882,7 @@ class Spool(NamespaceOwner):
         )
         if catalog.is_view:
             raise InvalidSpoolError(derived_msg)
-        if catalog._syncer is not None:
+        if catalog.syncer is not None:
             catalog.update(progress=progress)
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
@@ -2011,10 +1988,8 @@ class Spool(NamespaceOwner):
         # value residuals already trim the presented envelopes (to_df);
         # samples residuals fold in here. Presented-but-empty rows stay:
         # a spool exposing an emptied patch is not equal to one without.
-        if catalog is not None and catalog._residuals:
-            rows = samples_adjusted_envelopes(
-                rows, catalog._residuals, drop_empty=False
-            )
+        if catalog is not None and catalog.residuals:
+            rows = samples_adjusted_envelopes(rows, catalog.residuals, drop_empty=False)
         return {"rows": _strip_identity(rows)}
 
     def __rich__(self):

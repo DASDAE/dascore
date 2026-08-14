@@ -9,8 +9,8 @@ from threading import Barrier
 import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index import get_backend
-from dascore.io.index.schema import INDEX_VERSION, TABLES
+from dascore.io.index.backend import get_backend
+from dascore.io.index.schema import INDEX_VERSION, TABLES, TYPE_MAP
 
 
 class TestSchemaDeclaration:
@@ -19,13 +19,10 @@ class TestSchemaDeclaration:
     def test_stored_columns_match_declaration(self, tmp_path):
         """A created index has each table's declared columns and types."""
         backend = get_backend(tmp_path / "index.sqlite3")
-        dialect = backend.dialect
         for table, columns in TABLES.items():
             info = backend._con.execute(f'PRAGMA table_info("{table}")').fetchall()
             stored = {row[1]: row[2] for row in info}
-            expected = {
-                name: dialect.type_map[logical] for name, logical in columns.items()
-            }
+            expected = {name: TYPE_MAP[logical] for name, logical in columns.items()}
             assert stored == expected
         backend.close()
 
@@ -58,10 +55,27 @@ class TestSchemaValidation:
         assert backend._con.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
         tables = backend._existing_tables()
         assert set(TABLES) <= tables
-        with pytest.raises(sqlite3.IntegrityError):
+        # dims is supplied so the row fails on the foreign key rather than
+        # on the NOT NULL check, which would pass with no FK declared.
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_id) "
-                "VALUES (1, 999, '0')"
+                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "VALUES (1, 999, '0', 'time')"
+            )
+        backend.close()
+
+    def test_patch_dims_are_never_null(self, tmp_path):
+        """The column states an invariant every ingest path already keeps."""
+        backend = get_backend(tmp_path / "index.sqlite3")
+        backend._execute(
+            "INSERT INTO sources (source_id, base_uri, source_path, source_format, "
+            "format_version, mtime_ns, size_bytes, path_attrs, last_indexed_ns, "
+            "ordinal) VALUES (1, '', 'p', 'DASDAE', '1', 0, 0, NULL, 0, 0)"
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="dims"):
+            backend._execute(
+                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "VALUES (1, 1, '0', NULL)"
             )
         backend.close()
 

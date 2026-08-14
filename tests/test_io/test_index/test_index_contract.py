@@ -17,9 +17,9 @@ import pytest
 import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
-from dascore.io.index import Query, get_backend, summaries_to_records
-from dascore.io.index.backend import resolve_query
-from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.io.index.backend import get_backend
+from dascore.io.index.ingest import summaries_to_records
+from dascore.io.index.query import InvalidSpoolQueryError, Query, resolve_query
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.units import get_quantity
 
@@ -159,7 +159,7 @@ class TestFlatRelation:
     def test_structural_columns(self, backend):
         """Structural columns."""
         df = backend.query()
-        for col in ("source_path", "source_format", "source_version", "dims", "shape"):
+        for col in ("source_path", "source_format", "source_version", "dims"):
             assert col in df.columns
         assert pd.api.types.is_datetime64_dtype(df["time_min"])
         assert pd.api.types.is_timedelta64_dtype(df["time_step"])
@@ -374,28 +374,42 @@ class TestNameResolution:
 
     def test_attr_wins(self, backend):
         """Attr wins."""
-        query = resolve_query(backend, station="STA1")
+        query = resolve_query(
+            backend.attr_names(), backend.coord_names(), station="STA1"
+        )
         assert "station" in query.attrs
 
     def test_coord_fallback(self, backend):
         """Coord fallback."""
-        query = resolve_query(backend, lag_time=(0, 1))
+        query = resolve_query(
+            backend.attr_names(), backend.coord_names(), lag_time=(0, 1)
+        )
         assert "lag_time" in query.coords
 
     def test_unknown_raises(self, backend):
         """Unknown raises."""
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
-            resolve_query(backend, wavelength=(1, 2))
+            resolve_query(
+                backend.attr_names(), backend.coord_names(), wavelength=(1, 2)
+            )
 
     def test_double_specification_raises(self, backend):
         """Double specification raises."""
         with pytest.raises(InvalidSpoolQueryError, match="both"):
-            resolve_query(backend, station="STA1", _attrs={"station": "STA2"})
+            resolve_query(
+                backend.attr_names(),
+                backend.coord_names(),
+                station="STA1",
+                _attrs={"station": "STA2"},
+            )
 
     def test_explicit_namespaces(self, backend):
         """Explicit namespaces."""
         query = resolve_query(
-            backend, _attrs={"tag": "raw"}, _coords={"distance": (0, 10)}
+            backend.attr_names(),
+            backend.coord_names(),
+            _attrs={"tag": "raw"},
+            _coords={"distance": (0, 10)},
         )
         assert query.attrs == {"tag": "raw"} and "distance" in query.coords
 

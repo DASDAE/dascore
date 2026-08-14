@@ -21,10 +21,11 @@ import numpy as np
 import pandas as pd
 
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
-from dascore.io.index.dialect import SQLiteDialect
 from dascore.io.index.ingest import typed_value
+from dascore.io.index.schema import glob_expr, quote
 from dascore.units import convert_units
 from dascore.utils.misc import is_range
+from dascore.utils.pd import resolve_selector_namespaces
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -240,7 +241,6 @@ class _Where:
 
 def build_attr_clause(
     where: _Where,
-    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     name: str,
     value,
@@ -261,7 +261,7 @@ def build_attr_clause(
     }
 
     def col(kind):
-        return f"a.{dialect.quote(columns[kind])}"
+        return f"a.{quote(columns[kind])}"
 
     if isinstance(value, re.Pattern):
         # Regex is a residual filter; SQL only requires the attr be
@@ -313,7 +313,7 @@ def build_attr_clause(
         if "str" not in kinds:
             where.add("FALSE")
             return None
-        where.add(dialect.glob(col("str")), value)
+        where.add(glob_expr(col("str")), value)
         return None
     typed = _coerce_scalar(value, kinds)
     kind = typed.kind
@@ -492,7 +492,6 @@ def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
 
 def build_coord_clause(
     where: _Where,
-    dialect: SQLiteDialect,
     coord_meta: pd.DataFrame,
     name: str,
     value,
@@ -594,7 +593,6 @@ def build_coord_clause(
 
 def _build_where(
     queries: list[Query],
-    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
 ) -> tuple[_Where, list[tuple[str, re.Pattern]]]:
@@ -603,11 +601,11 @@ def _build_where(
     residuals: list[tuple[str, re.Pattern]] = []
     for one in queries:
         for name, value in one.attrs.items():
-            residual = build_attr_clause(where, dialect, attr_meta, name, value)
+            residual = build_attr_clause(where, attr_meta, name, value)
             if residual is not None:
                 residuals.append((name, residual))
         for name, value in one.coords.items():
-            build_coord_clause(where, dialect, coord_meta, name, value)
+            build_coord_clause(where, coord_meta, name, value)
     return where, residuals
 
 
@@ -618,7 +616,7 @@ _HOT_COORDS = ("time", "distance")
 
 
 def _order_clause(
-    order_by, dialect: SQLiteDialect, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
+    order_by, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
 ) -> tuple[str, list]:
     """
     Resolve an order spec into an ORDER BY clause and its parameters.
@@ -633,7 +631,7 @@ def _order_clause(
     direction = "ASC" if ascending else "DESC"
     params: list = []
     if kind == "coord" and name in _HOT_COORDS:
-        column = f"p.{dialect.quote(f'{name}_min')}"
+        column = f"p.{quote(f'{name}_min')}"
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
         # a coord observed under several kinds orders by its first kind
@@ -647,7 +645,7 @@ def _order_clause(
         params.append(name)
     else:
         rows = attr_meta[attr_meta["attr_name"] == name]
-        columns = [dialect.quote(c) for c in rows["column_name"]]
+        columns = [quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
         column = f"a.{columns[0]}"
     # rows without a value sort last regardless of direction (matching
@@ -660,7 +658,6 @@ def _order_clause(
 
 def build_sql(
     query: Query | Sequence[Query],
-    dialect: SQLiteDialect,
     attr_meta: pd.DataFrame,
     coord_meta: pd.DataFrame,
     count: bool = False,
@@ -688,7 +685,7 @@ def build_sql(
     back to a projected count.
     """
     queries = _as_query_list(query)
-    where, residuals = _build_where(queries, dialect, attr_meta, coord_meta)
+    where, residuals = _build_where(queries, attr_meta, coord_meta)
     if patch_ids is not None:
         where.add(
             "p.patch_id IN (SELECT value FROM json_each(?))",
@@ -699,7 +696,7 @@ def build_sql(
         sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
         return sql, where.params, residuals
     if order_by is not None:
-        order, order_params = _order_clause(order_by, dialect, attr_meta, coord_meta)
+        order, order_params = _order_clause(order_by, attr_meta, coord_meta)
     else:
         # the ordering contract: source ordinal, then file-internal order
         order, order_params = "ORDER BY s.ordinal, p.patch_id", []
@@ -707,10 +704,10 @@ def build_sql(
     if ids_only:
         sql = f"SELECT p.patch_id {_FROM}WHERE {where.sql} {order}"
         return sql, params, residuals
-    # attr columns selected explicitly: `a.*` would duplicate patch_id and
-    # engines disagree on how to dedupe result column names.
+    # attr columns selected explicitly: `a.*` would duplicate patch_id,
+    # and the duplicate's spelling in the result is not worth relying on.
     attr_cols = "".join(
-        f", a.{dialect.quote(col)}" for col in attr_meta["column_name"].unique()
+        f", a.{quote(col)}" for col in attr_meta["column_name"].unique()
     )
     sql = (
         "SELECT s.source_path, s.base_uri, s.source_format, s.format_version, "
@@ -743,3 +740,79 @@ def apply_residuals(
         )
         df = df[keep]
     return df
+
+
+def resolve_query(
+    attr_names: set[str],
+    coord_names: set[str],
+    /,
+    _attrs=None,
+    _coords=None,
+    **kwargs,
+) -> Query:
+    """
+    Resolve bare kwargs into a Query: attrs first, then coords.
+
+    Implements section 1 of the selector spec; raises on unknown names or
+    names supplied in more than one namespace. The name sets are
+    positional-only because every remaining keyword is a user's selector,
+    and an attr happening to be called `coord_names` is theirs to select on.
+    """
+
+    def _drop_noops(mapping: dict) -> dict:
+        """Bare None/... selectors are no-ops, matching Patch.select."""
+        return {k: v for k, v in mapping.items() if v is not None and v is not Ellipsis}
+
+    def _shape_coord_selector(name: str, value):
+        """
+        Normalize one coordinate selector to the spec's accepted shapes.
+
+        Coordinates select by range — a (start, stop) tuple or slice
+        with None/... open ends (a 2-element list is the legacy range
+        form) — or by a patch-local boolean mask. Scalars and value
+        membership have no exact patch-level meaning and raise here,
+        eagerly, rather than failing when a patch is materialized.
+        """
+        if value is None or value is Ellipsis:
+            return value
+        is_bool_array = (isinstance(value, np.ndarray) and value.dtype == np.bool_) or (
+            isinstance(value, list)
+            and value
+            and all(isinstance(x, bool | np.bool_) for x in value)
+        )
+        if is_bool_array:
+            # A sample mask is positional/absolute, so it is only defined
+            # when every patch shares the coordinate's size — a guarantee
+            # spools never make — and it can never reduce file reads.
+            msg = (
+                f"Coordinate {name!r} no longer accepts boolean sample "
+                "masks at the spool level; apply them per patch, e.g. "
+                "spool.map(lambda p: p.select(...)). Boolean arrays over "
+                "patches (spool[mask]) still select membership."
+            )
+            raise InvalidSpoolQueryError(msg)
+        if isinstance(value, tuple | list):
+            # range-like: a (start, stop) pair (2-element list is the
+            # legacy range form). Wrong arity is a malformed range.
+            if len(value) != 2:
+                msg = f"Coordinate range for {name!r} must be a length 2 sequence."
+                raise ParameterError(msg)
+            # canonicalize the open-end sentinel so equivalent selections
+            # (None vs ...) stay equivalent downstream (e.g. spool __eq__)
+            return tuple(None if v is Ellipsis else v for v in value)
+        msg = (
+            f"Coordinate {name!r} accepts range selectors (a (start, stop) "
+            "tuple or slice, None/... for open ends); scalar, membership, "
+            f"and boolean-mask values are not supported. Got {value!r}."
+        )
+        raise InvalidSpoolQueryError(msg)
+
+    attrs, coords = resolve_selector_namespaces(
+        attr_names,
+        coord_names,
+        _attrs=_attrs,
+        _coords=_coords,
+        kwargs=kwargs,
+    )
+    coords = {k: _shape_coord_selector(k, v) for k, v in coords.items()}
+    return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))

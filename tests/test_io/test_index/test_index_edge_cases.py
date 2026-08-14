@@ -35,13 +35,11 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.core import is_directory_format
-from dascore.io.index import Query, summaries_to_records
 from dascore.io.index.backend import (
-    SQLIndexBackend,
+    SQLiteIndexBackend,
     _ns_to_time,
     adapt_params,
     get_backend,
-    resolve_query,
 )
 from dascore.io.index.catalog import LiveResolver, PatchCatalog
 from dascore.io.index.indexer import (
@@ -54,17 +52,19 @@ from dascore.io.index.ingest import (
     _py_scalar,
     assemble_source_records,
     patch_record,
+    summaries_to_records,
     typed_value,
 )
 from dascore.io.index.ingest import (
     summaries_to_records as s2r,
 )
-from dascore.io.index.lite import SQLiteBackend
 from dascore.io.index.query import (
     _UNSET,
     InvalidSpoolQueryError,
+    Query,
     _range_bounds,
     _to_target_unit,
+    resolve_query,
 )
 from dascore.units import get_quantity, m, s
 from dascore.units import get_quantity as _gq
@@ -213,7 +213,7 @@ class TestIndexCoverageEdges:
         path = tmp_path / "i.sqlite3"
         get_backend(path).close()
         con = sqlite3.connect(path)
-        con.execute("ALTER TABLE patches DROP COLUMN n_dims")
+        con.execute("ALTER TABLE patches DROP COLUMN dtype")
         con.commit()
         con.close()
         with pytest.raises(InvalidIndexError, match="missing columns"):
@@ -231,7 +231,7 @@ class TestIndexCoverageEdges:
     def test_schema_creation_rolls_back_on_failure(self, tmp_path):
         """A failure while creating the schema rolls back and re-raises."""
 
-        class _BoomBackend(SQLiteBackend):
+        class _BoomBackend(SQLiteIndexBackend):
             def _execute(self, sql, params=()):
                 if "INSERT INTO meta_data" in sql:
                     raise RuntimeError("boom during schema init")
@@ -243,7 +243,7 @@ class TestIndexCoverageEdges:
     def test_schema_commit_failure_rolls_back(self, tmp_path):
         """A schema commit failure follows the protected rollback path."""
 
-        class _CommitBoomBackend(SQLiteBackend):
+        class _CommitBoomBackend(SQLiteIndexBackend):
             rolled_back = False
 
             def _commit(self):
@@ -283,7 +283,7 @@ class TestPureHelpers:
 
     def test_memory_backend_refuses_pickle(self):
         """An in-memory backend cannot be pickled (owners serialize rows)."""
-        back = SQLiteBackend(":memory:")
+        back = SQLiteIndexBackend(":memory:")
         try:
             with pytest.raises(TypeError, match="cannot be pickled"):
                 pickle.dumps(back)
@@ -303,8 +303,8 @@ class TestPureHelpers:
 
     def test_units_compatible(self):
         """_units_compatible is True for same dimensionality, False otherwise."""
-        assert SQLIndexBackend._units_compatible("m", "ft") is True
-        assert SQLIndexBackend._units_compatible("m", "s") is False
+        assert SQLiteIndexBackend._units_compatible("m", "ft") is True
+        assert SQLiteIndexBackend._units_compatible("m", "s") is False
 
     def test_legacy_index_check_missing_path(self, tmp_path):
         """A path that does not exist is not a legacy/foreign index."""
@@ -566,7 +566,8 @@ class TestResolveQueryErrors:
         """A name cannot be supplied in both explicit namespaces."""
         with pytest.raises(InvalidSpoolQueryError, match="both _attrs and _coords"):
             resolve_query(
-                backend,
+                backend.attr_names(),
+                backend.coord_names(),
                 _attrs={"distance": (0, 1)},
                 _coords={"distance": (0, 1)},
             )
@@ -574,12 +575,16 @@ class TestResolveQueryErrors:
     def test_unknown_attr_in_explicit_namespace(self, backend):
         """Unknown key in _attrs raises."""
         with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
-            resolve_query(backend, _attrs={"nope": 1})
+            resolve_query(
+                backend.attr_names(), backend.coord_names(), _attrs={"nope": 1}
+            )
 
     def test_unknown_coord_in_explicit_namespace(self, backend):
         """Unknown key in _coords raises."""
         with pytest.raises(InvalidSpoolQueryError, match="not a coordinate"):
-            resolve_query(backend, _coords={"nope": (1, 2)})
+            resolve_query(
+                backend.attr_names(), backend.coord_names(), _coords={"nope": (1, 2)}
+            )
 
 
 class TestQueryValueEdges:
@@ -649,7 +654,9 @@ class TestQueryValueEdges:
     def test_slice_range_form(self, backend):
         """Slices resolve to the same range tuples patch selects accept."""
         lo = np.datetime64("2024-06-01T00:00:00", "ns")
-        query = resolve_query(backend, time=slice(lo, None))
+        query = resolve_query(
+            backend.attr_names(), backend.coord_names(), time=slice(lo, None)
+        )
         assert query.coords["time"] == (lo, None)
         df = backend.query(query)
         assert list(df["tag"]) == ["extra"]
@@ -912,6 +919,22 @@ class TestIngestEdges:
             records = s2r([summary])
         assert "patch_id" not in records[0].patches[0].attrs
 
+    @pytest.mark.parametrize("name", ["shape", "n_dims", "sample_count_total"])
+    def test_dropped_columns_stay_reserved(self, random_patch, name):
+        """
+        Version 9 dropped these columns; the names keep their meaning.
+
+        Un-reserving one turns it into an ordinary indexed attr, which
+        chunk then refuses to merge two patches over.
+        """
+        patches = [
+            p.update_attrs(history=[], **{name: str(i)})
+            for i, p in enumerate(dc.get_example_spool("random_das"))
+        ]
+        with pytest.warns(UserWarning, match="reserved attr name"):
+            merged = dc.spool(patches).chunk(time=None)
+        assert len(merged) == 1
+
     @pytest.mark.parametrize("dtype", ["", np.dtype(bool)])
     def test_unsupported_coord_dtype_skipped(self, dtype):
         """A coord with a missing or unsupported dtype produces no record."""
@@ -1005,8 +1028,12 @@ class TestIndexerEdges:
     def test_auto_update_on_first_query(self, tmp_path, random_patch):
         """A brand-new index triggers one update on first query."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
-        indexer = DBDirectoryIndexer(tmp_path)
-        assert len(indexer()) == 1  # no explicit update() call
+        # no explicit update() call; the spool's first query triggers one
+        spool = dc.spool(tmp_path)
+        try:  # release the index handle so Windows can clean the temp dir
+            assert len(spool) == 1
+        finally:
+            spool.indexer.close()
 
     def test_empty_index_file_updates_on_first_query(self, tmp_path, random_patch):
         """A pre-created empty SQLite path is still a new index."""
@@ -1014,7 +1041,17 @@ class TestIndexerEdges:
         index_path = tmp_path / "empty.sqlite3"
         index_path.touch()
         indexer = DBDirectoryIndexer(tmp_path, index_path=index_path)
-        assert len(indexer()) == 1
+        try:
+            # the pre-created path is the index, and the first query fills it
+            assert indexer.index_path == index_path
+            spool = dc.spool(tmp_path)
+            try:
+                assert spool.indexer.index_path == index_path
+                assert len(spool) == 1
+            finally:
+                spool.indexer.close()
+        finally:  # both handles, so Windows can clean the temp dir
+            indexer.close()
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
@@ -1035,8 +1072,11 @@ class TestIndexerEdges:
             with (sub / name).open("wb") as fi:
                 rand.tofile(fi)
         indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
-        df = indexer()
-        assert len(df) == 2
+        spool = dc.spool(tmp_path).update(progress=None)
+        try:
+            assert len(spool) == 2
+        finally:
+            spool.indexer.close()
         # unchanged: second update rescans nothing
         before = indexer._backend.get_sources()["last_indexed_ns"].max()
         indexer.update(progress=None)
@@ -1268,7 +1308,7 @@ class TestResourceCleanup:
     @pytest.mark.concurrency
     def test_finalization_from_worker_thread(self):
         """Dropping the last backend reference off-thread does not raise."""
-        holder = [SQLiteBackend(":memory:")]
+        holder = [SQLiteIndexBackend(":memory:")]
         unraisable = []
         original = sys.unraisablehook
 

@@ -17,15 +17,21 @@ instantiated. A frame holding only some of a table's columns
 still uses its table's row class; only the columns actually fetched can
 be read, and nullable ones may arrive as NaN rather than None (reading
 code guards with `pd.isnull`).
+
+The bottom of the module holds the other half of that translation: the
+SQLite spellings the logical types become, and the DDL built from them.
+It lives here because both the query builder and the backend need it and
+this module imports nothing which could import them back.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 8
+INDEX_VERSION = 9
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -97,11 +103,8 @@ class PatchRow(NamedTuple):
     patch_id: int
     source_id: int
     source_patch_id: str
-    n_dims: int
     dims: str
-    shape: str
     dtype: str  # the data array's dtype, eg "float64"
-    sample_count_total: int | None
     time_min: int | None  # epoch ns; NULL for relative-time patches
     time_max: int | None
     time_step: int | None
@@ -160,7 +163,6 @@ class CoordDefRow(NamedTuple):
     step_ns: int | None
     min_str: str | None
     max_str: str | None
-    is_monotonic: bool | None
     is_relative: bool | None
 
 
@@ -224,6 +226,10 @@ TABLE_CONSTRAINTS = MappingProxyType(
         ),
         "patches": (
             "PRIMARY KEY (patch_id)",
+            # Every ingest path joins a string here, so this cannot fire
+            # today; it states the invariant where the schema states its
+            # other invariants, for a writer which does not yet exist.
+            "CHECK (dims IS NOT NULL)",
             "UNIQUE (source_id, source_patch_id)",
             "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
         ),
@@ -240,7 +246,6 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "PRIMARY KEY (coord_def_id)",
             "UNIQUE (def_key)",
             "CHECK (value_kind IN ('num', 'time', 'str'))",
-            "CHECK (is_monotonic IS NULL OR is_monotonic IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
@@ -267,10 +272,15 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "mtime_ns",
         "size_bytes",
         "path_attrs",
-        "n_dims",
         "dims",
-        "shape",
         "dtype",
+        # These named structural columns until version 9 dropped them.
+        # They stay reserved: the spool gives them a meaning whether or
+        # not a column holds one, and un-reserving a name silently turns
+        # it into an ordinary attr, which chunk then refuses to merge
+        # patches over.
+        "n_dims",
+        "shape",
         "sample_count_total",
         "coord_def_id",
         "def_key",
@@ -304,11 +314,6 @@ RESERVED_ATTR_COLUMNS = frozenset(
     }
 )
 
-# Structural columns the spool machinery must not see: unique-per-patch
-# values block chunk merge-compatibility grouping, which compares all
-# non-private columns.
-SPOOL_HIDDEN_COLUMNS = ("n_dims", "sample_count_total", "shape")
-
 # Structural columns the spool relation carries *privately*. The leading
 # underscore is load-bearing, not cosmetic: chunk's merge-compatibility
 # grouping and conflict policing both compare all non-private columns, so
@@ -322,3 +327,49 @@ SPOOL_PRIVATE_RENAMES = MappingProxyType({"patch_id": "_patch_id", "dtype": "_dt
 # source_patch_id), coord_defs(def_key) — and duplicating them measured
 # ~25% extra file size and slower writes for no query gain.
 INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
+
+
+# --- SQL generation -----------------------------------------------------
+#
+# The engine-specific half of the schema: type names, quoting, glob
+# matching, and DDL. It lives here, beside the logical types it
+# translates, because both the query builder and the backend need it and
+# this module imports nothing which could import them back.
+
+# Logical type -> engine type. SQLite STRICT tables accept
+# INTEGER/REAL/TEXT (and INTEGER for bool).
+TYPE_MAP = MappingProxyType(
+    {
+        "int64": "INTEGER",
+        "float64": "REAL",
+        "str": "TEXT",
+        "bool": "INTEGER",
+    }
+)
+
+
+def quote(identifier: str) -> str:
+    """Quote an identifier."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def glob_expr(column_sql: str) -> str:
+    """Return a parametrized unix-glob match expression."""
+    return f"{column_sql} GLOB ?"
+
+
+def create_table_sql(
+    name: str, columns: Mapping[str, str], constraints: tuple[str, ...] = ()
+) -> str:
+    """Return DDL for one table from logical column types."""
+    definitions = [f"{quote(col)} {TYPE_MAP[typ]}" for col, typ in columns.items()]
+    definitions.extend(constraints)
+    return f"CREATE TABLE IF NOT EXISTS {quote(name)} ({', '.join(definitions)}) STRICT"
+
+
+def add_column_sql(table: str, column: str, logical_type: str) -> str:
+    """Return DDL to add one nullable column."""
+    return (
+        f"ALTER TABLE {quote(table)} "
+        f"ADD COLUMN {quote(column)} {TYPE_MAP[logical_type]}"
+    )

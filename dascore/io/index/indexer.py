@@ -26,20 +26,18 @@ from dascore.config import config_attr
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.core import is_directory_format
-from dascore.io.index.backend import get_backend, resolve_query
+from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     SourceRecord,
     hive_path_attrs,
     summaries_to_records,
 )
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (
     coerce_to_local_path,
     directory_writable,
     requires_local_directory,
 )
-from dascore.utils.pd import present_units_columns
 
 
 def _path_digest(path) -> str:
@@ -449,22 +447,6 @@ class DBDirectoryIndexer:
             self._backend.mark_initial_update_done()
             self._initial_update_done = True
         return self
-
-    def get_contents(self, _attrs=None, _coords=None, **kwargs) -> pd.DataFrame:
-        """
-        Query the index, returning the spool-facing flat relation.
-
-        Bare kwargs resolve attrs-first then coords; `_attrs`/`_coords`
-        disambiguate explicitly (see the selector semantics spec).
-        """
-        self.ensure_updated()
-        query = resolve_query(self._backend, _attrs=_attrs, _coords=_coords, **kwargs)
-        df = self._backend.query(query)
-        df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore")
-        df = df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
-        return present_units_columns(df)
-
-    __call__ = get_contents
 
     def close(self) -> None:
         """Close the backend."""

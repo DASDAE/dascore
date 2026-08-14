@@ -126,7 +126,7 @@ class TestHiveIndexing:
         patch.io.write(tmp_path / "plain_file.h5", "dasdae")
         spool = Spool.from_directory(tmp_path).update(progress=None)
         try:
-            df = spool.indexer.get_contents()
+            df = spool.get_contents()
             assert df["_path_attrs"].isnull().all()
             assert "cable" not in df.columns
         finally:
@@ -250,13 +250,13 @@ class TestMoveDetection:
 
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
         """Renaming a partition directory never re-reads file contents."""
-        df_before = hive_spool.indexer.get_contents()
+        df_before = hive_spool.get_contents()
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
         updated = hive_spool.update(progress=None)
         assert not scan_calls
-        df = updated.indexer.get_contents()
+        df = updated.get_contents()
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
@@ -355,7 +355,7 @@ class TestEdgeCases:
         )
         hive_spool.indexer.update(paths=[hive_dir / "does_not_exist"], progress=None)
         assert not scan_calls
-        assert hive_spool.indexer.get_contents()["station"].iloc[0] == "R"
+        assert hive_spool.get_contents()["station"].iloc[0] == "R"
 
     def test_old_index_version_rebuilds(self, hive_dir):
         """An index stamped with an older version rebuilds transparently."""
