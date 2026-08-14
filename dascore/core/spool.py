@@ -332,7 +332,7 @@ class Spool(NamespaceOwner):
             return NotImplemented
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        members = [self._as_catalog_member(), other._as_catalog_member()]
+        members = [self._as_union_member(), other._as_union_member()]
         union = PatchCatalog.union(members)
         new = Spool()
         new._catalog = union
@@ -1462,18 +1462,16 @@ class Spool(NamespaceOwner):
         new._catalog = catalog
         return new
 
-    def _as_catalog_member(self):
+    def _as_union_member(self):
         """
-        Return (catalog, patch_ids) describing this spool for a union.
+        Return the catalog which represents this spool in a union.
 
         A view whose state a table transfer would lose first bakes it
         into a derived catalog (tables only — no patch data is loaded);
         `PatchCatalog.transfer_is_lossy` is what knows which those are.
         """
         catalog = self._catalog
-        if catalog.transfer_is_lossy():
-            return self._materialize_lossy(), None
-        return catalog, None
+        return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
     def _materialize_lossy(self):
         """

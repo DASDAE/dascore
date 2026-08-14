@@ -17,6 +17,11 @@ instantiated. A frame holding only some of a table's columns
 still uses its table's row class; only the columns actually fetched can
 be read, and nullable ones may arrive as NaN rather than None (reading
 code guards with `pd.isnull`).
+
+The bottom of the module holds the other half of that translation: the
+SQLite spellings the logical types become, and the DDL built from them.
+It lives here because both the query builder and the backend need it and
+this module imports nothing which could import them back.
 """
 
 from __future__ import annotations
@@ -221,9 +226,9 @@ TABLE_CONSTRAINTS = MappingProxyType(
         ),
         "patches": (
             "PRIMARY KEY (patch_id)",
-            # A patch with no dims would crash channel placement; ingest
-            # always joins a string, so this states the invariant where
-            # it belongs rather than guarding for it downstream.
+            # Every ingest path joins a string here, so this cannot fire
+            # today; it states the invariant where the schema states its
+            # other invariants, for a writer which does not yet exist.
             "CHECK (dims IS NOT NULL)",
             "UNIQUE (source_id, source_patch_id)",
             "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
@@ -269,6 +274,14 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "path_attrs",
         "dims",
         "dtype",
+        # These named structural columns until version 9 dropped them.
+        # They stay reserved: the spool gives them a meaning whether or
+        # not a column holds one, and un-reserving a name silently turns
+        # it into an ordinary attr, which chunk then refuses to merge
+        # patches over.
+        "n_dims",
+        "shape",
+        "sample_count_total",
         "coord_def_id",
         "def_key",
         # fixed time/distance envelope columns on the patches table: these

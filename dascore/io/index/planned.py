@@ -595,7 +595,7 @@ def derived_catalog(
     )
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_id"])
-    parent_residuals = () if parent is None else parent._residuals
+    parent_residuals = () if parent is None else parent.residuals
     # resolve stored-relative paths once; the derived catalog is
     # root-independent afterwards
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
@@ -676,7 +676,7 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
             int(_row_source_patch_id(row)) for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
-    ranges = _residual_ranges(catalog._residuals)
+    ranges = _residual_ranges(catalog.residuals)
     # `_modified` carries: it says the member is a *trim* of its source
     # rather than the whole of it, which is exactly what the re-plan needs
     # to know. Dropping it left `_build_members` to assume no source was

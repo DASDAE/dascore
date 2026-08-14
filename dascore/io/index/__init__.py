@@ -3,9 +3,9 @@ SQLite spool index package.
 
 Provides a normalized, summary-only index of patch metadata (sources,
 patches, attrs, and coordinates). `PatchCatalog` is the spool-facing
-metadata engine and the only thing outside this package needs; the
-modules below it are the index implementation and are imported directly
-by the few callers (tests, mostly) which have business there.
+metadata engine, and `Query` the shape a selection takes on the way in.
+The modules below them are the index implementation; the few callers
+with business there import from those modules directly.
 """
 
 from __future__ import annotations

@@ -704,8 +704,8 @@ def build_sql(
     if ids_only:
         sql = f"SELECT p.patch_id {_FROM}WHERE {where.sql} {order}"
         return sql, params, residuals
-    # attr columns selected explicitly: `a.*` would duplicate patch_id and
-    # engines disagree on how to dedupe result column names.
+    # attr columns selected explicitly: `a.*` would duplicate patch_id,
+    # and the duplicate's spelling in the result is not worth relying on.
     attr_cols = "".join(
         f", a.{quote(col)}" for col in attr_meta["column_name"].unique()
     )
@@ -743,13 +743,20 @@ def apply_residuals(
 
 
 def resolve_query(
-    attr_names: set[str], coord_names: set[str], _attrs=None, _coords=None, **kwargs
+    attr_names: set[str],
+    coord_names: set[str],
+    /,
+    _attrs=None,
+    _coords=None,
+    **kwargs,
 ) -> Query:
     """
     Resolve bare kwargs into a Query: attrs first, then coords.
 
     Implements section 1 of the selector spec; raises on unknown names or
-    names supplied in more than one namespace.
+    names supplied in more than one namespace. The name sets are
+    positional-only because every remaining keyword is a user's selector,
+    and an attr happening to be called `coord_names` is theirs to select on.
     """
 
     def _drop_noops(mapping: dict) -> dict:

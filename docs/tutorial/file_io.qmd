@@ -166,10 +166,11 @@ path = ex.spool_to_directory(diverse_spool)
 # Create an indexer and update the index. This scans new or changed files
 # (detected by per-file modification time and size), removes entries of
 # deleted files, and creates the index if one does not yet exist.
-indexer = DBDirectoryIndexer(path).update()
+DBDirectoryIndexer(path).update()
 
-# get the contents of the directory's files
-df = indexer.get_contents()
+# The index is queried through a spool, which is also what keeps it current;
+# reaching for the indexer directly only controls *when* scanning happens.
+df = dascore.spool(path).get_contents()
 
 # This dataframe can be used to ascertain data availability, detect gaps, etc.
 ```

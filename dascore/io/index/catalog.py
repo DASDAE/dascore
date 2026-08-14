@@ -521,10 +521,12 @@ class PatchCatalog:
         # member's patches. Dict insertion order keeps first-occurrence
         # position; the merge keeps last-occurrence metadata.
         merged: dict[tuple, SourceRecord] = {}
-        for member in catalogs:
-            catalog, patch_ids = member if isinstance(member, tuple) else (member, None)
-            if patch_ids is None and catalog.is_view:
-                patch_ids = catalog.to_df()["_patch_id"].tolist()
+        for catalog in catalogs:
+            # a view transfers only the rows it presents; a root transfers
+            # all of them, which lets the whole table move as-is
+            patch_ids = (
+                catalog.to_df()["_patch_id"].tolist() if catalog.is_view else None
+            )
             records = catalog.backend.export_records(patch_ids=patch_ids)
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
@@ -733,8 +735,14 @@ class PatchCatalog:
         return tuple(self.ordered_ids()) != by_ordinal
 
     @property
-    def residuals(self) -> tuple:
-        """The value trims this view applies when a patch is materialized."""
+    def residuals(self) -> tuple[tuple[dict, bool], ...]:
+        """
+        The selections applied per patch when it is materialized.
+
+        Each is a ``(coords, samples)`` pair: the coordinate selectors
+        SQL could not answer exactly, and whether they index samples
+        rather than name values.
+        """
         return self._residuals
 
     @property

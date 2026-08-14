@@ -514,7 +514,7 @@ class SQLiteIndexBackend:
         return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
-        """Insert many rows; engines override for faster bulk paths."""
+        """Insert many rows in one statement."""
         if not rows:
             return
         quoted = ", ".join(quote(c) for c in columns)
@@ -536,8 +536,8 @@ class SQLiteIndexBackend:
         """
         Insert or replace sources and all dependent rows, atomically.
 
-        Rows are batched per table (attrs grouped by column signature) so
-        columnar engines aren't punished by row-at-a-time inserts.
+        Rows are batched per table (attrs grouped by column signature)
+        rather than inserted one at a time.
         """
         with self._transaction():
             by_base: dict[str, list[str]] = {}
@@ -940,7 +940,7 @@ class SQLiteIndexBackend:
         for col, flavor in _TIME_COLS.items():
             if col in out:
                 out[col] = _ns_to_time(out[col], flavor)
-        # numeric envelopes: engines return object columns when all-NULL;
+        # numeric envelopes: an all-NULL column arrives as object;
         # downstream sorting needs float64 with NaN, never object None.
         for col in ("distance_min", "distance_max", "distance_step"):
             if col in out:

@@ -919,6 +919,22 @@ class TestIngestEdges:
             records = s2r([summary])
         assert "patch_id" not in records[0].patches[0].attrs
 
+    @pytest.mark.parametrize("name", ["shape", "n_dims", "sample_count_total"])
+    def test_dropped_columns_stay_reserved(self, random_patch, name):
+        """
+        Version 9 dropped these columns; the names keep their meaning.
+
+        Un-reserving one turns it into an ordinary indexed attr, which
+        chunk then refuses to merge two patches over.
+        """
+        patches = [
+            p.update_attrs(history=[], **{name: str(i)})
+            for i, p in enumerate(dc.get_example_spool("random_das"))
+        ]
+        with pytest.warns(UserWarning, match="reserved attr name"):
+            merged = dc.spool(patches).chunk(time=None)
+        assert len(merged) == 1
+
     @pytest.mark.parametrize("dtype", ["", np.dtype(bool)])
     def test_unsupported_coord_dtype_skipped(self, dtype):
         """A coord with a missing or unsupported dtype produces no record."""
@@ -1013,15 +1029,26 @@ class TestIndexerEdges:
         """A brand-new index triggers one update on first query."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         # no explicit update() call; the spool's first query triggers one
-        assert len(dc.spool(tmp_path)) == 1
+        spool = dc.spool(tmp_path)
+        try:  # release the index handle so Windows can clean the temp dir
+            assert len(spool) == 1
+        finally:
+            spool.indexer.close()
 
     def test_empty_index_file_updates_on_first_query(self, tmp_path, random_patch):
         """A pre-created empty SQLite path is still a new index."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         index_path = tmp_path / "empty.sqlite3"
         index_path.touch()
-        DBDirectoryIndexer(tmp_path, index_path=index_path)
-        assert len(dc.spool(tmp_path)) == 1
+        indexer = DBDirectoryIndexer(tmp_path, index_path=index_path)
+        # the pre-created path is the index, and the first query fills it
+        assert indexer.index_path == index_path
+        spool = dc.spool(tmp_path)
+        try:
+            assert spool.indexer.index_path == index_path
+            assert len(spool) == 1
+        finally:
+            spool.indexer.close()
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
@@ -1042,7 +1069,11 @@ class TestIndexerEdges:
             with (sub / name).open("wb") as fi:
                 rand.tofile(fi)
         indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
-        assert len(dc.spool(tmp_path).update(progress=None)) == 2
+        spool = dc.spool(tmp_path).update(progress=None)
+        try:
+            assert len(spool) == 2
+        finally:
+            spool.indexer.close()
         # unchanged: second update rescans nothing
         before = indexer._backend.get_sources()["last_indexed_ns"].max()
         indexer.update(progress=None)
