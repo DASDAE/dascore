@@ -1,18 +1,21 @@
 """
-Index backend interface and SQLite SQL implementation.
+The SQLite index backend.
 
-The backend persists the seven-table schema and answers flat-relation queries.
-Storage hooks remain separate from the write/query logic so the index contract
-has a clear boundary.
+Persists the seven-table schema and answers flat-relation queries. One
+engine, one class: the connection handling, the SQL, and the schema
+management are all SQLite's, and `get_backend` is the seam a second
+engine would reopen.
 """
 
 from __future__ import annotations
 
-import abc
 import json
+import sqlite3
+import threading
 import time
 import warnings
-from contextlib import contextmanager, nullcontext, suppress
+import weakref
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import numpy as np
@@ -22,10 +25,8 @@ import dascore as dc
 from dascore.exceptions import (
     InvalidIndexError,
     InvalidIndexVersionError,
-    ParameterError,
     UnitError,
 )
-from dascore.io.index.dialect import SQLiteDialect
 from dascore.io.index.ingest import (
     SourceRecord,
     assemble_source_records,
@@ -34,7 +35,6 @@ from dascore.io.index.ingest import (
     hive_typed_attrs,
 )
 from dascore.io.index.query import (
-    InvalidSpoolQueryError,
     Query,
     _as_query_list,
     _normalize_unit,
@@ -52,9 +52,11 @@ from dascore.io.index.schema import (
     PatchCoordRow,
     PatchRow,
     SourceRow,
+    add_column_sql,
+    create_table_sql,
+    quote,
 )
 from dascore.units import convert_units
-from dascore.utils.pd import resolve_selector_namespaces
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -100,65 +102,166 @@ def adapt_params(params) -> list:
     return out
 
 
-class SQLIndexBackend(abc.ABC):
+# A serialized SQLite build (threadsafety == 3) lets one connection be
+# used and closed from any thread, so cross-thread garbage collection of
+# a backend is safe. On rarer non-serialized builds the connection is
+# thread-bound and must stay check_same_thread.
+_SQLITE_SERIALIZED = sqlite3.threadsafety == 3
+
+
+def _safe_close(con: sqlite3.Connection) -> None:
+    """
+    Close a connection, tolerating cross-thread finalization.
+
+    On a serialized build closing works from any thread. On a
+    thread-bound build a finalizer firing on another thread would raise
+    ProgrammingError; suppress it (the underlying handle is freed at
+    interpreter teardown) rather than emit an unraisable exception.
+    """
+    with suppress(sqlite3.ProgrammingError):
+        con.close()
+
+
+def _adapt(params):
+    """Convert numpy/py types sqlite3 can't bind natively."""
+    return [int(p) if isinstance(p, bool) else p for p in adapt_params(params)]
+
+
+def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert nullable extension columns back to classic numpy dtypes.
+
+    Fetching with dtype_backend="numpy_nullable" is what keeps nullable
+    INTEGER columns exact (the default assembly rounds >2**53 ns values
+    through float64), but downstream spool code expects classic dtypes.
+    Only int columns that actually hold NULLs stay nullable (Int64) —
+    the exactness they exist for; consumers handle them via isna().
+    """
+    for name in df.columns:
+        col = df[name]
+        dtype = col.dtype
+        if not isinstance(dtype, pd.api.extensions.ExtensionDtype):
+            continue
+        if dtype.kind == "i":
+            if not col.isna().any():
+                df[name] = col.to_numpy(dtype="int64")
+        elif dtype.kind == "f":
+            df[name] = col.to_numpy(dtype="float64", na_value=np.nan)
+        else:  # string/boolean/... -> classic object with None for missing
+            df[name] = col.to_numpy(dtype=object, na_value=None)
+    return df
+
+
+class SQLiteIndexBackend:
     """
     The index backend: persists the schema and answers flat-relation queries.
 
-    Everything above this layer (catalog, indexer) talks to this
-    interface; the abstract methods below are the per-engine hooks the
-    concrete backend (`dascore.io.index.lite.SQLiteBackend`) supplies.
+    Everything above this layer (catalog, indexer) talks to this class.
+    Its state is one SQLite connection, and it is safe to share across
+    threads: statement execution is serialized on a reentrant lock, since
+    a pandas fetch spans many cursor calls and interleaving them corrupts
+    result frames.
     """
 
-    dialect: SQLiteDialect
-
-    def __init__(self):
+    def __init__(self, path: str | Path):
+        self._path = str(path)
+        # On a serialized build, drop the thread affinity so the shared
+        # backend can be used (and finalized) from worker threads, e.g.
+        # a thread-pool Spool.map over one catalog.
+        self._con = sqlite3.connect(
+            self._path, check_same_thread=not _SQLITE_SERIALIZED
+        )
+        # autocommit off; we manage transactions explicitly.
+        self._con.isolation_level = None
+        self._con.execute("PRAGMA foreign_keys = ON")
+        self._con.execute("PRAGMA busy_timeout = 30000")
+        # Catalog views share this backend object, so tying connection
+        # cleanup to *its* collection is safe (close() stays idempotent
+        # for explicit use). The finalizer tolerates cross-thread firing.
+        self._finalizer = weakref.finalize(self, _safe_close, self._con)
+        self._lock = threading.RLock()
         # collision name-sets already warned about (see _apply_attr_columns)
         self._warned_attr_clobber: set[frozenset] = set()
-        self._ensure_schema()
+        try:
+            self._ensure_schema()
+        except Exception:
+            self._con.close()
+            raise
 
-    # --- hooks each engine provides ---------------------------------
+    def __getstate__(self) -> dict:
+        """
+        Pickle by database path; the file is the durable state.
 
-    @abc.abstractmethod
+        This makes file-backed spools usable with process pools: the
+        receiving process reopens its own connection. In-memory backends
+        have no file to reopen; their owners (catalogs) serialize their
+        contents separately and never pickle the backend itself.
+        """
+        if self._path == ":memory:":
+            msg = (
+                "In-memory index backends cannot be pickled; pickle their "
+                "owning catalog/spool instead."
+            )
+            raise TypeError(msg)
+        return {"_path": self._path}
+
+    def __setstate__(self, state: dict) -> None:
+        """Reconnect to the database file."""
+        self.__init__(state["_path"])
+
+    # --- statements ---------------------------------------------------
+
     def _execute(self, sql: str, params=()) -> None:
-        """Execute one statement."""
+        with self._lock:
+            self._con.execute(sql, _adapt(params))
 
-    @abc.abstractmethod
     def _executemany(self, sql: str, seq_of_params) -> None:
-        """Execute one statement for many parameter tuples."""
+        # sqlite3.executemany consumes an iterator, so adapt lazily rather
+        # than materializing a second copy of each already-built batch.
+        with self._lock:
+            self._con.executemany(sql, (_adapt(p) for p in seq_of_params))
 
-    @abc.abstractmethod
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
         """
         Execute a SELECT and return a dataframe.
 
-        Contract: nullable integer columns must round-trip exactly (use a
-        nullable integer dtype, never float64) — ns epochs exceed
-        float64's 2**53 integer range.
+        numpy_nullable assembly keeps nullable INTEGER columns exact; the
+        default path rounds them through float64, corrupting ns epochs
+        (>2**53). A dtype= hint does NOT prevent that: pandas builds
+        float64 first and casts after.
         """
+        with self._lock:
+            df = pd.read_sql_query(
+                sql, self._con, params=_adapt(params), dtype_backend="numpy_nullable"
+            )
+        return _classic_dtypes(df)
 
-    @abc.abstractmethod
     def _begin(self) -> None:
-        """Start a transaction."""
+        self._con.execute("BEGIN IMMEDIATE")
 
-    @abc.abstractmethod
     def _commit(self) -> None:
-        """Commit the open transaction."""
+        self._con.execute("COMMIT")
 
-    @abc.abstractmethod
     def _rollback(self) -> None:
-        """Roll back the open transaction."""
+        self._con.execute("ROLLBACK")
 
-    @abc.abstractmethod
     def _existing_tables(self) -> set[str]:
-        """Return persisted user table names."""
+        rows = self._con.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        return {row[0] for row in rows}
 
-    @abc.abstractmethod
     def _table_columns(self, table: str) -> set[str]:
-        """Return persisted columns for one table."""
+        return {
+            row[1] for row in self._con.execute(f"PRAGMA table_info({quote(table)})")
+        }
 
-    @abc.abstractmethod
     def close(self) -> None:
-        """Release resources (the connection and anything holding it)."""
+        """Close the database connection."""
+        # detach the GC finalizer; closing twice is harmless but tidy.
+        self._finalizer.detach()
+        _safe_close(self._con)
 
     @contextmanager
     def _transaction(self):
@@ -167,13 +270,12 @@ class SQLIndexBackend(abc.ABC):
 
         Commits on normal (or early-return) exit; on any error rolls back
         without letting a failed rollback mask the original exception.
-        The backend's statement lock (when present) is held for the whole
-        transaction, so readers sharing the connection can never observe
-        a half-applied write; the reentrant lock keeps the statement
-        helpers inside the body working unchanged.
+        The statement lock is held for the whole transaction, so readers
+        sharing the connection can never observe a half-applied write;
+        being reentrant, it keeps the statement helpers inside the body
+        working unchanged.
         """
-        lock = getattr(self, "_lock", None)
-        with lock if lock is not None else nullcontext():
+        with self._lock:
             self._begin()
             try:
                 yield
@@ -199,9 +301,7 @@ class SQLIndexBackend(abc.ABC):
                 return
             for name, columns in TABLES.items():
                 self._execute(
-                    self.dialect.create_table(
-                        name, columns, TABLE_CONSTRAINTS.get(name, ())
-                    )
+                    create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
                 )
             for index_name, table, column in INDEXES:
                 self._execute(
@@ -255,10 +355,13 @@ class SQLIndexBackend(abc.ABC):
     def _attr_meta(self) -> pd.DataFrame:
         return self._fetch_df("SELECT * FROM attr_meta")
 
-    def _coord_meta(self, names=None) -> pd.DataFrame:
+    def coord_meta(self, names=None) -> pd.DataFrame:
         """
         Return distinct coordinate names, kinds, and canonical units,
         optionally restricted to the given coord names.
+
+        Public because the catalog asks: deciding which selectors are
+        numeric (and so unit-convertible) needs the stored kinds.
         """
         sql = (
             "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, "
@@ -352,7 +455,7 @@ class SQLIndexBackend(abc.ABC):
                 column = f"{base}_{suffix}"
                 suffix += 1
             taken.add(column)
-            self._execute(self.dialect.add_column("attrs", column, KIND_STORAGE[kind]))
+            self._execute(add_column_sql("attrs", column, KIND_STORAGE[kind]))
             self._execute(
                 "INSERT INTO attr_meta VALUES (?, ?, ?, ?)",
                 (name, kind, column, units),
@@ -402,7 +505,6 @@ class SQLIndexBackend(abc.ABC):
                     c.step_ns,
                     c.min_str,
                     c.max_str,
-                    c.is_monotonic,
                     c.is_relative,
                 )
             )
@@ -415,9 +517,9 @@ class SQLIndexBackend(abc.ABC):
         """Insert many rows; engines override for faster bulk paths."""
         if not rows:
             return
-        quoted = ", ".join(self.dialect.quote(c) for c in columns)
+        quoted = ", ".join(quote(c) for c in columns)
         marks = self._placeholders(len(columns))
-        sql = f"INSERT INTO {self.dialect.quote(table)} ({quoted}) VALUES ({marks})"
+        sql = f"INSERT INTO {quote(table)} ({quoted}) VALUES ({marks})"
         self._executemany(sql, rows)
 
     # --- writes ------------------------------------------------------
@@ -484,11 +586,8 @@ class SQLIndexBackend(abc.ABC):
                             patch_id,
                             source_id,
                             patch.source_patch_id,
-                            patch.n_dims,
                             patch.dims,
-                            patch.shape,
                             patch.dtype,
-                            patch.sample_count_total,
                             patch.time_min,
                             patch.time_max,
                             patch.time_step,
@@ -697,9 +796,7 @@ class SQLIndexBackend(abc.ABC):
                     )
                 groups.setdefault(tuple(sorted(sig)), []).append(ids[old])
             for sig, source_ids in groups.items():
-                assignments = ", ".join(
-                    f"{self.dialect.quote(col)} = ?" for col, _ in sig
-                )
+                assignments = ", ".join(f"{quote(col)} = ?" for col, _ in sig)
                 values = [value for _, value in sig]
                 for chunk, marks in self._iter_in_batches(source_ids):
                     self._execute(
@@ -725,7 +822,7 @@ class SQLIndexBackend(abc.ABC):
         coord_names = {name for q in queries for name in q.coords}
         if order_by is not None and order_by[0] == "coord":
             coord_names.add(order_by[1])
-        coord_meta = self._coord_meta(coord_names) if coord_names else pd.DataFrame()
+        coord_meta = self.coord_meta(coord_names) if coord_names else pd.DataFrame()
         return queries, attr_meta, coord_meta
 
     def query(self, query=None, order_by=None, patch_ids=None) -> pd.DataFrame:
@@ -733,7 +830,6 @@ class SQLIndexBackend(abc.ABC):
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
-            self.dialect,
             attr_meta,
             coord_meta,
             order_by=order_by,
@@ -755,7 +851,6 @@ class SQLIndexBackend(abc.ABC):
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
-            self.dialect,
             attr_meta,
             coord_meta,
             order_by=order_by,
@@ -773,7 +868,6 @@ class SQLIndexBackend(abc.ABC):
         queries, attr_meta, coord_meta = self._query_context(query)
         sql, params, residuals = build_sql(
             queries,
-            self.dialect,
             attr_meta,
             coord_meta,
             count=True,
@@ -1117,7 +1211,7 @@ class SQLIndexBackend(abc.ABC):
         columns = rows[rows["attr_name"] == name]["column_name"].unique()
         if not len(columns):
             return set()
-        stated = " OR ".join(f"{self.dialect.quote(x)} IS NOT NULL" for x in columns)
+        stated = " OR ".join(f"{quote(x)} IS NOT NULL" for x in columns)
         sql = f"SELECT patch_id FROM attrs WHERE ({stated})"
         params: list = []
         if patch_ids is not None:
@@ -1134,77 +1228,11 @@ class SQLIndexBackend(abc.ABC):
         return out
 
 
-def resolve_query(
-    backend: SQLIndexBackend, _attrs=None, _coords=None, **kwargs
-) -> Query:
+def get_backend(path: str | Path) -> SQLiteIndexBackend:
     """
-    Resolve bare kwargs into a Query: attrs first, then coords.
+    Create the spool-index backend at path.
 
-    Implements section 1 of the selector spec; raises on unknown names or
-    names supplied in more than one namespace.
+    The seam a second engine would reopen: everything above the backend
+    asks for one through this rather than naming a class.
     """
-
-    def _drop_noops(mapping: dict) -> dict:
-        """Bare None/... selectors are no-ops, matching Patch.select."""
-        return {k: v for k, v in mapping.items() if v is not None and v is not Ellipsis}
-
-    def _shape_coord_selector(name: str, value):
-        """
-        Normalize one coordinate selector to the spec's accepted shapes.
-
-        Coordinates select by range — a (start, stop) tuple or slice
-        with None/... open ends (a 2-element list is the legacy range
-        form) — or by a patch-local boolean mask. Scalars and value
-        membership have no exact patch-level meaning and raise here,
-        eagerly, rather than failing when a patch is materialized.
-        """
-        if value is None or value is Ellipsis:
-            return value
-        is_bool_array = (isinstance(value, np.ndarray) and value.dtype == np.bool_) or (
-            isinstance(value, list)
-            and value
-            and all(isinstance(x, bool | np.bool_) for x in value)
-        )
-        if is_bool_array:
-            # A sample mask is positional/absolute, so it is only defined
-            # when every patch shares the coordinate's size — a guarantee
-            # spools never make — and it can never reduce file reads.
-            msg = (
-                f"Coordinate {name!r} no longer accepts boolean sample "
-                "masks at the spool level; apply them per patch, e.g. "
-                "spool.map(lambda p: p.select(...)). Boolean arrays over "
-                "patches (spool[mask]) still select membership."
-            )
-            raise InvalidSpoolQueryError(msg)
-        if isinstance(value, tuple | list):
-            # range-like: a (start, stop) pair (2-element list is the
-            # legacy range form). Wrong arity is a malformed range.
-            if len(value) != 2:
-                msg = f"Coordinate range for {name!r} must be a length 2 sequence."
-                raise ParameterError(msg)
-            # canonicalize the open-end sentinel so equivalent selections
-            # (None vs ...) stay equivalent downstream (e.g. spool __eq__)
-            return tuple(None if v is Ellipsis else v for v in value)
-        msg = (
-            f"Coordinate {name!r} accepts range selectors (a (start, stop) "
-            "tuple or slice, None/... for open ends); scalar, membership, "
-            f"and boolean-mask values are not supported. Got {value!r}."
-        )
-        raise InvalidSpoolQueryError(msg)
-
-    attrs, coords = resolve_selector_namespaces(
-        backend.attr_names(),
-        backend.coord_names(),
-        _attrs=_attrs,
-        _coords=_coords,
-        kwargs=kwargs,
-    )
-    coords = {k: _shape_coord_selector(k, v) for k, v in coords.items()}
-    return Query(attrs=_drop_noops(attrs), coords=_drop_noops(coords))
-
-
-def get_backend(path: str | Path) -> SQLIndexBackend:
-    """Create the SQLite spool-index backend at path."""
-    from dascore.io.index.lite import SQLiteBackend  # noqa: PLC0415
-
-    return SQLiteBackend(path)
+    return SQLiteIndexBackend(path)

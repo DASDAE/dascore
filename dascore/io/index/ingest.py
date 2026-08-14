@@ -87,7 +87,6 @@ class CoordRecord:
     step_ns: int | None = None
     min_str: str | None = None
     max_str: str | None = None
-    is_monotonic: bool | None = None
     is_relative: bool | None = None
     coord_hash: str | None = None
 
@@ -125,7 +124,6 @@ class CoordRecord:
             self.step_ns,
             self.min_str,
             self.max_str,
-            self.is_monotonic,
             self.is_relative,
         )
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
@@ -138,10 +136,7 @@ class PatchRecord:
 
     source_patch_id: str
     dims: str
-    shape: str
     dtype: str
-    n_dims: int
-    sample_count_total: int | None
     time_min: int | None
     time_max: int | None
     time_step: int | None
@@ -445,14 +440,10 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     )
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
-    shape = tuple(int(x) for x in summary.shape)
     return PatchRecord(
         source_patch_id=normalize_source_patch_id(summary.source_patch_id),
         dims=",".join(summary.dims),
-        shape=",".join(str(x) for x in shape),
         dtype=str(summary.dtype or ""),
-        n_dims=len(summary.dims),
-        sample_count_total=int(np.prod(shape)) if shape else None,
         time_min=time_min,
         time_max=time_max,
         time_step=time_step,
@@ -561,7 +552,7 @@ def summaries_to_records(
 # Record fields read straight off an index row of the same name. The
 # remaining fields need per-field handling: a coord's name/dims are
 # patch-level (they come from the link row, not the shared definition),
-# its hash is stored as "fingerprint", and a patch's id/dims/shape get
+# its hash is stored as "fingerprint", and a patch's id/dims get
 # normalized below.
 _COORD_DEF_FIELDS = tuple(
     f.name
@@ -571,7 +562,7 @@ _COORD_DEF_FIELDS = tuple(
 _PATCH_ROW_FIELDS = tuple(
     f.name
     for f in fields(PatchRecord)
-    if f.name not in ("source_patch_id", "dims", "shape", "dtype", "attrs", "coords")
+    if f.name not in ("source_patch_id", "dims", "dtype", "attrs", "coords")
 )
 # Backends with no boolean type hand these columns back as 0/1, which
 # def_key would hash differently than the bool a scan produced.
@@ -683,7 +674,6 @@ def assemble_source_records(
                 PatchRecord(
                     source_patch_id=normalize_source_patch_id(patch.source_patch_id),
                     dims=_py_scalar(patch.dims) or "",
-                    shape=_py_scalar(patch.shape) or "",
                     dtype=_py_scalar(patch.dtype) or "",
                     attrs=typed,
                     coords=tuple(coords),

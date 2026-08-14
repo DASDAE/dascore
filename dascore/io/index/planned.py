@@ -340,14 +340,11 @@ def _output_records(
         patch = PatchRecord(
             source_patch_id=str(output_id),
             dims=dims,
-            shape="",
             # the plan carries the element dtype privately so a chained
             # chunk can still size patches by their memory footprint.
             # NaN is truthy, so `or ""` alone would store the string
             # "nan" and poison every later np.dtype() of this column.
             dtype=_dtype_str(row.get("_dtype")),
-            n_dims=len(dim_names),
-            sample_count_total=None,
             time_min=_ns(row.get("time_min")),
             time_max=_ns(row.get("time_max")),
             time_step=_ns(row.get("time_step")),

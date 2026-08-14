@@ -33,14 +33,15 @@ from dascore.constants import PROGRESS_LEVELS, namespace_select_type
 from dascore.core.summary import normalize_source_patch_id
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
-from dascore.io.index.backend import get_backend, resolve_query
+from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     InvalidSpoolQueryError,
     Query,
+    resolve_query,
 )
-from dascore.io.index.schema import SPOOL_HIDDEN_COLUMNS, SPOOL_PRIVATE_RENAMES
+from dascore.io.index.schema import SPOOL_PRIVATE_RENAMES
 from dascore.utils.misc import (
     _canonical_range,
     _CanonicalRange,
@@ -114,7 +115,7 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     Selectors on non-numeric coordinates (time ranges, string ranges)
     pass through unchanged.
     """
-    meta = backend._coord_meta(set(coords))
+    meta = backend.coord_meta(set(coords))
     numeric = set(meta.loc[meta["value_kind"] == "num", "coord_name"])
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
@@ -706,7 +707,42 @@ class PatchCatalog:
         """The presentation order: a user order spec, else the default."""
         return self._order if self._order is not None else self._default_order
 
-    def _ordered_ids(self) -> tuple[int, ...]:
+    def transfer_is_lossy(self) -> bool:
+        """
+        Whether a table-level transfer of this view would lose state.
+
+        Row membership (attr predicates, windows, id arrays) survives a
+        table union as-is, but residual trims and order specs live
+        Python-side and would silently vanish. A catalog default order
+        (directory time presentation) is lost only when ordinal-grain
+        transfer would actually present rows differently — an
+        interleaved multi-patch file — so ordinary archives keep
+        record-grain transfer and its same-source deduplication.
+        """
+        if self._residuals or self._order is not None:
+            return True
+        if self._default_order is None:
+            return False
+        by_ordinal = tuple(
+            self.backend.query_ids(
+                list(self._queries) or None,
+                order_by=None,
+                patch_ids=self._ids,
+            )
+        )
+        return tuple(self.ordered_ids()) != by_ordinal
+
+    @property
+    def residuals(self) -> tuple:
+        """The value trims this view applies when a patch is materialized."""
+        return self._residuals
+
+    @property
+    def syncer(self):
+        """The directory syncer keeping this catalog current, or None."""
+        return self._syncer
+
+    def ordered_ids(self) -> tuple[int, ...]:
         """
         The view's patch ids in presentation order (ids only, cheap).
 
@@ -739,7 +775,7 @@ class PatchCatalog:
         flat relation); subsequent selections compose within the window
         per the D2 rules.
         """
-        ids = self._ordered_ids()[item]
+        ids = self.ordered_ids()[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
@@ -751,7 +787,7 @@ class PatchCatalog:
         one row, matching the spool's set semantics). ``ids`` is this
         view's presented ids, for a caller which has just read them.
         """
-        ids = np.asarray(self._ordered_ids() if ids is None else ids)
+        ids = np.asarray(self.ordered_ids() if ids is None else ids)
         picked = ids[np.asarray(indices)]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)
@@ -831,7 +867,13 @@ class PatchCatalog:
         relative=True bounds resolve against the current view's global
         envelope, then behave as absolute ranges.
         """
-        query = resolve_query(self.backend, _attrs=_attrs, _coords=_coords, **kwargs)
+        query = resolve_query(
+            self.backend.attr_names(),
+            self.backend.coord_names(),
+            _attrs=_attrs,
+            _coords=_coords,
+            **kwargs,
+        )
         if samples:
             if query.attrs:
                 msg = (
@@ -887,9 +929,7 @@ class PatchCatalog:
                 df = df.sort_values(
                     "patch_id", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
-            df = df.drop(columns=list(SPOOL_HIDDEN_COLUMNS), errors="ignore").rename(
-                columns=dict(SPOOL_PRIVATE_RENAMES)
-            )
+            df = df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
             # SQL identifies overlapping source patches. Expose the selected
             # envelopes, matching spool.get_contents() and the exact trim
             # applied when each patch is materialized. Each pass copies the

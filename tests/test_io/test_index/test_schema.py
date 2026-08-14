@@ -9,8 +9,8 @@ from threading import Barrier
 import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index import get_backend
-from dascore.io.index.schema import INDEX_VERSION, TABLES
+from dascore.io.index.backend import get_backend
+from dascore.io.index.schema import INDEX_VERSION, TABLES, TYPE_MAP
 
 
 class TestSchemaDeclaration:
@@ -19,13 +19,10 @@ class TestSchemaDeclaration:
     def test_stored_columns_match_declaration(self, tmp_path):
         """A created index has each table's declared columns and types."""
         backend = get_backend(tmp_path / "index.sqlite3")
-        dialect = backend.dialect
         for table, columns in TABLES.items():
             info = backend._con.execute(f'PRAGMA table_info("{table}")').fetchall()
             stored = {row[1]: row[2] for row in info}
-            expected = {
-                name: dialect.type_map[logical] for name, logical in columns.items()
-            }
+            expected = {name: TYPE_MAP[logical] for name, logical in columns.items()}
             assert stored == expected
         backend.close()
 

@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 from upath import UPath
 
+import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index import indexer as indexer_mod
@@ -45,9 +46,21 @@ def diverse_indexer(diverse_spool_directory):
 
 
 @pytest.fixture(scope="class")
-def diverse_df(diverse_indexer):
-    """Return the contents of the diverse indexer."""
-    return diverse_indexer()
+def basic_spool(two_patch_directory):
+    """A spool over the basic directory; the catalog is the query face."""
+    return dc.spool(two_patch_directory).update(progress=None)
+
+
+@pytest.fixture(scope="class")
+def diverse_spool(diverse_spool_directory):
+    """A spool over the diverse directory."""
+    return dc.spool(diverse_spool_directory).update(progress=None)
+
+
+@pytest.fixture(scope="class")
+def diverse_df(diverse_spool):
+    """Return the contents of the diverse spool."""
+    return diverse_spool.get_contents()
 
 
 @pytest.fixture()
@@ -285,11 +298,11 @@ class TestBasics:
 
 
 class TestGetContents:
-    """Test cases for getting contents of indexer as dataframes."""
+    """The indexed directory is queried through its catalog (the spool)."""
 
-    def test_get_contents(self, basic_indexer, two_patch_directory):
+    def test_get_contents(self, basic_spool, two_patch_directory):
         """Ensure contents are returned."""
-        out = basic_indexer()
+        out = basic_spool.get_contents()
         files = list(Path(two_patch_directory).rglob("*.hdf5"))
         assert isinstance(out, pd.DataFrame)
         assert len(out) == len(files)
@@ -297,41 +310,41 @@ class TestGetContents:
         names_files = {x.name for x in files}
         assert names_df == names_files
 
-    def test_filter_time_after(self, diverse_df, diverse_indexer):
+    def test_filter_time_after(self, diverse_df, diverse_spool):
         """Half-open time range keeps every file overlapping it."""
         max_starttime = diverse_df["time_min"].max()
         expected = diverse_df[diverse_df["time_max"] >= max_starttime]
-        out = diverse_indexer(time=(max_starttime, None))
+        out = diverse_spool.select(time=(max_starttime, None)).get_contents()
         assert len(out) == len(expected)
 
-    def test_filter_time_before(self, diverse_df, diverse_indexer):
+    def test_filter_time_before(self, diverse_df, diverse_spool):
         """Half-open time range keeps every file overlapping it."""
         min_endtime = diverse_df["time_max"].min()
         expected = diverse_df[diverse_df["time_min"] <= min_endtime]
-        out = diverse_indexer(time=(None, min_endtime))
+        out = diverse_spool.select(time=(None, min_endtime)).get_contents()
         assert len(out) == len(expected)
 
-    def test_filter_tag_exact(self, diverse_df, diverse_indexer):
+    def test_filter_tag_exact(self, diverse_df, diverse_spool):
         """Ensure contents can be filtered on an attr."""
         # empty strings mean "attr missing" and are not queryable (spec),
         # so an empty result would satisfy the check below for free.
         exact_name = next(x for x in diverse_df["tag"].unique() if x)
-        new_df = diverse_indexer(tag=exact_name)
+        new_df = diverse_spool.select(tag=exact_name).get_contents()
         assert len(new_df)
         assert (new_df["tag"] == exact_name).all()
 
-    def test_filter_isin(self, diverse_df, diverse_indexer):
+    def test_filter_isin(self, diverse_df, diverse_spool):
         """Ensure contents can be filtered with a collection."""
         # empty strings mean "attr missing" and are not queryable (spec).
         tags = [x for x in diverse_df["tag"].unique() if x]
-        new_df = diverse_indexer(tag=tags[:2])
+        new_df = diverse_spool.select(tag=tags[:2]).get_contents()
         assert set(new_df["tag"]) <= set(tags[:2])
         assert len(new_df)
 
-    def test_empty_index(self, empty_index):
-        """An empty index should return an empty dataframe."""
-        df = empty_index()
-        assert df.empty
+    def test_empty_index(self, tmp_path_factory):
+        """An empty directory yields an empty relation."""
+        path = tmp_path_factory.mktemp("empty_contents")
+        assert dc.spool(path).update(progress=None).get_contents().empty
 
 
 class TestUpdate:
@@ -353,16 +366,15 @@ class TestUpdate:
         """Ensure a new patch added to the directory shows up."""
         path = empty_index.path / get_patch_names(random_patch).iloc[0]
         random_patch.io.write(path, file_format="dasdae")
-        new_index = empty_index.update(progress=None)
-        contents = new_index()
-        assert len(contents) == 1
+        empty_index.update(progress=None)
+        assert len(dc.spool(empty_index.path).update(progress=None)) == 1
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
         """Ensure if one file is not readable index continues."""
         indexer = DBDirectoryIndexer(spool_directory_with_non_das_file)
         updated = indexer.update(progress=None)
         assert isinstance(updated, DBDirectoryIndexer)
-        assert len(updated()) == 2
+        assert len(dc.spool(spool_directory_with_non_das_file)) == 2
 
     def test_removed_file_dropped(self, two_patch_directory, tmp_path_factory):
         """A deleted file's rows disappear on the next update."""
@@ -371,9 +383,10 @@ class TestUpdate:
         for index in Path(new).glob(".dascore_index*"):
             index.unlink()
         indexer = DBDirectoryIndexer(new).update(progress=None)
-        assert len(indexer()) == 2
+        assert len(dc.spool(new).update(progress=None)) == 2
         next(iter(Path(new).glob("*.hdf5"))).unlink()
-        assert len(indexer.update(progress=None)()) == 1
+        indexer.update(progress=None)
+        assert len(dc.spool(new).update(progress=None)) == 1
 
     def test_noop_update_rescans_nothing(self, basic_indexer):
         """Unchanged sources are not rescanned."""
@@ -411,7 +424,7 @@ class TestUpdate:
 class TestNameResolution:
     """Unknown names raise per the selector spec."""
 
-    def test_unknown_name_raises(self, basic_indexer):
+    def test_unknown_name_raises(self, basic_spool):
         """Names in neither namespace error clearly (#435)."""
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
-            basic_indexer(bad_dimension=(1, 2))
+            basic_spool.select(bad_dimension=(1, 2))
