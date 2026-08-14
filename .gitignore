@@ -71,8 +71,6 @@ target/
 
 # docs
 docs/api/*
-# Written from the inventory models by scripts/_inventory_model.py.
-docs/_generated
 # Where a local `quarto render docs` puts the built site.
 docs/_site/
 _autosummary

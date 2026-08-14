@@ -8,7 +8,6 @@ project:
 filters:
   - quarto
   - filters/fill_links.py
-  - filters/render-data-model.lua
 
 execute:
   warning: false
@@ -21,9 +20,7 @@ format:
       dark: darkly
     code-copy: true
     code-overflow: wrap
-    css:
-      - styles.css
-      - data_model.css
+    css: styles.css
 
 website:
   title: {{ dascore_version_str }}

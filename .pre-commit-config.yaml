@@ -1,7 +1,4 @@
-# The vendored library directories hold unmodified third-party releases; a
-# hook which "fixed" one would put us out of step with the upstream file we
-# vendored. docs/vendor/README.md is ours, and stays linted.
-exclude: (scripts/_templates|^docs/vendor/(cytoscape|elk)/)
+exclude: scripts/_templates
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v2.3.0

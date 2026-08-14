@@ -6,7 +6,6 @@ import sys
 from contextlib import suppress
 
 from _index_api import get_alias_mapping, parse_project
-from _inventory_model import write_model_spec
 from _qmd_builder import create_quarto_qmd
 from _render_api import render_project
 from _validate_links import validate_all_links
@@ -24,10 +23,6 @@ if __name__ == "__main__":
     obj_dict = get_alias_mapping(dc)
     print("Generating qmd files")  # noqa
     render_project(data_dict, obj_dict, debug=False)
-    # After render_project, which writes the cross references the diagram
-    # links its nodes to.
-    print("Generating the inventory model diagram")  # noqa
-    write_model_spec()
     # create the quarto info file (needs templating)
     print("creating quarto config")  # noqa
     create_quarto_qmd()

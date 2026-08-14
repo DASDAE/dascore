@@ -115,8 +115,6 @@ Next, the automatic API documents are created with scripts/build_api_docs.py
 python scripts/build_api_docs.py
 ```
 
-This step also writes the parts of the site which are generated from the code rather than the API docstrings — the quarto config itself, and the [inventory](../tutorial/inventory.qmd) data-model diagram — so quarto cannot render the site until it has run.
-
 Finally, the documentation can be built by calling quarto render on the docs folder:
 
 ```bash

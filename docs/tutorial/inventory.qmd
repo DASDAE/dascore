@@ -12,16 +12,43 @@ Nothing here changes patch data. Everything an inventory contributes is metadata
 
 # The model
 
-Every node below is a DASCore model, and every field it lists is a field that model has — the diagram is generated from the models themselves when the documentation is built. Hover a node to read its fields; click one to fold or unfold what it contains.
+An inventory is a tree of DASCore models. Its spine is containment, and each edge below is labelled with the field that holds the thing it points at.
 
-::: {.render_data_model spec="../_generated/inventory_model.yml" root="../"}
-:::
+```{mermaid}
+flowchart TD
+  Inventory -->|networks| Network
+  Network -->|fiber_arrays| FiberArray
+  Network -->|stations| Station
+  FiberArray -->|acquisitions| Acquisition
+  FiberArray -->|optical_paths| OpticalPath
+  Station -->|channels| Channel
+```
 
-Reading the diagram top to bottom: an [`Inventory`](`dascore.core.inventory.Inventory`) holds networks; a [`Network`](`dascore.core.inventory.Network`) holds fiber arrays (and stations, for conventional instruments recorded alongside); a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the durable observing identity, which holds both [`Acquisition`](`dascore.core.inventory.Acquisition`) objects — how an interrogator was set up — and [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects — what the light actually travelled through.
+An [`Inventory`](`dascore.core.inventory.Inventory`) holds networks; a [`Network`](`dascore.core.inventory.Network`) holds fiber arrays, and stations for the conventional instruments recorded alongside them; a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the durable observing identity, which holds both [`Acquisition`](`dascore.core.inventory.Acquisition`) objects — how an interrogator was set up — and [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects — what the light actually travelled through.
 
-The optical path is the part with no seismological analog. It is described by four independent tracks along optical distance: the ordered physical components that make up its length, the geometry that says where each distance is in space, the coupling that says how the fiber is attached to the ground there, and free-form annotations naming anything else worth recording per interval. Each track covers what it covers; none of them has to cover the whole path.
+The optical path is the part with no seismological analog. It is described by four independent tracks along optical distance.
 
-Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under `resources` and referred to elsewhere by their `resource_id`. The dashed edges in the diagram are those references.
+```{mermaid}
+flowchart LR
+  OpticalPath -->|optical_components| Components["FiberSegment · Splice · Connector · Terminator"]
+  OpticalPath -->|geometry| Geometry
+  OpticalPath -->|coupling| CouplingCondition
+  OpticalPath -->|annotations| OpticalPathAnnotation
+```
+
+The components are the ordered physical pieces that make up the path's length, the geometry says where each distance is in space, the coupling says how the fiber is attached to the ground there, and the annotations name anything else worth recording per interval. Each track covers what it covers; none of them has to cover the whole path.
+
+Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
+
+```{mermaid}
+flowchart LR
+  Acquisition -.->|interrogator| Interrogator
+  FiberSegment -.->|container| Cable
+  Cable -.->|container| Enclosure
+  OpticalPath -.->|measurements| OpticalMeasurement
+```
+
+These three diagrams are the shape of the model, not the whole of it; each class's own API page lists every field it has.
 
 # Writing an inventory
 
