@@ -56,7 +56,7 @@ class Terra15FormatterV4(FiberIO):
         distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """
         Read a terra15 file.
 

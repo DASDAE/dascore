@@ -33,7 +33,7 @@ with dc.config_context(display_float_precision=8):  # scoped to this block
 dc.reset_config()  # drop the permanent change
 ```
 
-[`Spool.map`](`dascore.core.spool.BaseSpool.map`) binds the config active when `map` is called and re-applies it in each worker, so overrides also reach thread- and process-pool workers.
+[`Spool.map`](`dascore.core.spool.Spool.map`) binds the config active when `map` is called and re-applies it in each worker, so overrides also reach thread- and process-pool workers.
 
 History recording is also configurable:
 

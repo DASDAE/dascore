@@ -298,7 +298,7 @@ def config_context(
     block's exit. For deterministic propagation, capture
     ``contextvars.copy_context()`` and run the worker with it, or rely on APIs
     that bind the config for you such as
-    [`Spool.map`](`dascore.core.spool.BaseSpool.map`).
+    [`Spool.map`](`dascore.core.spool.Spool.map`).
 
     Examples
     --------

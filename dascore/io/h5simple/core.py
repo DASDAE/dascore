@@ -29,7 +29,7 @@ class H5Simple(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.BaseSpool:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.Spool:
         """
         Read a simple h5 file.
 

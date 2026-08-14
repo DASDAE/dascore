@@ -94,7 +94,7 @@ from dascore.utils.remote_io import (
 ScanInput = (
     path_types
     | dc.Patch
-    | dc.BaseSpool
+    | dc.Spool
     | IOResourceManager
     | Iterable[path_types | dc.Patch | IOResourceManager]
 )
@@ -953,7 +953,7 @@ class FiberIO:
         }
     )
 
-    def read(self, resource, **kwargs) -> dc.BaseSpool:
+    def read(self, resource, **kwargs) -> dc.Spool:
         """
         Load data from a path.
 
@@ -1004,7 +1004,7 @@ class FiberIO:
             raise NotImplementedError(msg)
         return [_patch_to_scan_payload(pa) for pa in spool]
 
-    def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
+    def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
@@ -1120,7 +1120,7 @@ def read(
     time: time_select_type | None = None,
     distance: float_select_type | None = None,
     **kwargs,
-) -> dc.BaseSpool:
+) -> dc.Spool:
     """
     Read a fiber file.
 
@@ -1821,7 +1821,7 @@ def write(
     >>> path.unlink()
     """
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
-    if not isinstance(patch_or_spool, dc.BaseSpool):
+    if not isinstance(patch_or_spool, dc.Spool):
         patch_or_spool = dc.spool([patch_or_spool])
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
     with IOResourceManager(path) as man:

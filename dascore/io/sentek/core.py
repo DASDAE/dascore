@@ -26,7 +26,7 @@ class SentekV5(FiberIO):
         time=None,
         distance=None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a Sentek das file, return a DataArray."""
         attrs, coords, offsets = _get_patch_attrs(resource)
         resource.seek(offsets[0])

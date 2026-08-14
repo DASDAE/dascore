@@ -119,7 +119,7 @@ class NetCDFCFV18(FiberIO):
             pass
         return False
 
-    def read(self, resource: H5Reader, **kwargs) -> dc.BaseSpool:
+    def read(self, resource: H5Reader, **kwargs) -> dc.Spool:
         """Read a NetCDF-4 file into a Spool, streaming remote resources."""
         with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
@@ -146,7 +146,7 @@ class NetCDFCFV18(FiberIO):
             encoding["shuffle"] = True
         return encoding
 
-    def write(self, spool: dc.Patch | dc.BaseSpool, resource: Path, **kwargs) -> None:
+    def write(self, spool: dc.Patch | dc.Spool, resource: Path, **kwargs) -> None:
         """
         Write a Spool to NetCDF-4 through xarray.
 
@@ -260,7 +260,7 @@ class NetCDFCFV18(FiberIO):
         coord_kwargs = {k: v for k, v in kwargs.items() if k in patch.coords.coord_map}
         return patch.select(**coord_kwargs) if coord_kwargs else patch
 
-    def _validate_and_extract_patch(self, spool: dc.Patch | dc.BaseSpool) -> dc.Patch:
+    def _validate_and_extract_patch(self, spool: dc.Patch | dc.Spool) -> dc.Patch:
         """Validate write input and return the single supported patch."""
         patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
         if len(patches) == 0:

@@ -68,7 +68,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         distance: tuple[float | None, float | None] | None = None,
         source_patch_id=(),
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a ProdML file."""
         patches = _read_prodml(
             resource,
@@ -84,8 +84,6 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(
-        self, spool: dc.Patch | dc.BaseSpool, resource: H5Writer, **kwargs
-    ) -> None:
+    def write(self, spool: dc.Patch | dc.Spool, resource: H5Writer, **kwargs) -> None:
         """Write one raw Patch to a standalone ProdML HDF5 file."""
         _write_prodml(spool, resource)

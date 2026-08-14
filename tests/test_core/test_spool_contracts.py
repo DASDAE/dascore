@@ -141,7 +141,7 @@ class TestChunkPlanContract:
 
 
 class TestTypeSurface:
-    """The collapsed hierarchy: BaseSpool ABC with one concrete Spool."""
+    """The collapsed hierarchy: one concrete Spool class."""
 
     def test_every_spool_is_spool(self, patches, tmp_path):
         """All construction paths yield the same concrete class."""

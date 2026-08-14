@@ -68,7 +68,7 @@ class MSeedV2(FiberIO):
         channel: tuple[int | None, int | None] | None = None,
         source_patch_id=(),
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a MiniSEED file."""
         pymseed = optional_import("pymseed")
         patches = _get_patches(

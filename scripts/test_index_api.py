@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from _index_api import _get_base_address, _is_environment_path
+from _index_api import _get_base_address, _is_environment_path, parse_project
+
+import dascore as dc
 
 
 class TestIsEnvironmentPath:
@@ -33,3 +35,12 @@ class TestGetBaseAddress:
         """Project paths should convert to dotted addresses."""
         path = "/repo/dascore/core/patch.py"
         assert _get_base_address(path, "/repo") == "dascore.core.patch"
+
+
+class TestAliases:
+    """Tests that a second name for one object doesn't claim its page."""
+
+    def test_class_documented_under_defined_name(self):
+        """BaseSpool is an alias of Spool; only Spool gets documented."""
+        data = parse_project(dc)
+        assert data[str(id(dc.Spool))]["name"] == "Spool"

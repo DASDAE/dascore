@@ -73,7 +73,7 @@ class SegyV1_0(FiberIO):  # noqa
             dtype = str(fi.dtype)
         return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
 
-    def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
+    def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """
         Create a segy file from length 1 spool or patch.
 

@@ -78,52 +78,15 @@ class TestSpoolBasics:
         spool_str = str(spool)
         assert "Spool" in spool_str
 
-    def test_base_concat_raises(self, random_spool):
-        """Ensure BaseSpool.concatenate raises NotImplementedError."""
-        msg = "has no concatenate implementation"
-        with pytest.raises(NotImplementedError, match=msg):
-            BaseSpool.concatenate(random_spool, time=2)
-
-    def test_base_update_returns_self(self, random_spool):
-        """The BaseSpool update default (for third-party spools) no-ops."""
-        assert BaseSpool.update(random_spool) is random_spool
-
     def test_invalid_input_raises(self):
         """A non-patch, non-spool input raises a clear error."""
         with pytest.raises(InvalidSpoolError, match="accepts a Patch"):
             Spool(42)
 
-    def test_wraps_third_party_spool(self, random_spool):
-        """A non-Spool BaseSpool input realizes into the registry."""
-
-        class MiniSpool(BaseSpool):
-            """Minimal third-party spool over a patch list."""
-
-            def __init__(self, patches):
-                self._patches = list(patches)
-
-            def __getitem__(self, item):
-                return self._patches[item]
-
-            def __iter__(self):
-                return iter(self._patches)
-
-            def __len__(self):
-                return len(self._patches)
-
-            def chunk(self, **kwargs):
-                raise NotImplementedError
-
-            def select(self, **kwargs):
-                raise NotImplementedError
-
-            def get_contents(self):
-                raise NotImplementedError
-
-        patches = list(random_spool)
-        wrapped = Spool(MiniSpool(patches))
-        assert isinstance(wrapped, Spool)
-        assert list(wrapped) == patches
+    def test_base_spool_alias(self, random_spool):
+        """BaseSpool is kept as an alias of the one spool class."""
+        assert BaseSpool is Spool
+        assert isinstance(random_spool, BaseSpool)
 
     def test_viz_raises(self, random_spool):
         """Ensure Spool.viz raises AttributeError."""
@@ -656,20 +619,9 @@ class TestUnselect:
         with pytest.raises(InvalidSpoolQueryError, match="unselect cannot take"):
             diverse_spool.unselect(_coords="time", time=("2020-01-03", None))
 
-    def test_base_spool_unselect_raises(self, random_spool):
-        """A spool implementation which does not provide one says so."""
-        with pytest.raises(NotImplementedError, match="spool of type"):
-            BaseSpool.unselect(random_spool, tag="random")
-
 
 class TestSort:
     """Tests for sorting spools."""
-
-    def test_base_spool_sort_raises(self, random_spool):
-        """Ensure base spool's sort raises."""
-        expected_str = "spool of type"
-        with pytest.raises(NotImplementedError, match=expected_str):
-            BaseSpool.sort(random_spool, "time")
 
     def test_sorting_attr_not_exists(self, diverse_spool):
         """Test sorting by an attribute that does not exist in the DataFrame."""
@@ -711,11 +663,12 @@ class TestSplit:
         spools = tuple(random_spool_len_10.split(size=3))
         return spools
 
-    def test_both_parameters_raises(self, random_spool):
-        """Ensure split raises when both spool_size and spool_count are defined."""
+    @pytest.mark.parametrize("kwargs", [{"size": 1, "count": 2}, {}])
+    def test_needs_exactly_one_parameter(self, random_spool, kwargs):
+        """Ensure split raises unless exactly one of size/count is given."""
         msg = "requires either spool_count or spool_size"
         with pytest.raises(ParameterError, match=msg):
-            list(random_spool.split(size=1, count=2))
+            list(random_spool.split(**kwargs))
 
     def test_spool_size(self, split_10):
         """Ensure spool size can be split."""
@@ -755,14 +708,6 @@ class TestSplit:
         split = list(random_spool_len_10.split(count=3))
         assert len(split) == 3
         assert sum(len(x) for x in split) == 10
-
-    def test_base_split_raises(self, random_spool):
-        """Ensure BaseSpool split raises NotImplementedError."""
-        msg = "has no split implementation"
-        with pytest.raises(NotImplementedError, match=msg):
-            BaseSpool.split(
-                random_spool,
-            )
 
 
 class TestMap:

@@ -17,7 +17,7 @@ from dascore.compat import UPath
 
 PatchType = TypeVar("PatchType", bound="dc.Patch")
 
-SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
+SpoolType = TypeVar("SpoolType", bound="dc.Spool")
 
 
 @runtime_checkable

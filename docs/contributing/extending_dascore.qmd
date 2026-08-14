@@ -6,7 +6,7 @@ This page explains how to extend DASCore with `Patch` and `Spool` namespaces. Us
 
 ## When to use a namespace
 
-A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `BaseSpool`. Good candidates include:
+A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `Spool`. Good candidates include:
 
 - Optional integrations that should live in a separate package.
 - Domain-specific processing that is useful to a subset of users.

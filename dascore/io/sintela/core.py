@@ -77,7 +77,7 @@ class SintelaBinaryV3(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a single Sintela binary file."""
         patch = _get_patches(
             resource, time=time, distance=distance, attr_class=SintelaPatchAttrs
@@ -110,7 +110,7 @@ class SintelaProtobufV1(FiberIO):
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource)
 
-    def read(self, resource: BinaryReader, **kwargs) -> dc.BaseSpool:
+    def read(self, resource: BinaryReader, **kwargs) -> dc.Spool:
         """Read a Sintela protobuf recording into a spool."""
         data, coords, attrs = read_payload(resource)
         selectors = {name: kwargs[name] for name in coords.dims if name in kwargs}

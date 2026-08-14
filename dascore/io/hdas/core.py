@@ -81,7 +81,7 @@ class HDASV1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read an HDAS file into a spool."""
         coords, attrs_dict = self._get_coords_and_attrs(resource)
         patches = _get_patches(
