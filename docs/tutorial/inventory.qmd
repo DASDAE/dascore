@@ -273,7 +273,7 @@ refreshed = carrying.attach_inventory()
 assert refreshed.enrich()[0].attrs.gauge_length == 12.0
 ```
 
-`attach_inventory`, `enrich`, and `conform_to_inventory` all accept a path as well as an `Inventory`, read on the same terms.
+`attach_inventory` accepts a path as well as an `Inventory`, read on the same terms — and it is the only one of the three that takes either, since `enrich` and `conform_to_inventory` read what it attached.
 
 # Serializing
 

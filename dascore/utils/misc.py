@@ -123,7 +123,8 @@ def warn_or_raise(
         The type of warning to use. Must be a subclass of Warning.
     behavior
         "warn" to issue the warning, "raise" to raise the exception, and
-        "ignore" to do nothing.
+        "ignore" to do nothing. Anything else raises a ParameterError,
+        so a retired spelling cannot quietly pick a behavior.
     """
     if behavior == "ignore":
         return

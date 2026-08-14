@@ -182,8 +182,15 @@ STORAGE_PROVENANCE_ATTRS = (
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]
 
-# Options for handling specific warnings. "ignore" and None both mean
-# "do nothing"; warn_or_raise has always accepted either.
+progress_description = """
+progress
+    Controls the progress bar. "standard" produces the standard progress
+    bar. "basic" is a simplified version with lower refresh rates, best
+    for high-latency environments, and None disables the progress bar.
+""".strip()
+
+# Options for handling specific warnings. One spelling of "do nothing":
+# "ignore", which every policy argument in the library also spells.
 WARN_LEVELS = Literal["warn", "raise", "ignore"]
 
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
@@ -248,7 +255,7 @@ Any dimension name can be passed as key, and the values can be:
 check_behavior_description = """
 check_behavior
     Indicates what to do when an incompatible patch is found in the
-    spool. `None` will silently skip any incompatible patches,
+    spool. 'ignore' will silently skip any incompatible patches,
     'warn' will issue a warning and then skip incompatible patches,
     'raise' will raise an
     [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)

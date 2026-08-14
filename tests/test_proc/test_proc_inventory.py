@@ -973,20 +973,18 @@ class TestAttachInventoryPath:
             os.chdir(here)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
-    def test_enrich_takes_a_path(self, tmp_path, patch, inventory):
-        """Both inventory verbs attach what they are given."""
-        path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
-        assert (
-            dc.spool(patch).attach_inventory(path).enrich()[0].attrs.gauge_length
-            == 10.0
-        )
-
-    def test_conform_takes_a_path(self, tmp_path, patch, inventory):
-        """The same, for the verb which makes the index truthful."""
+    def test_conform_uses_an_attached_path(self, tmp_path, patch, inventory):
+        """A lazily attached path is read by the eager verb too."""
         path = tmp_path / "somewhere.yaml"
         inventory.to_yaml(path)
         assert len(dc.spool(patch).attach_inventory(path).conform_to_inventory()) == 1
+
+    @pytest.mark.parametrize("verb", ["enrich", "conform_to_inventory"])
+    def test_the_verbs_take_no_inventory(self, patch, inventory, verb):
+        """Attaching is the only way in, so neither verb accepts one."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with pytest.raises(TypeError, match="positional argument"):
+            getattr(spool, verb)(inventory)
 
     def test_no_argument_needs_a_directory(self, patch):
         """There is nowhere an in-memory spool could have carried one."""
@@ -1241,12 +1239,7 @@ class TestSpoolEnrich:
         spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert all(x.attrs.gauge_length == 10.0 for x in spool)
 
-    def test_uses_attached_inventory(self, patch, inventory):
-        """With one already carried, enrich needs no argument."""
-        spool = dc.spool(patch).attach_inventory(inventory).enrich()
-        assert spool[0].attrs.gauge_length == 10.0
-
-    def test_enrich_attaches_its_inventory(self, patch, inventory):
+    def test_enrich_keeps_the_attached_inventory(self, patch, inventory):
         """The spool carries what it enriches from."""
         spool = dc.spool(patch).attach_inventory(inventory).enrich()
         assert spool._inventory is inventory

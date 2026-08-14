@@ -2191,12 +2191,24 @@ class TestOneLoadingDoor:
         path.write_text(text)
         assert dc.inventory(text) == dc.inventory(path) == original
 
-    def test_from_yaml_does_not_read_paths(self, tmp_path):
-        """A path handed to the text reader is text, not a file to open."""
+    def test_from_yaml_refuses_a_path(self, tmp_path):
+        """The text reader says so rather than letting the parser fail."""
         path = tmp_path / "whole.yaml"
         path.write_text(dc.inventory().to_yaml())
-        with pytest.raises(InvalidInventoryError, match="no such file"):
-            inv.Inventory.from_yaml(str(path))
+        with pytest.raises(InvalidInventoryError, match="reads YAML text"):
+            inv.Inventory.from_yaml(path)
+
+    def test_a_mistyped_path_is_not_read_as_a_document(self, tmp_path):
+        """A name spelled like a document's is a path which is not there."""
+        with pytest.raises(InvalidInventoryError, match="No such inventory file"):
+            dc.inventory(str(tmp_path / "absent.yaml"))
+
+    def test_a_file_of_any_suffix_is_named_when_it_fails(self, tmp_path):
+        """The path stays in the message, whichever parser read it."""
+        path = tmp_path / "whole.txt"
+        path.write_text("this: [is not: yaml\n")
+        with pytest.raises(InvalidInventoryError, match=str(path.name)):
+            dc.inventory(path)
 
     def test_one_line_document_is_text(self):
         """Existence decides, so a newline is not what makes text text."""

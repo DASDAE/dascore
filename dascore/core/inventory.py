@@ -1781,16 +1781,15 @@ _SYSTEM_FACT_NAMES = tuple(
 )
 
 
-def _yaml_label(text) -> str:
+def _yaml_label(text: str) -> str:
     """
     Name YAML text in an error without quoting a whole document at it.
 
-    A one-line string is nearly always a path someone expected to be
-    read, so it is worth showing and worth a word about why it was not.
+    A short document is worth showing; a long one would bury the reason
+    it was rejected under itself.
     """
-    if isinstance(text, str) and "\n" not in text:
-        return f"{text!r} (read as YAML text; no such file or directory)"
-    return "the given YAML text"
+    short = len(text) <= 60 and "\n" not in text
+    return f"{text!r}" if short else "the given YAML text"
 
 
 class Inventory(InventoryModel):
@@ -2306,6 +2305,14 @@ class Inventory(InventoryModel):
             through [`dascore.inventory`](`dascore.inventory`), which is
             the one door every source goes through.
         """
+        if not isinstance(text, str):
+            # Otherwise the parser raises about the object's missing
+            # read method, naming neither this function nor the path.
+            msg = (
+                f"from_yaml reads YAML text, got {type(text).__name__}. "
+                "Load a path with dascore.inventory."
+            )
+            raise InvalidInventoryError(msg)
         yaml = optional_import("yaml", required_for="YAML inventory serialization")
         try:
             data = yaml.safe_load(text)

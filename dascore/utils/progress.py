@@ -5,12 +5,14 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterable, Sized
 from contextlib import suppress
+from typing import get_args
 
 import rich.progress as prog
 
 from dascore.compat import Progress
 from dascore.config import get_config
 from dascore.constants import PROGRESS_LEVELS
+from dascore.exceptions import ParameterError
 
 
 def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
@@ -82,6 +84,14 @@ def track(
     min_length
         The minimum length to emit a progress bar.
     """
+    # Anything else would fall through to the standard bar, so a stale
+    # `progress=False` would turn one on rather than off.
+    if not isinstance(progress, Progress) and progress not in get_args(PROGRESS_LEVELS):
+        msg = (
+            f"progress must be one of {get_args(PROGRESS_LEVELS)} or a "
+            f"rich Progress, got {progress!r}."
+        )
+        raise ParameterError(msg)
     total = get_track_length(sequence, length, min_length)
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.

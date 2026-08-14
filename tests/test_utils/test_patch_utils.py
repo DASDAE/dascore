@@ -784,6 +784,17 @@ class TestStackPatches:
         # Or a warning issued.
         with pytest.warns(UserWarning, match=msg):
             stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # Or the incompatible patch skipped without a word.
+        with suppress_warnings(action="error"):
+            stack_patches(spool, dim_vary="time", check_behavior="ignore")
+
+    def test_retired_check_behavior_raises(self, random_spool):
+        """None used to mean "ignore"; one spelling of it survives."""
+        patch1, patch2 = random_spool[0], random_spool[1]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            stack_patches(spool, dim_vary="time", check_behavior=None)
 
     def test_different_dimensions(self, random_spool):
         """Tests for when the spool has patches with different dimensions."""

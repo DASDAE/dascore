@@ -257,7 +257,7 @@ assert len(subspool) + len(spool.select(tag='some_tag')) == len(spool)
 
 The patches' own coordinates are not accepted. Selecting on one trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering; select the ranges to keep instead, or use [`Patch.unselect`](`dascore.Patch.unselect`) on each patch.
 
-The coordinates an attached [inventory](inventory.qmd) defines along the fiber are different, and *are* accepted: removing one of those chooses which channels a patch holds, so `len` can grow here as well.
+The coordinates an attached [inventory](inventory.qmd) defines along the fiber are different, and *are* accepted: removing one of those chooses which channels a patch holds. A patch may then be cut into the pieces the query did not match, so `len` can grow here as well.
 
 # chunk
 

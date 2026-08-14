@@ -34,6 +34,7 @@ from dascore.constants import (
     namespace_select_type,
     numeric_types,
     path_types,
+    progress_description,
     timeable_types,
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
@@ -102,11 +103,10 @@ def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.copy(deep=not copy_on_write)
 
 
-_VALID_ON_UNRESOLVED = ("warn", "raise", "ignore")
-# Conform decides membership, not metadata, so where enrich's quiet option
-# is "ignore" -- leave the patch as it was -- conform's is "drop": every
-# policy here removes the patch, and only the noise differs.
-_VALID_ON_UNRESOLVED_CONFORM = ("raise", "warn", "ignore")
+# One vocabulary for both fiber verbs. What the quiet option leaves
+# behind still differs -- enrich leaves the patch as it was, conform
+# removes it -- but that is the verb's business rather than the value's.
+_VALID_ON_UNRESOLVED = ("raise", "warn", "ignore")
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.
@@ -417,6 +417,16 @@ def _normalize_enrich_kwargs(kwargs) -> dict:
         raise ParameterError(msg)
     bound = signature.bind_partial(**kwargs)
     bound.apply_defaults()
+    # False is enrich's off switch, and None is not a second spelling of
+    # it -- said here so the refusal lands on this call rather than on
+    # whichever patch is pulled first.
+    for label in ("attrs", "coords"):
+        if bound.arguments.get(label, False) is None:
+            msg = (
+                f"enrich's {label} must be True, False, or a collection of "
+                "names; pass False to copy none."
+            )
+            raise ParameterError(msg)
     # A collection of names means what it holds, not which container holds it.
     return {
         name: tuple(value) if isinstance(value, list) else value
@@ -1443,7 +1453,8 @@ class Spool(NamespaceOwner):
         # Settled now rather than on extraction: a misspelled argument
         # should be an error here, not on some patch pulled much later.
         enrich_kwargs = _normalize_enrich_kwargs(kwargs)
-        new = self._checked_inventory(on_unresolved, _VALID_ON_UNRESOLVED, "enrich")
+        self._check_inventory_policy(on_unresolved, "enrich")
+        new = self.__class__(self)
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
         return new
@@ -1459,7 +1470,7 @@ class Spool(NamespaceOwner):
         """
         Expand the spool into one patch per value of an inventory coordinate.
 
-        Most often an annotation group. Every kind of group splits: a
+        Most often an annotation group. Every kind of group expands: a
         categorical one by each of its strings, a membership group into
         the channels it includes and those it does not, and a numeric one
         by each distinct measurement. Intervals of one group may overlap,
@@ -1471,7 +1482,7 @@ class Spool(NamespaceOwner):
         Parameters
         ----------
         name
-            The inventory-derived coordinate to split on.
+            The inventory-derived coordinate to expand by.
         include, exclude
             Glob patterns matched against each value *written as a
             string*, which is what lets one spelling cover all three
@@ -1485,7 +1496,7 @@ class Spool(NamespaceOwner):
             Whether to record the value on each output patch as an attr
             named after the coordinate, so overlapping siblings stay
             distinguishable and later operations can select on it. Pass
-            False for a nested split, where the second should not
+            False for a nested expansion, where the second should not
             overwrite the first.
 
         Examples
@@ -1513,8 +1524,8 @@ class Spool(NamespaceOwner):
                 "fiber. Attach one with Spool.attach_inventory."
             )
             raise ParameterError(msg)
-        # A name the inventory could not contribute has no values to split
-        # into, so it would quietly give an empty spool. Selection refuses
+        # A name the inventory could not contribute has no values to
+        # expand into, so it would quietly give an empty spool. Selection refuses
         # a name it does not know, and a misspelling is no more meaningful
         # here than it is there.
         if name not in set(self._resolved_inventory().get_names().coords):
@@ -1622,11 +1633,8 @@ class Spool(NamespaceOwner):
             resolve_row_epochs,
         )
 
-        new = self._checked_inventory(
-            on_unresolved,
-            _VALID_ON_UNRESOLVED_CONFORM,
-            "conform_to_inventory",
-        )
+        self._check_inventory_policy(on_unresolved, "conform_to_inventory")
+        new = self
         source_rows, working = new._plan_frames()
         # The two frames are one relation split by column, so a row of
         # either is the same patch as the row beside it; the messages
@@ -1697,16 +1705,19 @@ class Spool(NamespaceOwner):
         )
         return self._new_from_catalog(catalog)
 
-    def _checked_inventory(self, on_unresolved, valid, method) -> Self:
+    def _check_inventory_policy(self, on_unresolved, method) -> None:
         """
-        Return the spool an inventory verb works on, arguments checked.
+        Refuse an inventory verb's arguments before it does any work.
 
-        Both verbs read the attached inventory and police their own policy
-        vocabulary before doing any work. Sharing the entry keeps the two
-        from drifting into saying it differently.
+        Both verbs read the attached inventory and police the same policy
+        vocabulary. Sharing the check keeps the two from drifting into
+        saying the same refusal differently.
         """
-        if on_unresolved not in valid:
-            msg = f"on_unresolved must be one of {valid}, got {on_unresolved!r}."
+        if on_unresolved not in _VALID_ON_UNRESOLVED:
+            msg = (
+                f"on_unresolved must be one of {_VALID_ON_UNRESOLVED}, "
+                f"got {on_unresolved!r}."
+            )
             raise ParameterError(msg)
         if self._inventory is None:
             msg = (
@@ -1714,7 +1725,6 @@ class Spool(NamespaceOwner):
                 "Spool.attach_inventory."
             )
             raise ParameterError(msg)
-        return self.__class__(self)
 
     def _restrict_to_rows(self, patch_ids, keep: bool = True) -> Self:
         """
@@ -1850,6 +1860,7 @@ class Spool(NamespaceOwner):
             yield self[start : start + step]
             start += step
 
+    @compose_docstring(progress_desc=progress_description)
     def map(
         self,
         func: Callable[..., T],
@@ -1872,11 +1883,7 @@ class Spool(NamespaceOwner):
             The number of patches in each spool mapped to a client.
             If not set, defaults to the number of processors on the host.
             Does nothing unless client is defined.
-        progress
-            Controls the progress bar. "standard" produces the standard
-            progress bar. "basic" is a simplified version with lower refresh
-            rates, best for high-latency environments, and None disables
-            the progress bar.
+        {progress_desc}
         **kwargs
             kwargs passed to func.
 
@@ -2339,6 +2346,7 @@ class Spool(NamespaceOwner):
         """True when any of this spool's patches live in memory."""
         return bool(self._catalog.resolver.live_entries())
 
+    @compose_docstring(progress_desc=progress_description)
     def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         Updates the contents of the spool, return the updated spool.
@@ -2352,11 +2360,7 @@ class Spool(NamespaceOwner):
 
         Parameters
         ----------
-        progress
-            Controls the progress bar. "standard" produces the standard
-            progress bar. "basic" is a simplified version with lower refresh
-            rates, best for high-latency environments, and None disables
-            the progress bar.
+        {progress_desc}
         """
         from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 

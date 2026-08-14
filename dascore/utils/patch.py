@@ -1121,7 +1121,7 @@ def check_dims(
         second patch
     check_behavior
         String with 'raise' will raise an error if incompatible,
-        'warn' will provide a warning, None will do nothing.
+        'warn' will provide a warning, 'ignore' will do nothing.
     intersection
         If True, allow any intersection of dimensions to pass. This is useful
         when only broadcastability needs to be checked. If false require dims
