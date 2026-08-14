@@ -1041,14 +1041,17 @@ class TestIndexerEdges:
         index_path = tmp_path / "empty.sqlite3"
         index_path.touch()
         indexer = DBDirectoryIndexer(tmp_path, index_path=index_path)
-        # the pre-created path is the index, and the first query fills it
-        assert indexer.index_path == index_path
-        spool = dc.spool(tmp_path)
         try:
-            assert spool.indexer.index_path == index_path
-            assert len(spool) == 1
-        finally:
-            spool.indexer.close()
+            # the pre-created path is the index, and the first query fills it
+            assert indexer.index_path == index_path
+            spool = dc.spool(tmp_path)
+            try:
+                assert spool.indexer.index_path == index_path
+                assert len(spool) == 1
+            finally:
+                spool.indexer.close()
+        finally:  # both handles, so Windows can clean the temp dir
+            indexer.close()
 
     def test_directory_format_unit(self, tmp_path):
         """Directory-format sources (xml binary) group as one scan unit."""
