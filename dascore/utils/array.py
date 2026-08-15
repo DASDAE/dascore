@@ -17,14 +17,40 @@ from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.models import ArrayLike
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.array_api import (
+    array_namespace,
+    asarray_like,
+    backend_name,
+    is_foreign,
+    warn_numpy_fallback,
+)
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
+    _to_numpy_arg,
     align_patch_coords,
     get_dim_axis_value,
     swap_kwargs_dim_to_axis,
 )
+
+# Numpy ufunc names which the array API standard spells differently.
+UFUNC_NAMES = {
+    "absolute": "abs",
+    "arccos": "acos",
+    "arccosh": "acosh",
+    "arcsin": "asin",
+    "arcsinh": "asinh",
+    "arctan": "atan",
+    "arctan2": "atan2",
+    "arctanh": "atanh",
+    "conjugate": "conj",
+    "invert": "bitwise_invert",
+    "left_shift": "bitwise_left_shift",
+    "power": "pow",
+    "right_shift": "bitwise_right_shift",
+    "rint": "round",
+}
 
 
 def _dummy_accumulate(array, axis=0, dtype=None, out=None):
@@ -47,8 +73,9 @@ def _raise_on_out(kwargs):
 
 def _clear_units_if_bool_dtype(patch):
     """Clear the units on the patch if it is a boolean."""
-    dtype = getattr(patch, "dtype", None)
-    if dtype is not None and np.issubdtype(dtype, np.bool_):
+    if (dtype := getattr(patch, "dtype", None)) is None:
+        return patch
+    if array_namespace(patch.data).isdtype(dtype, "bool"):
         return patch.update_attrs(data_units=None)
     return patch
 
@@ -149,6 +176,37 @@ def convert_bytes_to_strings(data: ArrayLike, original_dtype="") -> np.ndarray:
     return out
 
 
+def _get_backend_ufunc(ufunc, array):
+    """Get the array API equivalent of a numpy ufunc, or None if it has none."""
+    name = UFUNC_NAMES.get(ufunc.__name__, ufunc.__name__)
+    return getattr(array_namespace(array), name, None)
+
+
+def _as_backend(value, template):
+    """Put a ufunc operand in the same array namespace as template."""
+    # Python scalars are valid operands for any backend, as are arrays which
+    # already belong to it.
+    if isinstance(value, int | float | complex | bool) or is_foreign(value):
+        return value
+    return asarray_like(value, template)
+
+
+def _apply_operator(operator, *arrays, **kwargs):
+    """
+    Apply a ufunc to arrays, one of which may not be numpy backed.
+
+    Numpy data are passed to the numpy ufunc, everything else uses the
+    matching function from its own array API namespace.
+    """
+    template = next((x for x in arrays if is_foreign(x)), None)
+    if template is None:
+        return operator(*arrays, **kwargs)
+    func = _get_backend_ufunc(operator, template)
+    assert func is not None, f"{operator.__name__} has no array API equivalent."
+    arrays = tuple(_as_backend(x, template) for x in arrays)
+    return func(*arrays, **kwargs)
+
+
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     """
     Create a patch from a unary ufunc.
@@ -169,7 +227,7 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     -----
     We assume the shape of the array won't change.
     """
-    out = operator(patch.data, *args, **kwargs)
+    out = _apply_operator(operator, patch.data, *args, **kwargs)
     return patch.new(data=out)
 
 
@@ -232,20 +290,24 @@ def _apply_binary_ufunc(
         """Deal with broadcasting a patch and an array."""
         # This handles warning from quantity.
         other = other.magnitude if hasattr(other, "magnitude") else other
-        other = np.asanyarray(other)
-        if patch.shape == other.shape:
+        # Only the shape is needed here, so don't convert arrays which
+        # already have one; that would materialize non-numpy data.
+        if (shape := getattr(other, "shape", None)) is None:
+            shape = np.asanyarray(other).shape
+        # Scalars broadcast against anything.
+        if not shape or patch.shape == shape:
             return patch
-        if (patch_ndims := patch.ndim) < (array_ndims := other.ndim):
+        if (patch_ndims := patch.ndim) < (array_ndims := len(shape)):
             msg = f"Cannot broadcast patch/array {patch_ndims=} {array_ndims=}"
             raise PatchBroadcastError(msg)
-        patch = patch.make_broadcastable_to(other.shape)
+        patch = patch.make_broadcastable_to(shape)
         return patch
 
     def _apply_op(array1, array2, operator, reversed=False):
         """Simply apply the operator, account for reversal."""
         if reversed:
             array1, array2 = array2, array1
-        return operator(array1, array2, *args, **kwargs)
+        return _apply_operator(operator, array1, array2, *args, **kwargs)
 
     def _apply_op_units(patch, other, operator, attrs, reversed=False):
         """Apply the operation handling units attached to array."""
@@ -515,8 +577,18 @@ def _reassemble_patch(result, patch, func, args, kwargs):
 def apply_array_func(func, *args, **kwargs):
     """
     Apply an array function.
+
+    Numpy functions have no array API equivalent, so patches from other
+    backends are converted to numpy and the result converted back.
     """
     _raise_on_out(kwargs)
+    if (data := _get_foreign_data(args, kwargs)) is not None:
+        return _numpy_fallback_call(_apply_array_func, func, args, kwargs, data)
+    return _apply_array_func(func, *args, **kwargs)
+
+
+def _apply_array_func(func, *args, **kwargs):
+    """Apply an array function to numpy backed patches."""
     # Only handle functions involving Patches
     patches = _find_patches(args, kwargs)
     assert len(patches), "No patches found in apply_array_func"
@@ -549,6 +621,37 @@ UFUNC_MAP = {
     "reduce": apply_array_func,
     "accumulate": apply_array_func,
 }
+
+
+def _get_foreign_data(args, kwargs):
+    """Return the data of the first non-numpy backed operand, or None."""
+    values = (*args, *kwargs.values())
+    patch_data = (x.data for x in values if isinstance(x, dc.Patch))
+    return next((x for x in (*patch_data, *values) if is_foreign(x)), None)
+
+
+def _backend_can_apply(ufunc, key, args, kwargs, data):
+    """Determine if a ufunc can be applied in the data's own namespace."""
+    # Only element-wise ufuncs have array API equivalents; reductions and
+    # numpy functions (__array_function__) have to use numpy.
+    if key not in ((1, 1), (2, 1)):
+        return False
+    # Units are implemented with pint, which only wraps numpy arrays.
+    if any(isinstance(x, Quantity | Unit) for x in (*args, *kwargs.values())):
+        return False
+    return _get_backend_ufunc(ufunc, data) is not None
+
+
+def _numpy_fallback_call(runner, func, args, kwargs, data):
+    """Apply an operation numpy can perform but the input's backend cannot."""
+    name = getattr(func, "__name__", "operation")
+    warn_numpy_fallback(name, backend_name(data), stacklevel=3)
+    args = tuple(_to_numpy_arg(x) for x in args)
+    kwargs = {i: _to_numpy_arg(v) for i, v in kwargs.items()}
+    out = runner(func, *args, **kwargs)
+    if isinstance(out, dc.Patch):
+        out = out.new(data=asarray_like(out.data, data))
+    return out
 
 
 def apply_ufunc(ufunc, *args, **kwargs):
@@ -597,7 +700,11 @@ def apply_ufunc(ufunc, *args, **kwargs):
             f"supported for use with Patch. Use the patch.data array directly."
         )
         raise ParameterError(msg)
-    out = func(ufunc, *args, **kwargs)
+    data = _get_foreign_data(args, kwargs)
+    if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
+        out = func(ufunc, *args, **kwargs)
+    else:
+        out = _numpy_fallback_call(func, ufunc, args, kwargs, data)
     return _clear_units_if_bool_dtype(out)
 
 

@@ -4,6 +4,9 @@ Tests for patch ufuncs.
 
 from __future__ import annotations
 
+import warnings
+from contextlib import contextmanager
+
 import numpy as np
 import pytest
 from pint import DimensionalityError
@@ -15,6 +18,7 @@ from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
 from dascore.utils.array import (
+    UFUNC_NAMES,
     PatchUFunc,
     _BoundPatchUFunc,
     apply_array_func,
@@ -24,6 +28,20 @@ from dascore.utils.array import (
     hash_array,
     is_string_byte_serializable_array,
 )
+from dascore.utils.array_api import backend_name
+from dascore.warnings import NumpyFallbackWarning
+
+# array_api_strict is a test dependency, but some environments (eg wasm)
+# install dascore without the test extras.
+xps = pytest.importorskip("array_api_strict")
+
+
+@contextmanager
+def warnings_as_errors():
+    """A context manager which raises rather than warns."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        yield
 
 
 class TestApplyUfunc:
@@ -708,3 +726,102 @@ class TestHashArray:
         """Datetime arrays should hash without special casing at call sites."""
         arr = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
         assert hash_array(arr) == hash_array(arr.copy())
+
+
+class TestArrayBackends:
+    """Tests for operators applied to patches backed by other array libraries."""
+
+    @pytest.fixture(scope="class")
+    def strict_patch(self, random_patch) -> dc.Patch:
+        """A patch whose data are backed by array_api_strict."""
+        return random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
+
+    def _assert_matches_numpy(self, out, expected):
+        """The output keeps its backend and agrees with the numpy result."""
+        assert backend_name(out.data) == "array_api_strict"
+        assert np.allclose(np.asarray(out.data), np.asarray(expected.data))
+
+    def test_scalar_operand(self, strict_patch, random_patch):
+        """Operations with python scalars stay on the patch's backend."""
+        with warnings_as_errors():
+            out = strict_patch / 10 + 1
+        self._assert_matches_numpy(out, random_patch / 10 + 1)
+
+    def test_patch_operand(self, strict_patch, random_patch):
+        """So do operations between two patches."""
+        with warnings_as_errors():
+            out = strict_patch * strict_patch
+        self._assert_matches_numpy(out, random_patch * random_patch)
+
+    def test_reversed_operand(self, strict_patch, random_patch):
+        """Reversed operators (scalar on the left) also work."""
+        with warnings_as_errors():
+            out = 1 - strict_patch
+        self._assert_matches_numpy(out, 1 - random_patch)
+
+    def test_unary_ufunc(self, strict_patch, random_patch):
+        """Unary ufuncs use the backend's own implementation."""
+        with warnings_as_errors():
+            out = np.exp(strict_patch)
+        self._assert_matches_numpy(out, np.exp(random_patch))
+
+    def test_numpy_array_operand(self, strict_patch, random_patch):
+        """A numpy array operand is converted to the patch's backend."""
+        other = np.ones(strict_patch.shape)
+        with warnings_as_errors():
+            out = strict_patch + other
+        self._assert_matches_numpy(out, random_patch + other)
+
+    def test_comparison_clears_units(self, strict_patch):
+        """Comparisons return bool data, which have no units."""
+        with warnings_as_errors():
+            out = strict_patch > 0
+        assert backend_name(out.data) == "array_api_strict"
+        assert xps.isdtype(out.data.dtype, "bool")
+        assert out.attrs.data_units is None
+
+    def test_dtype_argument(self, strict_patch):
+        """A dtype argument is not mistaken for an array from the backend."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = strict_patch.add.reduce(dim="time", dtype=np.float32)
+        assert backend_name(out.data) == "array_api_strict"
+
+    def test_reduce_falls_back(self, strict_patch, random_patch):
+        """Reductions have no array API equivalent, so they use numpy."""
+        with pytest.warns(NumpyFallbackWarning, match="reduce"):
+            out = strict_patch.add.reduce(dim="time")
+        self._assert_matches_numpy(out, random_patch.add.reduce(dim="time"))
+
+    def test_array_function_falls_back(self, strict_patch, random_patch):
+        """So do numpy functions applied to a patch."""
+        with pytest.warns(NumpyFallbackWarning, match="mean"):
+            out = np.mean(strict_patch, axis=0)
+        self._assert_matches_numpy(out, np.mean(random_patch, axis=0))
+
+    def test_units_fall_back(self, strict_patch, random_patch):
+        """Units are implemented with pint, which only wraps numpy arrays."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = strict_patch * get_quantity("m")
+        expected = random_patch * get_quantity("m")
+        self._assert_matches_numpy(out, expected)
+        assert out.attrs.data_units == expected.attrs.data_units
+
+    def test_ufunc_without_equivalent_falls_back(self, strict_patch, random_patch):
+        """Ufuncs the standard doesn't define use numpy."""
+        with pytest.warns(NumpyFallbackWarning, match="fmod"):
+            out = np.fmod(strict_patch, 2)
+        self._assert_matches_numpy(out, np.fmod(random_patch, 2))
+
+    @pytest.mark.parametrize("numpy_name,array_api_name", sorted(UFUNC_NAMES.items()))
+    def test_renamed_ufuncs_exist(self, numpy_name, array_api_name):
+        """Each renamed ufunc exists under both names."""
+        assert isinstance(getattr(np, numpy_name), np.ufunc)
+        assert hasattr(xps, array_api_name)
+
+    @pytest.mark.parametrize("ufunc", [np.absolute, np.power, np.arctan2, np.rint])
+    def test_renamed_ufunc_values(self, ufunc, strict_patch, random_patch):
+        """Renamed ufuncs give the same answer as numpy does."""
+        with warnings_as_errors():
+            out = ufunc(strict_patch, 2) if ufunc.nin == 2 else ufunc(strict_patch)
+        expected = ufunc(random_patch, 2) if ufunc.nin == 2 else ufunc(random_patch)
+        self._assert_matches_numpy(out, expected)

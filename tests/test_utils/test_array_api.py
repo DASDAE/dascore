@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
+import sys
 import warnings
+from collections.abc import Callable
 from contextlib import contextmanager
+from typing import NamedTuple
 
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.utils.array_api import (
+    ARRAY_API_BACKEND,
     asarray_like,
     backend_name,
     is_numpy,
@@ -206,3 +212,118 @@ class TestNonStandardArrayLike:
         with warnings_as_errors():
             out = array_like_patch.transpose()
         assert out.dims == array_like_patch.dims[::-1]
+
+
+def _identity(patch):
+    """Return the patch unchanged."""
+    return patch
+
+
+class _Case(NamedTuple):
+    """How to exercise one patch function on a non-numpy backend."""
+
+    call: Callable
+    setup: Callable = _identity
+
+
+# Every patch function which declares the array API backend needs an entry
+# here, which is also the inventory of what has been converted so far.
+# setup runs on the numpy patch, before it is moved to another backend.
+ARRAY_API_CASES = {
+    "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
+    "dascore.proc.coords.squeeze": _Case(
+        call=lambda patch: patch.squeeze(),
+        setup=lambda patch: patch.select(distance=0, samples=True),
+    ),
+}
+
+
+def _get_patch_functions() -> dict[str, Callable]:
+    """Return every patch function dascore defines, keyed by qualified name."""
+    for module in pkgutil.walk_packages(dc.__path__, "dascore."):
+        importlib.import_module(module.name)
+    out = {}
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("dascore"):
+            continue
+        for obj in vars(module).values():
+            if callable(obj) and isinstance(getattr(obj, "backends", None), dict):
+                out[f"{obj.__module__}.{obj.__qualname__}"] = obj
+    return out
+
+
+PATCH_FUNCTIONS = _get_patch_functions()
+ARRAY_API_FUNCTIONS = {
+    i: v for i, v in PATCH_FUNCTIONS.items() if ARRAY_API_BACKEND in v.backends
+}
+
+
+class TestArrayApiPatchFunctions:
+    """Every patch function which declares the array API must work on it."""
+
+    def test_patch_functions_found(self):
+        """The discovery finds dascore's patch functions."""
+        assert len(PATCH_FUNCTIONS) > 50
+        assert "dascore.proc.detrend.detrend" in PATCH_FUNCTIONS
+
+    def test_every_function_has_a_case(self):
+        """Declaring the array API backend requires proving it works."""
+        missing = sorted(set(ARRAY_API_FUNCTIONS) - set(ARRAY_API_CASES))
+        assert not missing, f"add an ARRAY_API_CASES entry for: {missing}"
+
+    def test_no_stale_cases(self):
+        """Cases for functions which no longer declare the array API."""
+        stale = sorted(set(ARRAY_API_CASES) - set(ARRAY_API_FUNCTIONS))
+        assert not stale, f"remove the ARRAY_API_CASES entry for: {stale}"
+
+    @pytest.mark.parametrize("name", sorted(ARRAY_API_CASES))
+    def test_backend_preserved(self, name, random_patch):
+        """The function runs on another backend, unconverted, with no warning."""
+        case = ARRAY_API_CASES[name]
+        numpy_patch = case.setup(random_patch)
+        patch = numpy_patch.new(data=xps.asarray(np.asarray(numpy_patch.data)))
+        with warnings_as_errors():
+            out = case.call(patch)
+        # A function which returns its input proves nothing about the backend.
+        assert out is not patch
+        assert backend_name(out.data) == "array_api_strict"
+        expected = case.call(numpy_patch)
+        assert np.allclose(np.asarray(out.data), np.asarray(expected.data))
+
+
+class TestRegisterBackend:
+    """Tests for naming the backend an implementation is registered under."""
+
+    @pytest.fixture
+    def patch_func(self):
+        """A patch function with only a numpy implementation."""
+
+        @dc.patch_function()
+        def func(patch):
+            return patch
+
+        return func
+
+    def test_string(self, patch_func):
+        """A backend can be named with a string."""
+        patch_func.register("array_api_strict")(_identity)
+        assert "array_api_strict" in patch_func.backends
+
+    def test_namespace(self, patch_func):
+        """It can also be named with the array namespace itself."""
+        patch_func.register(xps)(_identity)
+        assert "array_api_strict" in patch_func.backends
+
+    def test_array(self, patch_func):
+        """Or with an example array."""
+        patch_func.register(xps.asarray([1.0]))(_identity)
+        assert "array_api_strict" in patch_func.backends
+
+    def test_decorator_argument(self):
+        """The decorator's backend argument accepts the same forms."""
+
+        @dc.patch_function(backend=np)
+        def func(patch):
+            return patch
+
+        assert set(func.backends) == {"numpy"}
