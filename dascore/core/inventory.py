@@ -721,6 +721,14 @@ class CouplingCondition(_IntervalModel):
     )
 
 
+def _wanted(field: str, info) -> bool:
+    """Whether a serialization's own include/exclude asked for a field."""
+    if (exclude := getattr(info, "exclude", None)) and field in exclude:
+        return False
+    include = getattr(info, "include", None)
+    return not include or field in include
+
+
 class OpticalPathAnnotation(_IntervalModel):
     """
     Key/value annotation attached to an interval of an optical path.
@@ -752,6 +760,29 @@ class OpticalPathAnnotation(_IntervalModel):
             )
             raise ValueError(msg)
         return value
+
+    def _write_object_type(self, handler, info):
+        """
+        Tag the document as every model does, and keep the value with it.
+
+        Overridden rather than added beside: pydantic runs one model
+        serializer per class, so a second one here would take the base's
+        place and drop the ``object_type`` every document is dispatched by.
+
+        The value itself needs putting back because ``exclude_defaults``
+        compares with ``==`` and ``1 == True``, the default. A group
+        numbered from one would otherwise lose every ``1`` on the way out
+        and reload holding a boolean, which then mixes kinds with the
+        numbers beside it and is refused. Identity is what "still its
+        default" means for a field admitting both. A caller who asked for
+        the value to be left out is obeyed: this restores what
+        exclude_defaults dropped, not what anyone chose to filter.
+        """
+        out = super()._write_object_type(handler, info)
+        if "value" in out or self.value is True or not _wanted("value", info):
+            return out
+        out["value"] = self.value
+        return out
 
 
 # The coordinates a DistanceMap may be written in, in preference order.
