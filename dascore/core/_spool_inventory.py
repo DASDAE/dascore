@@ -34,6 +34,7 @@ from dascore.core.inventory import (
     Inventory,
     ResolvedContext,
     _annotation_kind,
+    axis_columns,
     interval_masks,
 )
 from dascore.core.inventory_loader import BLESSED_NAME, find_inventory
@@ -666,7 +667,9 @@ def _get_geometry_coord(inventory, path, label, distances):
         index = crs.axis_index(label)
     except InvalidInventoryError:
         return None
-    if not path.geometry:
+    # Geometry which places nothing defines no axis, so the caller's
+    # on_missing policy rules rather than a column of nan.
+    if not any(axis_columns(x, crs) for x in path.geometry):
         return None
     coords = path.coordinates_at(distances, crs)
     if index >= coords.shape[1]:

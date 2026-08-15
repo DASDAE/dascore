@@ -992,6 +992,15 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     not a position, and guessing the missing axis is not a reader's job.
     """
     labels = tuple(crs.coordinate_labels)
+
+    def is_axis(name: str) -> bool:
+        """Whether the CRS reads this header as one of its own axes."""
+        try:
+            crs.axis_index(name)
+        except InvalidInventoryError:
+            return False
+        return True
+
     renamed, units = {}, {}
     for header in frame.columns:
         if header in {"segment", "distance"}:
@@ -1002,25 +1011,26 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
         renamed[header] = name
         if not unit:
             continue
-        if name in labels or name in {"x", "y", "z"}:
+        if is_axis(name):
             msg = (
                 f"{_quote(path)} states units for {name!r}, which is a "
                 "position axis; the CRS states the units of its own axes."
             )
             raise InvalidInventoryError(msg)
         units[name] = unit
-    stated = set(renamed.values())
-    if len(stated) != len(renamed):
-        repeated = sorted(
-            {x for x in renamed.values() if list(renamed.values()).count(x) > 1}
-        )
+    # Counted against the structural columns as well: `distance (m)` renames
+    # to a column the table already has, and two of them would reach pandas
+    # rather than this message.
+    written = [*renamed.values(), "segment", "distance"]
+    if repeated := sorted({x for x in written if written.count(x) > 1}):
         msg = (
             f"{_quote(path)} names the column(s) {repeated} more than once; "
             "one column states one thing."
         )
         raise InvalidInventoryError(msg)
-    axes = stated & set(labels)
-    if axes and axes != set(labels):
+    stated = set(renamed.values())
+    axes = {x for x in stated if is_axis(x)}
+    if axes and len(axes) != len(labels):
         msg = (
             f"{_quote(path)} states the axis column(s) {sorted(axes)}, but "
             f"its frame declares {list(labels)}; a segment states every axis "

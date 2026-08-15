@@ -376,6 +376,21 @@ class TestGeometryColumns:
         # acquisition maps path distance 100 onto channel 0.
         assert depth.max() < patch.get_coord("distance").max()
 
+    def test_an_axis_is_missing_where_nothing_places_the_fiber(self, patch, inventory):
+        """Geometry which measures but does not place defines no axis."""
+        segment = Geometry(
+            name="hole",
+            distance=(100.0, 200.0),
+            coordinates={"borehole_depth": (0.0, 100.0)},
+        )
+        inv = _replace_path(inventory, geometry=(segment,))
+        with pytest.raises(PatchError, match="defines no 'x'"):
+            patch.enrich(inv, attrs=False, coords=("x",))
+        # And a blanket request does not offer one either.
+        out = patch.enrich(inv, attrs=False)
+        assert "x" not in set(out.coords.coord_map)
+        assert "borehole_depth" in set(out.coords.coord_map)
+
     def test_a_column_does_not_bridge_segments(self, patch, inventory):
         """Two holes are two holes, and the fiber between them is neither."""
         first = Geometry(

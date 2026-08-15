@@ -333,10 +333,10 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     crs = inventory.coordinate_reference_system
     labels = crs.coordinate_labels
-    out = ["x", "y", "z"][: len(labels)] if path.geometry else []
-    # The axes are copied under their canonical names, so a column which is
-    # one of them is already covered; the rest come under their own.
+    # The axes are copied under their canonical names, and only where some
+    # segment actually places the fiber; the rest come under their own.
     axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
+    out = ["x", "y", "z"][: len(labels)] if axes else []
     out += [x for x in path.geometry_columns() if x not in axes]
     seen = dict.fromkeys(x.group for x in path.annotations)
     return out + [x for x in seen if x]

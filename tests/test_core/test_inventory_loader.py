@@ -1220,6 +1220,37 @@ class TestTrackTables:
         with pytest.raises(InvalidInventoryError, match=r"annotations\.csv"):
             make_inventory(files)
 
+    def test_a_structural_column_restated_with_units(self, make_inventory):
+        """`distance (m)` renames onto a column the table already has."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,distance (m)\nS100,100.0,100.0\nS100,102.0,102.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="more than once"):
+            make_inventory(files)
+
+    def test_a_canonical_name_the_crs_has_no_axis_for(self, make_inventory):
+        """`z` is a column of its own where the CRS declares two axes."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "inventory.yaml": (
+                "object_type: Inventory\n"
+                "coordinate_reference_system:\n"
+                "  coordinate_labels: [easting, northing]\n"
+                "  units: [meter, meter]\n"
+            ),
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,z (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
+            ),
+        }
+        geometry = one_path(make_inventory(files)).geometry[0]
+        assert geometry.coordinates["z"] == (0.0, 2.0)
+        assert geometry.units["z"] == "m"
+
     def test_one_column_stated_twice(self, make_inventory):
         """A unit suffix is not a second column, however it is spelled."""
         files = {

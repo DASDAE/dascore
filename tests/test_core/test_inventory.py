@@ -344,6 +344,108 @@ class TestGeometryColumns:
         assert path.column_at("azimuth", [5.0]) is None
 
 
+class TestGeometryColumnReviewFindings:
+    """What a review of the column form found, kept as regressions."""
+
+    @staticmethod
+    def _path(*geometry):
+        return inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            geometry=geometry,
+        )
+
+    def _inventory(self, *geometry, crs=None):
+        array = inv.FiberArray(code="L001", optical_paths=(self._path(*geometry),))
+        return inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
+            **({"coordinate_reference_system": crs} if crs else {}),
+        )
+
+    def test_two_spellings_of_one_axis_overlap(self):
+        """Checking columns by name alone would let these two through."""
+        canonical = inv.Geometry(
+            name="a",
+            distance=(0.0, 10.0),
+            coordinates={"x": (0.0, 10.0), "y": (0.0, 10.0), "z": (0.0, 10.0)},
+        )
+        labelled = inv.Geometry(
+            name="b",
+            distance=(5.0, 15.0),
+            coordinates={
+                "longitude": (100.0, 110.0),
+                "latitude": (100.0, 110.0),
+                "elevation": (100.0, 110.0),
+            },
+        )
+        with pytest.raises(InvalidInventoryError, match="for axis"):
+            self._inventory(canonical, labelled).check()
+
+    def test_an_axis_stated_twice_is_refused_when_placing(self):
+        """Otherwise whichever spelling came last would win, silently."""
+        doubled = inv.Geometry(
+            name="doubled",
+            distance=(0.0, 10.0),
+            coordinates={
+                "x": (0.0, 10.0),
+                "longitude": (100.0, 110.0),
+                "y": (0.0, 1.0),
+                "z": (0.0, 1.0),
+            },
+        )
+        crs = inv.CoordinateReferenceSystem()
+        with pytest.raises(InvalidInventoryError, match="twice"):
+            self._path(doubled).coordinates_at([5.0], crs)
+
+    def test_a_column_segment_does_not_claim_a_position_run_end(self):
+        """The position track's coverage is the segments which place it."""
+        placed = inv.Geometry(
+            name="placed",
+            distance=(0.0, 10.0),
+            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+        )
+        measured = inv.Geometry(
+            name="measured",
+            distance=(10.0, 20.0),
+            coordinates={"borehole_depth": (0.0, 10.0)},
+        )
+        crs = inv.CoordinateReferenceSystem()
+        out = self._path(placed, measured).coordinates_at([10.0], crs)
+        assert np.allclose(out, [[1.0, 1.0, 1.0]])
+
+    def test_a_dotted_column_name(self):
+        """A dotted name is how a field of a typed track is asked for."""
+        dotted = inv.Geometry(
+            distance=(0.0, 10.0), coordinates={"coupling.depth": (0.0, 1.0)}
+        )
+        with pytest.raises(InvalidInventoryError, match="dotted name"):
+            self._inventory(dotted).check()
+
+    def test_select_revalidates_the_columns_it_writes(self):
+        """model_copy would skip the validators and leave a mutable dict."""
+        segment = inv.Geometry(
+            name="run",
+            distance=(0.0, 10.0),
+            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+        )
+        out = self._path(segment).select(distance=(2.0, 8.0))
+        coordinates = out.geometry[0].coordinates
+        assert isinstance(coordinates, Mapping)
+        with pytest.raises(TypeError):
+            coordinates["x"] = (0.0,)
+
+    def test_a_canonical_name_the_crs_has_no_axis_for(self):
+        """`z` is a column of its own where the CRS declares two axes."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        segment = inv.Geometry(
+            distance=(0.0, 10.0), coordinates={"z": (0.0, 1.0)}, units={"z": "m"}
+        )
+        inventory = self._inventory(segment, crs=crs)
+        assert inventory.check() is inventory
+        assert "z" in inventory.get_names().coords
+
+
 class TestGeometry:
     """Geometry segment rules."""
 

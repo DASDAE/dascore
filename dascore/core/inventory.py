@@ -1053,6 +1053,39 @@ def axis_columns(segment, crs) -> dict[str, int]:
     return out
 
 
+def _axis_set_errors(segment, axes: Mapping[str, int], crs) -> list[str]:
+    """Return what is wrong with the set of axes one segment states."""
+    what = f"Geometry {segment.name!r}" if segment.name else "A geometry"
+    spellings: dict[int, list[str]] = {}
+    for name, index in axes.items():
+        spellings.setdefault(index, []).append(name)
+    errors = [
+        f"{what} states axis {crs.coordinate_labels[index]!r} twice, as "
+        f"{sorted(names)}."
+        for index, names in sorted(spellings.items())
+        if len(names) > 1
+    ]
+    if axes and len(spellings) != len(crs.coordinate_labels):
+        errors.append(
+            f"{what} states the axes {sorted(axes)} but the inventory CRS "
+            f"declares {list(crs.coordinate_labels)}; a segment states every "
+            "axis or none of them."
+        )
+    return errors
+
+
+def _check_axis_set(segment, axes: Mapping[str, int], crs) -> None:
+    """
+    Refuse a segment whose axes are partial or doubly spelled.
+
+    A checked inventory cannot reach this; an unchecked one says so rather
+    than filling a position from whichever spelling the mapping happened to
+    hold last, or leaving an axis reading as uncovered distance.
+    """
+    if errors := _axis_set_errors(segment, axes, crs):
+        raise InvalidInventoryError(" ".join(errors))
+
+
 def _track_identity_fields() -> Mapping[str, str]:
     """
     Map each typed track of an optical path to the field its name means.
@@ -1208,22 +1241,18 @@ class OpticalPath(TimeRangedModel):
         """
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         out = np.full((len(dist), len(crs.coordinate_labels)), np.nan)
-        if not self.geometry:
+        placing = [x for x in self.geometry if axis_columns(x, crs)]
+        if not placing:
             return out
-        masks = interval_masks(dist, [x.interval for x in self.geometry])
-        for segment, mask in zip(self.geometry, masks, strict=True):
+        # Only the segments which place the fiber decide the position track's
+        # coverage. A depth-only segment starting where one of them ends is
+        # not a rival for that distance, and letting it claim the run end
+        # would take the last surveyed point off the position it belongs to.
+        masks = interval_masks(dist, [x.interval for x in placing])
+        for segment, mask in zip(placing, masks, strict=True):
             axes = axis_columns(segment, crs)
-            if axes and len(set(axes.values())) != len(crs.coordinate_labels):
-                # Half a position is not one. A checked inventory cannot get
-                # here; an unchecked one says so rather than handing back a
-                # row whose missing axis reads as uncovered distance.
-                msg = (
-                    f"Geometry {segment.name!r} states the axes {sorted(axes)} "
-                    f"but the CRS declares {list(crs.coordinate_labels)}; a "
-                    "segment states every axis or none of them."
-                )
-                raise InvalidInventoryError(msg)
-            if not axes or not np.any(mask):
+            _check_axis_set(segment, axes, crs)
+            if not np.any(mask):
                 continue
             values = segment.interpolate(dist[mask])
             rows = np.flatnonzero(mask)
@@ -1329,6 +1358,12 @@ class OpticalPath(TimeRangedModel):
                 "becomes a coordinate and cannot shadow a structural "
                 "coordinate or a typed track."
             )
+        for name in sorted(x for x in spans if "." in x):
+            errors.append(
+                f"Geometry column {name!r} states a dotted name, which is "
+                "how a field of a typed track is asked for; a column is "
+                "asked for by a name of its own."
+            )
         groups = {x.group for x in self.annotations if x.group}
         for name in sorted(set(spans) & groups):
             errors.append(
@@ -1417,14 +1452,10 @@ class OpticalPath(TimeRangedModel):
                 name: tuple(np.interp(new_dist, dist, np.asarray(values, dtype=float)))
                 for name, values in seg.coordinates.items()
             }
-            geometry.append(
-                seg.model_copy(
-                    update={
-                        "distance": tuple(new_dist),
-                        "coordinates": new_coords,
-                    }
-                )
-            )
+            # new(), not model_copy(): a copy skips the validators, and
+            # would leave `coordinates` a plain mutable dict whose columns
+            # nothing had checked against the new distance array.
+            geometry.append(seg.new(distance=tuple(new_dist), coordinates=new_coords))
         outer = self.end_distance
         coupling = _clip_intervals(self.coupling, lo, hi, outer)
         annotations = _clip_intervals(self.annotations, lo, hi, outer)
@@ -1464,14 +1495,12 @@ class OpticalPath(TimeRangedModel):
         for seg in self.geometry:
             dist = np.asarray(seg.distance, dtype=float)
             geometry.append(
-                seg.model_copy(
-                    update={
-                        "distance": tuple(flip(dist)[::-1]),
-                        "coordinates": {
-                            name: tuple(values[::-1])
-                            for name, values in seg.coordinates.items()
-                        },
-                    }
+                seg.new(
+                    distance=tuple(flip(dist)[::-1]),
+                    coordinates={
+                        name: tuple(values[::-1])
+                        for name, values in seg.coordinates.items()
+                    },
                 )
             )
         geometry.sort(key=lambda s: s.distance[0])
@@ -2225,6 +2254,7 @@ class Inventory(InventoryModel):
                 for path in array.optical_paths:
                     for segment in path.geometry:
                         errors.extend(self._check_segment_axes(segment, crs))
+                    errors.extend(self._check_axis_overlap(path, crs))
             for station in net.stations:
                 if station.coordinates is not None:
                     check_width(len(station.coordinates), f"Station {station.code!r}")
@@ -2247,27 +2277,37 @@ class Inventory(InventoryModel):
         """
         what = f"Geometry {segment.name!r}" if segment.name else "A geometry"
         axes = axis_columns(segment, crs)
-        errors = []
-        spellings: dict[int, list[str]] = {}
-        for name, index in axes.items():
-            spellings.setdefault(index, []).append(name)
-        for index, names in sorted(spellings.items()):
-            if len(names) > 1:
-                errors.append(
-                    f"{what} states axis {crs.coordinate_labels[index]!r} "
-                    f"twice, as {sorted(names)}."
-                )
-        if axes and len(set(axes.values())) != len(crs.coordinate_labels):
-            errors.append(
-                f"{what} states the axes {sorted(axes)} but the inventory "
-                f"CRS declares {list(crs.coordinate_labels)}; a segment "
-                "states every axis or none of them."
-            )
+        errors = _axis_set_errors(segment, axes, crs)
         if on_axes := sorted(set(segment.units) & set(axes)):
             errors.append(
                 f"{what} states units for the axis column(s) {on_axes}; the "
                 "CRS states the units of its own axes."
             )
+        return errors
+
+    @staticmethod
+    def _check_axis_overlap(path, crs) -> list[str]:
+        """
+        Check that two segments do not place the same axis twice.
+
+        The path checks its columns by name, which is all it can do; two
+        spellings of one axis are two names there and one axis here, so the
+        overlap has to be looked for again against what the CRS says.
+        """
+        spans: dict[int, list[tuple[float, float]]] = {}
+        for segment in path.geometry:
+            for index in set(axis_columns(segment, crs).values()):
+                spans.setdefault(index, []).append(segment.interval)
+        errors = []
+        for index in sorted(spans):
+            overlap = _intervals_overlap(spans[index])
+            if overlap is not None:
+                errors.append(
+                    f"Overlapping geometry intervals {overlap[0]} and "
+                    f"{overlap[1]} for axis "
+                    f"{crs.coordinate_labels[index]!r}; an axis is a "
+                    "function track."
+                )
         return errors
 
     def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
