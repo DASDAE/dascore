@@ -986,12 +986,13 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     """
     Read a geometry table's headers, and refuse what cannot be a column.
 
-    A header naming an axis the CRS declares is that axis; every other one
-    is a numeric column in its own right, which may carry its units in
-    parentheses. The axes are all stated or none are: a partial position is
-    not a position, and guessing the missing axis is not a reader's job.
+    A header naming an axis the CRS declares is that axis and takes the
+    CRS's units; every other one is a numeric column in its own right, and
+    may carry its units in parentheses. The axes are all stated or none
+    are, since guessing the missing one is not a reader's job. Text is
+    refused: a value which varies along the fiber without being a number
+    is what annotations are for.
     """
-    labels = tuple(crs.coordinate_labels)
 
     def is_axis(name: str) -> bool:
         """Whether the CRS reads this header as one of its own axes."""
@@ -1001,6 +1002,7 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
             return False
         return True
 
+    labels = tuple(crs.coordinate_labels)
     renamed, units = {}, {}
     for header in frame.columns:
         if header in {"segment", "distance"}:
@@ -1009,15 +1011,14 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
         if (match := _UNIT_SUFFIX.match(header)) is not None:
             name, unit = match.group("name"), match.group("units").strip()
         renamed[header] = name
-        if not unit:
-            continue
-        if is_axis(name):
+        if unit and is_axis(name):
             msg = (
                 f"{_quote(path)} states units for {name!r}, which is a "
                 "position axis; the CRS states the units of its own axes."
             )
             raise InvalidInventoryError(msg)
-        units[name] = unit
+        if unit:
+            units[name] = unit
     # Counted against the structural columns as well: `distance (m)` renames
     # to a column the table already has, and two of them would reach pandas
     # rather than this message.
@@ -1028,8 +1029,7 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
             "one column states one thing."
         )
         raise InvalidInventoryError(msg)
-    stated = set(renamed.values())
-    axes = {x for x in stated if is_axis(x)}
+    axes = {x for x in renamed.values() if is_axis(x)}
     if axes and len(axes) != len(labels):
         msg = (
             f"{_quote(path)} states the axis column(s) {sorted(axes)}, but "
@@ -1037,30 +1037,19 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
             "or none of them."
         )
         raise InvalidInventoryError(msg)
-    frame = frame.rename(columns=renamed)
-    return _numeric_columns(frame, sorted(stated), path), units
-
-
-def _numeric_columns(frame: pd.DataFrame, columns, path: Path) -> pd.DataFrame:
-    """
-    Read a geometry table's columns as numbers, refusing text.
-
-    Text along distance is what annotations are for, and a column of it
-    here would otherwise reach the model as a string it cannot place.
-    """
-    frame = frame.copy()
-    for column in columns:
+    frame = frame.rename(columns=renamed).copy()
+    for column in sorted(set(renamed.values())):
         values = pd.to_numeric(frame[column], errors="coerce")
         if (bad := frame[column].notna() & values.isna()).any():
-            first = frame.loc[bad, column].iloc[0]
             msg = (
-                f"{_quote(path)} states {first!r} in column {column!r}, "
-                "which is not a number. A geometry column is numeric; text "
-                "which varies along the fiber belongs in annotations.csv."
+                f"{_quote(path)} states {frame.loc[bad, column].iloc[0]!r} in "
+                f"column {column!r}, which is not a number. A geometry column "
+                "is numeric; text which varies along the fiber belongs in "
+                "annotations.csv."
             )
             raise InvalidInventoryError(msg)
         frame[column] = values
-    return frame
+    return frame, units
 
 
 def _parse_annotations(rows: list[dict], path: Path) -> None:

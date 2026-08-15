@@ -682,7 +682,10 @@ def _get_geometry_column_coord(path, name, distances):
     values = path.column_at(name, distances)
     if values is None:
         return None
-    return get_coord(data=values, units=path.column_units(name) or None)
+    # The path has already refused two segments measuring one column in two
+    # units, so whichever states it states the one they agree on.
+    units = next((x.units[name] for x in path.geometry if name in x.units), None)
+    return get_coord(data=values, units=units)
 
 
 def get_coord_values(inventory, path, name, distances):

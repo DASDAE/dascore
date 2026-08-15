@@ -308,7 +308,7 @@ class TestGeometryColumns:
 
     def test_units_for_a_column_which_is_not_there(self):
         """A unit sitting on nothing is a typo no reader would find."""
-        with pytest.raises(ValidationError, match="no column for"):
+        with pytest.raises(ValidationError, match="has no column"):
             inv.Geometry(
                 distance=(0.0, 10.0),
                 coordinates={"depth": (0.0, 1.0)},
