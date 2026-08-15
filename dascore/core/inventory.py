@@ -37,6 +37,7 @@ from pydantic import (
     BeforeValidator,
     Field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 from typing_extensions import Self
@@ -696,6 +697,21 @@ class OpticalPathAnnotation(_IntervalModel):
             )
             raise ValueError(msg)
         return value
+
+    @model_serializer(mode="wrap")
+    def _keep_the_value(self, handler, info):
+        """
+        Put back a value which is the default only by ``==``.
+
+        ``exclude_defaults`` compares with ``==``, and ``1 == True``, so a
+        group numbered from one loses every ``1`` on the way out and reloads
+        holding a boolean -- which then mixes kinds with the numbers beside
+        it and is refused. Identity is what "still its default" means here.
+        """
+        out = handler(self)
+        if "value" not in out and self.value is not True:
+            out["value"] = self.value
+        return out
 
 
 # The coordinates a DistanceMap may be written in, in preference order.

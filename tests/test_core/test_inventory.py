@@ -2073,6 +2073,49 @@ class TestSerializationIsLossless:
         inventory = SAMPLE_INVENTORIES[name]
         assert dc.inventory(inventory.to_yaml()) == inventory
 
+    def test_an_annotation_value_of_one_survives(self):
+        """`1 == True`, and the value's default is True, so it was dropped."""
+        pytest.importorskip("yaml")
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0, end_distance=10.0, group="hole", value=1
+                ),
+                inv.OpticalPathAnnotation(
+                    start_distance=20.0, end_distance=30.0, group="hole", value=2
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        text = inventory.to_yaml()
+        assert "value: 1" in text
+        # Without the value, the group reloads holding a boolean beside a
+        # number and is refused as mixing two kinds.
+        assert dc.inventory(text) == inventory
+
+    def test_a_flag_annotation_stays_terse(self):
+        """A value which really is the default is still left out."""
+        pytest.importorskip("yaml")
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            annotations=(
+                inv.OpticalPathAnnotation(
+                    start_distance=0.0, end_distance=10.0, group="noisy"
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        text = inventory.to_yaml()
+        assert "value:" not in text
+        assert dc.inventory(text) == inventory
+
     def test_round_trip_through_file(self, tmp_path):
         """The writer taking a path writes what the text form holds."""
         pytest.importorskip("yaml")
