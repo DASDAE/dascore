@@ -703,11 +703,9 @@ class CoordManager(DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        if array is None:
-            out = None
-        else:
-            out = array_namespace(array).broadcast_to(array, target_shape)
-        return self.update_coords(**new_coords), out
+        if array is not None:
+            array = array_namespace(array).broadcast_to(array, target_shape)
+        return self.update_coords(**new_coords), array
 
     def _check_multiple_relative(self, kwargs):
         """

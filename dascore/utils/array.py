@@ -73,9 +73,9 @@ def _raise_on_out(kwargs):
 
 def _clear_units_if_bool_dtype(patch):
     """Clear the units on the patch if it is a boolean."""
-    if (dtype := getattr(patch, "dtype", None)) is None:
-        return patch
-    if array_namespace(patch.data).isdtype(dtype, "bool"):
+    # Every ufunc and array function path reassembles a patch first.
+    assert hasattr(patch, "dtype"), "can only clear the units of a patch"
+    if array_namespace(patch.data).isdtype(patch.dtype, "bool"):
         return patch.update_attrs(data_units=None)
     return patch
 
