@@ -33,8 +33,6 @@ from dascore.core.inventory import (
     VALID_COORDINATE_LABELS,
     Inventory,
     ResolvedContext,
-    _annotation_kind,
-    interval_masks,
 )
 from dascore.core.inventory_loader import BLESSED_NAME, find_inventory
 from dascore.exceptions import (
@@ -47,6 +45,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import get_quantity_str
+from dascore.utils.intervals import interval_masks, value_kind
 from dascore.utils.misc import iterate
 
 # One vocabulary for both fiber verbs. What the quiet option leaves
@@ -625,7 +624,7 @@ def _get_annotation_coord(path, group, distances):
     items = [x for x in path.annotations if x.group == group]
     if not items:
         return None
-    kind = _annotation_kind(items[0].value)
+    kind = value_kind(items[0].value)
     intervals = [x.interval for x in items]
     values = [x.value for x in items]
     return _fill_from_intervals(distances, intervals, values, kind)
@@ -648,7 +647,7 @@ def _get_track_coord(path, track, field, distances):
         # inventory defines nothing here, and on_missing then rules --
         # rather than handing back a coordinate that is blank throughout.
         return None
-    kinds = {_annotation_kind(x) for x in values if not is_unset(x)}
+    kinds = {value_kind(x) for x in values if not is_unset(x)}
     kind = kinds.pop() if len(kinds) == 1 else "string"
     filled = _fill_from_intervals(distances, intervals, values, kind)
     if units := _TRACK_FIELD_UNITS.get(f"{track}.{field}"):

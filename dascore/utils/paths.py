@@ -30,6 +30,23 @@ def is_pathlike(resource) -> TypeIs[str | Path | UPath]:
     return isinstance(resource, str | Path | UPath)
 
 
+def quote_path(path: Path) -> str:
+    """
+    Name a file for an error message.
+
+    Its container is included because a bare name is ambiguous across
+    containers and the full path is noise the reader already knows.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> from dascore.utils.paths import quote_path
+    >>> Path(quote_path(Path("inventory/path@2020-01-01/coupling.csv"))).parts
+    ('path@2020-01-01', 'coupling.csv')
+    """
+    return str(Path(path.parent.name) / path.name)
+
+
 def is_memory_uri(path) -> bool:
     """
     Return True if a path is a synthetic in-memory patch identity.
