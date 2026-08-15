@@ -96,6 +96,9 @@ test = [
     "aiohttp",
     # A reference array API implementation used to catch numpy-only code.
     "array-api-strict",
+    # An array backend which array-api-compat has to wrap, unlike numpy and
+    # array-api-strict, so backend dispatch is tested against both kinds.
+    "dask[array]",
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",

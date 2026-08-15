@@ -38,10 +38,10 @@ def warnings_as_errors():
         yield
 
 
-@pytest.fixture(scope="module")
-def strict_patch(random_patch) -> dc.Patch:
-    """Return a patch whose data are backed by array_api_strict."""
-    return random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
+@pytest.fixture(scope="class")
+def backend_patch(random_patch, to_backend) -> dc.Patch:
+    """Return a patch whose data are on the array backend under test."""
+    return to_backend(random_patch)
 
 
 class _DeviceArray:
@@ -125,42 +125,42 @@ class TestAsArrayLike:
 class TestPatchBackends:
     """Tests for patches backed by a non-numpy array library."""
 
-    def test_patch_keeps_backend(self, strict_patch):
+    def test_patch_keeps_backend(self, backend_patch, backend):
         """Creating a patch does not convert the data to numpy."""
-        assert backend_name(strict_patch.data) == "array_api_strict"
+        assert backend_name(backend_patch.data) == backend
 
-    def test_array_api_function_keeps_backend(self, strict_patch):
+    def test_array_api_function_keeps_backend(self, backend_patch, backend):
         """Functions written against the standard don't warn or convert."""
         with warnings_as_errors():
-            out = strict_patch.transpose()
-        assert backend_name(out.data) == "array_api_strict"
-        assert out.dims == strict_patch.dims[::-1]
+            out = backend_patch.transpose()
+        assert backend_name(out.data) == backend
+        assert out.dims == backend_patch.dims[::-1]
 
-    def test_squeeze_keeps_backend(self, strict_patch):
+    def test_squeeze_keeps_backend(self, backend_patch, backend):
         """Squeeze also works on any backend."""
         with suppress_warnings(NumpyFallbackWarning):
-            patch = strict_patch.select(distance=0, samples=True)
+            patch = backend_patch.select(distance=0, samples=True)
         with warnings_as_errors():
             out = patch.squeeze()
-        assert backend_name(out.data) == "array_api_strict"
+        assert backend_name(out.data) == backend
         assert "distance" not in out.dims
 
-    def test_numpy_only_function_warns(self, strict_patch):
+    def test_numpy_only_function_warns(self, backend_patch, backend):
         """Numpy-only functions warn but preserve the input backend."""
         with pytest.warns(NumpyFallbackWarning, match="detrend"):
-            out = strict_patch.detrend("time")
-        assert backend_name(out.data) == "array_api_strict"
-        assert out.shape == strict_patch.shape
+            out = backend_patch.detrend("time")
+        assert backend_name(out.data) == backend
+        assert out.shape == backend_patch.shape
 
-    def test_to_numpy_array(self, strict_patch):
+    def test_to_numpy_array(self, backend_patch):
         """Patches from any backend convert to numpy arrays."""
-        array = np.asarray(strict_patch)
+        array = np.asarray(backend_patch)
         assert isinstance(array, np.ndarray)
-        assert array.shape == strict_patch.shape
+        assert array.shape == backend_patch.shape
 
-    def test_str(self, strict_patch):
+    def test_str(self, backend_patch):
         """Patches from any backend have a string representation."""
-        assert "Patch" in str(strict_patch)
+        assert "Patch" in str(backend_patch)
 
 
 def test_suppress_fallback_warning(random_patch):
@@ -281,16 +281,16 @@ class TestArrayApiPatchFunctions:
         assert not stale, f"remove the ARRAY_API_CASES entry for: {stale}"
 
     @pytest.mark.parametrize("name", sorted(ARRAY_API_CASES))
-    def test_backend_preserved(self, name, random_patch):
+    def test_backend_preserved(self, name, random_patch, to_backend, backend):
         """The function runs on another backend, unconverted, with no warning."""
         case = ARRAY_API_CASES[name]
         numpy_patch = case.setup(random_patch)
-        patch = numpy_patch.new(data=xps.asarray(np.asarray(numpy_patch.data)))
+        patch = to_backend(numpy_patch)
         with warnings_as_errors():
             out = case.call(patch)
         # A function which returns its input proves nothing about the backend.
         assert out is not patch
-        assert backend_name(out.data) == "array_api_strict"
+        assert backend_name(out.data) == backend
         # The whole patch must match what the numpy implementation returns.
         expected = case.call(numpy_patch)
         array = np.asarray(out.data)

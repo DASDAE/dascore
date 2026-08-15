@@ -17,7 +17,7 @@ from typing import Any, TypeGuard
 import array_api_compat.numpy as np_namespace
 import numpy as np
 from array_api_compat import array_namespace as _array_namespace
-from array_api_compat import device, to_device
+from array_api_compat import device, is_array_api_obj, to_device
 
 from dascore.compat import is_array
 from dascore.warnings import NumpyFallbackWarning
@@ -99,7 +99,13 @@ def is_foreign(array: Any) -> bool:
     # protocols from their instances, so exclude types explicitly.
     if is_numpy(array) or isinstance(array, type):
         return False
-    return hasattr(array, "__array_namespace__")
+    # Everything else is only an array if it has a shape; checking here
+    # keeps scalar operands off the slower classification below.
+    if getattr(array, "shape", None) is None:
+        return False
+    # Not just __array_namespace__; backends which don't implement the
+    # standard natively (eg torch, dask) are recognized by their type.
+    return is_array_api_obj(array)
 
 
 def warn_numpy_fallback(name: str, backend: str, stacklevel: int = 3) -> None:
