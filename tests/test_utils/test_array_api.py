@@ -168,3 +168,41 @@ def test_suppress_fallback_warning(random_patch):
 def test_backend_name_of_non_array():
     """Objects which don't carry array data dispatch to numpy."""
     assert _get_backend_name(object()) == "numpy"
+
+
+class _ArrayLike:
+    """An array-like which numpy can consume but which isn't standard."""
+
+    def __init__(self, array):
+        self._array = array
+        self.shape = array.shape
+        self.dtype = array.dtype
+
+    def __array__(self, dtype=None, copy=None):
+        return self._array
+
+
+class TestNonStandardArrayLike:
+    """Tests for patch data which doesn't implement the array API."""
+
+    @pytest.fixture(scope="class")
+    def array_like_patch(self, random_patch) -> dc.Patch:
+        """A patch whose data only implement __array__."""
+        data = _ArrayLike(np.asarray(random_patch.data))
+        return random_patch.new(data=data)
+
+    def test_namespace_is_numpy(self, array_like_patch):
+        """Such arrays are handled by numpy, so they report numpy."""
+        assert backend_name(array_like_patch.data) == "numpy"
+
+    def test_numpy_function(self, array_like_patch):
+        """Numpy-only functions work as they did before dispatch existed."""
+        with warnings_as_errors():
+            out = array_like_patch.detrend("time")
+        assert isinstance(out.data, np.ndarray)
+
+    def test_array_api_function(self, array_like_patch):
+        """So do functions written against the standard."""
+        with warnings_as_errors():
+            out = array_like_patch.transpose()
+        assert out.dims == array_like_patch.dims[::-1]

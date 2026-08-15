@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from typing import Any, TypeGuard
 
+import array_api_compat.numpy as np_namespace
 import numpy as np
-from array_api_compat import array_namespace, device, to_device
+from array_api_compat import array_namespace as _array_namespace
+from array_api_compat import device, to_device
 
 __all__ = [
     "array_namespace",
@@ -28,6 +30,33 @@ ARRAY_API_BACKEND = "array_api"
 
 # The key used by patch functions which require numpy arrays.
 NUMPY_BACKEND = "numpy"
+
+
+def array_namespace(*arrays: Any) -> Any:
+    """
+    Return the array API namespace shared by arrays.
+
+    Array-likes which don't implement the standard, but which numpy can
+    consume through ``__array__``, get the numpy namespace; numpy code is
+    what has always handled them.
+
+    Parameters
+    ----------
+    *arrays
+        One or more arrays.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import array_namespace
+    >>>
+    >>> xp = array_namespace(np.array([1, 2]))
+    >>> assert xp.sum(np.array([1, 2])) == 3
+    """
+    try:
+        return _array_namespace(*arrays)
+    except TypeError:
+        return np_namespace
 
 
 def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
@@ -59,6 +88,8 @@ def backend_name(array: Any) -> str:
     if is_numpy(array):
         return NUMPY_BACKEND
     name = array_namespace(array).__name__
+    # array_namespace falls back to numpy for array-likes which don't
+    # implement the standard; those are numpy's problem as well.
     # array_api_compat wraps incomplete backends in modules named after them
     # (eg array_api_compat.dask.array); native namespaces are named after
     # their own package (eg jax.numpy).

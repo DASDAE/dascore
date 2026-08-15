@@ -246,11 +246,15 @@ def _get_backend_name(patch) -> str:
     return backend_name(data)
 
 
-def _to_numpy_patch(obj):
-    """Convert a patch's data to numpy, leaving everything else alone."""
-    if not isinstance(obj, dc.Patch) or is_numpy(obj.data):
-        return obj
-    return obj.new(data=to_numpy(obj.data))
+def _to_numpy_arg(obj):
+    """Convert patches and non-numpy arrays to numpy, leaving the rest alone."""
+    if isinstance(obj, dc.Patch):
+        return obj if is_numpy(obj.data) else obj.new(data=to_numpy(obj.data))
+    # Arrays which implement the standard (eg a boolean mask made from the
+    # patch data) have to cross the boundary as well.
+    if not is_numpy(obj) and hasattr(obj, "__array_namespace__"):
+        return to_numpy(obj)
+    return obj
 
 
 def _numpy_fallback(func, patch, args, kwargs, backend):
@@ -261,13 +265,17 @@ def _numpy_fallback(func, patch, args, kwargs, backend):
         "with dascore.utils.misc.suppress_warnings(NumpyFallbackWarning)."
     )
     warnings.warn(msg, NumpyFallbackWarning, stacklevel=4)
-    data = patch.data
-    args = tuple(_to_numpy_patch(x) for x in args)
-    kwargs = {i: _to_numpy_patch(v) for i, v in kwargs.items()}
-    out = func(_to_numpy_patch(patch), *args, **kwargs)
+    args = tuple(_to_numpy_arg(x) for x in args)
+    kwargs = {i: _to_numpy_arg(v) for i, v in kwargs.items()}
+    numpy_patch = _to_numpy_arg(patch)
+    out = func(numpy_patch, *args, **kwargs)
+    # The function did nothing, so neither should the conversion. This keeps
+    # the identity check the patch function machinery uses for history.
+    if out is numpy_patch:
+        return patch
     # Only patches carry data back to the original backend.
     if isinstance(out, dc.Patch):
-        out = out.new(data=asarray_like(out.data, data))
+        out = out.new(data=asarray_like(out.data, patch.data))
     return out
 
 

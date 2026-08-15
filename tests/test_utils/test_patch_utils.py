@@ -1334,6 +1334,32 @@ class TestBackendDispatch:
         assert out.attrs.data_type == "strain"
         assert "set_strain" in out.attrs.history[-1]
 
+    def test_array_arguments_converted(self, strict_patch):
+        """Arrays passed as arguments are converted for the fallback."""
+        types = []
+
+        @dc.patch_function()
+        def uses_array(patch, condition):
+            types.append(type(condition))
+            return patch.new(data=np.where(condition, patch.data, 0))
+
+        condition = strict_patch.data > 0
+        with pytest.warns(NumpyFallbackWarning):
+            out = uses_array(strict_patch, condition)
+        assert types == [np.ndarray]
+        assert backend_name(out.data) == "array_api_strict"
+
+    def test_unchanged_patch_returned(self, strict_patch):
+        """A function which returns its input returns the original patch."""
+
+        @dc.patch_function()
+        def do_nothing(patch):
+            return patch
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = do_nothing(strict_patch)
+        assert out is strict_patch
+
     def test_registered_function_validated(self, strict_patch):
         """Registered implementations get the same call validation."""
 
