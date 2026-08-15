@@ -1,12 +1,12 @@
 # This action renders and publishes the development docs whenever
-# new commits are added to the master branch.
+# new commits are added to the dev branch.
 
-name: BuildDeployMasterDocs
+name: BuildDeployDevDocs
 
 on:
-  # Runs on pushes targeting the master branch
+  # Runs on pushes targeting the dev branch
   push:
-    branches: ["master"]
+    branches: ["dev"]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -20,18 +20,20 @@ env:
   # Where the test-data cache is restored; pooch reads files from here.
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+  # The branch quarto uses for the docs' "edit this page" links.
+  DASCORE_DOC_BRANCH: dev
 
-# Allow one concurrent deployment
+# Publish only the newest dev commit. This is a netlify deployment, so it does
+# not share the "pages" group used by the stable docs; grouping them together
+# would let a dev push cancel a release's GitHub Pages deployment.
 concurrency:
-  group: "pages"
+  group: "netlify-dev-docs"
   cancel-in-progress: true
 
 jobs:
   # Build job
   build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
