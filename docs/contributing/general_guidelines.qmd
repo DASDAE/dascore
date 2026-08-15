@@ -9,9 +9,7 @@ We create new features or bug fixes in their own branches and merge them into `d
 integration branch; it is merged into `master` at release time. We may switch to a more complex branching model if
 the need arises.
 
-The two documentation sites follow these branches: the [development docs](https://dascore.netlify.app) are rebuilt from
-`dev` on every push, and the [stable docs](https://dascore.org) are rebuilt when a release is published. A push to
-`master` outside of a release does not rebuild either site.
+The two documentation sites follow these branches: the [development docs](https://dascore.netlify.app) are rebuilt from `dev` on every push, and the [stable docs](https://dascore.org) are rebuilt when a release is published. A push to `master` outside of a release does not rebuild either site.
 
 If substantial new features have been added since the last release we will bump the minor version.  If only bug
 fixes/minor changes have been made, only the patch version will be bumped. Like most Python projects, we loosely
