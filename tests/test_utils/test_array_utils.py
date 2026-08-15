@@ -871,7 +871,7 @@ class TestArrayBackends:
 
     @pytest.mark.parametrize("dtype", ["int32", "bool"])
     @pytest.mark.parametrize(
-        "name", ["min", "max", "sum", "mean", "std", "normalize", "demean"]
+        "name", ["min", "max", "sum", "mean", "std", "demean", "standardize"]
     )
     def test_dtypes_without_fractions(
         self, name, dtype, backend_patch, random_patch, backend
@@ -883,6 +883,17 @@ class TestArrayBackends:
         with suppress_warnings(NumpyFallbackWarning):
             out = getattr(patch, name)("time")
             expected = getattr(numpy_patch, name)("time")
+        self._assert_matches_numpy(out, expected, backend)
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
+    def test_normalize_integer_data(self, norm, backend_patch, random_patch, backend):
+        """Every normalization divides, so integer data must promote."""
+        array = (np.asarray(random_patch.data) * 10).astype("int32")
+        numpy_patch = random_patch.new(data=array)
+        patch = backend_patch.new(data=to_backend_array(backend_patch, array))
+        with suppress_warnings(NumpyFallbackWarning):
+            out = patch.normalize("time", norm=norm)
+            expected = numpy_patch.normalize("time", norm=norm)
         self._assert_matches_numpy(out, expected, backend)
 
     def test_no_equivalent_in_the_standard(self, xps):

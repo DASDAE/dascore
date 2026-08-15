@@ -409,6 +409,26 @@ class TestNanReduce:
         assert out.dtype == expected.dtype
         assert np.allclose(out, expected, equal_nan=True)
 
+    @pytest.mark.parametrize("name", names)
+    @pytest.mark.parametrize(
+        "values",
+        [
+            [np.inf, np.inf],
+            [np.inf, 1.0],
+            [np.nan, np.inf],
+            [1 + 1j, 1 - 1j],
+            [1 + 1j, np.nan],
+        ],
+    )
+    def test_hard_values(self, name, values, to_array):
+        """Values where numpy's answer is easy to get wrong."""
+        array = np.array(values)
+        with suppress_warnings():
+            expected = np.asarray(getattr(np, f"nan{name}")(array))
+            out = np.asarray(nan_reduce(name, to_array(array)))
+        assert out.dtype == expected.dtype
+        assert np.allclose(out, expected, equal_nan=True)
+
     @pytest.mark.parametrize("name", ["min", "max"])
     def test_infinities(self, name, to_array):
         """Infinities are values like any other, not a missing-data marker."""

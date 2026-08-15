@@ -26,10 +26,10 @@ __all__ = [
     "array_namespace",
     "asarray_like",
     "backend_name",
+    "can_nan_reduce",
     "device",
     "is_foreign",
     "is_numpy",
-    "can_nan_reduce",
     "namespace_name",
     "nan_reduce",
     "to_numpy",
@@ -244,6 +244,14 @@ def _all_nan(array: Any, axis, keepdims: bool) -> Any:
     return xp.all(xp.isnan(array), axis=axis, keepdims=keepdims)
 
 
+def _real_dtype(array):
+    """Return the dtype a magnitude of the array has."""
+    xp = array_namespace(array)
+    if xp.isdtype(array.dtype, "complex floating"):
+        return xp.finfo(array.dtype).dtype
+    return array.dtype
+
+
 def _nan_extremum(name, array, axis, keepdims):
     """Return the min or max of an array, ignoring nans."""
     xp = array_namespace(array)
@@ -258,13 +266,14 @@ def _nan_extremum(name, array, axis, keepdims):
 
 
 def _nan_count(array, axis, keepdims):
-    """Return the number of values which are not nan."""
+    """Return the number of values which are not nan, as a float."""
     xp = array_namespace(array)
-    counts = xp.sum(
-        xp.astype(~xp.isnan(array), array.dtype), axis=axis, keepdims=keepdims
-    )
+    # Counted as integers so a long trace cannot overflow a narrow float,
+    # then widened so it can divide arrays of any floating dtype.
+    counts = xp.sum(xp.astype(~xp.isnan(array), xp.int64), axis=axis, keepdims=keepdims)
+    counts = xp.astype(counts, xp.float64)
     # Empty slices divide to nan rather than raising, as numpy does.
-    return xp.where(counts == 0, xp.asarray(float("nan"), dtype=array.dtype), counts)
+    return xp.where(counts == 0, xp.asarray(float("nan")), counts)
 
 
 def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
@@ -278,14 +287,20 @@ def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any
     total = xp.sum(_replace_nan(array, 0), axis=axis, keepdims=keepdims)
     if name == "sum":
         return total
-    mean = total / _nan_count(array, axis, keepdims)
+    counts = _nan_count(array, axis, keepdims)
     if name == "mean":
-        return mean
+        return xp.astype(total / counts, array.dtype)
     # Only std is left; it needs the mean with the reduced axes still in
     # place. The magnitude keeps complex deviations from cancelling out.
     deviation = xp.abs(array - _nan_reduce("mean", array, axis, keepdims=True)) ** 2
-    center = xp.sum(_replace_nan(deviation, 0), axis=axis, keepdims=keepdims)
-    return xp.sqrt(center / _nan_count(array, axis, keepdims))
+    # Masked with the input's nans, not the deviation's; an infinity makes
+    # an indeterminate deviation which numpy keeps rather than skips.
+    center = xp.sum(
+        xp.where(xp.isnan(array), xp.asarray(0, dtype=deviation.dtype), deviation),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return xp.astype(xp.sqrt(center / counts), _real_dtype(array))
 
 
 # The dtype kinds each reduction accepts in the array API standard. Numpy
