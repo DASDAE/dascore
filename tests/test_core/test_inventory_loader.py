@@ -1166,13 +1166,81 @@ class TestTrackTables:
         assert path.coupling[0].description == ""
         assert path.coupling[1].description == "backfilled"
 
+    def test_a_column_which_is_not_an_axis(self, make_inventory):
+        """A header the CRS does not name is a curve along the fiber."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation,borehole_depth\n"
+                "S100,100.0,-117.0,40.0,687.0,0.0\n"
+                "S100,102.0,-117.1,40.1,685.0,2.0\n"
+            ),
+        }
+        geometry = one_path(make_inventory(files)).geometry[0]
+        assert geometry.coordinates["borehole_depth"] == (0.0, 2.0)
+        assert geometry.units == {}
+
+    def test_a_column_states_its_units_in_its_header(self, make_inventory):
+        """`depth (m)` is the column `depth`, measured in meters."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,depth (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
+            ),
+        }
+        geometry = one_path(make_inventory(files)).geometry[0]
+        assert geometry.coordinates["depth"] == (0.0, 2.0)
+        assert geometry.units["depth"] == "m"
+
+    def test_units_on_an_axis_header(self, make_inventory):
+        """The CRS states the units of its axes, so a header may not."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation (ft)\n"
+                "S100,100.0,-117.0,40.0,687.0\n"
+                "S100,102.0,-117.1,40.1,685.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="units of its own axes"):
+            make_inventory(files)
+
+    def test_a_column_of_text_is_refused(self, make_inventory):
+        """Text along distance is what annotations are for."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,zone\nS100,100.0,north\nS100,102.0,south\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match=r"annotations\.csv"):
+            make_inventory(files)
+
+    def test_one_column_stated_twice(self, make_inventory):
+        """A unit suffix is not a second column, however it is spelled."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,depth,depth (m)\nS100,100.0,0.0,0.0\n"
+                "S100,102.0,2.0,2.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="more than once"):
+            make_inventory(files)
+
     def test_a_geometry_names_its_axes_the_way_its_frame_does(self, make_inventory):
         """Coordinates are stored canonically, whatever the CRS calls them."""
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
         geometry = path.geometry[0]
         assert geometry.distance == (100.0, 102.0)
-        # longitude, latitude, elevation are axes 0, 1, 2 of the default CRS.
-        assert geometry.coordinates[0] == (-117.0, 40.0, 687.0)
+        # A column is keyed by the header which states it.
+        assert geometry.coordinates["longitude"] == (-117.0, -117.1)
+        assert geometry.coordinates["elevation"] == (687.0, 685.0)
 
     def test_a_declared_frame_renames_the_axes(self, make_inventory):
         """The envelope decides which headers a geometry table may state."""
@@ -1194,18 +1262,20 @@ class TestTrackTables:
             ),
         }
         geometry = one_path(make_inventory(files)).geometry[0]
-        assert geometry.coordinates[0] == (2562048.25, 1137365.53, 687.0)
+        assert geometry.coordinates["x"] == (2562048.25, 2562048.17)
+        assert geometry.coordinates["elevation"] == (687.0, 685.0)
 
-    def test_a_header_the_frame_does_not_declare(self, make_inventory):
-        """A geometry header disagreeing with the frame raises."""
+    def test_a_partial_set_of_axes(self, make_inventory):
+        """A segment states every axis the frame declares, or none of them."""
         files = {
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "segment,distance,x,y,z\nS100,100.0,1.0,2.0,3.0\n"
+                "segment,distance,longitude,latitude\nS100,100.0,1.0,2.0\n"
+                "S100,102.0,1.1,2.1\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="its frame declares"):
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
             make_inventory(files)
 
     def test_a_point_missing_an_axis(self, make_inventory):
@@ -1807,7 +1877,7 @@ class TestGapsMutationTestingFound:
         # Interleaved in the file; gathered by name and ordered by distance.
         assert geometry["S100"].distance == (100.0, 102.0)
         assert geometry["S120"].distance == (200.0, 202.0)
-        assert geometry["S100"].coordinates[1] == (-117.1, 40.1, 685.0)
+        assert geometry["S100"].coordinates["latitude"] == (40.0, 40.1)
 
     def test_a_wrong_cell_names_the_field_it_could_not_take(self, make_inventory):
         """Matching only 'Could not read' would pass for any path failure."""

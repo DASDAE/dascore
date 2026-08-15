@@ -36,7 +36,7 @@ def build_inventory() -> inv.Inventory:
     geometry = inv.Geometry(
         name="survey",
         distance=(0.0, 100.0, 200.0),
-        coordinates=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 1.0)),
+        coordinates={"x": (0.0, 1.0, 2.0), "y": (0.0, 0.0, 0.0), "z": (0.0, 0.0, 1.0)},
     )
     path = inv.OpticalPath(
         name="main",
@@ -96,7 +96,11 @@ def build_full_inventory() -> inv.Inventory:
             inv.Geometry(
                 name="trench",
                 distance=(100.0, 400.0),
-                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+                coordinates={
+                    "x": (-117.0, -117.0),
+                    "y": (40.0, 40.1),
+                    "z": (1500.0, 1500.0),
+                },
             ),
         ),
         coupling=(
@@ -178,38 +182,205 @@ def build_full_inventory() -> inv.Inventory:
     ).check()
 
 
+class TestGeometryColumns:
+    """A geometry states named numeric columns, of which some are axes."""
+
+    @staticmethod
+    def _inventory(*geometry, crs=None, annotations=()):
+        """Wrap geometry segments in the smallest inventory holding them."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=1000.0),),
+            geometry=geometry,
+            annotations=annotations,
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        return inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
+            **({"coordinate_reference_system": crs} if crs else {}),
+        )
+
+    def test_a_column_which_is_not_a_position(self):
+        """Chainage is a curve along the fiber and no part of a position."""
+        chainage = inv.Geometry(
+            name="chainage",
+            distance=(0.0, 100.0),
+            coordinates={"chainage": (1200.0, 1300.0)},
+            units={"chainage": "m"},
+        )
+        assert self._inventory(chainage).check() is not None
+        out = chainage.interpolate([50.0])
+        assert out["chainage"][0] == 1250.0
+
+    def test_a_segment_with_no_axes_is_legal(self):
+        """A path may be described without ever being placed in space."""
+        depth = inv.Geometry(
+            distance=(0.0, 40.0), coordinates={"borehole_depth": (0.0, 40.0)}
+        )
+        inventory = self._inventory(depth)
+        assert inventory.check() is inventory
+        crs = inventory.coordinate_reference_system
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        assert np.all(np.isnan(path.coordinates_at([20.0], crs)))
+
+    def test_axes_are_all_or_none(self):
+        """Half a position is not a position."""
+        partial = inv.Geometry(
+            name="partial", distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0)}
+        )
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            self._inventory(partial).check()
+
+    def test_an_axis_stated_twice(self):
+        """`x` and the label the CRS gives it are one axis, not two."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        doubled = inv.Geometry(
+            name="doubled",
+            distance=(0.0, 10.0),
+            coordinates={
+                "x": (0.0, 1.0),
+                "easting": (0.0, 1.0),
+                "northing": (0.0, 1.0),
+            },
+        )
+        with pytest.raises(InvalidInventoryError, match="twice"):
+            self._inventory(doubled, crs=crs).check()
+
+    def test_overlap_is_refused_per_column(self):
+        """Two segments may overlap unless they state the same column."""
+        first = inv.Geometry(distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)})
+        second = inv.Geometry(distance=(50.0, 80.0), coordinates={"depth": (5.0, 8.0)})
+        with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
+            self._inventory(first, second).check()
+
+    def test_different_columns_may_overlap(self):
+        """Each column is its own function track, so they are independent."""
+        depth = inv.Geometry(distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)})
+        azimuth = inv.Geometry(
+            distance=(50.0, 80.0), coordinates={"azimuth": (5.0, 8.0)}
+        )
+        inventory = self._inventory(depth, azimuth)
+        assert inventory.check() is inventory
+
+    def test_a_reserved_column_name(self):
+        """A column becomes a coordinate, so it cannot shadow one."""
+        clash = inv.Geometry(distance=(0.0, 10.0), coordinates={"time": (0.0, 1.0)})
+        with pytest.raises(InvalidInventoryError, match="reserved name"):
+            self._inventory(clash).check()
+
+    def test_a_column_which_is_also_an_annotation_group(self):
+        """One name is one coordinate, whichever track would define it."""
+        column = inv.Geometry(distance=(0.0, 10.0), coordinates={"zone": (0.0, 1.0)})
+        annotation = inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=10.0, group="zone", value=1.0
+        )
+        with pytest.raises(InvalidInventoryError, match="one name is one coordinate"):
+            self._inventory(column, annotations=(annotation,)).check()
+
+    def test_units_on_an_axis_are_refused(self):
+        """The CRS states the units of its own axes."""
+        segment = inv.Geometry(
+            name="axed",
+            distance=(0.0, 10.0),
+            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            units={"x": "furlong"},
+        )
+        with pytest.raises(InvalidInventoryError, match="states the units of its own"):
+            self._inventory(segment).check()
+
+    def test_units_for_a_column_which_is_not_there(self):
+        """A unit sitting on nothing is a typo no reader would find."""
+        with pytest.raises(ValidationError, match="no column for"):
+            inv.Geometry(
+                distance=(0.0, 10.0),
+                coordinates={"depth": (0.0, 1.0)},
+                units={"dpeth": "m"},
+            )
+
+    def test_one_unit_per_column(self):
+        """Two segments cannot measure one column in two units."""
+        meters = inv.Geometry(
+            distance=(0.0, 10.0),
+            coordinates={"depth": (0.0, 1.0)},
+            units={"depth": "m"},
+        )
+        feet = inv.Geometry(
+            distance=(20.0, 30.0),
+            coordinates={"depth": (0.0, 1.0)},
+            units={"depth": "ft"},
+        )
+        with pytest.raises(InvalidInventoryError, match="has one unit"):
+            self._inventory(meters, feet).check()
+
+    def test_a_crs_label_the_crs_does_not_declare(self):
+        """`depth` is a column of its own where the CRS spends z on elevation."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing", "elevation"),
+            units=("meter", "meter", "meter"),
+        )
+        segment = inv.Geometry(
+            distance=(0.0, 40.0),
+            coordinates={"depth": (0.0, 40.0)},
+            units={"depth": "m"},
+        )
+        inventory = self._inventory(segment, crs=crs)
+        assert inventory.check() is inventory
+        assert "depth" in inventory.get_names().coords
+
+    def test_a_column_never_bridges_two_segments(self):
+        """Distance between two segments is uncovered, whatever they hold."""
+        first = inv.Geometry(distance=(0.0, 10.0), coordinates={"depth": (0.0, 1.0)})
+        second = inv.Geometry(distance=(20.0, 30.0), coordinates={"depth": (2.0, 3.0)})
+        path = self._inventory(first, second).networks[0].fiber_arrays[0]
+        values = path.optical_paths[0].column_at("depth", [5.0, 15.0, 25.0])
+        assert not np.isnan(values[0]) and not np.isnan(values[2])
+        assert np.isnan(values[1])
+
+    def test_a_column_no_segment_states(self):
+        """None, so the caller's on_missing policy rules rather than a nan."""
+        segment = inv.Geometry(distance=(0.0, 10.0), coordinates={"depth": (0.0, 1.0)})
+        path = self._inventory(segment).networks[0].fiber_arrays[0].optical_paths[0]
+        assert path.column_at("azimuth", [5.0]) is None
+
+
 class TestGeometry:
     """Geometry segment rules."""
 
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
-            inv.Geometry(distance=(1.0,), coordinates=((0.0, 0.0),))
+            inv.Geometry(distance=(1.0,), coordinates={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
         """Strictly increasing."""
         with pytest.raises(ValidationError, match="strictly increasing"):
-            inv.Geometry(distance=(1.0, 1.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
+            inv.Geometry(
+                distance=(1.0, 1.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            )
 
     def test_paired_lengths(self):
         """Paired lengths."""
-        with pytest.raises(ValidationError, match="same length"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((0.0, 0.0),))
+        with pytest.raises(ValidationError, match="one value per distance"):
+            inv.Geometry(distance=(0.0, 1.0), coordinates={"x": (0.0,), "y": (0.0,)})
 
     def test_coil_repeated_coordinates(self):
         """A coil interpolates to a constant coordinate."""
         coil = inv.Geometry(
             distance=(1200.0, 1300.0),
-            coordinates=((500.0, 120.0), (500.0, 120.0)),
+            coordinates={"x": (500.0, 500.0), "y": (120.0, 120.0)},
         )
         out = coil.interpolate([1200.0, 1250.0, 1299.0])
-        assert np.allclose(out, [[500.0, 120.0]] * 3)
+        assert np.allclose(out["x"], [500.0] * 3)
+        assert np.allclose(out["y"], [120.0] * 3)
 
     def test_uncovered_is_nan(self):
         """Uncovered is nan."""
-        geo = inv.Geometry(distance=(10.0, 20.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
+        geo = inv.Geometry(
+            distance=(10.0, 20.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+        )
         out = geo.interpolate([5.0, 25.0])
-        assert np.all(np.isnan(out))
+        assert all(np.all(np.isnan(x)) for x in out.values())
 
 
 class TestPathTracks:
@@ -238,7 +409,7 @@ class TestPathTracks:
 
     def test_geometry_overlap_raises(self):
         """Geometry overlap raises."""
-        seg = dict(coordinates=((0.0, 0.0), (1.0, 1.0)))
+        seg = dict(coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
@@ -341,14 +512,18 @@ class TestPathTracks:
 
     def test_outer_endpoint_included(self):
         """The outermost covered endpoint of the geometry track resolves."""
-        path = build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
-        coords = path.coordinates_at([200.0])
+        inventory = build_inventory()
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        crs = inventory.coordinate_reference_system
+        coords = path.coordinates_at([200.0], crs)
         assert np.allclose(coords, [[2.0, 0.0, 1.0]])
 
     def test_uncovered_distance_is_nan(self):
         """Uncovered distance is nan."""
-        path = build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
-        assert np.all(np.isnan(path.coordinates_at([225.0])))
+        inventory = build_inventory()
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        crs = inventory.coordinate_reference_system
+        assert np.all(np.isnan(path.coordinates_at([225.0], crs)))
 
 
 class TestDistanceMap:
@@ -754,10 +929,10 @@ class TestReviewRegressions:
                 resources=[inv.Cable(resource_id="x"), inv.Cable(resource_id="x")]
             )
 
-    def test_zero_dim_geometry_raises(self):
-        """Zero dim geometry raises."""
-        with pytest.raises(ValidationError, match="nonzero"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((), ()))
+    def test_columnless_geometry_raises(self):
+        """A segment which measures nothing describes nothing."""
+        with pytest.raises(ValidationError, match="states no columns"):
+            inv.Geometry(distance=(0.0, 1.0), coordinates={})
 
     def test_station_extra_fields_forbidden(self):
         """Coordinates are canonical (x, y, z); label fields are not stored."""
@@ -1007,22 +1182,26 @@ class TestInternalReviewRegressions:
         with pytest.raises(InvalidInventoryError, match="Duplicate fiber array"):
             net.check()
 
-    def test_mixed_dimensionality_geometry_raises(self):
-        """Segments with different coordinate dims fail the path check."""
+    def test_partial_axes_fail_the_inventory_check(self):
+        """A segment stating some axes and not others fails the check."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                    distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="dimensionalities"):
-            path.check()
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            inventory.check()
 
     def test_inventory_function_dispatch(self):
         """dc.inventory handles bad input with clear errors."""
@@ -1076,7 +1255,9 @@ class TestCodexReviewRegressions:
                 start_distance=np.nan, end_distance=10.0, coupling_type="trench"
             )
         with pytest.raises(ValidationError, match="finite"):
-            inv.Geometry(distance=(0.0, np.inf), coordinates=((0.0, 0.0), (1.0, 1.0)))
+            inv.Geometry(
+                distance=(0.0, np.inf), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            )
         with pytest.raises(ValidationError, match="finite"):
             inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))
 
@@ -1146,11 +1327,12 @@ class TestCoverageCompleteness:
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=10.0),)
         )
-        assert np.all(np.isnan(path.coordinates_at([5.0])))
+        crs = inv.CoordinateReferenceSystem()
+        assert np.all(np.isnan(path.coordinates_at([5.0], crs)))
 
     def test_select_drops_out_of_range_geometry(self):
         """Selection drops segments entirely outside the clip."""
-        seg = dict(coordinates=((0.0, 0.0), (1.0, 1.0)))
+        seg = dict(coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
@@ -1776,16 +1958,17 @@ class TestPrReviewFindings:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                    distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="mix coordinate"):
-            path.coordinates_at([5.0])
+        crs = inv.CoordinateReferenceSystem()
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            path.coordinates_at([5.0], crs)
 
     def test_coordinate_width_must_match_crs(self):
         """Coordinates are read through the CRS, so they must fit its axes."""
@@ -1795,7 +1978,7 @@ class TestPrReviewFindings:
                 inv.Geometry(
                     name="flat",
                     distance=(0.0, 10.0),
-                    coordinates=((0.0, 0.0), (1.0, 1.0)),
+                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
             ),
         )
@@ -1803,7 +1986,7 @@ class TestPrReviewFindings:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
         )
-        with pytest.raises(InvalidInventoryError, match="CRS declares 3 axes"):
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
             inventory.check()
 
     def test_station_coordinate_width_must_match_crs(self):
@@ -1845,8 +2028,10 @@ class TestConstraintsMatchDescriptions:
 
     def test_geometry_coordinates_must_be_finite(self):
         """A nan control point would read as uncovered distance."""
-        with pytest.raises(ValidationError, match="must be finite"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((np.nan, 0.0), (1.0, 1.0)))
+        with pytest.raises(ValidationError, match="must hold finite"):
+            inv.Geometry(
+                distance=(0.0, 1.0), coordinates={"x": (np.nan, 1.0), "y": (0.0, 1.0)}
+            )
 
     def test_point_coordinates_must_be_finite(self):
         """Stations and channels name real positions."""

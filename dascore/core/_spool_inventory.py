@@ -668,10 +668,18 @@ def _get_geometry_coord(inventory, path, label, distances):
         return None
     if not path.geometry:
         return None
-    coords = path.coordinates_at(distances)
+    coords = path.coordinates_at(distances, crs)
     if index >= coords.shape[1]:
         return None
     return get_coord(data=coords[:, index], units=crs.units[index])
+
+
+def _get_geometry_column_coord(path, name, distances):
+    """Return one geometry column which is not a position, with its units."""
+    values = path.column_at(name, distances)
+    if values is None:
+        return None
+    return get_coord(data=values, units=path.column_units(name) or None)
 
 
 def get_coord_values(inventory, path, name, distances):
@@ -688,7 +696,13 @@ def get_coord_values(inventory, path, name, distances):
             path, track, field or TRACK_IDENTITY_FIELDS[track], distances
         )
     if name in VALID_COORDINATE_LABELS:
-        return _get_geometry_coord(inventory, path, name, distances)
+        # A coordinate label this CRS does not declare is not an axis here,
+        # and is free to be a geometry column of its own -- depth, where the
+        # CRS is spent on easting, northing, and elevation.
+        if (coord := _get_geometry_coord(inventory, path, name, distances)) is not None:
+            return coord
+    if (coord := _get_geometry_column_coord(path, name, distances)) is not None:
+        return coord
     return _get_annotation_coord(path, name, distances)
 
 
