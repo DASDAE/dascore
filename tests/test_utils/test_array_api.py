@@ -25,9 +25,13 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _get_backend_name
 from dascore.warnings import NumpyFallbackWarning
 
-# array_api_strict is a test dependency, but some environments (eg wasm)
-# install dascore without the test extras.
-xps = pytest.importorskip("array_api_strict")
+
+@pytest.fixture(scope="module")
+def xps():
+    """The reference implementation of the array API standard."""
+    # It is a test dependency, but some environments (eg wasm) install
+    # dascore without the test extras.
+    return pytest.importorskip("array_api_strict")
 
 
 @contextmanager
@@ -69,7 +73,7 @@ class TestBackendName:
         """Numpy arrays report the numpy backend."""
         assert backend_name(np.array([1, 2])) == "numpy"
 
-    def test_strict(self):
+    def test_strict(self, xps):
         """Other backends report their top-level package name."""
         assert backend_name(xps.asarray([1, 2])) == "array_api_strict"
 
@@ -81,7 +85,7 @@ class TestIsNumpy:
         """Numpy arrays are numpy arrays."""
         assert is_numpy(np.array([1, 2]))
 
-    def test_not_numpy(self):
+    def test_not_numpy(self, xps):
         """Arrays from other backends are not."""
         assert not is_numpy(xps.asarray([1, 2]))
 
@@ -94,7 +98,7 @@ class TestToNumpy:
         array = np.array([1, 2])
         assert to_numpy(array) is array
 
-    def test_other_backend(self):
+    def test_other_backend(self, xps):
         """Other backends are converted to numpy arrays."""
         out = to_numpy(xps.asarray([1.0, 2.0]))
         assert isinstance(out, np.ndarray)
@@ -111,12 +115,12 @@ class TestToNumpy:
 class TestAsArrayLike:
     """Tests for converting arrays back to another backend."""
 
-    def test_numpy_like(self):
+    def test_numpy_like(self, xps):
         """A numpy template returns a numpy array."""
         out = asarray_like(xps.asarray([1.0, 2.0]), np.array([1.0]))
         assert isinstance(out, np.ndarray)
 
-    def test_other_backend_like(self):
+    def test_other_backend_like(self, xps):
         """A non-numpy template returns that backend's array."""
         out = asarray_like(np.array([1.0, 2.0]), xps.asarray([1.0]))
         assert backend_name(out) == "array_api_strict"
@@ -163,12 +167,12 @@ class TestPatchBackends:
         assert "Patch" in str(backend_patch)
 
 
-def test_suppress_fallback_warning(random_patch):
+def test_suppress_fallback_warning(random_patch, to_backend, backend):
     """The fallback warning can be silenced like any other dascore warning."""
-    patch = random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
+    patch = to_backend(random_patch)
     with suppress_warnings(NumpyFallbackWarning):
         out = patch.detrend("time")
-    assert backend_name(out.data) == "array_api_strict"
+    assert backend_name(out.data) == backend
 
 
 def test_backend_name_of_non_array():
@@ -319,12 +323,12 @@ class TestRegisterBackend:
         patch_func.register("array_api_strict")(_identity)
         assert "array_api_strict" in patch_func.backends
 
-    def test_namespace(self, patch_func):
+    def test_namespace(self, patch_func, xps):
         """It can also be named with the array namespace itself."""
         patch_func.register(xps)(_identity)
         assert "array_api_strict" in patch_func.backends
 
-    def test_array(self, patch_func):
+    def test_array(self, patch_func, xps):
         """Or with an example array."""
         patch_func.register(xps.asarray([1.0]))(_identity)
         assert "array_api_strict" in patch_func.backends

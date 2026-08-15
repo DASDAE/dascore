@@ -32,10 +32,6 @@ from dascore.utils.array_api import array_namespace, backend_name
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import NumpyFallbackWarning
 
-# array_api_strict is a test dependency, but some environments (eg wasm)
-# install dascore without the test extras.
-xps = pytest.importorskip("array_api_strict")
-
 
 class _OtherBackendArray:
     """An array which claims to belong to a different array API backend."""
@@ -746,6 +742,11 @@ class TestArrayBackends:
     """Tests for operators applied to patches backed by other array libraries."""
 
     @pytest.fixture(scope="class")
+    def xps(self):
+        """The reference implementation of the array API standard."""
+        return pytest.importorskip("array_api_strict")
+
+    @pytest.fixture(scope="class")
     def backend_patch(self, random_patch, to_backend) -> dc.Patch:
         """A patch whose data are backed by the array backend under test."""
         return to_backend(random_patch)
@@ -846,14 +847,14 @@ class TestArrayBackends:
             out = np.fmod(backend_patch, 2)
         self._assert_matches_numpy(out, np.fmod(random_patch, 2), backend)
 
-    def test_no_equivalent_in_the_standard(self):
+    def test_no_equivalent_in_the_standard(self, xps):
         """A ufunc the standard lacks has no equivalent to look up."""
         array = xps.asarray([1.0, 2.0])
         assert array_utils._get_backend_ufunc(np.fmod, array) is None
         assert array_utils._get_backend_ufunc(np.power, array) is xps.pow
 
     @pytest.mark.parametrize("numpy_name,array_api_name", sorted(UFUNC_NAMES.items()))
-    def test_renamed_ufuncs_exist(self, numpy_name, array_api_name):
+    def test_renamed_ufuncs_exist(self, numpy_name, array_api_name, xps):
         """Each renamed ufunc exists under both names."""
         assert isinstance(getattr(np, numpy_name), np.ufunc)
         assert hasattr(xps, array_api_name)
