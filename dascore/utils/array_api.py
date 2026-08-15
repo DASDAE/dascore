@@ -5,6 +5,8 @@ DASCore patch data can be backed by any array library which implements the
 [array API standard](https://data-apis.org/array-api/latest/). This module
 holds the small set of helpers needed to write backend-agnostic code and to
 cross the boundary back to numpy when a numpy-only implementation is used.
+Which array-likes are accepted as patch data is a separate question, and
+lives in [compat](`dascore.compat`).
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import array_api_compat.numpy as np_namespace
 import numpy as np
 from array_api_compat import array_namespace as _array_namespace
 from array_api_compat import device, to_device
+
+from dascore.compat import is_array
 
 __all__ = [
     "array_namespace",
@@ -61,9 +65,9 @@ def array_namespace(*arrays: Any) -> Any:
 
 def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
     """Return True if the array is a numpy array or scalar."""
-    # Unlike compat.is_array numpy scalars count, and unlike
-    # array_api_compat.is_numpy_array this is fast enough for every call.
-    return isinstance(array, np.ndarray | np.generic)
+    # Numpy scalars are excluded by is_array but count here; they carry
+    # __array_namespace__, so they must not be treated as foreign arrays.
+    return is_array(array) or isinstance(array, np.generic)
 
 
 def backend_name(array: Any) -> str:
