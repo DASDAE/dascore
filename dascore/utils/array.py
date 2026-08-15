@@ -22,6 +22,7 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     is_foreign,
+    can_nan_reduce,
     is_numpy,
     nan_reduce,
     to_numpy,
@@ -479,27 +480,34 @@ class PatchUFunc:
         )
 
 
-def _apply_reduction(func, data, axis):
-    """
-    Apply a reduction to data, using its own array namespace if it can.
+def _backend_can_reduce(func, data):
+    """Determine if a reduction can be applied in the data's own namespace."""
+    if (name := NAN_REDUCTIONS.get(func)) is not None:
+        return can_nan_reduce(name, data)
+    return func in REDUCTIONS
 
-    Reductions the standard doesn't define, such as median, and callables
-    dascore knows nothing about are applied by numpy.
-    """
+
+def _apply_reduction(func, data, axis):
+    """Apply a reduction to data, using its own array namespace if it can."""
     if is_numpy(data):
         return func(data, axis=axis)
     if (name := NAN_REDUCTIONS.get(func)) is not None:
         return nan_reduce(name, data, axis=axis)
-    if (name := REDUCTIONS.get(func)) is not None:
-        return getattr(array_namespace(data), name)(data, axis=axis)
-    name = getattr(func, "__name__", "aggregation")
-    warn_numpy_fallback(name, backend_name(data), stacklevel=4)
-    return asarray_like(func(to_numpy(data), axis=axis), data)
+    return getattr(array_namespace(data), REDUCTIONS[func])(data, axis=axis)
 
 
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     """Apply an aggregation operator to patch."""
     data = patch.data
+    # Reductions the standard doesn't define, such as median, and callables
+    # dascore knows nothing about are applied by numpy. The whole patch
+    # crosses the boundary once here rather than once per dimension.
+    if not is_numpy(data) and not _backend_can_reduce(func, data):
+        name = getattr(func, "__name__", "aggregation")
+        warn_numpy_fallback(name, backend_name(data), stacklevel=4)
+        numpy_patch = patch.new(data=to_numpy(data))
+        out = _apply_aggregator(numpy_patch, dim, func, dim_reduce)
+        return out.new(data=asarray_like(out.data, data))
     dims = tuple(iterate(patch.dims if dim is None else dim))
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
     if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):

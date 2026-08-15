@@ -18,6 +18,7 @@ from dascore.utils.array_api import (
     ARRAY_API_BACKEND,
     asarray_like,
     backend_name,
+    can_nan_reduce,
     is_numpy,
     nan_reduce,
     to_numpy,
@@ -394,6 +395,52 @@ class TestNanReduce:
         array = np.linspace(1, 5, 12).reshape(3, 4)
         out = np.asarray(nan_reduce(name, to_array(array), axis=1))
         assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=1))
+
+    @pytest.mark.parametrize("name", names)
+    @pytest.mark.parametrize(
+        "dtype", ["bool", "int64", "float32", "float64", "complex128"]
+    )
+    def test_dtypes_match_numpy(self, name, dtype, to_array):
+        """Each reduction matches numpy's value and dtype for each dtype."""
+        array = np.array([1, 0, 3, 2], dtype=dtype).reshape(2, 2)
+        with suppress_warnings():
+            expected = getattr(np, f"nan{name}")(array, axis=0)
+            out = np.asarray(nan_reduce(name, to_array(array), axis=0))
+        assert out.dtype == expected.dtype
+        assert np.allclose(out, expected, equal_nan=True)
+
+    @pytest.mark.parametrize("name", ["min", "max"])
+    def test_infinities(self, name, to_array):
+        """Infinities are values like any other, not a missing-data marker."""
+        array = np.array([np.nan, np.inf, -np.inf])
+        out = np.asarray(nan_reduce(name, to_array(array)))
+        assert out == getattr(np, f"nan{name}")(array)
+
+    @pytest.mark.parametrize("name", names)
+    def test_empty(self, name, to_array):
+        """Reducing nothing does what numpy does, including refusing to."""
+        array = np.array([], dtype="float64")
+        with suppress_warnings(RuntimeWarning):
+            # Neither numpy nor the standard has an identity for min or max.
+            if name in {"min", "max"}:
+                with pytest.raises(ValueError):
+                    np.asarray(nan_reduce(name, to_array(array)))
+                return
+            expected = getattr(np, f"nan{name}")(array)
+            out = np.asarray(nan_reduce(name, to_array(array)))
+        assert np.allclose(out, expected, equal_nan=True)
+
+    def test_unknown_name(self):
+        """A reduction dascore doesn't have is an error, not a std."""
+        with pytest.raises(ValueError, match="not a reduction"):
+            nan_reduce("median", np.array([1.0, 2.0]))
+
+    def test_can_nan_reduce(self, to_array, backend):
+        """Only reductions the standard defines for a dtype can be done."""
+        assert can_nan_reduce("mean", to_array(np.array([1.0, 2.0])))
+        # dask has its own nan reductions, so it can do them all.
+        booleans = to_array(np.array([True, False]))
+        assert can_nan_reduce("min", booleans) == (backend == "dask")
 
     @pytest.mark.parametrize("name", names)
     def test_integer_data(self, name, to_array):

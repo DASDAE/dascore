@@ -30,6 +30,19 @@ from dascore.utils.patch import (
 )
 
 
+def _as_float(data):
+    """
+    Promote data which cannot hold a fraction to floats.
+
+    Numpy promotes when dividing or subtracting a float; the array API
+    standard has no mixed kind promotion, so it has to be explicit.
+    """
+    xp = array_namespace(data)
+    if xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        return data
+    return xp.astype(data, xp.float64)
+
+
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
     Set dimension to non-dimensional coordinate.
@@ -354,7 +367,7 @@ def normalize(
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
     axis = self.get_axis(dim)
-    data = self.data
+    data = _as_float(self.data)
     xp = array_namespace(data)
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
@@ -419,7 +432,7 @@ def standardize(
     ```
     """
     axis = self.get_axis(dim)
-    data = self.data
+    data = _as_float(self.data)
     mean = nan_reduce("mean", data, axis=axis, keepdims=True)
     std = nan_reduce("std", data, axis=axis, keepdims=True)
     new_data = (data - mean) / std
@@ -942,7 +955,7 @@ def demean(patch, dim: str = "time"):
     >>> plt.close(fig)
     """
     axis = patch.get_axis(dim)
-    data = patch.data
+    data = _as_float(patch.data)
 
     # Compute mean along axis, keep dims for broadcasting
     mea = nan_reduce("mean", data, axis=axis, keepdims=True)

@@ -33,6 +33,11 @@ from dascore.utils.misc import suppress_warnings
 from dascore.warnings import NumpyFallbackWarning
 
 
+def to_backend_array(patch, array):
+    """Return the array on the same backend as the patch's data."""
+    return array_namespace(patch.data).asarray(array)
+
+
 class _OtherBackendArray:
     """An array which claims to belong to a different array API backend."""
 
@@ -852,6 +857,32 @@ class TestArrayBackends:
         with pytest.warns(NumpyFallbackWarning, match="nanmedian"):
             out = backend_patch.aggregate("time", method="median")
         expected = random_patch.aggregate("time", method="median")
+        self._assert_matches_numpy(out, expected, backend)
+
+    def test_multi_dimension_fallback_warns_once(
+        self, backend_patch, random_patch, backend
+    ):
+        """The patch crosses to numpy once, not once per dimension."""
+        with pytest.warns(NumpyFallbackWarning) as warnings_raised:
+            out = backend_patch.aggregate(dim=None, method="median")
+        assert len(warnings_raised) == 1
+        expected = random_patch.aggregate(dim=None, method="median")
+        self._assert_matches_numpy(out, expected, backend)
+
+    @pytest.mark.parametrize("dtype", ["int32", "bool"])
+    @pytest.mark.parametrize(
+        "name", ["min", "max", "sum", "mean", "std", "normalize", "demean"]
+    )
+    def test_dtypes_without_fractions(
+        self, name, dtype, backend_patch, random_patch, backend
+    ):
+        """Data which can't hold a fraction still match numpy exactly."""
+        array = (np.asarray(random_patch.data) * 10).astype(dtype)
+        numpy_patch = random_patch.new(data=array)
+        patch = backend_patch.new(data=to_backend_array(backend_patch, array))
+        with suppress_warnings(NumpyFallbackWarning):
+            out = getattr(patch, name)("time")
+            expected = getattr(numpy_patch, name)("time")
         self._assert_matches_numpy(out, expected, backend)
 
     def test_no_equivalent_in_the_standard(self, xps):
