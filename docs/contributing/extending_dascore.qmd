@@ -128,6 +128,38 @@ Spool namespaces use the same pattern. The only changes are:
 - Inherit from `SpoolNameSpace` and write methods against a `Spool`.
 - Register the namespace in the `dascore.spool_namespace` entry point group instead of `dascore.patch_namespace`.
 
+## Array backends
+
+Patch data can be backed by any array library which implements the [array API standard](https://data-apis.org/array-api/latest/), not just NumPy. A patch function declares which one its body was written for:
+
+```{python}
+import dascore as dc
+from dascore.constants import PatchType
+from dascore.utils.array_api import array_namespace
+
+
+@dc.patch_function(backend="array_api")
+def double(patch: PatchType) -> PatchType:
+    xp = array_namespace(patch.data)
+    return patch.new(data=xp.multiply(patch.data, 2))
+```
+
+The default, `"numpy"`, means the function needs NumPy arrays. Patches from another backend are then converted to NumPy, the function is applied, and the output is converted back, which issues a `NumpyFallbackWarning`. Use `"array_api"` when the body only uses functions from the standard, as above, in which case it runs on any backend without conversion.
+
+An implementation for one specific backend is added with `register`, which also works on DASCore's own patch functions from your package:
+
+```{python}
+#| eval: false
+import jax.numpy as jnp
+
+
+@dc.proc.detrend.register(jnp)
+def _jax_detrend(patch, dim="time"):
+    ...
+```
+
+The registration key is the name of the array library's *namespace*, which is not always the name of the library: `torch` rather than `pytorch`, `jax` rather than `jaxlib`. Passing the namespace module, as above, or an example array is therefore recommended over passing the string; a misspelled string registers an implementation which is never called. Note that this only works for libraries which implement the standard. Array-likes which merely support `__array__` are handled by NumPy, and report `"numpy"` as their backend.
+
 ## Related guides
 
 - [Contributing](contributing.qmd)

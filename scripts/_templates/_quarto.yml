@@ -31,7 +31,7 @@ website:
   image: "_static/logo.png"
   favicon: "_static/logo.png"
   repo-subdir: docs
-  repo-branch: master
+  repo-branch: {{ repo_branch }}
   repo-actions: [edit]
   page-navigation: true
 

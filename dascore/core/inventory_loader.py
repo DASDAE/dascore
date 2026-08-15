@@ -30,7 +30,6 @@ deployment logs -- is ignored where it lies.
 
 from __future__ import annotations
 
-import csv
 import itertools
 import json
 import os
@@ -61,10 +60,20 @@ from dascore.core.inventory import (
 from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
+    ParameterError,
 )
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
 from dascore.utils.misc import check_code, optional_import
+from dascore.utils.paths import quote_path as _quote
+from dascore.utils.tables import (
+    ordered_rows,
+    parse_cell,
+    read_table,
+    require_columns,
+    require_stated,
+    row_cells,
+)
 from dascore.utils.time import to_datetime64
 
 # One data model stands behind all three spellings, so they are accepted
@@ -166,16 +175,6 @@ def _model_names() -> frozenset[str]:
             yield from walk(sub)
 
     return frozenset(walk(InventoryModel)) | {Inventory.__name__}
-
-
-def _quote(path: Path) -> str:
-    """
-    Name a file for an error message.
-
-    Its container is included because a bare name is ambiguous across
-    containers and the full path is noise the reader already knows.
-    """
-    return str(Path(path.parent.name) / path.name)
 
 
 def _object_suffix(path: Path) -> str | None:
@@ -502,154 +501,6 @@ _TABLES: Mapping[str, _Table] = {
 _SEQUENCE = "sequence"
 
 
-def _read_table(path: Path) -> pd.DataFrame:
-    """
-    Read one track table.
-
-    Every cell arrives as text and the models coerce it, so a column's
-    meaning is the field's rather than whatever pandas inferred from the
-    rows it happened to see. Only a truly empty cell is null: an empty
-    cell means unset, and a document which writes ``NA`` means the string.
-    """
-    # The header is read first and by itself, for two reasons: pandas
-    # renames a repeated column rather than refusing it, so by the time a
-    # frame exists the second one is `coupling_type.1` and the clash cannot
-    # be seen; and it raises its own error for a file with no columns,
-    # which would arrive before this one could say what was expected.
-    try:
-        with path.open(newline="", encoding="utf-8-sig") as stream:
-            reader = csv.reader(stream)
-            header = next(reader, [])
-            if header:
-                # Streamed rather than listed: a track table is the part of
-                # this format meant to grow, and holding every cell as a
-                # python object beside the frame pandas builds would cost
-                # several times what the frame itself does.
-                _check_widths(reader, header, path)
-    except (OSError, UnicodeDecodeError) as error:
-        msg = f"Could not read {_quote(path)}: {error}."
-        raise InvalidInventoryError(msg) from error
-    if not header:
-        msg = f"{_quote(path)} has no columns, so it states no track."
-        raise InvalidInventoryError(msg)
-    repeated = sorted({x for x in header if header.count(x) > 1})
-    if repeated:
-        msg = (
-            f"{_quote(path)} names {', '.join(repeated)} more than once; one "
-            "column states one field."
-        )
-        raise InvalidInventoryError(msg)
-    # index_col=False so that no column is ever read as an index; the row
-    # widths above already agree, and this keeps them agreeing.
-    return pd.read_csv(
-        path,
-        dtype=str,
-        keep_default_na=False,
-        na_values=[""],
-        index_col=False,
-        # Both readers decode alike, or the header checked above is not
-        # the header parsed here: a locale-encoded read disagrees with
-        # pandas' UTF-8, and a byte order mark reaches only one of them.
-        encoding="utf-8-sig",
-    )
-
-
-def _check_widths(reader, header: list[str], path: Path) -> None:
-    """
-    Refuse a row which is not its header wide.
-
-    Pandas refuses neither a wide row nor a narrow one: by default the
-    surplus cell pushes the first column into the index, so every value in
-    the row shifts one field left and lands in its neighbour's meaning. A
-    row states one cell per column or it is not a row.
-    """
-    for number, row in enumerate(reader, start=2):
-        if row and len(row) != len(header):
-            msg = (
-                f"{_quote(path)} row {number} states {len(row)} cells where "
-                f"its header names {len(header)} columns."
-            )
-            raise InvalidInventoryError(msg)
-
-
-def _cells(row) -> dict[str, str]:
-    """Return a row's stated cells, an empty one meaning unset."""
-    return {str(k): v for k, v in row.items() if not pd.isnull(v)}
-
-
-def _require_columns(frame: pd.DataFrame, needed, path: Path) -> None:
-    """Refuse a table which does not carry a column it is read by."""
-    missing = [x for x in needed if x is not None and x not in frame.columns]
-    if missing:
-        msg = (
-            f"{_quote(path)} states no {', '.join(missing)} column, which its "
-            "rows are read by."
-        )
-        raise InvalidInventoryError(msg)
-
-
-def _require_stated(frame: pd.DataFrame, needed, path: Path) -> None:
-    """
-    Refuse a blank cell in a column the table is read by.
-
-    A column which orders or groups the rows decides where each one goes,
-    so a row leaving it empty has no place. Left to pandas the row would
-    simply disappear -- a null sorts last, and a null grouping key drops
-    its row from every group.
-    """
-    for column in needed:
-        if column is None:
-            continue
-        empty = [
-            str(n) for n, ok in enumerate(frame[column].notna(), start=2) if not ok
-        ]
-        if empty:
-            msg = (
-                f"{_quote(path)} leaves {column} empty at row(s) "
-                f"{', '.join(empty)}, so those rows state no place."
-            )
-            raise InvalidInventoryError(msg)
-
-
-def _ordered(frame: pd.DataFrame, column: str | None, path: Path) -> pd.DataFrame:
-    """
-    Return the rows in the order the named column states, if any.
-
-    A table which names one is read by it rather than by row position, so
-    re-sorting a spreadsheet cannot change what it means. A table which
-    names none keeps the order it was written in.
-    """
-    if column is None:
-        return frame
-    try:
-        keys = pd.to_numeric(frame[column])
-    except (TypeError, ValueError) as error:
-        msg = f"{_quote(path)} has a non-numeric {column}: {error}."
-        raise InvalidInventoryError(msg) from error
-    return frame.assign(**{column: keys}).sort_values(column, kind="stable")
-
-
-def _parse_cell(text: str):
-    """
-    Read a cell's value the way its own text states it.
-
-    A CSV has no types, so an annotation's value -- which the model lets
-    be a string, a boolean or a number -- is decided by what was written.
-    A value which is genuinely a string but looks like one of the others
-    is the one thing this spelling cannot express; that group is authored
-    in YAML, where the types are explicit.
-    """
-    if (folded := text.strip().casefold()) in ("true", "false"):
-        return folded == "true"
-    try:
-        number = float(text)
-    except ValueError:
-        return text
-    # int(number) rather than int(text): 1e3 is integral, and only the
-    # number knows that -- the text raises.
-    return int(number) if number.is_integer() and "." not in text else number
-
-
 def _check_places(keys: pd.Series, column: str, path: Path) -> None:
     """
     Refuse an ordering which does not place every row.
@@ -670,14 +521,14 @@ def _check_places(keys: pd.Series, column: str, path: Path) -> None:
 
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
     """Read a table whose every row is one object."""
-    _require_columns(frame, [table.order], path)
-    _require_stated(frame, [table.order], path)
-    ordered = _ordered(frame, table.order, path)
+    require_columns(frame, [table.order], path)
+    require_stated(frame, [table.order], path)
+    ordered = ordered_rows(frame, table.order, path)
     if table.places and table.order is not None:
         _check_places(ordered[table.order], table.order, path)
     out = []
     for _, row in ordered.iterrows():
-        cells = _cells(row)
+        cells = row_cells(row)
         # The order column is the table's own scaffolding where the object
         # has no such field, so it is dropped -- but only where the table
         # says it has one. Dropped everywhere, a stray sequence column in
@@ -702,11 +553,11 @@ def _point_rows(
     its header, so a name the file never states is a column the segment
     does not have.
     """
-    _require_columns(frame, [table.order, table.group], path)
-    _require_stated(frame, [table.order, table.group], path)
-    frame = _ordered(frame, table.order, path)
+    require_columns(frame, [table.order, table.group], path)
+    require_stated(frame, [table.order, table.group], path)
+    frame = ordered_rows(frame, table.order, path)
     # dropna=False: a blank grouping cell would otherwise take its row out
-    # of the table without a word. _require_stated has already refused one,
+    # of the table without a word. require_stated has already refused one,
     # and this keeps that the reason nothing is missing.
     groups = (
         frame.groupby(table.group, sort=True, dropna=False)
@@ -955,8 +806,22 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
 
 
 def _load_table(path: Path, table: _Table, stem: str, crs):
-    """Read one track table into whatever its attribute holds."""
-    frame = _read_table(path)
+    """
+    Read one track table into whatever its attribute holds.
+
+    The table utilities are format-neutral, so this is where their errors
+    become the inventory's: one boundary rather than an exception class
+    threaded through every call.
+    """
+    try:
+        return _read_track_table(path, table, stem, crs)
+    except ParameterError as error:
+        raise InvalidInventoryError(str(error)) from error
+
+
+def _read_track_table(path: Path, table: _Table, stem: str, crs):
+    """Read one track table, in the table utilities' own error vocabulary."""
+    frame = read_table(path, what="no track")
     # Refused here rather than left to the model: a header with nothing
     # under it claims a track and states none, and for a single-object
     # table it would otherwise build one object out of no points.
@@ -1064,7 +929,7 @@ def _parse_annotations(rows: list[dict], path: Path) -> None:
     for number, row in enumerate(rows, start=2):
         if (text := row.get("value")) is None:
             continue
-        row["value"] = value = _parse_cell(text)
+        row["value"] = value = parse_cell(text)
         # A boolean is asked about first because a bool IS an int, which
         # would otherwise let true and 1 share a group whose shape they do
         # not share. An int and a float, by contrast, are ONE kind: the

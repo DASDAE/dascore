@@ -88,12 +88,21 @@ def _get_dascore_title():
     return f"DASCore ({vstr})"
 
 
+def _get_repo_branch():
+    """Get the branch the docs' "edit this page" links should point to."""
+    return os.environ.get("DASCORE_DOC_BRANCH", "master")
+
+
 def create_quarto_qmd():
     """Create the _quarto.yml file."""
     temp = get_template("_quarto.yml")
     version_str = _get_dascore_title()
     api_toc_tree = build_amp_toc_tree()
-    out = temp.render(dascore_version_str=version_str, api_toc_tree=api_toc_tree)
+    out = temp.render(
+        dascore_version_str=version_str,
+        api_toc_tree=api_toc_tree,
+        repo_branch=_get_repo_branch(),
+    )
     path = Path(__file__).parent.parent / "docs" / "_quarto.yml"
     with path.open("w") as fi:
         fi.write(out)

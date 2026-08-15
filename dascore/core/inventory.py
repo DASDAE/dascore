@@ -52,6 +52,13 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
+from dascore.utils.intervals import (
+    clip_intervals,
+    interval_masks,
+    intervals_overlap,
+    normalize_value,
+    value_kind,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     check_code,
@@ -108,18 +115,8 @@ ResourceIdStr = Annotated[
 
 
 def _annotation_value(value):
-    """
-    Normalize an annotation value so its Python type survives validation.
-
-    Numpy scalars are unwrapped: pydantic's smart union resolves every numpy
-    scalar to float, which would turn a mask element into a numeric group.
-    """
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, float) and not np.isfinite(value):
-        msg = f"Annotation value must be finite; got {value}."
-        raise InvalidInventoryError(msg)
-    return value
+    """Normalize an annotation value so its Python type survives validation."""
+    return normalize_value(value, error=InvalidInventoryError)
 
 
 # The value kind decides an annotation group's shape, so it must be exact.
@@ -624,31 +621,6 @@ class Geometry(InventoryModel):
             )
             out[name] = column
         return out
-
-
-def interval_masks(values, intervals) -> list[np.ndarray]:
-    """
-    Return, per interval, the mask of values that interval covers.
-
-    Coverage is half-open, ``[start, end)``, with one exception: the end of
-    a coverage run belongs to the interval ending there when no half-open
-    interval claims it, so the last point of a run is not left out. Point
-    markers (equal start and end) cover nothing.
-    """
-    values = np.asarray(values, dtype=float)
-    spans = [(lo, hi) for lo, hi in intervals]
-    claimed = np.zeros(len(values), dtype=bool)
-    for lo, hi in spans:
-        if lo < hi:
-            claimed |= (values >= lo) & (values < hi)
-    out = []
-    for lo, hi in spans:
-        if lo >= hi:  # a point marker covers nothing
-            out.append(np.zeros(len(values), dtype=bool))
-            continue
-        mask = (values >= lo) & (values < hi)
-        out.append(mask | ((values == hi) & ~claimed))
-    return out
 
 
 class _IntervalModel(InventoryModel):
@@ -1166,27 +1138,6 @@ def _times_equal(time1, time2) -> bool:
     return bool(time1 == time2)
 
 
-def _annotation_kind(value) -> str:
-    """Return the value kind which decides an annotation group's shape."""
-    if isinstance(value, bool):  # bool before int; bool is an int subclass
-        return "boolean"
-    if isinstance(value, str):
-        return "string"
-    return "numeric"
-
-
-def _intervals_overlap(intervals: list[tuple[float, float]]) -> tuple | None:
-    """Return the first overlapping pair of half-open intervals, or None.
-
-    Empty (point) intervals cover nothing and cannot overlap.
-    """
-    ordered = sorted(x for x in intervals if x[0] < x[1])
-    for first, second in itertools.pairwise(ordered):
-        if second[0] < first[1]:
-            return first, second
-    return None
-
-
 class OpticalPath(TimeRangedModel):
     """
     Continuous optical path described by independent tracks.
@@ -1331,7 +1282,7 @@ class OpticalPath(TimeRangedModel):
                         f"{name} interval ({lo}, {hi}) extends past path "
                         f"span ({start}, {end})."
                     )
-        overlap = _intervals_overlap(coup_spans)
+        overlap = intervals_overlap(coup_spans)
         if overlap is not None:
             errors.append(
                 f"Overlapping coupling intervals {overlap[0]} and "
@@ -1391,7 +1342,7 @@ class OpticalPath(TimeRangedModel):
                     "share its name."
                 )
         for name in sorted(spans):
-            if (overlap := _intervals_overlap(spans[name])) is not None:
+            if (overlap := intervals_overlap(spans[name])) is not None:
                 errors.append(
                     f"Overlapping geometry intervals {overlap[0]} and "
                     f"{overlap[1]} for column {name!r}; a column is a "
@@ -1417,7 +1368,7 @@ class OpticalPath(TimeRangedModel):
                 "coordinate, a typed track, or a coordinate label."
             )
         for group, items in groups.items():
-            kinds = {_annotation_kind(x.value) for x in items}
+            kinds = {value_kind(x.value) for x in items}
             if len(kinds) > 1:
                 errors.append(
                     f"Annotation group {group!r} mixes {sorted(kinds)} values; "
@@ -1426,7 +1377,7 @@ class OpticalPath(TimeRangedModel):
                 continue
             if kinds == {"boolean"}:  # membership groups may overlap
                 continue
-            overlap = _intervals_overlap([x.interval for x in items])
+            overlap = intervals_overlap([x.interval for x in items])
             if overlap is not None:
                 errors.append(
                     f"Overlapping intervals {overlap[0]} and {overlap[1]} in "
@@ -1476,8 +1427,8 @@ class OpticalPath(TimeRangedModel):
             # nothing had checked against the new distance array.
             geometry.append(seg.new(distance=tuple(new_dist), coordinates=new_coords))
         outer = self.end_distance
-        coupling = _clip_intervals(self.coupling, lo, hi, outer)
-        annotations = _clip_intervals(self.annotations, lo, hi, outer)
+        coupling = clip_intervals(self.coupling, lo, hi, outer)
+        annotations = clip_intervals(self.annotations, lo, hi, outer)
         return self.model_copy(
             update={
                 "start_distance": lo,
@@ -1601,29 +1552,6 @@ class OpticalPath(TimeRangedModel):
                 "measurements": (*self.measurements, *other.measurements),
             }
         )
-
-
-def _clip_intervals(items, lo: float, hi: float, outer: float | None = None) -> list:
-    """
-    Clip interval items to [lo, hi), dropping those left with no coverage.
-
-    Point markers cover nothing but are not nothing: they survive when they
-    fall inside the clip, or on its outermost included endpoint.
-    """
-    out = []
-    for item in items:
-        start, end = item.interval
-        if start == end:
-            if lo <= start < hi or (outer is not None and start == hi == outer):
-                out.append(item)
-            continue
-        new_lo, new_hi = max(start, lo), min(end, hi)
-        if new_hi <= new_lo:
-            continue
-        out.append(
-            item.model_copy(update={"start_distance": new_lo, "end_distance": new_hi})
-        )
-    return out
 
 
 class Response(InventoryModel):
@@ -2308,7 +2236,7 @@ class Inventory(InventoryModel):
             for index in set(axes.values()):
                 spans.setdefault(index, []).append(segment.interval)
         for index in sorted(spans):
-            if (overlap := _intervals_overlap(spans[index])) is not None:
+            if (overlap := intervals_overlap(spans[index])) is not None:
                 errors.append(
                     f"Overlapping geometry intervals {overlap[0]} and "
                     f"{overlap[1]} for axis {crs.coordinate_labels[index]!r}; "
