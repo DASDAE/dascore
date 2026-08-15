@@ -42,8 +42,6 @@ from pydantic import (
 from typing_extensions import Self
 
 from dascore.constants import (
-    DATA_STATE_ATTRS,
-    INVENTORY_ATTRS,
     DataCategory,
     DataType,
 )
@@ -206,8 +204,9 @@ class CoordinateReferenceSystem(InventoryModel):
         """
         The axes are unique, canonical in number, and paired with units.
 
-        Three statements about one thing -- what this CRS's axes are --
-        so a document naming its axes badly hears every way at once.
+        Three checks of one thing -- what this CRS's axes are -- kept
+        together so they cannot drift apart. The first to fail is the
+        one reported, as it was when these were three validators.
         """
         labels = self.coordinate_labels
         if len(set(labels)) != len(labels):
@@ -370,10 +369,14 @@ class _OpticalComponentBase(InventoryModel):
 
     Every component carries a unified one-way transmission ``loss_db`` and
     return ``reflectance_db`` (the two quantities an OTDR trace shows per
-    event), each paired with the measurement record that produced it. One
-    value each: a component measured at several wavelengths is several
-    components' worth of facts, and the inventory has no channel to give
-    them to.
+    event), each paired with the measurement record that produced it.
+
+    One value each. A channel takes one number from a component, so a
+    per-wavelength set has nothing to be projected onto; state the
+    wavelength the inventory describes, and keep the others with the
+    measurement records they came from. (Repeating the component is not
+    the way: its `optical_length` would be counted twice and shift every
+    channel after it.)
     """
 
     _identity_field: ClassVar[str] = "name"
@@ -1564,10 +1567,14 @@ def _drop_empty(value, _in_extras=False):
     """
     Recursively drop empty strings, mappings, and sequences from a dump.
 
-    Pruned fields default to the empty value they held, so reload is
-    lossless; user-supplied ``extra_fields`` contents are kept verbatim.
-    An annotation value cannot be pruned into a different kind: it is a
-    scalar, and `_reject_empty_string` refuses the one empty form.
+    A field whose default is the empty value it held reloads unchanged;
+    user-supplied ``extra_fields`` contents are kept verbatim.
+
+    This prunes by key without knowing which model a mapping came from,
+    so a field whose default is *not* empty -- a CRS deliberately left
+    without an authority, say -- reloads as that default rather than as
+    the blank it was given. Pruning would have to walk the models
+    alongside the dump to tell those apart.
     """
     if isinstance(value, dict):
         out = {}
@@ -1717,22 +1724,40 @@ def _resource_ref_fields(model) -> Mapping[str, tuple]:
     unreachable by `replace`. Cached on the class, like the value names.
     """
     resources = tuple(_annotation_members(_Resource))
+
+    def held(annotation) -> tuple:
+        """The resource classes a field can hold, through a collection."""
+        out = []
+        for member in _annotation_members(annotation):
+            if get_origin(member) in _COLLECTION_ORIGINS:
+                # a tuple of resources holds them just as a bare field does
+                out.extend(held(get_args(member)[0]))
+            elif isinstance(member, type) and issubclass(member, resources):
+                out.append(member)
+        return tuple(dict.fromkeys(out))
+
     return MappingProxyType(
         {
             name: allowed
             for name, info in model.model_fields.items()
-            if (
-                allowed := tuple(
-                    x
-                    for x in _annotation_members(info.annotation)
-                    if isinstance(x, type) and issubclass(x, resources)
-                )
-            )
+            if (allowed := held(info.annotation))
         }
     )
 
 
-_SYSTEM_FACT_NAMES = tuple(sorted(INVENTORY_ATTRS + DATA_STATE_ATTRS))
+# The observing-system facts an inventory can contribute, read off the
+# models so a field added to either becomes one without being listed
+# anywhere. The data-state trio is included because it can be asked for
+# by name (blanket enrichment leaves it to processing). INVENTORY_ATTRS
+# is the same vocabulary as the readers spell it, and cannot be derived
+# from here without the readers importing the models -- so that one
+# pairing is what the test pins.
+_SYSTEM_FACT_NAMES = tuple(
+    sorted(
+        list(_value_field_names(Acquisition))
+        + [f"interrogator.{x}" for x in _value_field_names(Interrogator)]
+    )
+)
 
 
 def _yaml_label(text: str) -> str:
@@ -1841,8 +1866,11 @@ class Inventory(InventoryModel):
             updates = {}
             for field, allowed in fields.items():
                 value = getattr(obj, field)
-                new_value = register(value, field, allowed)
-                if new_value is not value:
+                if isinstance(value, tuple):
+                    new_value = tuple(register(x, field, allowed) for x in value)
+                    if new_value != value:
+                        updates[field] = new_value
+                elif (new_value := register(value, field, allowed)) is not value:
                     updates[field] = new_value
             return obj.model_copy(update=updates) if updates else obj
 
@@ -1850,15 +1878,15 @@ class Inventory(InventoryModel):
             pool_add(rid, normalize(resource))
 
         def norm_path(path):
+            # the path's own reference fields (measurements) go through
+            # normalize like any other model's; its components are models
+            # of their own and each normalizes itself.
+            path = normalize(path)
             return path.model_copy(
                 update={
                     "optical_components": tuple(
                         normalize(c) for c in path.optical_components
-                    ),
-                    "measurements": tuple(
-                        register(x, "measurements", (OpticalMeasurement,))
-                        for x in path.measurements
-                    ),
+                    )
                 }
             )
 

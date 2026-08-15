@@ -1459,16 +1459,28 @@ class TestOpticalLoss:
         assert comps[0].loss_measurement == "otdr-1"
         assert comps[1].reflectance_measurement == "otdr-1"
 
-    def test_one_value_per_component(self):
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("loss_db", (0.1, 0.2)),
+            ("reflectance_db", (-40.0, -45.0)),
+            ("loss_measurement", ("m1", "m2")),
+            ("reflectance_measurement", ("m1", "m2")),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "model", [inv.FiberSegment, inv.Connector, inv.Splice, inv.Terminator]
+    )
+    def test_one_value_per_component(self, model, field, value):
         """
         A component states one loss, not one per wavelength.
 
-        Several wavelengths are several components' worth of facts with
-        no channel to give them to; the component measured at each is
-        the thing to state.
+        A channel takes one number from a component, so a per-wavelength
+        set has nothing to be projected onto. All four fields are named:
+        re-widening any one of them is the edit this refuses.
         """
-        with pytest.raises(ValidationError):
-            inv.FiberSegment(optical_length=10.0, loss_db=(0.1, 0.2))
+        with pytest.raises(ValidationError, match="valid"):
+            model(optical_length=10.0, **{field: value})
 
     def test_dangling_measurement_ref_raises(self):
         """Dangling measurement ref raises."""
@@ -1535,7 +1547,7 @@ class TestPrReviewFindings:
 
     def test_acquisition_refuses_unknown_fields(self):
         """The model is closed; a stray name is a mistake, not an extra."""
-        with pytest.raises(ValidationError, match="xtra"):
+        with pytest.raises(ValidationError, match="Extra inputs"):
             inv.Acquisition(code="RAW", start_distance=100.0)
 
     def test_duplicate_channel_identity_raises(self):
@@ -1919,10 +1931,17 @@ class TestGetNames:
 
         The interval bounds say where a coupling condition applies, and a
         geometry's control points are the segment itself; neither is a
-        number a channel inside it carries.
+        number a channel inside it carries. Nor is a reference to another
+        record: a component's container and its measurement records are
+        second records, not values its channels take.
         """
         excluded = {"coupling.start_distance", "coupling.end_distance"}
         excluded |= {"geometry.distance", "geometry.coordinates"}
+        excluded |= {"optical_components.container"}
+        excluded |= {
+            "optical_components.loss_measurement",
+            "optical_components.reflectance_measurement",
+        }
         assert not set(names.coords) & excluded
 
     def test_coords_omit_absent_tracks(self):
@@ -1983,20 +2002,51 @@ class TestGetNamesRoundTrip:
                 qualified.get_coord(f"{track}.{field}").values,
             ), track
 
-    def test_annotation_value_survives_a_dump(self):
+    def test_an_inline_specification_is_pooled(self):
         """
-        A pruned value would reload as the default, changing its kind.
+        The one derived reference row nothing else constructs.
 
-        Nothing can be pruned into that: the value is a scalar and the
-        one empty form is refused, so `_drop_empty` has no empty value
-        of this field to find.
+        `Cable.specification` and `Enclosure.specification` appear in no
+        other test, so were the derivation to stop seeing them the
+        object would stay inline -- out of `resources`, unreachable by
+        `replace` -- with everything else still green.
         """
-        for value in (False, True, 0.0, 0, "north"):
-            note = inv.OpticalPathAnnotation(
-                group="g", value=value, start_distance=0.0, end_distance=1.0
-            )
-            dumped = inv._drop_empty(note.model_dump(mode="json", exclude_none=True))
-            assert dumped["value"] == value
+        spec = inv.ExternalResource(resource_id="spec-1", uri="http://x/y")
+        cable = inv.Cable(resource_id="c1", specification=spec)
+        enclosure = inv.Enclosure(resource_id="e1", specification=spec)
+        got = inv.Inventory(resources={"c1": cable, "e1": enclosure})
+        assert got.resources["c1"].specification == "spec-1"
+        assert got.resources["e1"].specification == "spec-1"
+        assert got.resources["spec-1"] == spec
+
+    def test_a_track_identity_field_must_exist(self, monkeypatch):
+        """
+        The map is derived, and the derivation checks what it derives.
+
+        A model declaring an identity field it does not have would build
+        an entry pointing at nothing, so it fails where it is built
+        rather than somewhere a bare track name quietly resolves to NaN.
+        """
+        monkeypatch.setattr(inv.CouplingCondition, "_identity_field", "not_a_field")
+        with pytest.raises(AssertionError):
+            inv._track_identity_fields()
+
+    def test_no_annotation_value_is_prunable(self):
+        """
+        Why `_UNPRUNED_KEYS` could go: the value it protected cannot occur.
+
+        Pruning drops a key whose value is empty, which would hand an
+        annotation back its `True` default and change its group's kind.
+        The empty string is the only form of `str | bool | int | float`
+        that pruning removes -- shown directly below -- and validation
+        refuses it, so no dump reaches `_drop_empty` holding one.
+        """
+        # pruning really would drop it, were it ever written
+        assert inv._drop_empty({"value": ""}) == {}
+        # and the falsy-but-not-empty forms are untouched either way
+        assert inv._drop_empty({"value": False}) == {"value": False}
+        assert inv._drop_empty({"value": 0}) == {"value": 0}
+        # so the exemption protected a value which cannot be constructed
         with pytest.raises(ValidationError, match="empty string"):
             inv.OpticalPathAnnotation(
                 group="g", value="", start_distance=0.0, end_distance=1.0

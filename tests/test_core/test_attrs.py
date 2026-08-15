@@ -8,7 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, VALID_DATA_TYPES, max_lens
+from dascore.constants import (
+    DATA_STATE_ATTRS,
+    INVENTORY_ATTRS,
+    VALID_DATA_TYPES,
+    max_lens,
+)
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Interrogator
@@ -342,4 +347,4 @@ class TestInventoryAttrs:
         Processing rewrites them, so blanket enrichment must not carry
         them even though the inventory records their as-acquired values.
         """
-        assert not set(INVENTORY_ATTRS) & {"data_type", "data_category", "data_units"}
+        assert not set(INVENTORY_ATTRS) & set(DATA_STATE_ATTRS)

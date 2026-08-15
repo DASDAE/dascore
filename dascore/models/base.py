@@ -100,6 +100,14 @@ def sensible_model_hash(self: BaseModel) -> int:
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
 
+    # Declared, not unused: `cached_method` (dascore.utils.misc) assigns
+    # `self._cache` on first use, and without this pydantic private-attr
+    # declaration the dict lands in `__dict__` beside the field values --
+    # where a `deep_equality_check` over `__dict__` sees two otherwise
+    # equal models differ by which of them has been asked a cached
+    # question.
+    _cache = {}
+
     model_config = ConfigDict(
         extra="ignore",  # TODO: change to raise, then let subclass overwrite
         validate_assignment=True,

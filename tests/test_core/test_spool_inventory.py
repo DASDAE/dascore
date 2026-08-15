@@ -34,7 +34,6 @@ from dascore.constants import (
 )
 from dascore.core._spool_inventory import InventoryRef, resolve_row_epochs
 from dascore.core.inventory import (
-    _SYSTEM_FACT_NAMES,
     Acquisition,
     CouplingCondition,
     DistanceMap,
@@ -290,8 +289,9 @@ class TestLazyInventory:
         an inventory whose attrs depended on its contents would make the
         gate skip reads it needs.
         """
-        assert set(inventory.get_names().attrs) == set(_SYSTEM_FACT_NAMES)
-        assert set(dc.inventory().get_names().attrs) == set(_SYSTEM_FACT_NAMES)
+        # the point is that an empty inventory answers the same as a full
+        # one, so the gate can read the constant instead of the contents
+        assert set(dc.inventory().get_names().attrs) == set(inventory.get_names().attrs)
 
     def test_a_fiber_coordinate_reads_it(self, data_directory):
         """A name the index does not have is a question for the inventory."""

@@ -134,13 +134,6 @@ max_lens = {
 # inventory's: seconds, hertz, and meters. Readers convert at the parse
 # boundary instead of shipping a companion units attr.
 # Tested against the models in tests/test_core/test_attrs.py.
-# Attrs describing the data as it now stands rather than the system which
-# recorded it. Processing maintains them, so blanket enrichment leaves
-# them alone; naming one restores the as-acquired value. Kept beside
-# INVENTORY_ATTRS because the two together are what an inventory can say
-# about a patch.
-DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
-
 INVENTORY_ATTRS = (
     "closed_fiber_loop",
     "firmware_version",
@@ -157,6 +150,13 @@ INVENTORY_ATTRS = (
     "software_version",
     "spatial_interval",
 )
+
+# Attrs describing the data as it now stands rather than the system which
+# recorded it. Processing maintains them, so blanket enrichment leaves them
+# alone; naming one restores the as-acquired value. Together with
+# INVENTORY_ATTRS these are what an inventory can say about a patch.
+DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
+
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
