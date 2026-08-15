@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
@@ -21,6 +22,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
 )
 from dascore.units import percent
+from dascore.utils.array_api import backend_name
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -39,6 +41,7 @@ from dascore.utils.patch import (
     stack_patches,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import NumpyFallbackWarning
 
 
 @dc.patch_function(required_dims=("time", "distance"))
@@ -1193,3 +1196,180 @@ class TestDottedPatchNames:
         assert "DAS.R2D1..RAW" in name
         patch.io.write(tmp_path / f"{name}.h5", "dasdae")
         assert get_patch_names(dc.spool(tmp_path).update()).iloc[0] == name
+
+
+class TestBackendDispatch:
+    """Tests for dispatching patch functions on the patch's array backend."""
+
+    @pytest.fixture
+    def numpy_func(self):
+        """A patch function which only supports numpy."""
+
+        @dc.patch_function()
+        def numpy_only(patch, calls=None):
+            if calls is not None:
+                calls.append(backend_name(patch.data))
+            return patch.new(data=patch.data * 2)
+
+        return numpy_only
+
+    @pytest.fixture
+    def strict_patch(self, random_patch):
+        """A patch backed by the array_api_strict library."""
+        xps = pytest.importorskip("array_api_strict")
+        return random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
+
+    def test_default_backend(self, numpy_func):
+        """By default a patch function declares only a numpy implementation."""
+        assert set(numpy_func.backends) == {"numpy"}
+        assert numpy_func.backends["numpy"] is numpy_func.raw_function
+
+    def test_numpy_patch_not_converted(self, numpy_func, random_patch):
+        """Numpy patches use the numpy implementation directly."""
+        calls = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = numpy_func(random_patch, calls=calls)
+        assert calls == ["numpy"]
+        assert isinstance(out.data, np.ndarray)
+
+    def test_fallback_converts_and_restores(self, numpy_func, strict_patch):
+        """Other backends are converted to numpy then converted back."""
+        calls = []
+        with pytest.warns(NumpyFallbackWarning, match="numpy_only"):
+            out = numpy_func(strict_patch, calls=calls)
+        assert calls == ["numpy"]
+        assert backend_name(out.data) == "array_api_strict"
+
+    def test_registered_backend_used(self, numpy_func, strict_patch):
+        """A registered implementation takes precedence over the fallback."""
+
+        @numpy_func.register("array_api_strict")
+        def _strict(patch, calls=None):
+            calls.append("registered")
+            return patch
+
+        calls = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            numpy_func(strict_patch, calls=calls)
+        assert calls == ["registered"]
+
+    def test_array_api_used_for_unknown_backend(self, strict_patch):
+        """Array API implementations serve backends with no exact match."""
+        calls = []
+
+        @dc.patch_function(backend="array_api")
+        def array_api_func(patch):
+            calls.append(backend_name(patch.data))
+            return patch
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            array_api_func(strict_patch)
+        assert calls == ["array_api_strict"]
+
+    def test_exact_backend_beats_array_api(self, random_patch):
+        """An exact backend match wins over the generic implementation."""
+        calls = []
+
+        @dc.patch_function(backend="array_api")
+        def func(patch):
+            calls.append("array_api")
+            return patch
+
+        @func.register("numpy")
+        def _numpy_func(patch):
+            calls.append("numpy")
+            return patch
+
+        func(random_patch)
+        assert calls == ["numpy"]
+
+    def test_no_implementation_raises(self, random_patch):
+        """A patch with no usable implementation raises."""
+
+        @dc.patch_function(backend="jax")
+        def jax_only(patch):
+            return patch
+
+        with pytest.raises(NotImplementedError, match="numpy"):
+            jax_only(random_patch)
+
+    def test_patch_arguments_converted(self, strict_patch):
+        """Patches passed as arguments are also converted for the fallback."""
+        backends = []
+
+        @dc.patch_function()
+        def two_patches(patch, other, key=None):
+            backends.append(
+                (backend_name(patch.data), backend_name(other.data), key.dims)
+            )
+            return patch
+
+        with pytest.warns(NumpyFallbackWarning):
+            two_patches(strict_patch, strict_patch, key=strict_patch)
+        assert backends == [("numpy", "numpy", strict_patch.dims)]
+
+    def test_non_patch_output(self, strict_patch):
+        """Functions which don't return a patch are left alone."""
+
+        @dc.patch_function()
+        def get_shape(patch):
+            return patch.shape
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = get_shape(strict_patch)
+        assert out == strict_patch.shape
+
+    def test_history_and_data_type_added(self, strict_patch):
+        """The fallback path keeps the normal patch function machinery."""
+
+        @dc.patch_function(data_type="strain")
+        def set_strain(patch):
+            return patch.new(data=patch.data)
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = set_strain(strict_patch)
+        assert out.attrs.data_type == "strain"
+        assert "set_strain" in out.attrs.history[-1]
+
+    def test_array_arguments_converted(self, strict_patch):
+        """Arrays passed as arguments are converted for the fallback."""
+        types = []
+
+        @dc.patch_function()
+        def uses_array(patch, condition):
+            types.append(type(condition))
+            return patch.new(data=np.where(condition, patch.data, 0))
+
+        condition = strict_patch.data > 0
+        with pytest.warns(NumpyFallbackWarning):
+            out = uses_array(strict_patch, condition)
+        assert types == [np.ndarray]
+        assert backend_name(out.data) == "array_api_strict"
+
+    def test_unchanged_patch_returned(self, strict_patch):
+        """A function which returns its input returns the original patch."""
+
+        @dc.patch_function()
+        def do_nothing(patch):
+            return patch
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = do_nothing(strict_patch)
+        assert out is strict_patch
+
+    def test_registered_function_validated(self, strict_patch):
+        """Registered implementations get the same call validation."""
+
+        @dc.patch_function(validate_call=True)
+        def needs_int(patch, value: int = 1):
+            return patch
+
+        @needs_int.register("array_api_strict")
+        def _strict_needs_int(patch, value: int = 1):
+            return patch
+
+        with pytest.raises(pydantic.ValidationError):
+            needs_int(strict_patch, value="not_an_int")

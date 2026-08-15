@@ -1,7 +1,9 @@
 """DASCore - A library for fiber optic sensing."""
 from __future__ import annotations
 
-import warnings
+# Aliased because importing dascore.warnings binds the submodule to the
+# `warnings` name in this namespace, which would shadow the standard library.
+import warnings as std_warnings
 
 from rich import print  # noqa
 
@@ -47,4 +49,4 @@ def __getattr__(name: str):
 
 
 # Ensure warnings are issued only once (per warning/line)
-warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")
+std_warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")

@@ -99,5 +99,5 @@ def is_array(maybe_array) -> TypeGuard[np.ndarray]:
     """
     Determine if an object is a numpy array.
     """
-    # This is here so that we can support other array types in the future.
+    # Support for other array types lives in dascore.utils.array_api.
     return isinstance(maybe_array, np.ndarray)

@@ -25,6 +25,7 @@ from dascore.utils.array import (
     patch_array_function,
     patch_array_ufunc,
 )
+from dascore.utils.array_api import to_numpy
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
@@ -192,7 +193,7 @@ class Patch(NamespaceOwner):
             out = np.empty((), dtype=object)
             out[()] = self
             return out
-        data = np.asarray(self.data)
+        data = to_numpy(self.data)
         out = data.astype(dtype) if dtype is not None else data
         out = out if not copy else np.copy(out)
         return out

@@ -32,6 +32,14 @@ from dascore.exceptions import (
     PatchCoordinateError,
 )
 from dascore.units import convert_units, get_quantity, is_percent
+from dascore.utils.array_api import (
+    ARRAY_API_BACKEND,
+    NUMPY_BACKEND,
+    asarray_like,
+    backend_name,
+    is_numpy,
+    to_numpy,
+)
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
@@ -49,6 +57,7 @@ from dascore.utils.misc import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.warnings import NumpyFallbackWarning
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -214,13 +223,75 @@ class _PatchFunction(Protocol):
 
     The decorator attaches references back to the function it wrapped so
     callers can skip the patch-function machinery when calling it again.
+    It also attaches the backend registry, which maps the name of an array
+    backend to the implementation used for patches backed by it.
     """
 
     func: Callable
     raw_function: Callable
+    backends: dict[str, Callable]
+    register: Callable[[str], Callable]
     __wrapped__: Callable
 
     def __call__(self, patch, *args, **kwargs): ...
+
+
+def _get_backend_name(patch) -> str:
+    """Get the name of the array backend which backs a patch's data."""
+    data = getattr(patch, "data", None)
+    # Anything which doesn't carry array data uses the numpy path, where
+    # it gets the same error it would have gotten before dispatch existed.
+    if data is None or is_numpy(data):
+        return NUMPY_BACKEND
+    return backend_name(data)
+
+
+def _to_numpy_arg(obj):
+    """Convert patches and non-numpy arrays to numpy, leaving the rest alone."""
+    if isinstance(obj, dc.Patch):
+        return obj if is_numpy(obj.data) else obj.new(data=to_numpy(obj.data))
+    # Arrays which implement the standard (eg a boolean mask made from the
+    # patch data) have to cross the boundary as well.
+    if not is_numpy(obj) and hasattr(obj, "__array_namespace__"):
+        return to_numpy(obj)
+    return obj
+
+
+def _numpy_fallback(func, patch, args, kwargs, backend):
+    """Run a numpy-only implementation on non-numpy patches."""
+    msg = (
+        f"{func.__name__} has no {backend} implementation; the patch data "
+        "were converted to numpy and the output converted back. Silence this "
+        "with dascore.utils.misc.suppress_warnings(NumpyFallbackWarning)."
+    )
+    warnings.warn(msg, NumpyFallbackWarning, stacklevel=4)
+    args = tuple(_to_numpy_arg(x) for x in args)
+    kwargs = {i: _to_numpy_arg(v) for i, v in kwargs.items()}
+    numpy_patch = _to_numpy_arg(patch)
+    out = func(numpy_patch, *args, **kwargs)
+    # The function did nothing, so neither should the conversion. This keeps
+    # the identity check the patch function machinery uses for history.
+    if out is numpy_patch:
+        return patch
+    # Only patches carry data back to the original backend.
+    if isinstance(out, dc.Patch):
+        out = out.new(data=asarray_like(out.data, patch.data))
+    return out
+
+
+def _dispatch_backend(backends, patch, args, kwargs):
+    """Call the implementation which best matches the patch's array backend."""
+    name = _get_backend_name(patch)
+    for key in (name, ARRAY_API_BACKEND, NUMPY_BACKEND):
+        if (func := backends.get(key)) is not None:
+            break
+    else:
+        keys = sorted(backends)
+        msg = f"No implementation for {name} arrays. Registered backends: {keys}"
+        raise NotImplementedError(msg)
+    if key == NUMPY_BACKEND and name != NUMPY_BACKEND:
+        return _numpy_fallback(func, patch, args, kwargs, name)
+    return func(patch, *args, **kwargs)
 
 
 def patch_function(
@@ -230,6 +301,7 @@ def patch_function(
     history: Literal["full", "method_name", None] = "full",
     validate_call: bool = False,
     data_type: str | None = None,
+    backend: str = NUMPY_BACKEND,
 ):
     """
     Decorator to mark a function as a patch method.
@@ -256,6 +328,18 @@ def patch_function(
         Controls the output patch's ``data_type`` attr. If None, leave the
         returned patch's ``data_type`` unchanged. Otherwise, set to specified
         value. Use an empty string ("") to clear.
+    backend
+        The name of the array backend the decorated function supports.
+        The default, "numpy", means the function requires numpy arrays;
+        patches backed by another array library are converted to numpy and
+        the output converted back, which issues a
+        [NumpyFallbackWarning](`dascore.warnings.NumpyFallbackWarning`).
+        Use "array_api" for functions written against the array API
+        standard, which then work with any array backend. Implementations
+        for a specific backend (eg "jax") are added with the ``register``
+        method of the decorated function.
+        Only patches passed as arguments are converted for the fallback,
+        not patches nested inside other containers.
 
     Examples
     --------
@@ -294,12 +378,26 @@ def patch_function(
     >>> @dc.patch_function(data_type="")
     ... def do_unknown_quantity(patch):
     ...     ...
+    >>>
+    >>> # 6. A patch method which works with any array backend, plus a
+    >>> # backend-specific implementation.
+    >>> from dascore.utils.array_api import array_namespace
+    >>> @dc.patch_function(backend="array_api")
+    ... def do_portable_thing(patch):
+    ...     xp = array_namespace(patch.data)
+    ...     return patch.new(data=xp.abs(patch.data))
+    >>>
+    >>> @do_portable_thing.register("numpy")
+    ... def _do_numpy_thing(patch):
+    ...     ...
 
     Notes
     -----
     - The original function can still be accessed with the raw_function
       attribute. This may be useful for avoiding calling the patch_func
-      machinery multiple times from within another patch function.
+      machinery multiple times from within another patch function. It skips
+      backend dispatch as well, so it should only be used on data the
+      calling function has already put on the right backend.
 
     - If using `PatchType` or `SpoolType` type variables from the
       [constants module](`dascore.constants`), make sure dascore is imported
@@ -312,9 +410,24 @@ def patch_function(
         return patch_function()(required_dims)
 
     def _wrapper(func):
-        if validate_call:
+        def _maybe_validate(function):
+            """Apply pydantic validation to each backend implementation."""
+            if not validate_call:
+                return function
             config = pydantic.ConfigDict(arbitrary_types_allowed=True)
-            func = pydantic.validate_call(config=config)(func)
+            return pydantic.validate_call(config=config)(function)
+
+        def _register(name: str) -> Callable:
+            """Register an implementation for a named array backend."""
+
+            def _decorator(function):
+                backends[name] = _maybe_validate(function)
+                return function
+
+            return _decorator
+
+        func = _maybe_validate(func)
+        backends = {backend: func}
 
         @functools.wraps(func)
         def _func(patch, *args, **kwargs):
@@ -324,7 +437,7 @@ def patch_function(
                 coords=required_coords,
             )
             check_patch_attrs(patch, required_attrs)
-            out = func(patch, *args, **kwargs)
+            out = _dispatch_backend(backends, patch, args, kwargs)
             attr_updates = {}
             if data_type is not None:
                 attr_updates["data_type"] = data_type
@@ -347,6 +460,8 @@ def patch_function(
         # matches pydantic naming.
         patch_func.raw_function = getattr(func, "raw_function", func)
         patch_func.__wrapped__ = func
+        patch_func.backends = backends
+        patch_func.register = _register
 
         return patch_func
 
