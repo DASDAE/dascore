@@ -526,7 +526,10 @@ class Geometry(InventoryModel):
     azimuth. Those carry their own entry in ``units``.
 
     Interpolation between points is piecewise linear and never crosses
-    segments; uncovered distance has undefined values.
+    segments; uncovered distance has undefined values. Two segments may
+    cover the same distance as long as they state different columns -- a
+    depth survey and an azimuth survey of one borehole -- and then they
+    share a name, being two measurements of one stretch of fiber.
 
     Examples
     --------
@@ -1370,6 +1373,7 @@ class OpticalPath(TimeRangedModel):
                 f"{name!r} is both a geometry column and an annotation "
                 "group; one name is one coordinate."
             )
+        errors.extend(self._check_overlapping_names())
         for name in sorted(spans):
             overlap = _intervals_overlap(spans[name])
             if overlap is not None:
@@ -1382,6 +1386,32 @@ class OpticalPath(TimeRangedModel):
                 errors.append(
                     f"Geometry column {name!r} is stated in "
                     f"{sorted(stated)}; a column has one unit."
+                )
+        return errors
+
+    def _check_overlapping_names(self) -> list[str]:
+        """
+        Check that segments covering one stretch of fiber share a name.
+
+        Two segments may cover the same distance now, as long as they state
+        different columns -- a depth survey and an azimuth survey of one
+        borehole. They are two measurements of one stretch of fiber, so they
+        are one segment by name: the bare ``geometry`` coordinate is that
+        name, and a channel with two of them would take whichever the tuple
+        happened to hold last.
+        """
+        errors = []
+        for first, second in itertools.combinations(self.geometry, 2):
+            if first.name == second.name:
+                continue
+            lo = max(first.interval[0], second.interval[0])
+            hi = min(first.interval[1], second.interval[1])
+            if lo < hi:
+                errors.append(
+                    f"Geometry segments {first.name!r} and {second.name!r} "
+                    f"both cover ({lo}, {hi}); segments which overlap state "
+                    "different columns of one stretch of fiber, so they "
+                    "share its name."
                 )
         return errors
 

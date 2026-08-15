@@ -256,12 +256,29 @@ class TestGeometryColumns:
 
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
-        depth = inv.Geometry(distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)})
+        depth = inv.Geometry(
+            name="hole 1", distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)}
+        )
         azimuth = inv.Geometry(
-            distance=(50.0, 80.0), coordinates={"azimuth": (5.0, 8.0)}
+            name="hole 1", distance=(50.0, 80.0), coordinates={"azimuth": (5.0, 8.0)}
         )
         inventory = self._inventory(depth, azimuth)
         assert inventory.check() is inventory
+
+    def test_overlapping_segments_share_a_name(self):
+        """The bare `geometry` coordinate is that name, so there is one."""
+        depth = inv.Geometry(
+            name="depth survey",
+            distance=(0.0, 60.0),
+            coordinates={"depth": (0.0, 6.0)},
+        )
+        azimuth = inv.Geometry(
+            name="azimuth survey",
+            distance=(50.0, 80.0),
+            coordinates={"azimuth": (5.0, 8.0)},
+        )
+        with pytest.raises(InvalidInventoryError, match="share its name"):
+            self._inventory(depth, azimuth).check()
 
     def test_a_reserved_column_name(self):
         """A column becomes a coordinate, so it cannot shadow one."""
