@@ -29,11 +29,25 @@ from dascore.utils.array import (
     is_string_byte_serializable_array,
 )
 from dascore.utils.array_api import backend_name
+from dascore.utils.misc import suppress_warnings
 from dascore.warnings import NumpyFallbackWarning
 
 # array_api_strict is a test dependency, but some environments (eg wasm)
 # install dascore without the test extras.
 xps = pytest.importorskip("array_api_strict")
+
+
+class _OtherBackendArray:
+    """An array which claims to belong to a different array API backend."""
+
+    def __init__(self, array):
+        self._array = array
+        self.shape = array.shape
+        self.dtype = array.dtype
+
+    def __array_namespace__(self, api_version=None):
+        """Return a namespace which is not the one under test."""
+        return np
 
 
 @contextmanager
@@ -736,10 +750,26 @@ class TestArrayBackends:
         """A patch whose data are backed by array_api_strict."""
         return random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
 
+    @pytest.fixture(scope="class")
+    def int_numpy_patch(self, random_patch) -> dc.Patch:
+        """A patch with integer data."""
+        data = (np.asarray(random_patch.data) * 10).astype("int32")
+        return random_patch.new(data=data)
+
+    @pytest.fixture(scope="class")
+    def int_patch(self, int_numpy_patch) -> dc.Patch:
+        """A patch with integer data backed by array_api_strict."""
+        return int_numpy_patch.new(data=xps.asarray(np.asarray(int_numpy_patch.data)))
+
     def _assert_matches_numpy(self, out, expected):
-        """The output keeps its backend and agrees with the numpy result."""
+        """The output keeps its backend and matches the patch numpy returns."""
         assert backend_name(out.data) == "array_api_strict"
-        assert np.allclose(np.asarray(out.data), np.asarray(expected.data))
+        array = np.asarray(out.data)
+        assert array.dtype == expected.data.dtype
+        assert out.dims == expected.dims
+        assert out.coords == expected.coords
+        assert out.attrs == expected.attrs
+        assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
 
     def test_scalar_operand(self, strict_patch, random_patch):
         """Operations with python scalars stay on the patch's backend."""
@@ -817,6 +847,56 @@ class TestArrayBackends:
         """Each renamed ufunc exists under both names."""
         assert isinstance(getattr(np, numpy_name), np.ufunc)
         assert hasattr(xps, array_api_name)
+
+    def test_numpy_scalar_operand(self, strict_patch, random_patch):
+        """Numpy scalars are converted; they are not python scalars."""
+        with warnings_as_errors():
+            out = strict_patch + np.float64(1)
+        self._assert_matches_numpy(out, random_patch + np.float64(1))
+
+    def test_sequence_operand_falls_back(self, strict_patch, random_patch):
+        """Sequences have no dtype, and the standard won't promote them."""
+        other = [1] * strict_patch.shape[-1]
+        with pytest.warns(NumpyFallbackWarning):
+            out = strict_patch + other
+        self._assert_matches_numpy(out, random_patch + other)
+
+    def test_ufunc_keyword_falls_back(self, strict_patch, random_patch):
+        """Numpy-only ufunc keywords have no array API equivalent."""
+        where = np.ones(strict_patch.shape, dtype=bool)
+        with pytest.warns(NumpyFallbackWarning):
+            out = np.add(strict_patch, 1, where=where)
+        self._assert_matches_numpy(out, np.add(random_patch, 1, where=where))
+
+    def test_stored_units_fall_back(self, strict_patch, random_patch):
+        """Units stored on a patch become quantities when patches align."""
+        with suppress_warnings(NumpyFallbackWarning):
+            out = strict_patch.set_units("m") * strict_patch.set_units("m")
+        expected = random_patch.set_units("m") * random_patch.set_units("m")
+        self._assert_matches_numpy(out, expected)
+        assert out.attrs.data_units == expected.attrs.data_units
+
+    def test_integer_data_falls_back(self, int_patch, int_numpy_patch):
+        """Numpy and the standard disagree most on integer data."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = np.rint(int_patch)
+        # numpy casts integers up to floats here, the standard does not.
+        expected = np.rint(int_numpy_patch)
+        assert np.asarray(out.data).dtype == expected.data.dtype
+        assert backend_name(out.data) == "array_api_strict"
+
+    def test_broadcast_keeps_backend(self, strict_patch, random_patch):
+        """Broadcasting a patch up to a shape doesn't convert its data."""
+        collapsed = strict_patch.mean("time")
+        with suppress_warnings(NumpyFallbackWarning):
+            out = collapsed.make_broadcastable_to(strict_patch.shape)
+        assert backend_name(out.data) == "array_api_strict"
+        assert out.shape == strict_patch.shape
+
+    def test_other_backend_operand(self, strict_patch):
+        """An array from a third backend is not passed to this one."""
+        other = _OtherBackendArray(np.ones(strict_patch.shape))
+        assert not array_utils._operand_can_apply(other, strict_patch.data)
 
     @pytest.mark.parametrize("ufunc", [np.absolute, np.power, np.arctan2, np.rint])
     def test_renamed_ufunc_values(self, ufunc, strict_patch, random_patch):

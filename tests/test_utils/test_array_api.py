@@ -231,6 +231,10 @@ class _Case(NamedTuple):
 # setup runs on the numpy patch, before it is moved to another backend.
 ARRAY_API_CASES = {
     "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
+    "dascore.proc.coords.make_broadcastable_to": _Case(
+        call=lambda patch: patch.make_broadcastable_to((patch.shape[0], 3)),
+        setup=lambda patch: patch.mean("time"),
+    ),
     "dascore.proc.coords.squeeze": _Case(
         call=lambda patch: patch.squeeze(),
         setup=lambda patch: patch.select(distance=0, samples=True),
@@ -287,8 +291,14 @@ class TestArrayApiPatchFunctions:
         # A function which returns its input proves nothing about the backend.
         assert out is not patch
         assert backend_name(out.data) == "array_api_strict"
+        # The whole patch must match what the numpy implementation returns.
         expected = case.call(numpy_patch)
-        assert np.allclose(np.asarray(out.data), np.asarray(expected.data))
+        array = np.asarray(out.data)
+        assert array.dtype == expected.data.dtype
+        assert out.dims == expected.dims
+        assert out.coords == expected.coords
+        assert out.attrs == expected.attrs
+        assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
 
 
 class TestRegisterBackend:

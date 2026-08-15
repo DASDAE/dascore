@@ -320,7 +320,7 @@ def drop_private_coords(self: PatchType) -> PatchType:
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def make_broadcastable_to(
     self: PatchType,
     shape: tuple[int, ...],
