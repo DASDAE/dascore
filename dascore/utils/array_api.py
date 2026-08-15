@@ -60,9 +60,9 @@ def array_namespace(*arrays: Any) -> Any:
 
 
 def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
-    """Return True if the array is a numpy array."""
-    # Not array_api_compat.is_numpy_array; this is called by every patch
-    # function and the isinstance check is several times faster.
+    """Return True if the array is a numpy array or scalar."""
+    # Unlike compat.is_array numpy scalars count, and unlike
+    # array_api_compat.is_numpy_array this is fast enough for every call.
     return isinstance(array, np.ndarray | np.generic)
 
 
