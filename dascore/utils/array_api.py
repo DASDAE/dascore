@@ -11,22 +11,27 @@ lives in [compat](`dascore.compat`).
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, TypeGuard
 
 import array_api_compat.numpy as np_namespace
 import numpy as np
 from array_api_compat import array_namespace as _array_namespace
-from array_api_compat import device, to_device
+from array_api_compat import device, is_array_api_obj, to_device
 
 from dascore.compat import is_array
+from dascore.warnings import NumpyFallbackWarning
 
 __all__ = [
     "array_namespace",
     "asarray_like",
     "backend_name",
     "device",
+    "is_foreign",
     "is_numpy",
+    "namespace_name",
     "to_numpy",
+    "warn_numpy_fallback",
 ]
 
 # The key used by patch functions written against the array API standard.
@@ -70,6 +75,61 @@ def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
     return is_array(array) or isinstance(array, np.generic)
 
 
+def is_foreign(array: Any) -> bool:
+    """
+    Return True if the array belongs to a non-numpy array API backend.
+
+    These are the arrays which have to cross the numpy boundary explicitly.
+
+    Parameters
+    ----------
+    array
+        Any object.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import is_foreign
+    >>>
+    >>> assert not is_foreign(np.array([1, 2]))
+    >>> assert not is_foreign(10)
+    >>> assert not is_foreign(np.float32)  # a dtype, not an array
+    """
+    # Array classes (eg np.float32 used as a dtype) inherit the array
+    # protocols from their instances, so exclude types explicitly.
+    if is_numpy(array) or isinstance(array, type):
+        return False
+    # Everything else is only an array if it has a shape; checking here
+    # keeps scalar operands off the slower classification below.
+    if getattr(array, "shape", None) is None:
+        return False
+    # Not just __array_namespace__; backends which don't implement the
+    # standard natively (eg torch, dask) are recognized by their type.
+    return is_array_api_obj(array)
+
+
+def warn_numpy_fallback(name: str, backend: str, stacklevel: int = 3) -> None:
+    """
+    Warn that name has no implementation for the given array backend.
+
+    Parameters
+    ----------
+    name
+        The name of the function which lacks an implementation.
+    backend
+        The name of the array backend of the input data.
+    stacklevel
+        The stack level, as understood by warnings.warn, of the function
+        calling this one.
+    """
+    msg = (
+        f"{name} has no {backend} implementation; the data were converted "
+        "to numpy and the output converted back. Silence this with "
+        "dascore.utils.misc.suppress_warnings(NumpyFallbackWarning)."
+    )
+    warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
+
+
 def backend_name(array: Any) -> str:
     """
     Return the name of the array backend which owns array.
@@ -89,15 +149,33 @@ def backend_name(array: Any) -> str:
     >>>
     >>> assert backend_name(np.array([1, 2])) == "numpy"
     """
-    if is_numpy(array):
-        return NUMPY_BACKEND
-    name = array_namespace(array).__name__
     # array_namespace falls back to numpy for array-likes which don't
     # implement the standard; those are numpy's problem as well.
+    if is_numpy(array):
+        return NUMPY_BACKEND
+    return namespace_name(array_namespace(array))
+
+
+def namespace_name(namespace: Any) -> str:
+    """
+    Return the backend name of an array API namespace.
+
+    Parameters
+    ----------
+    namespace
+        An array API namespace module.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import namespace_name
+    >>>
+    >>> assert namespace_name(np) == "numpy"
+    """
     # array_api_compat wraps incomplete backends in modules named after them
     # (eg array_api_compat.dask.array); native namespaces are named after
     # their own package (eg jax.numpy).
-    name = name.removeprefix("array_api_compat.")
+    name = namespace.__name__.removeprefix("array_api_compat.")
     return name.split(".")[0]
 
 

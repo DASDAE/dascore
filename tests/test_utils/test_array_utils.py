@@ -4,6 +4,9 @@ Tests for patch ufuncs.
 
 from __future__ import annotations
 
+import warnings
+from contextlib import contextmanager
+
 import numpy as np
 import pytest
 from pint import DimensionalityError
@@ -15,6 +18,7 @@ from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
 from dascore.utils.array import (
+    UFUNC_NAMES,
     PatchUFunc,
     _BoundPatchUFunc,
     apply_array_func,
@@ -24,6 +28,30 @@ from dascore.utils.array import (
     hash_array,
     is_string_byte_serializable_array,
 )
+from dascore.utils.array_api import array_namespace, backend_name
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import NumpyFallbackWarning
+
+
+class _OtherBackendArray:
+    """An array which claims to belong to a different array API backend."""
+
+    def __init__(self, array):
+        self._array = array
+        self.shape = array.shape
+        self.dtype = array.dtype
+
+    def __array_namespace__(self, api_version=None):
+        """Return a namespace which is not the one under test."""
+        return np
+
+
+@contextmanager
+def warnings_as_errors():
+    """A context manager which raises rather than warns."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        yield
 
 
 class TestApplyUfunc:
@@ -708,3 +736,183 @@ class TestHashArray:
         """Datetime arrays should hash without special casing at call sites."""
         arr = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
         assert hash_array(arr) == hash_array(arr.copy())
+
+
+class TestArrayBackends:
+    """Tests for operators applied to patches backed by other array libraries."""
+
+    @pytest.fixture(scope="class")
+    def xps(self):
+        """The reference implementation of the array API standard."""
+        return pytest.importorskip("array_api_strict")
+
+    @pytest.fixture(scope="class")
+    def backend_patch(self, random_patch, to_backend) -> dc.Patch:
+        """A patch whose data are backed by the array backend under test."""
+        return to_backend(random_patch)
+
+    @pytest.fixture(scope="class")
+    def int_numpy_patch(self, random_patch) -> dc.Patch:
+        """A patch with integer data."""
+        data = (np.asarray(random_patch.data) * 10).astype("int32")
+        return random_patch.new(data=data)
+
+    @pytest.fixture(scope="class")
+    def int_patch(self, int_numpy_patch, to_backend) -> dc.Patch:
+        """A patch with integer data on the backend under test."""
+        return to_backend(int_numpy_patch)
+
+    def _assert_matches_numpy(self, out, expected, backend):
+        """The output keeps its backend and matches the patch numpy returns."""
+        assert backend_name(out.data) == backend
+        array = np.asarray(out.data)
+        assert array.dtype == expected.data.dtype
+        assert out.dims == expected.dims
+        assert out.coords == expected.coords
+        assert out.attrs == expected.attrs
+        assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
+
+    def test_scalar_operand(self, backend_patch, random_patch, backend):
+        """Operations with python scalars stay on the patch's backend."""
+        with warnings_as_errors():
+            out = backend_patch / 10 + 1
+        self._assert_matches_numpy(out, random_patch / 10 + 1, backend)
+
+    def test_patch_operand(self, backend_patch, random_patch, backend):
+        """So do operations between two patches."""
+        with warnings_as_errors():
+            out = backend_patch * backend_patch
+        self._assert_matches_numpy(out, random_patch * random_patch, backend)
+
+    def test_reversed_operand(self, backend_patch, random_patch, backend):
+        """Reversed operators (scalar on the left) also work."""
+        with warnings_as_errors():
+            out = 1 - backend_patch
+        self._assert_matches_numpy(out, 1 - random_patch, backend)
+
+    def test_unary_ufunc(self, backend_patch, random_patch, backend):
+        """Unary ufuncs use the backend's own implementation."""
+        with warnings_as_errors():
+            out = np.exp(backend_patch)
+        self._assert_matches_numpy(out, np.exp(random_patch), backend)
+
+    def test_numpy_array_operand(self, backend_patch, random_patch, backend):
+        """A numpy array operand is converted to the patch's backend."""
+        other = np.ones(backend_patch.shape)
+        with warnings_as_errors():
+            out = backend_patch + other
+        self._assert_matches_numpy(out, random_patch + other, backend)
+
+    def test_comparison_clears_units(self, backend_patch, backend):
+        """Comparisons return bool data, which have no units."""
+        with warnings_as_errors():
+            out = backend_patch > 0
+        assert backend_name(out.data) == backend
+        assert array_namespace(out.data).isdtype(out.data.dtype, "bool")
+        assert out.attrs.data_units is None
+
+    def test_dtype_argument(self, backend_patch, backend):
+        """A dtype argument is not mistaken for an array from the backend."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = backend_patch.add.reduce(dim="time", dtype=np.float32)
+        assert backend_name(out.data) == backend
+
+    def test_reduce_falls_back(self, backend_patch, random_patch, backend):
+        """Reductions have no array API equivalent, so they use numpy."""
+        with pytest.warns(NumpyFallbackWarning, match="reduce"):
+            out = backend_patch.add.reduce(dim="time")
+        self._assert_matches_numpy(out, random_patch.add.reduce(dim="time"), backend)
+
+    def test_array_function_falls_back(self, backend_patch, random_patch, backend):
+        """So do numpy functions applied to a patch."""
+        with pytest.warns(NumpyFallbackWarning, match="mean"):
+            out = np.mean(backend_patch, axis=0)
+        self._assert_matches_numpy(out, np.mean(random_patch, axis=0), backend)
+
+    def test_units_fall_back(self, backend_patch, random_patch, backend):
+        """Units are implemented with pint, which only wraps numpy arrays."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = backend_patch * get_quantity("m")
+        expected = random_patch * get_quantity("m")
+        self._assert_matches_numpy(out, expected, backend)
+        assert out.attrs.data_units == expected.attrs.data_units
+
+    def test_ufunc_outside_the_standard(self, backend_patch, random_patch, backend):
+        """Ufuncs the standard doesn't define still match numpy.
+
+        Whether they need the numpy fallback depends on the backend, since
+        array-api-compat's wrappers expose more than the standard requires.
+        """
+        with suppress_warnings(NumpyFallbackWarning):
+            out = np.fmod(backend_patch, 2)
+        self._assert_matches_numpy(out, np.fmod(random_patch, 2), backend)
+
+    def test_no_equivalent_in_the_standard(self, xps):
+        """A ufunc the standard lacks has no equivalent to look up."""
+        array = xps.asarray([1.0, 2.0])
+        assert array_utils._get_backend_ufunc(np.fmod, array) is None
+        assert array_utils._get_backend_ufunc(np.power, array) is xps.pow
+
+    @pytest.mark.parametrize("numpy_name,array_api_name", sorted(UFUNC_NAMES.items()))
+    def test_renamed_ufuncs_exist(self, numpy_name, array_api_name, xps):
+        """Each renamed ufunc exists under both names."""
+        assert isinstance(getattr(np, numpy_name), np.ufunc)
+        assert hasattr(xps, array_api_name)
+
+    def test_numpy_scalar_operand(self, backend_patch, random_patch, backend):
+        """Numpy scalars are converted; they are not python scalars."""
+        with warnings_as_errors():
+            out = backend_patch + np.float64(1)
+        self._assert_matches_numpy(out, random_patch + np.float64(1), backend)
+
+    def test_sequence_operand_falls_back(self, backend_patch, random_patch, backend):
+        """Sequences have no dtype, and the standard won't promote them."""
+        other = [1] * backend_patch.shape[-1]
+        with pytest.warns(NumpyFallbackWarning):
+            out = backend_patch + other
+        self._assert_matches_numpy(out, random_patch + other, backend)
+
+    def test_ufunc_keyword_falls_back(self, backend_patch, random_patch, backend):
+        """Numpy-only ufunc keywords have no array API equivalent."""
+        where = np.ones(backend_patch.shape, dtype=bool)
+        with pytest.warns(NumpyFallbackWarning):
+            out = np.add(backend_patch, 1, where=where)
+        self._assert_matches_numpy(out, np.add(random_patch, 1, where=where), backend)
+
+    def test_stored_units_fall_back(self, backend_patch, random_patch, backend):
+        """Units stored on a patch become quantities when patches align."""
+        with suppress_warnings(NumpyFallbackWarning):
+            out = backend_patch.set_units("m") * backend_patch.set_units("m")
+        expected = random_patch.set_units("m") * random_patch.set_units("m")
+        self._assert_matches_numpy(out, expected, backend)
+        assert out.attrs.data_units == expected.attrs.data_units
+
+    def test_integer_data_falls_back(self, int_patch, int_numpy_patch, backend):
+        """Numpy and the standard disagree most on integer data."""
+        with pytest.warns(NumpyFallbackWarning):
+            out = np.rint(int_patch)
+        # numpy casts integers up to floats here, the standard does not.
+        expected = np.rint(int_numpy_patch)
+        assert np.asarray(out.data).dtype == expected.data.dtype
+        assert backend_name(out.data) == backend
+
+    def test_broadcast_keeps_backend(self, backend_patch, random_patch, backend):
+        """Broadcasting a patch up to a shape doesn't convert its data."""
+        collapsed = backend_patch.mean("time")
+        with suppress_warnings(NumpyFallbackWarning):
+            out = collapsed.make_broadcastable_to(backend_patch.shape)
+        assert backend_name(out.data) == backend
+        assert out.shape == backend_patch.shape
+
+    def test_other_backend_operand(self, backend_patch, backend):
+        """An array from a third backend is not passed to this one."""
+        other = _OtherBackendArray(np.ones(backend_patch.shape))
+        assert not array_utils._operand_can_apply(other, backend_patch.data)
+
+    @pytest.mark.parametrize("ufunc", [np.absolute, np.power, np.arctan2, np.rint])
+    def test_renamed_ufunc_values(self, ufunc, backend_patch, random_patch, backend):
+        """Renamed ufuncs give the same answer as numpy does."""
+        with warnings_as_errors():
+            out = ufunc(backend_patch, 2) if ufunc.nin == 2 else ufunc(backend_patch)
+        expected = ufunc(random_patch, 2) if ufunc.nin == 2 else ufunc(random_patch)
+        self._assert_matches_numpy(out, expected, backend)

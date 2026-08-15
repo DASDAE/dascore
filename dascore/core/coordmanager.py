@@ -73,6 +73,7 @@ from dascore.models import (
     frozen_dict_serializer,
     frozen_dict_validator,
 )
+from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -702,8 +703,9 @@ class CoordManager(DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        out = array if array is None else np.broadcast_to(array, target_shape)
-        return self.update_coords(**new_coords), out
+        if array is not None:
+            array = array_namespace(array).broadcast_to(array, target_shape)
+        return self.update_coords(**new_coords), array
 
     def _check_multiple_relative(self, kwargs):
         """
