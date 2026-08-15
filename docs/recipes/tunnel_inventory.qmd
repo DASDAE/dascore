@@ -1,0 +1,582 @@
+---
+title: A Tunnel Inventory
+execute:
+  warning: false
+---
+
+The [inventory tutorial](../tutorial/inventory.qmd) shows the shape of the model and the verbs which use it. This recipe writes a whole inventory for one deployment, from a survey drawing to enriched patches. It is long on purpose: real installations are made of parts that each need saying, and the point is to watch them fit together.
+
+The deployment is an underground tunnel instrumented to watch for floor instability and to record seismicity. A telemetry cable arrives from an instrument room 1500 m away; from the splice box the fiber drops into a trench along the tunnel floor, passes a buried coil, rises again, and then works back along the tunnel through three instrumented boreholes.
+
+![The deployment as surveyed. The upper panel is optical distance along the fiber; the lower one is the tunnel's own survey grid.](../_static/tunnel_deployment.svg){#fig-tunnel}
+
+The inventory is written the way a field crew would keep it: a directory of small YAML files for the hardware, and CSV tables for everything that comes in rows. Everything below runs, and nothing is downloaded.
+
+```{python}
+import io
+import tempfile
+from pathlib import Path
+from textwrap import dedent
+
+import numpy as np
+import pandas as pd
+
+import dascore as dc
+
+root = Path(tempfile.mkdtemp()) / "tunnel_inventory"
+
+
+def write(name, text):
+    """Write one file into the inventory directory."""
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+```
+
+# What the drawing says
+
+Reading @fig-tunnel along the fiber, from the interrogator:
+
+| From | To | What the light passes through | Optical |
+|---|---|---|---:|
+| instrument room | A | telemetry cable | 1500 m |
+| A | B | drop into the trench | 2.5 m |
+| B | C | trenched sensing fiber | 25 m |
+| C | | the buried coil | 10 m |
+| C | D | trenched sensing fiber | 25 m |
+| D | E | rise out of the trench | 2.5 m |
+| E | 3, 2, 1 | six links between splice boxes, couplers, and borehole heads | 15 m each |
+| | | three boreholes, down and back | 40 m each |
+
+: The path, waypoint by waypoint. {#tbl-path}
+
+Two of those numbers need a word.
+
+A borehole holds 40 m of fiber but is only 20 m deep, because the cable goes down, turns around at the bottom, and comes back up. Both legs are coupled to the rock and both are sensing.
+
+![The borehole cable: armored pigtail above ground, rock-coupled fiber below, and a turnaround enclosure at the bottom.](../_static/borehole_fiber.svg){#fig-borehole width="30%"}
+
+The trench cable is wound helically off-axis, which buys sensitivity to broadside motion at the cost of length: the fiber is longer than the trench it lies in. With a wind angle $\phi$, a distance $d_r$ along the ground and $d_o$ along the fiber,
+
+$$
+d_r \approx d_o \cos \phi \approx 0.886\, d_o
+$$
+
+which is why the drawing's 25 m of fiber between B and C covers 22.15 m of tunnel. This is the distinction the inventory exists to keep. Optical distance is what the interrogator measures; where a channel actually *is* comes from the geometry track, and no consumer downstream ever has to know the wind angle.
+
+# The hardware
+
+Cables, enclosures, and interrogators are named once and referred to from everywhere they appear. Each is a small file under `resources/`, and the file's name is the `resource_id` other files use to point at it.
+
+```{python}
+#| code-fold: true
+#| code-summary: "resources/*.yaml — the hardware, from the purchase orders"
+resources = {
+    "telemetry-cable": (
+        "object_type: Cable\n"
+        "name: tunnel telemetry cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The run in from the instrument room.\n"
+    ),
+    "connecting-cable": (
+        "object_type: Cable\n"
+        "name: tunnel connecting cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The links between boxes, couplers, and borehole heads.\n"
+    ),
+    "borehole-cable": (
+        "object_type: Cable\n"
+        "name: borehole sensing cable\n"
+        "manufacturer: Nerve Sensors\n"
+        "model: Epsilon\n"
+        "fiber_count: 4\n"
+        "description: Rock-coupled downhole cable with an armored pigtail.\n"
+    ),
+    "trench-cable": (
+        "object_type: Cable\n"
+        "name: helically wound trench cable\n"
+        "manufacturer: Silixa\n"
+        "model: HWC\n"
+        "fiber_count: 1\n"
+    ),
+    "das-interrogator": (
+        "object_type: Interrogator\n"
+        "name: tunnel DAS interrogator\n"
+        "manufacturer: Sintela\n"
+        "model: Onyxia\n"
+        "instrument_type: DAS interrogator\n"
+    ),
+}
+# One enclosure per housing, because a resource_id names an asset rather
+# than a kind: box A and box E are two boxes, and each borehole has its own
+# turnaround down the hole.
+for label, name in [
+    ("splice-box-a", "splice box at A"),
+    ("splice-box-e", "splice box at E"),
+    ("turnaround-1", "borehole 1 turnaround housing"),
+    ("turnaround-2", "borehole 2 turnaround housing"),
+    ("turnaround-3", "borehole 3 turnaround housing"),
+]:
+    kind = "box" if "splice" in label else "housing"
+    resources[label] = (
+        f"object_type: Enclosure\nname: tunnel {name}\nenclosure_type: {kind}\n"
+    )
+for name, text in resources.items():
+    write(f"resources/{name}.yaml", text)
+```
+
+These stay objects rather than rows because they have nothing in common: a cable has a fiber count, an enclosure has an inner diameter, an interrogator has a serial number. A table of one row with twelve mostly-empty columns would be worse than the file.
+
+The envelope names the document and states the coordinate reference system everything is expressed in. This tunnel has its own survey grid rather than a global reference, so the axes are `x`, `y`, and `z` in meters, with `z` positive up.
+
+```{python}
+write(
+    "inventory.yaml",
+    "object_type: Inventory\n"
+    "coordinate_reference_system:\n"
+    "  authority: local\n"
+    "  code: tunnel\n"
+    "  name: tunnel engineering grid\n"
+    "  coordinate_labels: [x, y, z]\n"
+    "  units: [meter, meter, meter]\n",
+)
+
+write(
+    "fiber_arrays/XT.TUN1/attrs.yaml",
+    "object_type: FiberArray\nname: tunnel fiber array\n",
+)
+```
+
+# The path, as a table
+
+An optical path is the ordered list of things the light passes through. Each component states its own optical length and they tile the path end to end, which is what gives the path its length. No row states a start distance, because the `sequence` column already did.
+
+This is @tbl-path with the parts named, and it goes in `path.00` — the directory naming the optical path at location code `00`.
+
+```{python}
+#| code-fold: true
+#| code-summary: "path.00/optical_components.csv"
+components_csv = dedent("""\
+sequence,object_type,optical_length,name,container
+1,FiberSegment,1500.0,telemetry lead-in,telemetry-cable
+2,Splice,0.0,splice at box A,splice-box-a
+3,FiberSegment,2.5,drop into the trench,trench-cable
+4,FiberSegment,25.0,trench B to the coil,trench-cable
+5,FiberSegment,10.0,cable coil at C,trench-cable
+6,FiberSegment,25.0,trench from the coil to D,trench-cable
+7,FiberSegment,2.5,rise out of the trench,trench-cable
+8,Splice,0.0,splice at box E,splice-box-e
+9,FiberSegment,15.0,link E to borehole 3,connecting-cable
+10,FiberSegment,20.0,borehole 3 down,borehole-cable
+11,Splice,0.0,borehole 3 turnaround,turnaround-3
+12,FiberSegment,20.0,borehole 3 up,borehole-cable
+13,FiberSegment,15.0,link borehole 3 to coupler G,connecting-cable
+14,Connector,0.0,coupler G,
+15,FiberSegment,15.0,link coupler G to borehole 2,connecting-cable
+16,FiberSegment,20.0,borehole 2 down,borehole-cable
+17,Splice,0.0,borehole 2 turnaround,turnaround-2
+18,FiberSegment,20.0,borehole 2 up,borehole-cable
+19,FiberSegment,15.0,link borehole 2 to coupler H,connecting-cable
+20,Connector,0.0,coupler H,
+21,FiberSegment,15.0,link coupler H to borehole 1,connecting-cable
+22,FiberSegment,20.0,borehole 1 down,borehole-cable
+23,Splice,0.0,borehole 1 turnaround,turnaround-1
+24,FiberSegment,20.0,borehole 1 up,borehole-cable
+25,FiberSegment,15.0,link borehole 1 back to box A,connecting-cable
+26,Terminator,0.0,path end,
+""")
+
+PATH = "fiber_arrays/XT.TUN1/path.00"
+write(f"{PATH}/attrs.yaml", "object_type: OpticalPath\n")
+write(f"{PATH}/optical_components.csv", components_csv)
+
+pd.read_csv(root / PATH / "optical_components.csv").head(9)
+```
+
+Every column but `sequence` is a field of the class the `object_type` column names, so the table is barely a format of its own — it is the objects, written the way rows of the same shape are worth writing. `sequence` belongs to the table, and is dropped once it has put the rows in order. The blank `container` on the terminator is a field left unset; the ones which are filled are `resource_id`s pointing back at the files above.
+
+The other three tables are written against distances along this path, and those distances are the running totals of this one column. Adding them up by hand is how a table stops agreeing with its neighbours, so add them up once:
+
+```{python}
+def spans(csv_text):
+    """Map each component's name to the optical interval it covers."""
+    frame = pd.read_csv(io.StringIO(csv_text))
+    end = frame["optical_length"].cumsum()
+    return dict(zip(frame["name"], zip(end - frame["optical_length"], end)))
+
+
+at = spans(components_csv)
+
+print("borehole 3 sensing fiber:", at["borehole 3 down"][0], "to", at["borehole 3 up"][1])
+```
+
+# Where the fiber is
+
+Geometry places optical distance in space, one row per control point, grouped into segments. The columns after `segment` and `distance` are the axes the coordinate reference system declared, and naming any others is an error rather than an extra.
+
+The survey points are the ones lettered in @fig-tunnel. Each straight run of fiber goes from one to the next, so the table is those points paired with the component that runs between them.
+
+```{python}
+#| code-fold: true
+#| code-summary: "path.00/geometry.csv — the survey points, paired with the fiber between them"
+A = (100.00, 100.00, 0.0)
+B = (100.00, 97.79, -0.5)
+C = (122.15, 97.79, -0.5)
+D = (144.30, 97.79, -0.5)
+E = (144.30, 100.00, 0.0)
+HEADS = {1: (108.00, 100.00, 0.0), 2: (126.00, 100.00, 0.0), 3: (142.00, 100.00, 0.0)}
+DEPTH = 20.0
+
+
+def bottom(number):
+    """The bottom of a borehole is its head, straight down."""
+    x, y, _ = HEADS[number]
+    return (x, y, -DEPTH)
+
+
+def surveyed_runs(at):
+    """Which component runs between which two survey points."""
+    runs = [
+        ("drop into the trench", A, B),
+        ("trench B to the coil", B, C),
+        ("trench from the coil to D", C, D),
+        ("rise out of the trench", D, E),
+    ]
+    for number in (3, 2, 1):
+        runs.append((f"borehole {number} down", HEADS[number], bottom(number)))
+        runs.append((f"borehole {number} up", bottom(number), HEADS[number]))
+    return runs
+
+
+def geometry_table(at, runs):
+    """Turn each straight run into its two control points."""
+    rows = []
+    for name, start, end in runs:
+        first, last = at[name]
+        rows.append((name, first, *start))
+        rows.append((name, last, *end))
+    return pd.DataFrame(rows, columns=["segment", "distance", "x", "y", "z"])
+
+
+geometry = geometry_table(at, surveyed_runs(at))
+geometry.to_csv(root / PATH / "geometry.csv", index=False)
+
+geometry.head(8)
+```
+
+The coil and the six 15 m links appear nowhere in that table, so their interiors get no position at all — only the channel at the very start of a link, which is the surveyed point the run before it ended on. That is the honest answer rather than a gap: the links are slack cable in a tray, and ten meters of fiber wound into a one-meter loop has no useful position per channel. A made-up polyline would be worse than a `nan`.
+
+Notice also what the table does *not* say. It never mentions the wind angle. Two control points state that 25 m of fiber runs from B to C, every channel between them is placed by interpolating that, and $\cos\phi$ stops being anyone's problem at this line.
+
+# How it is attached to the ground
+
+Coupling is what decides whether a wiggle means anything, and it is an interval property. The controlled `coupling_type` carries the part a program can act on; `medium` and `attachment` carry the rest.
+
+```{python}
+#| code-fold: true
+#| code-summary: "path.00/coupling.csv"
+def coupling_table(at, trench_parts):
+    """Buried in the trench, coiled at C, cemented in the boreholes."""
+    rows = [
+        (*at[name], "trench", "soil", "direct_burial", 0.5) for name in trench_parts
+    ]
+    rows.append((*at["cable coil at C"], "coiled", "soil", "", 0.5))
+    rows.extend(
+        (
+            at[f"borehole {number} down"][0],
+            at[f"borehole {number} up"][1],
+            "outside_borehole_casing",
+            "rock",
+            "cemented",
+            "",
+        )
+        for number in (3, 2, 1)
+    )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "start_distance",
+            "end_distance",
+            "coupling_type",
+            "medium",
+            "attachment",
+            "depth",
+        ],
+    )
+
+
+TRENCH_PARTS = (
+    "drop into the trench",
+    "trench B to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+
+coupling = coupling_table(at, TRENCH_PARTS)
+coupling.to_csv(root / PATH / "coupling.csv", index=False)
+
+coupling
+```
+
+The coil is `coiled` rather than `trench`, which is the whole reason that value exists: it is buried in the same soil at the same depth, but a channel in it is not sampling a place.
+
+# Everything else
+
+Annotations are for what the model has no field for. Each group becomes a coordinate on the patches, named after the group, so pick names you would want to select on later. Here `section` says what kind of installation a channel belongs to, and `borehole` numbers the holes.
+
+```{python}
+#| code-fold: true
+#| code-summary: "path.00/annotations.csv"
+def annotation_table(at, trench_parts):
+    """Which section a channel is in, and which borehole if it is in one."""
+    rows = [(*at[name], "section", "trench") for name in trench_parts]
+    rows.append((*at["cable coil at C"], "section", "coil"))
+    for number in (3, 2, 1):
+        span = (at[f"borehole {number} down"][0], at[f"borehole {number} up"][1])
+        rows.append((*span, "section", "borehole"))
+        rows.append((*span, "borehole", number))
+    return pd.DataFrame(
+        rows, columns=["start_distance", "end_distance", "group", "value"]
+    )
+
+
+annotations = annotation_table(at, TRENCH_PARTS)
+annotations.to_csv(root / PATH / "annotations.csv", index=False)
+
+annotations
+```
+
+A group holds one kind of value: `section` is text in every row and `borehole` is a number in every row. Mixing them would be two tracks sharing a name, and is refused when the directory is read.
+
+# How the instrument was set up
+
+A path is the fiber; an acquisition is a configuration of an instrument recording through it. The file's name states the identity — network, fiber array, location code, and acquisition code — so `XT.TUN1.00.DAS` is what a patch recorded here carries as its `acquisition_key`.
+
+The `distance_map` is the join between instrument and fiber: it says where the interrogator's own distance axis lands on the path. This one is zeroed at itself, so the map is the identity — but it is stated rather than assumed, because a re-zeroed instrument is the usual cause of metadata that is quietly off by a lead-in. It is also stated past the end of the fiber, so that it keeps working when the fiber gets longer.
+
+```{python}
+write(
+    "acquisitions/XT.TUN1.00.DAS.yaml",
+    "object_type: Acquisition\n"
+    "data_category: DAS\n"
+    "data_type: strain_rate\n"
+    "data_units: 1/s\n"
+    "interrogator: das-interrogator\n"
+    "gauge_length: 10.0\n"
+    "spatial_interval: 1.0\n"
+    "sample_rate: 250.0\n"
+    "distance_map:\n"
+    "  instrument_distance: [0.0, 2000.0]\n"
+    "  distance: [0.0, 2000.0]\n",
+)
+```
+
+The telemetry cable holds four fibers and only one is in use here. A second interrogator on another of them would be a second optical path under this same fiber array, at its own location code, with its own acquisitions — the array is the installation, not the instrument.
+
+# Reading it back
+
+The directory is now an inventory, and loading it is where every rule is checked: that each file is what it says it is, that each `container` resolves to a resource, that no track runs off the end of its path.
+
+```{python}
+inventory = dc.inventory(root)
+
+path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+print(f"{path.optical_length:.1f} m of fiber in {len(path.optical_components)} components")
+
+names = inventory.get_names()
+print("coords:", [x for x in names.coords if "." not in x])
+```
+
+`section` and `borehole` are among the coordinates because the annotations table named them. `x`, `y`, and `z` are there because the CRS declares those axes and the geometry table resolves to them.
+
+# What the data gets out of it
+
+A patch recorded here carries the acquisition key, and that key with the time the patch covers is the whole of the join.
+
+```{python}
+patch = dc.get_example_patch(
+    "random_das",
+    acquisition_key="XT.TUN1.00.DAS",
+    time_min="2024-06-01",
+    shape=(1776, 200),
+)
+spool = dc.spool(patch).attach_inventory(inventory)
+```
+
+Attaching reads no data and changes no patch. What it changes is which names resolve — the fiber's own vocabulary is now among them, so the boreholes can be asked for by name:
+
+```{python}
+boreholes = spool.select(section="borehole")
+
+print(f"{len(boreholes)} runs of borehole fiber")
+for sub in boreholes:
+    distance = sub.get_coord("distance")
+    print(f"  {distance.min()} to {distance.max()} m, {sub.shape[0]} channels")
+```
+
+Three patches, not one: the three holes are three separate runs of fiber, and a patch is a dense block of channels, so a selection matching three disjoint runs gives back three patches rather than silently gluing them together.
+
+[`Spool.enrich`](`dascore.core.spool.Spool.enrich`) is what puts the metadata on a patch:
+
+```{python}
+enriched = spool.enrich()[0]
+
+print("gauge length:", enriched.attrs.gauge_length)
+print("coordinates:", sorted(enriched.coords.coord_map))
+```
+
+And the coordinates are the point of all of it. The channel 1590 m along the fiber is 10 m down borehole 3; the channel 1510 m along it is 6.645 m into the tunnel, which is the wind angle doing its work without having been mentioned; and the channel 1000 m along it is somewhere in a cable tray that nobody surveyed.
+
+```{python}
+depth = enriched.get_coord("z").values
+along = enriched.get_coord("x").values
+
+assert depth[1590] == -10.0
+assert np.isclose(along[1510], 100.0 + 7.5 * 0.886)
+assert np.isnan(depth[1000])
+```
+
+# A repair, and what it does to the data
+
+In September a contractor puts a bucket through the trench cable, fifteen meters of fiber into the trench. It is repaired with two splices and a two-meter patch cord, and every channel beyond the repair now sits two meters further along the fiber than it used to.
+
+This is what epochs are for. The old description is not edited. A second directory is added, named for the day of the repair, and the first path runs until the second begins.
+
+The components table is where the repair happens: one row becomes five, and the table is renumbered.
+
+```{python}
+# The repair is new hardware, so it is new resources: a patch cord, and the
+# box holding the slack.
+write(
+    "resources/repair-cord.yaml",
+    "object_type: Cable\nname: trench repair patch cord\nfiber_count: 1\n",
+)
+write(
+    "resources/repair-box.yaml",
+    "object_type: Enclosure\nname: trench repair box\nenclosure_type: box\n",
+)
+
+rows = pd.read_csv(io.StringIO(components_csv)).to_dict("records")
+index = next(i for i, row in enumerate(rows) if row["name"] == "trench B to the coil")
+rows[index : index + 1] = [
+    dict(object_type="FiberSegment", optical_length=15.0,
+         name="trench B to the break", container="trench-cable"),
+    dict(object_type="Splice", optical_length=0.0,
+         name="repair splice near side", container="repair-box"),
+    dict(object_type="FiberSegment", optical_length=2.0,
+         name="repair patch cord", container="repair-cord"),
+    dict(object_type="Splice", optical_length=0.0,
+         name="repair splice far side", container="repair-box"),
+    dict(object_type="FiberSegment", optical_length=10.0,
+         name="trench from the break to the coil", container="trench-cable"),
+]
+
+repaired_components = pd.DataFrame(rows)
+repaired_components["sequence"] = range(1, len(repaired_components) + 1)
+repaired_csv = repaired_components.to_csv(index=False)
+
+repaired_components.iloc[index - 1 : index + 5]
+```
+
+Everything else follows from that table, which is the argument for having written it this way: the three other tracks are regenerated from the new running totals rather than edited row by row.
+
+```{python}
+#| code-fold: true
+#| code-summary: "path.00@2024-09-01 — the same tracks, against the new distances"
+EPOCH = "fiber_arrays/XT.TUN1/path.00@2024-09-01"
+BREAK = (100.00 + 15.0 * 0.886, 97.79, -0.5)
+
+repaired_at = spans(repaired_csv)
+repaired_trench = (
+    "drop into the trench",
+    "trench B to the break",
+    "trench from the break to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+# The patch cord is coiled in a splice box, so the trench is surveyed up to
+# the break and again from it, and the two meters between get no position.
+repaired_runs = [
+    ("trench B to the break", B, BREAK),
+    ("trench from the break to the coil", BREAK, C),
+] + [x for x in surveyed_runs(repaired_at) if x[0] != "trench B to the coil"]
+
+write(f"{EPOCH}/attrs.yaml", "object_type: OpticalPath\n")
+write(f"{EPOCH}/optical_components.csv", repaired_csv)
+geometry_table(repaired_at, repaired_runs).to_csv(
+    root / EPOCH / "geometry.csv", index=False
+)
+coupling_table(repaired_at, repaired_trench).to_csv(
+    root / EPOCH / "coupling.csv", index=False
+)
+annotation_table(repaired_at, repaired_trench).to_csv(
+    root / EPOCH / "annotations.csv", index=False
+)
+
+repaired = dc.inventory(root)
+for epoch in repaired.networks[0].fiber_arrays[0].optical_paths:
+    start = "the beginning" if np.isnat(epoch.start_time) else str(epoch.start_time)[:10]
+    print(f"from {start}: {epoch.optical_length:.1f} m")
+```
+
+A patch recorded across midnight on the first of September was recorded through both. [`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the step which insists every patch be describable by exactly one entry, and it subdivides that patch rather than choosing for you:
+
+```{python}
+straddling = dc.get_example_patch(
+    "random_das",
+    acquisition_key="XT.TUN1.00.DAS",
+    time_min="2024-08-31T23:59:59",
+    shape=(1776, 500),
+)
+crossed = dc.spool(straddling).attach_inventory(repaired)
+
+print("patches before:", len(crossed))
+conformed = crossed.conform_to_inventory()
+print("patches after: ", len(conformed))
+print(conformed.get_contents()[["time_min", "time_max"]].to_string(index=False))
+```
+
+The split is exact: every sample the patch held is in one piece or the other, and none is in both. Each piece then enriches with the geometry that was true while it was recording, which is the entire reason the repair was written as an epoch instead of an edit.
+
+```{python}
+before, after = conformed.enrich()
+
+# The same channel, ten meters down borehole 3 and then eight, because the
+# repair pushed two meters of fiber in front of it.
+assert before.get_coord("z").values[1590] == -10.0
+assert after.get_coord("z").values[1590] == -8.0
+
+# Nothing before the break moved.
+assert np.isclose(
+    before.get_coord("x").values[1510], after.get_coord("x").values[1510]
+)
+```
+
+Had the path been edited in place instead, that first assertion would now be false for data recorded in June.
+
+# Shipping it
+
+The directory is the authoring format, and it is the right one while a deployment is still being surveyed, because the tracks are spreadsheets. [`Inventory.to_yaml`](`dascore.core.inventory.Inventory.to_yaml`) writes the single-file form to ship beside a data archive, and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads either back.
+
+```{python}
+text = repaired.to_yaml()
+
+print(f"{len(text.splitlines())} lines of yaml")
+assert dc.inventory(text) == repaired
+```
+
+Dropping either into the data directory means every spool opened there finds it without being told: the authoring directory as `.inventory/`, or the single file as `.inventory.yaml` or `.inventory.yml`. The suffix states the format rather than decorating it, so a file called plainly `.inventory` is not one of the spellings, and the third one — `.inventory.json` — holds what `model_dump_json` writes rather than what `to_yaml` does.
+
+# Where the boundaries fell
+
+The choices worth restating, because a second deployment will have to make them again:
+
+- **Three boreholes, one fiber array.** They are one continuous run of fiber recorded as one channel axis, so they are one array with one path. Five dissimilar arms radiating from a hut, each with its own cable and its own break history, would be five fiber arrays instead — the question to ask is whether a break in one changes the others' metadata.
+- **The turnaround is a component; its housing is a resource.** The splice is on the path because the light goes through it. The housing it sits in is a thing the site owns, referred to by any component inside it.
+- **The wind angle is geometry, not arithmetic.** It is two control points and a straight line, so nothing downstream computes with $\cos\phi$, and a second trench wound at a different angle needs no new code.
+- **The repair is an epoch, not an edit.** Data recorded before it is still described by what was true then. Editing the path in place would have silently moved every channel in the archive's history.
