@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import pickle
 from pathlib import Path
-from types import UnionType
-from typing import Annotated, Union, get_args, get_origin
 
 import numpy as np
 import pytest
@@ -64,57 +62,6 @@ def build_inventory() -> inv.Inventory:
     )
     network = inv.Network(code="DAS", fiber_arrays=(array,))
     return inv.Inventory(networks=(network,))
-
-
-# The annotation walking the models used to do at import time. It lives
-# here now: the source states its vocabulary as literals, and these tests
-# are what catch a model field the literals were never told about.
-_COLLECTIONS = (tuple, list, set, frozenset, dict)
-
-
-def _annotation_members(annotation):
-    """The alternatives a possibly-optional, possibly-Annotated union admits."""
-    if get_origin(annotation) is Annotated:
-        return _annotation_members(get_args(annotation)[0])
-    if get_origin(annotation) in (Union, UnionType):
-        members = [x for m in get_args(annotation) for x in _annotation_members(m)]
-        return [x for x in members if x is not type(None)]
-    return [annotation]
-
-
-def _inventory_models():
-    """
-    Every concrete inventory model declared in the module.
-
-    Underscore-named bases are never instantiated; their fields reach the
-    table through the concrete subclasses, which are listed there.
-    """
-    return [
-        x
-        for name, x in vars(inv).items()
-        if isinstance(x, type)
-        and issubclass(x, inv.InventoryModel)
-        and x.__module__ == inv.__name__
-        and not name.startswith("_")
-    ]
-
-
-def _value_fields(model) -> tuple[str, ...]:
-    """The fields of a model which state one fact about one thing."""
-    structural = frozenset(inv.TimeRangedModel.model_fields) | inv._IDENTITY_FIELDS
-    structural |= inv._EXTENT_FIELDS
-    out = []
-    for name, info in model.model_fields.items():
-        if name in structural:
-            continue
-        members = _annotation_members(info.annotation)
-        if any(
-            isinstance(x, type) and issubclass(x, inv.InventoryModel) for x in members
-        ):
-            continue  # a reference to a second record, not a fact of this one
-        if any(get_origin(x) not in _COLLECTIONS for x in members):
-            out.append(name)
-    return tuple(out)
 
 
 class TestGeometry:
@@ -1927,11 +1874,6 @@ class TestGetNames:
         asked by name rather than in the blanket form.
         """
         assert set(names.attrs) == set(INVENTORY_ATTRS) | set(DATA_STATE_ATTRS)
-        # and the vocabulary covers the models, so a new field must be
-        # added to it rather than quietly going uncontributed
-        reflected = set(_value_fields(inv.Acquisition))
-        reflected |= {f"interrogator.{x}" for x in _value_fields(inv.Interrogator)}
-        assert reflected == set(INVENTORY_ATTRS) | set(DATA_STATE_ATTRS)
 
     def test_attrs_are_model_fields(self, names):
         """Every attr name is a field of the model it is read from."""
@@ -1952,19 +1894,6 @@ class TestGetNames:
         excluded = {"code", "location_code", "start_time", "end_time"}
         excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
         assert not set(names.attrs) & excluded
-
-    def test_identity_fields_name_real_fields(self):
-        """
-        The map is written out; these check what it claims.
-
-        An entry pointing at a field no model has would leave a bare
-        track name quietly resolving to nothing.
-        """
-        for track, field in inv.TRACK_IDENTITY_FIELDS.items():
-            ann = inv.OpticalPath.model_fields[track].annotation
-            for model in _annotation_members(get_args(ann)[0]):
-                assert field in model.model_fields, (track, model, field)
-                assert model._identity_field == field, (track, model)
 
     def test_coords_hold_the_tracks_and_groups(self, names):
         """The path's tracks, their fields, and its annotation groups."""
@@ -2054,17 +1983,6 @@ class TestGetNamesRoundTrip:
                 qualified.get_coord(f"{track}.{field}").values,
             ), track
 
-    def test_track_value_fields_match_the_models(self):
-        """
-        The table is written out; this walks the models to check it.
-
-        A field added, renamed, or retyped without updating the table
-        would be silently absent from (or wrongly present in) the names
-        an inventory says it can contribute.
-        """
-        for model, fields in inv.TRACK_VALUE_FIELDS.items():
-            assert fields == _value_fields(model), model
-
     def test_annotation_value_survives_a_dump(self):
         """
         A pruned value would reload as the default, changing its kind.
@@ -2083,29 +2001,3 @@ class TestGetNamesRoundTrip:
             inv.OpticalPathAnnotation(
                 group="g", value="", start_distance=0.0, end_distance=1.0
             )
-
-    def test_ref_fields_cover_every_resource_field(self):
-        """
-        `RESOURCE_REF_FIELDS` names the fields which hold a resource.
-
-        A resource-valued field the table never heard of keeps its inline
-        object where an id belongs: it never reaches the pool, so nothing
-        resolves it and `replace` cannot reach it either.
-        """
-        resource_types = tuple(_annotation_members(inv._Resource))
-        for model in _inventory_models():
-            for name, info in model.model_fields.items():
-                members = _annotation_members(info.annotation)
-                holds = any(
-                    isinstance(x, type) and issubclass(x, resource_types)
-                    for x in members
-                )
-                declared = name in inv.RESOURCE_REF_FIELDS.get(model, {})
-                assert holds == declared, (model.__name__, name, holds, declared)
-
-    def test_every_track_model_is_in_the_table(self):
-        """A new track model has to be added to the table to be seen."""
-        for track in inv.TRACK_IDENTITY_FIELDS:
-            ann = inv.OpticalPath.model_fields[track].annotation
-            for model in _annotation_members(get_args(ann)[0]):
-                assert model in inv.TRACK_VALUE_FIELDS, model

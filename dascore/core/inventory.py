@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Mapping
-from types import MappingProxyType
+from functools import cache
+from types import MappingProxyType, UnionType
 from typing import (
     Annotated,
     Any,
@@ -24,7 +25,9 @@ from typing import (
     Literal,
     NamedTuple,
     TypeAlias,
+    Union,
     get_args,
+    get_origin,
 )
 from uuid import uuid4
 
@@ -1623,92 +1626,112 @@ _EXTENT_FIELDS = frozenset(_IntervalModel.model_fields) - frozenset(
 _COLLECTION_ORIGINS = (tuple, list, set, frozenset, dict)
 
 
-# What each typed track and its models state, written out rather than
-# read off the annotations. `coupling="trench"` asks about coupling_type;
-# every other field is reached by its qualified name (`coupling.medium`).
-# A model field added or renamed without touching these is caught by the
-# drift tests in tests/test_core/test_inventory.py, which do the walking
-# this file used to do at import time.
-TRACK_IDENTITY_FIELDS = MappingProxyType(
-    {
-        "optical_components": "name",
-        "geometry": "name",
-        "coupling": "coupling_type",
-    }
-)
+def _annotation_members(annotation) -> list:
+    """
+    Return the alternatives a possibly-optional union annotation admits.
 
-# Which fields of which models hold a shareable resource, and what each
-# may hold. `_normalize_resources` moves an inline object here into the
-# flat pool and leaves the id behind, so a resource-valued field missing
-# from this table keeps its object where an id belongs -- nothing
-# resolves it, and `replace` cannot reach it. Pinned by a drift test.
-_MEASUREMENT_REFS = MappingProxyType(
-    {
-        "loss_measurement": (OpticalMeasurement,),
-        "reflectance_measurement": (OpticalMeasurement,),
-    }
-)
-RESOURCE_REF_FIELDS = MappingProxyType(
-    {
-        FiberSegment: {"container": (Cable,), **_MEASUREMENT_REFS},
-        Connector: {"container": (Enclosure,), **_MEASUREMENT_REFS},
-        Splice: {"container": (Enclosure,), **_MEASUREMENT_REFS},
-        Terminator: {"container": (Enclosure,), **_MEASUREMENT_REFS},
-        Cable: {
-            "container": (Enclosure, Cable),
-            "specification": (ExternalResource,),
-        },
-        Enclosure: {"specification": (ExternalResource,)},
-        Acquisition: {"interrogator": (Interrogator,)},
-        OpticalMeasurement: {"data": (ExternalResource,)},
-    }
-)
+    `Annotated` is transparent: this file writes several of its unions as
+    `Annotated[A | B, Field(discriminator=...)]`, and the wrapper must not
+    hide what they hold. `None` is dropped, since "or nothing" says what
+    the field does when it is unset rather than what it can hold.
+    """
+    if get_origin(annotation) is Annotated:
+        return _annotation_members(get_args(annotation)[0])
+    if get_origin(annotation) in (Union, UnionType):
+        out = [
+            x for member in get_args(annotation) for x in _annotation_members(member)
+        ]
+        return [x for x in out if x is not type(None)]
+    return [annotation]
 
 
-# The fields of each track model which state one fact about one thing --
-# what an inventory can give a channel. Reference fields (another model)
-# and collections are not among them: they are a second record, or have
-# no single value to hand over.
-TRACK_VALUE_FIELDS = MappingProxyType(
-    {
-        FiberSegment: (
-            "optical_length",
-            "name",
-            "loss_db",
-            "reflectance_db",
-            "fiber_number",
-            "fiber_color",
-            "fiber_type",
-            "fiber_standard",
-            "refractive_index",
-            "buffer_type",
-        ),
-        Connector: (
-            "optical_length",
-            "name",
-            "loss_db",
-            "reflectance_db",
-            "connector_type",
-        ),
-        Splice: ("optical_length", "name", "loss_db", "reflectance_db", "splice_type"),
-        Terminator: (
-            "optical_length",
-            "name",
-            "loss_db",
-            "reflectance_db",
-            "termination_type",
-        ),
-        Geometry: ("name",),
-        CouplingCondition: ("coupling_type", "medium", "attachment", "depth"),
-    }
-)
+def _is_value_field(info) -> bool:
+    """
+    Return True when a field could hold one value describing one thing.
+
+    A field which may hold another inventory model is a reference to a
+    second record rather than a fact of this one, and one which can only
+    hold a collection has no single value to state, or to give a channel.
+    """
+    members = _annotation_members(info.annotation)
+    if any(isinstance(x, type) and issubclass(x, InventoryModel) for x in members):
+        return False
+    return any(get_origin(x) not in _COLLECTION_ORIGINS for x in members)
 
 
-# The observing-system facts an inventory can contribute: the vocabulary
-# constants.py declares, plus the three attrs which describe the data as
-# it now stands rather than the system which recorded it (blanket enrich
-# leaves those alone, but they can be asked for by name). A model field
-# missing from the vocabulary is caught by the drift test.
+@cache
+def _value_field_names(model) -> tuple[str, ...]:
+    """
+    Return the fields of a model which state a fact about one thing.
+
+    Cached on the class: the answer is a property of the model, and an
+    inventory asked for its names walks every item of every track.
+    """
+    structural = frozenset(TimeRangedModel.model_fields) | _IDENTITY_FIELDS
+    structural |= _EXTENT_FIELDS
+    return tuple(
+        name
+        for name, info in model.model_fields.items()
+        if name not in structural and _is_value_field(info)
+    )
+
+
+def _track_identity_fields() -> Mapping[str, str]:
+    """
+    Map each typed track of an optical path to the field its name means.
+
+    `coupling="trench"` asks about coupling_type; every other field of a
+    track is reached by its qualified name (`coupling.medium`). Each
+    track model declares which of its fields is its identity, so the
+    pairing lives beside the field rather than in a list to keep in step
+    with it.
+    """
+    out = {}
+    for track, info in OpticalPath.model_fields.items():
+        # A track is a tuple of items; the path's scalar fields are not.
+        if get_origin(info.annotation) is not tuple:
+            continue
+        for model in _annotation_members(get_args(info.annotation)[0]):
+            field = getattr(model, "_identity_field", None)
+            if field is None:
+                continue
+            # The model names one of its own fields, or the map it builds
+            # would point at nothing.
+            assert field in model.model_fields, (model, field)
+            out[track] = field
+    return MappingProxyType(out)
+
+
+TRACK_IDENTITY_FIELDS = _track_identity_fields()
+
+
+@cache
+def _resource_ref_fields(model) -> Mapping[str, tuple]:
+    """
+    Return the fields of a model which hold a shareable resource.
+
+    Read off the annotations rather than listed beside them: a field
+    which can hold a resource says so in its own type, and a list could
+    name a field that moved or miss one that arrived -- either of which
+    leaves an inline object where an id belongs, out of the pool and
+    unreachable by `replace`. Cached on the class, like the value names.
+    """
+    resources = tuple(_annotation_members(_Resource))
+    return MappingProxyType(
+        {
+            name: allowed
+            for name, info in model.model_fields.items()
+            if (
+                allowed := tuple(
+                    x
+                    for x in _annotation_members(info.annotation)
+                    if isinstance(x, type) and issubclass(x, resources)
+                )
+            )
+        }
+    )
+
+
 _SYSTEM_FACT_NAMES = tuple(sorted(INVENTORY_ATTRS + DATA_STATE_ATTRS))
 
 
@@ -1796,7 +1819,6 @@ class Inventory(InventoryModel):
         """
         pool: dict[str, Any] = {}
         string_refs: list[tuple[str, str, tuple]] = []
-        ref_fields = RESOURCE_REF_FIELDS
 
         def pool_add(rid, resource):
             if rid in pool and pool[rid] != resource:
@@ -1815,9 +1837,7 @@ class Inventory(InventoryModel):
 
         def normalize(obj):
             """Rewrite an object's resource-valued fields to id references."""
-            fields = next(
-                (f for cls, f in ref_fields.items() if isinstance(obj, cls)), {}
-            )
+            fields = _resource_ref_fields(type(obj))
             updates = {}
             for field, allowed in fields.items():
                 value = getattr(obj, field)
@@ -1943,7 +1963,7 @@ class Inventory(InventoryModel):
             for track in TRACK_IDENTITY_FIELDS:
                 for item in getattr(path, track):
                     fields = tracks.setdefault(track, {})
-                    fields.update(dict.fromkeys(TRACK_VALUE_FIELDS[type(item)]))
+                    fields.update(dict.fromkeys(_value_field_names(type(item))))
         for track, fields in tracks.items():
             out[track] = None
             out.update(dict.fromkeys(f"{track}.{x}" for x in fields))
