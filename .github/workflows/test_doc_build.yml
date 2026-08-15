@@ -1,9 +1,8 @@
 name: TestDocBuild
 
 on:
-  push:
-    branches:
-      - dev
+  # Pushes to dev are covered by BuildDeployDevDocs, which builds the same
+  # docs and publishes them, so this only guards labeled pull requests.
   pull_request:
     types: [labeled, synchronize]
 
@@ -18,8 +17,7 @@ env:
 jobs:
   test_build_docs:
     if: |
-      github.event_name == 'push'
-      || (github.event.action == 'labeled' && github.event.label.name == 'documentation')
+      (github.event.action == 'labeled' && github.event.label.name == 'documentation')
       || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
     runs-on: ubuntu-latest
     permissions:
