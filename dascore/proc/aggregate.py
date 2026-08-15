@@ -29,7 +29,7 @@ and more details.
 """
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, options=sorted(_AGG_FUNCS))
 def aggregate(
     patch: PatchType,
@@ -79,7 +79,7 @@ def aggregate(
     return _apply_aggregator(patch, dim, func, dim_reduce)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def min(
     patch: PatchType,
@@ -107,7 +107,7 @@ def min(
     return aggregate.func(patch, dim=dim, method=np.nanmin, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def max(
     patch: PatchType,
@@ -135,7 +135,7 @@ def max(
     return aggregate.func(patch, dim=dim, method=np.nanmax, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def mean(
     patch: PatchType,
@@ -182,7 +182,7 @@ def median(
     return aggregate.func(patch, dim=dim, method=np.nanmedian, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def std(
     patch: PatchType,
@@ -241,7 +241,7 @@ def last(
     return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def sum(
     patch: PatchType,
@@ -260,7 +260,7 @@ def sum(
     return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def any(
     patch: PatchType,
@@ -279,7 +279,7 @@ def any(
     return aggregate.func(patch, dim=dim, method=np.any, dim_reduce=dim_reduce)
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def all(
     patch: PatchType,

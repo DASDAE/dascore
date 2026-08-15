@@ -847,6 +847,13 @@ class TestArrayBackends:
             out = np.fmod(backend_patch, 2)
         self._assert_matches_numpy(out, np.fmod(random_patch, 2), backend)
 
+    def test_aggregation_without_equivalent(self, backend_patch, random_patch, backend):
+        """Aggregations the standard lacks are applied by numpy."""
+        with pytest.warns(NumpyFallbackWarning, match="nanmedian"):
+            out = backend_patch.aggregate("time", method="median")
+        expected = random_patch.aggregate("time", method="median")
+        self._assert_matches_numpy(out, expected, backend)
+
     def test_no_equivalent_in_the_standard(self, xps):
         """A ufunc the standard lacks has no equivalent to look up."""
         array = xps.asarray([1.0, 2.0])

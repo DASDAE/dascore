@@ -22,6 +22,9 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     is_foreign,
+    is_numpy,
+    nan_reduce,
+    to_numpy,
     warn_numpy_fallback,
 )
 from dascore.utils.misc import iterate
@@ -33,6 +36,19 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     swap_kwargs_dim_to_axis,
 )
+
+# Numpy reductions which skip nans, and the name they are known by in
+# dascore.utils.array_api.nan_reduce.
+NAN_REDUCTIONS = {
+    np.nanmax: "max",
+    np.nanmean: "mean",
+    np.nanmin: "min",
+    np.nanstd: "std",
+    np.nansum: "sum",
+}
+
+# Numpy reductions which the array API standard defines under the same name.
+REDUCTIONS = {np.all: "all", np.any: "any"}
 
 # Numpy ufunc names which the array API standard spells differently.
 UFUNC_NAMES = {
@@ -463,6 +479,24 @@ class PatchUFunc:
         )
 
 
+def _apply_reduction(func, data, axis):
+    """
+    Apply a reduction to data, using its own array namespace if it can.
+
+    Reductions the standard doesn't define, such as median, and callables
+    dascore knows nothing about are applied by numpy.
+    """
+    if is_numpy(data):
+        return func(data, axis=axis)
+    if (name := NAN_REDUCTIONS.get(func)) is not None:
+        return nan_reduce(name, data, axis=axis)
+    if (name := REDUCTIONS.get(func)) is not None:
+        return getattr(array_namespace(data), name)(data, axis=axis)
+    name = getattr(func, "__name__", "aggregation")
+    warn_numpy_fallback(name, backend_name(data), stacklevel=4)
+    return asarray_like(func(to_numpy(data), axis=axis), data)
+
+
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     """Apply an aggregation operator to patch."""
     data = patch.data
@@ -477,10 +511,11 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
         new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
-            data = func(data, axis=axis)
+            data = _apply_reduction(func, data, axis)
         else:
             coords = patch.coords.update(**{dim: new_coord})
-            data = np.expand_dims(func(data, axis=axis), axis)
+            reduced = _apply_reduction(func, data, axis)
+            data = array_namespace(reduced).expand_dims(reduced, axis=axis)
         attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
         patch = patch.new(data=data, coords=coords, attrs=attrs)
     return patch

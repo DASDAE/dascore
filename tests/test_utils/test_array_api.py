@@ -19,6 +19,7 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     is_numpy,
+    nan_reduce,
     to_numpy,
 )
 from dascore.utils.misc import suppress_warnings
@@ -235,6 +236,23 @@ class _Case(NamedTuple):
 # setup runs on the numpy patch, before it is moved to another backend.
 ARRAY_API_CASES = {
     "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
+    "dascore.proc.aggregate.aggregate": _Case(
+        call=lambda patch: patch.aggregate("time", method="mean"),
+    ),
+    "dascore.proc.aggregate.all": _Case(call=lambda patch: patch.all("time")),
+    "dascore.proc.aggregate.any": _Case(call=lambda patch: patch.any("time")),
+    "dascore.proc.aggregate.max": _Case(call=lambda patch: patch.max("time")),
+    "dascore.proc.aggregate.mean": _Case(call=lambda patch: patch.mean("time")),
+    "dascore.proc.aggregate.min": _Case(call=lambda patch: patch.min("time")),
+    "dascore.proc.aggregate.std": _Case(call=lambda patch: patch.std("time")),
+    "dascore.proc.aggregate.sum": _Case(call=lambda patch: patch.sum("time")),
+    "dascore.proc.basic.demean": _Case(call=lambda patch: patch.demean("time")),
+    "dascore.proc.basic.normalize": _Case(
+        call=lambda patch: patch.normalize("time", norm="l2"),
+    ),
+    "dascore.proc.basic.standardize": _Case(
+        call=lambda patch: patch.standardize("time"),
+    ),
     "dascore.proc.coords.make_broadcastable_to": _Case(
         call=lambda patch: patch.make_broadcastable_to((patch.shape[0], 3)),
         setup=lambda patch: patch.mean("time"),
@@ -341,3 +359,45 @@ class TestRegisterBackend:
             return patch
 
         assert set(func.backends) == {"numpy"}
+
+
+class TestNanReduce:
+    """Tests for reductions which ignore nan values."""
+
+    names = ("min", "max", "mean", "std", "sum")
+
+    @pytest.fixture(scope="class")
+    def numpy_array(self):
+        """An array with a scattered nan, and a slice of nothing but nans."""
+        array = np.linspace(-2, 2, 24).reshape(4, 6)
+        array[1, 2] = np.nan
+        array[3, :] = np.nan
+        return array
+
+    @pytest.mark.parametrize("name", names)
+    @pytest.mark.parametrize("axis", [0, 1, None])
+    @pytest.mark.parametrize("keepdims", [True, False])
+    def test_matches_numpy(self, name, axis, keepdims, numpy_array, to_array):
+        """The reductions agree with numpy, including on all-nan slices."""
+        array = to_array(numpy_array)
+        with suppress_warnings(RuntimeWarning):
+            expected = getattr(np, f"nan{name}")(
+                numpy_array, axis=axis, keepdims=keepdims
+            )
+        out = np.asarray(nan_reduce(name, array, axis=axis, keepdims=keepdims))
+        assert out.shape == expected.shape
+        assert np.allclose(out, expected, equal_nan=True)
+
+    @pytest.mark.parametrize("name", names)
+    def test_no_nans(self, name, to_array):
+        """The reductions agree with numpy when there is nothing to skip."""
+        array = np.linspace(1, 5, 12).reshape(3, 4)
+        out = np.asarray(nan_reduce(name, to_array(array), axis=1))
+        assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=1))
+
+    @pytest.mark.parametrize("name", names)
+    def test_integer_data(self, name, to_array):
+        """Integer data have no nans to skip, but must still reduce."""
+        array = np.arange(12, dtype="int64").reshape(3, 4)
+        out = np.asarray(nan_reduce(name, to_array(array), axis=0))
+        assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=0))

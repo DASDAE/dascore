@@ -30,6 +30,7 @@ __all__ = [
     "is_foreign",
     "is_numpy",
     "namespace_name",
+    "nan_reduce",
     "to_numpy",
     "warn_numpy_fallback",
 ]
@@ -228,3 +229,95 @@ def asarray_like(array: Any, like: Any) -> Any:
         return np.asarray(array)
     xp = array_namespace(like)
     return xp.asarray(array, device=device(like))
+
+
+def _replace_nan(array: Any, value: float) -> Any:
+    """Return a floating point array with its nans replaced by a value."""
+    xp = array_namespace(array)
+    return xp.where(xp.isnan(array), xp.asarray(value, dtype=array.dtype), array)
+
+
+def _all_nan(array: Any, axis, keepdims: bool) -> Any:
+    """Return a mask of the slices which hold nothing but nans."""
+    xp = array_namespace(array)
+    return xp.all(xp.isnan(array), axis=axis, keepdims=keepdims)
+
+
+def _nan_extremum(name, array, axis, keepdims):
+    """Return the min or max of an array, ignoring nans."""
+    xp = array_namespace(array)
+    fill = xp.finfo(array.dtype).max if name == "min" else xp.finfo(array.dtype).min
+    out = getattr(xp, name)(_replace_nan(array, fill), axis=axis, keepdims=keepdims)
+    # Numpy returns nan for a slice of nothing but nans; the fill value would
+    # otherwise leak out here.
+    nan = xp.asarray(float("nan"), dtype=array.dtype)
+    return xp.where(_all_nan(array, axis, keepdims), nan, out)
+
+
+def _nan_count(array, axis, keepdims):
+    """Return the number of values which are not nan."""
+    xp = array_namespace(array)
+    counts = xp.sum(
+        xp.astype(~xp.isnan(array), array.dtype), axis=axis, keepdims=keepdims
+    )
+    # Empty slices divide to nan rather than raising, as numpy does.
+    return xp.where(counts == 0, xp.asarray(float("nan"), dtype=array.dtype), counts)
+
+
+def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
+    """Reduce an array with the array API standard, ignoring nans."""
+    xp = array_namespace(array)
+    # Only floating point data can hold nans. The standard has no integer
+    # mean or std, and numpy promotes those to floats, so do the same.
+    if not xp.isdtype(array.dtype, ("real floating", "complex floating")):
+        if name not in {"mean", "std"}:
+            return getattr(xp, name)(array, axis=axis, keepdims=keepdims)
+        array = xp.astype(array, xp.float64)
+    if name in {"min", "max"}:
+        return _nan_extremum(name, array, axis, keepdims)
+    total = xp.sum(_replace_nan(array, 0), axis=axis, keepdims=keepdims)
+    if name == "sum":
+        return total
+    mean = total / _nan_count(array, axis, keepdims)
+    if name == "mean":
+        return mean
+    # Only std is left; it needs the mean with the reduced axes still in place.
+    center = xp.sum(
+        _replace_nan((array - _nan_reduce("mean", array, axis, keepdims=True)) ** 2, 0),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return xp.sqrt(center / _nan_count(array, axis, keepdims))
+
+
+def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
+    """
+    Reduce an array along an axis, ignoring nans.
+
+    The backend's own implementation is used when it has one, since it is
+    both faster and exactly what dascore did before it supported other
+    array backends.
+
+    Parameters
+    ----------
+    name
+        The name of the reduction; one of min, max, mean, std, or sum.
+    array
+        The array to reduce.
+    axis
+        The axis, or axes, to reduce along. If None, reduce all of them.
+    keepdims
+        If True, leave the reduced axes in the output with length one.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import nan_reduce
+    >>>
+    >>> array = np.array([1.0, np.nan, 3.0])
+    >>> assert nan_reduce("mean", array) == 2.0
+    """
+    xp = array_namespace(array)
+    if (func := getattr(xp, f"nan{name}", None)) is not None:
+        return func(array, axis=axis, keepdims=keepdims)
+    return _nan_reduce(name, array, axis=axis, keepdims=keepdims)
