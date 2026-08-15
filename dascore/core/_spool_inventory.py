@@ -671,9 +671,9 @@ def _get_geometry_coord(inventory, path, label, distances):
     # on_missing policy rules rather than a column of nan.
     if not any(axis_columns(x, crs) for x in path.geometry):
         return None
+    # axis_index refuses a label this CRS has no axis for, and the array is
+    # one column per axis, so the index is always one of its columns.
     coords = path.coordinates_at(distances, crs)
-    if index >= coords.shape[1]:
-        return None
     return get_coord(data=coords[:, index], units=crs.units[index])
 
 
