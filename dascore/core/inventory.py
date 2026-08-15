@@ -1632,38 +1632,6 @@ class Network(TimeRangedModel):
         return self
 
 
-# Fields whose default is not the empty value; dropping them would reload as
-# something else. An annotation value defaults to True, so a pruned empty
-# string would come back as a boolean and change its group's kind.
-_UNPRUNED_KEYS = frozenset({"value"})
-
-
-def _drop_empty(value, _in_extras=False):
-    """
-    Recursively drop empty strings, mappings, and sequences from a dump.
-
-    Pruned fields default to the empty value they held, so reload is
-    lossless; fields in ``_UNPRUNED_KEYS`` and user-supplied ``extra_fields``
-    contents are kept verbatim.
-    """
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            pruned = (
-                item
-                if _in_extras
-                else _drop_empty(item, _in_extras=key == "extra_fields")
-            )
-            empty = pruned in ("", {}, []) and key not in _UNPRUNED_KEYS
-            if empty and not _in_extras:
-                continue
-            out[key] = pruned
-        return out
-    if isinstance(value, list):
-        return [_drop_empty(item) for item in value]
-    return value
-
-
 class ResolvedContext(NamedTuple):
     """The inventory objects an acquisition_key + time resolve to."""
 
@@ -2277,10 +2245,19 @@ class Inventory(InventoryModel):
         return self.new(networks=tuple(networks))
 
     def to_yaml(self, path=None) -> str:
-        """Serialize this inventory to YAML, optionally writing to a path."""
+        """
+        Serialize this inventory to YAML, optionally writing to a path.
+
+        A field still holding its default is left out, so the document
+        states what the inventory says rather than every field it has;
+        what is written reloads equal to this inventory.
+        """
         yaml = optional_import("yaml", required_for="YAML inventory serialization")
 
-        data = _drop_empty(self.model_dump(mode="json", exclude_none=True))
+        # Everything defaulted is dropped, so the document records which
+        # envelope it was written against even when that is the default.
+        dumped = self.model_dump(mode="json", exclude_defaults=True)
+        data = {"schema_version": self.schema_version} | dumped
         out = yaml.safe_dump(data, sort_keys=False)
         if path is not None:
             with open(path, "w") as fh:

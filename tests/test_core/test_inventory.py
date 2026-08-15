@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
-from dascore.models import values_equal
+from dascore.models import InventoryModel, values_equal
 from dascore.utils.mapping import FrozenDict
 
 
@@ -62,6 +63,119 @@ def build_inventory() -> inv.Inventory:
     )
     network = inv.Network(code="DAS", fiber_arrays=(array,))
     return inv.Inventory(networks=(network,))
+
+
+def build_full_inventory() -> inv.Inventory:
+    """Build a valid inventory holding one of every inventory model."""
+    cable = inv.Cable(resource_id="cable-1", name="trunk", fiber_count=12)
+    enclosure = inv.Enclosure(resource_id="box-1", enclosure_type="splice_box")
+    interrogator = inv.Interrogator(resource_id="int-1", model="FI-1")
+    report = inv.ExternalResource(resource_id="otdr-file", uri="file://otdr.sor")
+    measurement = inv.OpticalMeasurement(
+        resource_id="otdr-1", method="otdr", wavelength=1550.0, data=report
+    )
+    path = inv.OpticalPath(
+        name="main",
+        location_code="00",
+        start_time="2026-06-01",
+        optical_components=(
+            inv.FiberSegment(
+                name="lead",
+                optical_length=100.0,
+                container=cable,
+                fiber_number=1,
+                loss_db=0.2,
+                loss_measurement=measurement,
+            ),
+            inv.Connector(name="patch", container=enclosure),
+            inv.Splice(name="splice", container=enclosure),
+            inv.FiberSegment(name="run", optical_length=400.0, container=cable),
+            inv.Terminator(name="end", container=enclosure),
+        ),
+        geometry=(
+            inv.Geometry(
+                name="trench",
+                distance=(100.0, 400.0),
+                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+            ),
+        ),
+        coupling=(
+            inv.CouplingCondition(
+                start_distance=100.0,
+                end_distance=250.0,
+                coupling_type="trench",
+                medium="soil",
+                depth=1.0,
+            ),
+        ),
+        annotations=(
+            inv.OpticalPathAnnotation(
+                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+            ),
+            inv.OpticalPathAnnotation(
+                start_distance=150.0, end_distance=300.0, group="noisy", value=True
+            ),
+            inv.OpticalPathAnnotation(
+                start_distance=150.0, end_distance=300.0, group="quiet", value=False
+            ),
+            inv.OpticalPathAnnotation(
+                start_distance=100.0, end_distance=200.0, group="count", value=0
+            ),
+            inv.OpticalPathAnnotation(
+                start_distance=200.0, end_distance=300.0, group="offset", value=0.0
+            ),
+        ),
+        measurements=(measurement,),
+    )
+    acquisition = inv.Acquisition(
+        code="RAW",
+        location_code="00",
+        start_time="2026-06-01",
+        data_category="DAS",
+        data_type="strain_rate",
+        data_units="strain/s",
+        sample_rate=500.0,
+        gauge_length=10.0,
+        spatial_interval=1.0,
+        interrogator=interrogator,
+        interrogator_port="1",
+        extra_fields={"native_key": "", "count": 0},
+        distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(100.0, 400.0)),
+    )
+    channel = inv.Channel(
+        code="HSF",
+        location_code="00",
+        coordinates=(-117.0, 40.0, 1500.0),
+        sample_rate=500.0,
+        response=inv.Response(sensitivity=1.0, input_units="m/s", output_units="V"),
+    )
+    station = inv.Station(
+        code="STA1",
+        name="station one",
+        identifiers=("doi:10.7914/SN/XX",),
+        coordinates=(-117.0, 40.0, 1500.0),
+        channels=(channel,),
+    )
+    array = inv.FiberArray(
+        code="R2D1",
+        name="array one",
+        start_time="2026-06-01",
+        acquisitions=(acquisition,),
+        optical_paths=(path,),
+    )
+    network = inv.Network(
+        code="DAS",
+        name="network one",
+        start_time="2026-06-01",
+        fiber_arrays=(array,),
+        stations=(station,),
+    )
+    return inv.Inventory(
+        creation_info=inv.CreationInfo(
+            agency_id="agency", author="author", version="1.0"
+        ),
+        networks=(network,),
+    ).check()
 
 
 class TestGeometry:
@@ -1777,8 +1891,258 @@ class TestConstraintsMatchDescriptions:
             )
 
 
+def _sample_inventories() -> dict[str, inv.Inventory]:
+    """Build inventories covering the ways serialization could lose a value."""
+    blank_crs = inv.CoordinateReferenceSystem(
+        authority="",
+        code="",
+        name="",
+        wkt='LOCAL_CS["mine"]',
+        coordinate_labels=("x", "y"),
+        units=("m", "m"),
+    )
+    cable = inv.Cable(resource_id="cable-1", name="trunk")
+    segment = inv.FiberSegment(name="run", optical_length=100.0, container=cable)
+    annotations = (
+        inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=50.0, group="zone", value="east"
+        ),
+        inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=50.0, group="noisy", value=True
+        ),
+        inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=50.0, group="masked", value=False
+        ),
+        inv.OpticalPathAnnotation(
+            start_distance=0.0, end_distance=50.0, group="shots", value=0
+        ),
+        inv.OpticalPathAnnotation(
+            start_distance=50.0, end_distance=100.0, group="offset", value=0.0
+        ),
+    )
+
+    def array(code, paths=(), **kwargs):
+        return inv.FiberArray(code=code, optical_paths=tuple(paths), **kwargs)
+
+    return {
+        "defaults": inv.Inventory(),
+        "blank_crs": inv.Inventory(coordinate_reference_system=blank_crs),
+        "blank_resources": inv.Inventory(
+            resources=(
+                inv.Interrogator(resource_id="int-1", instrument_type=""),
+                inv.Cable(resource_id="cable-2", name=""),
+            )
+        ),
+        "explicit_empties": inv.Inventory(
+            networks=(
+                inv.Network(
+                    code="XX",
+                    name="",
+                    description="",
+                    identifiers=(),
+                    extra_fields={},
+                    fiber_arrays=(array("L001", name="", identifiers=()),),
+                ),
+            )
+        ),
+        "depths": inv.Inventory(
+            networks=(
+                inv.Network(code="N0"),
+                inv.Network(code="N1", fiber_arrays=(array("L001"),)),
+                inv.Network(
+                    code="N2",
+                    fiber_arrays=(
+                        array("L002"),
+                        array(
+                            "L003",
+                            paths=(
+                                inv.OpticalPath(location_code="00"),
+                                inv.OpticalPath(
+                                    location_code="01",
+                                    optical_components=(segment,),
+                                    annotations=annotations,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        ),
+        "shared_resource": inv.Inventory(
+            networks=(
+                inv.Network(
+                    code="XX",
+                    fiber_arrays=(
+                        array(
+                            "L001",
+                            paths=(
+                                inv.OpticalPath(
+                                    location_code="00", optical_components=(segment,)
+                                ),
+                                inv.OpticalPath(
+                                    location_code="01", optical_components=(segment,)
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        ),
+        "extra_fields": inv.Inventory(
+            networks=(
+                inv.Network(
+                    code="XX",
+                    extra_fields={"blank": "", "zero": 0, "off": False, "none": 0.0},
+                ),
+            )
+        ),
+        "full": build_full_inventory(),
+    }
+
+
+SAMPLE_INVENTORIES = _sample_inventories()
+
+
+def _walk_models(obj):
+    """Yield every inventory model in a tree, the tree itself included."""
+    if isinstance(obj, InventoryModel):
+        yield obj
+        for name in type(obj).model_fields:
+            yield from _walk_models(getattr(obj, name))
+    elif isinstance(obj, tuple | list):
+        for item in obj:
+            yield from _walk_models(item)
+    elif isinstance(obj, Mapping):
+        for item in obj.values():
+            yield from _walk_models(item)
+
+
+def _swap_model(obj, old, new):
+    """Rebuild a tree with one model instance, matched by identity, swapped."""
+    if obj is old:
+        return new
+    if isinstance(obj, InventoryModel):
+        updates = {}
+        for name in type(obj).model_fields:
+            value = getattr(obj, name)
+            if (swapped := _swap_model(value, old, new)) is not value:
+                updates[name] = swapped
+        return obj.new(**updates) if updates else obj
+    if isinstance(obj, tuple | list):
+        items = tuple(_swap_model(x, old, new) for x in obj)
+        changed = any(a is not b for a, b in zip(items, obj, strict=True))
+        return items if changed else obj
+    if isinstance(obj, Mapping):
+        items = {key: _swap_model(value, old, new) for key, value in obj.items()}
+        return items if any(items[key] is not obj[key] for key in obj) else obj
+    return obj
+
+
+def _empty_like(value):
+    """Return the empty value of this value's type, or None if it has none."""
+    if isinstance(value, str):
+        return ""
+    if isinstance(value, Mapping):
+        return {}
+    if isinstance(value, tuple):
+        return ()
+    return None
+
+
+def _empty_keys(data, out=None) -> set[str]:
+    """Return the keys a document writes with an empty value."""
+    out = set() if out is None else out
+    if isinstance(data, Mapping):
+        for key, value in data.items():
+            if value in ("", [], {}):
+                out.add(key)
+            _empty_keys(value, out)
+    elif isinstance(data, list):
+        for item in data:
+            _empty_keys(item, out)
+    return out
+
+
 class TestSerializationIsLossless:
     """Pruning empty values must not change what reloads."""
+
+    @pytest.mark.parametrize("name", sorted(SAMPLE_INVENTORIES))
+    def test_round_trip_equals(self, name):
+        """Whatever was written comes back, in text and through a file."""
+        pytest.importorskip("yaml")
+        inventory = SAMPLE_INVENTORIES[name]
+        assert dc.inventory(inventory.to_yaml()) == inventory
+
+    def test_round_trip_through_file(self, tmp_path):
+        """The writer taking a path writes what the text form holds."""
+        pytest.importorskip("yaml")
+        inventory = build_full_inventory()
+        path = tmp_path / "inventory.yaml"
+        inventory.to_yaml(path)
+        assert dc.inventory(path) == inventory
+
+    def test_blank_crs_fields_survive(self):
+        """A frame described by WKT alone must not reload as EPSG:4979."""
+        pytest.importorskip("yaml")
+        inventory = SAMPLE_INVENTORIES["blank_crs"]
+        crs = dc.inventory(inventory.to_yaml()).coordinate_reference_system
+        assert (crs.authority, crs.code, crs.name) == ("", "", "")
+
+    def test_blank_instrument_type_survives(self):
+        """A blanked field with a non-empty default is not a missing one."""
+        pytest.importorskip("yaml")
+        inventory = SAMPLE_INVENTORIES["blank_resources"]
+        loaded = dc.inventory(inventory.to_yaml())
+        assert loaded.resources["int-1"].instrument_type == ""
+
+    def test_every_blankable_field_survives(self):
+        """Emptying any field of any model must survive a round trip.
+
+        Sweeping the model tree, rather than listing the fields at risk,
+        is what catches the next field added with a non-empty default.
+        """
+        pytest.importorskip("yaml")
+        inventory = build_full_inventory()
+        checked = set()
+        for model in _walk_models(inventory):
+            for name in type(model).model_fields:
+                empty = _empty_like(getattr(model, name))
+                if empty is None:
+                    continue
+                try:
+                    blanked = model.new(**{name: empty})
+                    candidate = _swap_model(inventory, model, blanked).check()
+                except (ValidationError, InvalidInventoryError):
+                    continue  # a field a validator refuses to blank
+                # Outside the catch: an inventory valid here but not once it
+                # has been written is a document the pruning damaged.
+                loaded = dc.inventory(candidate.to_yaml())
+                assert loaded == candidate, f"{type(model).__name__}.{name} was lost"
+                checked.add((type(model).__name__, name))
+        # The fields the reported bug was found in must be among those swept.
+        crs = "CoordinateReferenceSystem"
+        assert {(crs, "authority"), (crs, "code"), (crs, "name")} <= checked
+        assert ("Interrogator", "instrument_type") in checked
+
+    def test_defaulted_fields_are_dropped(self):
+        """A field still holding its default is left out of the document."""
+        yaml = pytest.importorskip("yaml")
+        data = yaml.safe_load(build_inventory().to_yaml())
+        assert not _empty_keys(data)
+        assert "description" not in yaml.safe_dump(data)
+
+    def test_document_states_its_schema_version(self):
+        """The envelope version is written, default or not.
+
+        Every other defaulted field is dropped, so this is what says which
+        envelope a document was written against.
+        """
+        yaml = pytest.importorskip("yaml")
+        default = inv.Inventory().schema_version
+        data = yaml.safe_load(build_inventory().to_yaml())
+        assert data["schema_version"] == default
+        other = inv.Inventory(schema_version=default + 1)
+        assert dc.inventory(other.to_yaml()).schema_version == default + 1
 
     def test_empty_annotation_value_is_rejected(self):
         """An empty value would have to survive serialization to mean anything.
