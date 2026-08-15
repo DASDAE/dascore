@@ -17,6 +17,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     PatchError,
 )
+from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
@@ -711,7 +712,7 @@ def order(
     return patch.new(data=data, coords=new_coords)
 
 
-@patch_function(history=None)
+@patch_function(history=None, backend="array_api")
 def transpose(self: PatchType, *dims: str) -> PatchType:
     """
     Transpose the data array to any dimension order desired.
@@ -753,7 +754,8 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
         return self
     new_dims = new_coord.dims
     axes = tuple(old_dims.index(x) for x in new_dims)
-    new_data = np.transpose(self.data, axes)
+    xp = array_namespace(self.data)
+    new_data = xp.permute_dims(self.data, axes)
     return self.new(data=new_data, coords=new_coord)
 
 
@@ -823,7 +825,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     return patch.update(data=data, coords=coords)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def squeeze(self: PatchType, dim=None) -> PatchType:
     """
     Return a new object with len one dimensions flattened.
@@ -853,10 +855,11 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     if coords is self.coords:
         return self
     if dim is None:
-        axes = None
+        axes = tuple(i for i, x in enumerate(self.shape) if x == 1)
     else:
         axes = tuple(self.get_axis(x) for x in iterate(dim))
-    data = np.squeeze(self.data, axis=axes)
+    xp = array_namespace(self.data)
+    data = xp.squeeze(self.data, axis=axes)
     return self.new(data=data, coords=coords)
 
 

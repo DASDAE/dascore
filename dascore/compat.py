@@ -13,11 +13,10 @@ from typing import TypeGuard
 
 import numpy as np
 from h5py import Dataset as H5Dataset
-from numpy import floor, interp, ndarray  # NOQA
+from numpy import ndarray  # NOQA
 from numpy.random import RandomState
 from rich.progress import Progress  # NOQA
 from scipy.interpolate import interp1d  # NOQA
-from scipy.ndimage import zoom  # NOQA
 from upath import UPath  # NOQA
 
 
@@ -33,9 +32,7 @@ def _lazy_import(module_name: str, attr_name: str):
     return _wrapper
 
 
-decimate = _lazy_import("scipy.signal", "decimate")
 resample = _lazy_import("scipy.signal", "resample")
-resample_poly = _lazy_import("scipy.signal", "resample_poly")
 
 random_state = RandomState(42)
 
