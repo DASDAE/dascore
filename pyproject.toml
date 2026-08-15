@@ -47,7 +47,10 @@ dependencies = [
      "array-api-compat>=1.9",
      "h5py",
      "matplotlib>=3.10",
-     "numpy>=2.0",  # array API standard support (isdtype, permute_dims, ...)
+     # 2.0 is the first numpy with native array API support; older numpy
+     # works only through array-api-compat shims, which we would rather not
+     # write dascore against.
+     "numpy>=2.0",
      "packaging",
      "pandas>=2.0",
      "pooch>=1.3",  # retry_if_failed was added in 1.3

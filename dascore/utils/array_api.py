@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, TypeGuard
 
 import numpy as np
-from array_api_compat import array_namespace, device
+from array_api_compat import array_namespace, device, to_device
 
 __all__ = [
     "array_namespace",
@@ -82,13 +82,14 @@ def to_numpy(array: Any) -> np.ndarray:
     >>>
     >>> assert isinstance(to_numpy(np.array([1, 2])), np.ndarray)
     """
-    # asarray returns numpy arrays unchanged. Most other backends implement
-    # __array__, but some (eg device arrays) raise rather than silently
-    # moving data, so fall back to the dlpack protocol for those.
+    # asarray returns numpy arrays unchanged and handles any backend which
+    # implements __array__.
     try:
         return np.asarray(array)
     except (TypeError, ValueError, RuntimeError):
-        return np.from_dlpack(array)
+        # Arrays which live on another device (eg a gpu) refuse implicit
+        # conversion, so they must be copied to the host first.
+        return np.asarray(to_device(array, "cpu"))
 
 
 def asarray_like(array: Any, like: Any) -> Any:

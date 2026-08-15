@@ -330,6 +330,8 @@ def patch_function(
         standard, which then work with any array backend. Implementations
         for a specific backend (eg "jax") are added with the ``register``
         method of the decorated function.
+        Only patches passed as arguments are converted for the fallback,
+        not patches nested inside other containers.
 
     Examples
     --------
@@ -385,7 +387,9 @@ def patch_function(
     -----
     - The original function can still be accessed with the raw_function
       attribute. This may be useful for avoiding calling the patch_func
-      machinery multiple times from within another patch function.
+      machinery multiple times from within another patch function. It skips
+      backend dispatch as well, so it should only be used on data the
+      calling function has already put on the right backend.
 
     - If using `PatchType` or `SpoolType` type variables from the
       [constants module](`dascore.constants`), make sure dascore is imported

@@ -38,8 +38,8 @@ def strict_patch(random_patch) -> dc.Patch:
     return random_patch.new(data=xps.asarray(np.asarray(random_patch.data)))
 
 
-class _DLPackOnly:
-    """An array-like which can only be converted to numpy through dlpack."""
+class _DeviceArray:
+    """An array-like which must be moved to the host to become numpy."""
 
     def __init__(self, array):
         self._array = array
@@ -50,11 +50,10 @@ class _DLPackOnly:
         msg = "Implicit conversion to a numpy array is not allowed."
         raise TypeError(msg)
 
-    def __dlpack__(self, **kwargs):
-        return self._array.__dlpack__(**kwargs)
-
-    def __dlpack_device__(self):
-        return self._array.__dlpack_device__()
+    def to_device(self, device, stream=None):
+        """Return the host array, like cupy's asnumpy does."""
+        assert device == "cpu"
+        return self._array
 
 
 class TestBackendName:
@@ -95,10 +94,10 @@ class TestToNumpy:
         assert isinstance(out, np.ndarray)
         assert np.allclose(out, [1.0, 2.0])
 
-    def test_dlpack_fallback(self):
-        """Arrays which refuse implicit conversion go through dlpack."""
+    def test_device_array(self):
+        """Arrays which refuse implicit conversion are moved to the host."""
         array = np.array([1.0, 2.0])
-        out = to_numpy(_DLPackOnly(array))
+        out = to_numpy(_DeviceArray(array))
         assert isinstance(out, np.ndarray)
         assert np.allclose(out, array)
 
