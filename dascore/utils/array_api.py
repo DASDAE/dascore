@@ -310,7 +310,7 @@ NAN_REDUCE_DTYPES = {
     "max": ("integral", "real floating"),
     "mean": ("integral", "real floating", "complex floating"),
     "min": ("integral", "real floating"),
-    "std": ("integral", "real floating"),
+    "std": ("integral", "real floating", "complex floating"),
     "sum": ("integral", "real floating", "complex floating"),
 }
 
