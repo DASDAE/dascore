@@ -17,7 +17,13 @@ bounding region so table operations work whatever its geometry is.
 from __future__ import annotations
 
 import datetime
+import json
+
+# Whole rather than by name: this module's own Path is a geometry.
+import pathlib
+import re
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from typing import Annotated, Any, ClassVar, Literal, NamedTuple
 
 import numpy as np
@@ -47,7 +53,12 @@ from dascore.models import (
 )
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import iterate, to_str, validate_acquisition_key
+from dascore.utils.misc import (
+    iterate,
+    optional_import,
+    to_str,
+    validate_acquisition_key,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # Columns any set may carry, whatever dimensions it declares.
@@ -72,6 +83,13 @@ _VERTEX_KINDS = {"path": 2, "polygon": 3}
 
 # The vertices frame's own scaffolding; every other column is a dimension.
 _VERTEX_COLUMNS = ("id", "seq")
+
+# The three parts a stored set spells itself with, and the suffix a table
+# takes. The loader reads these names; `save` writes them.
+ATTRS_STEM = "attrs"
+ANNOTATION_STEM = "annotations"
+VERTEX_STEM = "vertices"
+TABLE_SUFFIX = ".csv"
 
 # What a range column is spelled with.
 _START, _END = "_start", "_end"
@@ -112,10 +130,11 @@ def _document(value):
 
 
 # A coordinate may be a time, which json has no type for. Written as the
-# string DASCore writes every datetime as; reading it back as a time again
-# is the loader's job, since it knows what each dimension holds. One
-# serializer rather than two stacked: a python-mode dump is what equality
-# compares and what `new` rebuilds from, so it keeps the values themselves.
+# string DASCore writes every datetime as; `_coordinate` reads that
+# spelling back, so a document holds the coordinates it was dumped from
+# without anything downstream having to know which dimension is a time.
+# One serializer rather than two stacked: a python-mode dump is what
+# equality compares and what `new` rebuilds from, so it keeps the values.
 def _serialize_coordinates(value, info):
     """Write a mapping of coordinates, as a document only in json mode."""
     if info.mode != "json":
@@ -123,12 +142,43 @@ def _serialize_coordinates(value, info):
     return {k: [_document(x) for x in values] for k, values in value.items()}
 
 
+# Exactly the spelling `to_str` gives a datetime64: a date, optionally a
+# time after it. Anything looser would read a label as a coordinate.
+_DATETIME_TEXT = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?)?$")
+
+
+def _coordinate(value):
+    """Read one coordinate, a datetime written as text becoming one again."""
+    if not (isinstance(value, str) and _DATETIME_TEXT.match(value)):
+        return value
+    # Shaped like a date without being one: a label reading '2020-13-45'
+    # is still the label it was written as.
+    with suppress(ValueError, TypeError):
+        return to_datetime64(value)
+    return value
+
+
+def _read_coordinates(value):
+    """Read a mapping of coordinate sequences."""
+    if not isinstance(value, Mapping):
+        return value
+    return {k: [_coordinate(x) for x in iterate(v)] for k, v in value.items()}
+
+
+def _read_place(value):
+    """Read a mapping of one coordinate per dimension."""
+    if not isinstance(value, Mapping):
+        return value
+    return {k: _coordinate(v) for k, v in value.items()}
+
+
 _freeze_map = AfterValidator(lambda x: FrozenDict(x))
 _write_map = PlainSerializer(_serialize_coordinates, return_type=dict)
+_read_map = BeforeValidator(_read_coordinates)
 
-Bounds = Annotated[Mapping[str, tuple[Any, Any]], _freeze_map, _write_map]
+Bounds = Annotated[Mapping[str, tuple[Any, Any]], _read_map, _freeze_map, _write_map]
 
-Vertices = Annotated[Mapping[str, tuple[Any, ...]], _freeze_map, _write_map]
+Vertices = Annotated[Mapping[str, tuple[Any, ...]], _read_map, _freeze_map, _write_map]
 
 
 def _serialize_place(value, info):
@@ -140,6 +190,7 @@ def _serialize_place(value, info):
 
 Point = Annotated[
     Mapping[str, Any],
+    BeforeValidator(_read_place),
     _freeze_map,
     PlainSerializer(_serialize_place, return_type=dict),
 ]
@@ -613,14 +664,14 @@ class AnnotationSet:
         self._attrs = _build_attrs(
             attrs, dims, creation_info, acquisition_key, history, columns
         )
-        frame = _coerce_frame(data, "annotations")
+        frame = _normalize_times(_coerce_frame(data, "annotations"))
         spellings = _read_spellings(frame, self._attrs.dims)
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
         _check_values(frame)
         ids = _check_ids(frame)
-        _check_basis(frame, self._attrs.dims)
-        vertex_frame = _coerce_frame(vertices, "vertices")
+        frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
+        vertex_frame = _normalize_times(_coerce_frame(vertices, "vertices"))
         self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
         self._df = _fill_vertex_bounds(frame, self._vertices, spellings)
         # Read again: filling a derived bounding region adds the range
@@ -646,6 +697,59 @@ class AnnotationSet:
     def to_vertices(self) -> pd.DataFrame:
         """Return the vertices of every path and polygon as a tidy dataframe."""
         return self._vertices.copy()
+
+    # --- writing the set out
+
+    def to_csv(self, path=None) -> str:
+        """
+        Return the annotations as CSV text, optionally writing it to a path.
+
+        A bare table states one grain, so a set holding vertices is written
+        with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
+        this is the spelling for a set of regions. The set's dimensions are
+        not part of the table, so reading one back states them again.
+
+        Parameters
+        ----------
+        path
+            Where to write the text, or None to only return it.
+        """
+        if not self._vertices.empty:
+            msg = (
+                "This set holds vertices, which a bare table has no row for. "
+                "Save it as a directory, which states its vertices beside its "
+                "annotations."
+            )
+            raise ParameterError(msg)
+        return _write_table(self._df, path)
+
+    def save(self, path) -> pathlib.Path:
+        """
+        Write the set to a directory, creating it if needed.
+
+        The directory states the set in three parts: what it is and which
+        dimensions it holds, its annotations, and -- where any path or
+        polygon needs them -- its vertices. It reads back through
+        [dascore.annotations](`dascore.annotations`).
+
+        Parameters
+        ----------
+        path
+            The directory to write into.
+        """
+        yaml = optional_import("yaml", required_for="YAML annotation storage")
+        directory = pathlib.Path(path)
+        directory.mkdir(parents=True, exist_ok=True)
+        # Defaults are dropped, so the document says what the set says;
+        # dims has no default, so it is always written. The attributes name
+        # their own model, which is what the file holds.
+        document = self._attrs.model_dump(mode="json", exclude_defaults=True)
+        with open(directory / f"{ATTRS_STEM}.yaml", "w") as stream:
+            stream.write(yaml.safe_dump(document, sort_keys=False))
+        _write_table(self._df, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
+        if not self._vertices.empty:
+            _write_table(self._vertices, directory / f"{VERTEX_STEM}{TABLE_SUFFIX}")
+        return directory
 
     # --- what the set holds
 
@@ -1149,12 +1253,54 @@ def _freeze(value):
     return _scalar(value)
 
 
-def _check_basis(frame, dims) -> None:
-    """Read every stated curve at load, so a bad one is not found later."""
+def _normalize_basis(frame, dims) -> pd.DataFrame:
+    """
+    Replace every basis cell with the curve it states.
+
+    Reading them at load is what catches a bad one before a row is asked
+    for; keeping what was read is what makes a set hold one spelling of a
+    curve, so a set written out and read back is the set it was rather
+    than the same curves spelled as documents.
+    """
     if "basis" not in frame.columns:
-        return
-    for value in frame["basis"]:
-        _read_basis(value, dims)
+        return frame
+    read = [_read_basis(x, dims) for x in frame["basis"]]
+    return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
+
+
+def _normalize_times(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Hold every time at nanoseconds, the resolution DASCore keeps them at.
+
+    A column arriving at another resolution states the same times, but
+    everything which reads one back -- a stored table, a coordinate, a
+    curve -- states them at DASCore's, so a set which kept both spellings
+    would differ from itself over nothing.
+    """
+    changed = {}
+    for name in frame.columns:
+        series = frame[name]
+        kind = getattr(series.dtype, "kind", "")
+        if kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
+            changed[name] = to_datetime64(series)
+        elif kind == "m" and series.dtype != np.dtype("timedelta64[ns]"):
+            changed[name] = to_timedelta64(series)
+    if not changed:
+        return frame
+    # Assigned by item rather than by keyword: a column need not be named
+    # anything a keyword can spell.
+    out = frame.copy()
+    for name, series in changed.items():
+        out[name] = series
+    return out
+
+
+def _normalize_tags(frame) -> pd.DataFrame:
+    """Replace every tags cell with the tags it states, one spelling."""
+    if "tags" not in frame.columns:
+        return frame
+    read = [_read_tags(x) or None for x in frame["tags"]]
+    return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
 
 
 def _read_basis(value, dims):
@@ -1194,6 +1340,49 @@ def _read_tags(value) -> tuple[str, ...]:
     # A lone value is one tag; a cell holding a number is not a mistake,
     # it is a label which happens to be spelled as one.
     return (str(value),)
+
+
+def _write_table(frame: pd.DataFrame, path=None) -> str:
+    """Return a frame as CSV text, optionally writing it to a path."""
+    spelled = pd.DataFrame({name: _writable(frame[name]) for name in frame.columns})
+    text = spelled.to_csv(index=False)
+    if path is not None:
+        with open(path, "w", newline="", encoding="utf-8") as stream:
+            stream.write(text)
+    return text
+
+
+def _writable(series: pd.Series) -> pd.Series:
+    """Return one column as the text a table states it with."""
+    return series.map(_writable_cell)
+
+
+def _writable_cell(value):
+    """
+    Spell one cell the way a table holds it.
+
+    A value a CSV has no column shape for is written as its own document:
+    a basis as the JSON its curve dumps, a sequence as the comma-separated
+    list `tags` is read from. An extra holding a nested object survives as
+    that text rather than as the object, which is what a table can say.
+    """
+    if not _stated(value):
+        return value
+    # Through _scalar first: mapping a datetime column hands over pandas
+    # Timestamps, which str() spells with a space where numpy uses a T,
+    # and only the numpy spelling reads back as a time.
+    value = _scalar(value)
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return to_str(value)
+    if isinstance(value, AnnotationBasis):
+        return json.dumps(value.model_dump(mode="json"))
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return json.dumps(dict(value), default=_document)
+    if isinstance(value, Iterable):
+        return ", ".join(str(_writable_cell(x)) for x in value)
+    return value
 
 
 def _scalar(value):

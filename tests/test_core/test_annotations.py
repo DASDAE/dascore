@@ -1112,6 +1112,32 @@ class TestSerialization:
         written = path.model_dump(mode="json")["vertices"]["time"]
         assert written == [str(TIMES[0]), str(TIMES[1])]
 
+    def test_datetime_bounds_read_back_as_times(self):
+        """A time written as text is a time again, not the text."""
+        region = Region(bounds={"time": (TIMES[0], TIMES[2])})
+        assert Region(**region.model_dump(mode="json")) == region
+
+    def test_datetime_vertices_read_back_as_times(self):
+        """The same holds for a path's vertices and a line's endpoints."""
+        line = Line(start={"time": TIMES[0]}, end={"time": TIMES[2]})
+        path = Path(
+            region=Region(bounds={}),
+            vertices={"time": (TIMES[0], TIMES[1])},
+            basis=line,
+        )
+        assert Path(**path.model_dump(mode="json")) == path
+
+    def test_a_label_is_not_a_time(self):
+        """Only the spelling DASCore writes a datetime with is read as one."""
+        region = Region(bounds={"stage": ("2020-13-45", "before")})
+        assert region.bounds["stage"] == ("2020-13-45", "before")
+
+    @pytest.mark.parametrize("model", [Region, Line])
+    def test_coordinates_which_are_not_a_mapping(self, model):
+        """A coordinate map which is not a map is pydantic's to refuse."""
+        with pytest.raises(ValidationError):
+            model(bounds="everywhere", start="here", end="there")
+
     def test_geometry_kinds_are_distinct(self):
         """A polygon is not a path which happens to close."""
         assert not isinstance(
