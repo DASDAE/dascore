@@ -225,12 +225,18 @@ def main(ref: str) -> int:
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
         worktree = temp / "baseline"
-        subprocess.run(
-            ["git", "worktree", "add", "--detach", str(worktree), ref],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
+        try:
+            subprocess.run(
+                ["git", "worktree", "add", "--detach", str(worktree), ref],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            # Otherwise an unknown ref is just a non-zero exit status.
+            msg = f"could not check out {ref!r}: {error.stderr.strip()}"
+            raise SystemExit(msg) from error
         try:
             before = _dump_at(worktree, temp / "before.json")
             after = _dump_at(repo, temp / "after.json")
@@ -256,5 +262,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.dump:
         dump(Path(args.dump))
+    elif not args.ref:
+        parser.error("--ref is required; it names the checkout to compare against.")
     else:
         sys.exit(main(args.ref))
