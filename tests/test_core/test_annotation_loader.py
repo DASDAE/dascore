@@ -8,6 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 import dascore as dc
 from dascore.core.annotations import Line, Moveout
 from dascore.exceptions import InvalidAnnotationError, ParameterError
@@ -161,6 +166,48 @@ class TestRoundTrip:
         assert "distance" not in loaded[1].region.bounds
 
 
+class TestWhatATableCannotSay:
+    """A CSV has no types, and these are the corners where that shows."""
+
+    def test_an_extra_named_seq(self, tmp_path):
+        """Only the vertices order by seq; an annotation's is its own."""
+        frame = pd.DataFrame(
+            {"group": ["a"], "distance": [1.0], "seq": ["third"]},
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded[0].extra["seq"] == "third"
+
+    def test_an_empty_cell_is_unset(self, tmp_path):
+        """A table cannot tell an empty cell from an empty string."""
+        frame = pd.DataFrame({"group": ["", "b"], "distance": [1.0, 2.0]})
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+        assert annotations[0].group == ""
+
+    def test_a_datetime_extra_reads_back_as_text(self, tmp_path):
+        """Only a declared dimension is known to hold times, so only it is read
+        as one; an extra keeps the text it was written as.
+        """
+        frame = pd.DataFrame(
+            {
+                "group": ["a"],
+                "distance": [1.0],
+                "when": [np.datetime64("2020-01-01T00:00:00")],
+            }
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded[0].extra["when"] == "2020-01-01T00:00:00.000000000"
+
+    def test_a_numeric_looking_extra_reads_as_a_number(self, tmp_path):
+        """A cell is read the way its own text states it, as every table is."""
+        frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "zip": ["01234"]})
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded[0].extra["zip"] == 1234
+
+
 class TestTheDoor:
     """Everything a set may be loaded from goes through one function."""
 
@@ -223,6 +270,24 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
             dc.annotations(path)
 
+    def test_stated_as_a_bare_string(self, tmp_path):
+        """A lone string is a sequence of its own letters, so it is refused."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "attrs.json").write_text('{"dims": "distance"}')
+        (directory / "annotations.csv").write_text("group,distance\na,1.0\n")
+        with pytest.raises(InvalidAnnotationError, match="sequence of letters"):
+            dc.annotations(directory)
+
+    def test_a_document_which_does_not_build(self, tmp_path):
+        """A bad stored document is named as a bad file, not as a bad call."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "attrs.json").write_text('{"dims": ["distance"], "n": 1}')
+        (directory / "annotations.csv").write_text("group,distance\na,1.0\n")
+        with pytest.raises(InvalidAnnotationError, match="Extra inputs"):
+            dc.annotations(directory)
+
     def test_the_caller_wins(self, regions, tmp_path):
         """A caller stating dimensions states them for the whole read."""
         directory = regions.save(tmp_path / "picks")
@@ -235,40 +300,45 @@ class TestDeclaringDimensions:
 class TestTheAttrsFile:
     """What a set directory says about itself."""
 
-    def test_json_spelling(self, regions, tmp_path):
-        """One data model stands behind both spellings."""
+    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
+    def test_yaml_spelling(self, regions, tmp_path):
+        """One data model stands behind both spellings; a set may be authored
+        in the more readable one.
+        """
         directory = regions.save(tmp_path / "picks")
-        document = json.loads(
-            regions.attrs.model_dump_json(exclude_defaults=True),
-        )
-        (directory / "attrs.json").write_text(json.dumps(document))
-        (directory / "attrs.yaml").unlink()
+        document = json.loads((directory / "attrs.json").read_text())
+        (directory / "attrs.yaml").write_text(yaml.safe_dump(document))
+        (directory / "attrs.json").unlink()
         assert dc.annotations(directory) == regions
 
     def test_two_spellings(self, regions, tmp_path):
         """A set spells each of its parts once."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.json").write_text("{}")
+        (directory / "attrs.yml").write_text("{}")
         with pytest.raises(InvalidAnnotationError, match="more than once"):
             dc.annotations(directory)
 
     def test_the_wrong_object(self, regions, tmp_path):
         """A file declaring another model is a misfiled object."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.yaml").write_text("object_type: Inventory\ndims: [time]\n")
+        (directory / "attrs.json").write_text(
+            '{"object_type": "Inventory", "dims": ["time"]}'
+        )
         with pytest.raises(InvalidAnnotationError, match="declares 'Inventory'"):
             dc.annotations(directory)
 
     def test_which_is_not_a_mapping(self, regions, tmp_path):
         """A document stating a list defines no attributes."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.yaml").write_text("- distance\n- time\n")
+        (directory / "attrs.json").write_text('["distance", "time"]')
         with pytest.raises(InvalidAnnotationError, match="no mapping"):
             dc.annotations(directory)
 
+    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_which_does_not_parse(self, regions, tmp_path):
         """Unparseable YAML names the file rather than the parser."""
         directory = regions.save(tmp_path / "picks")
+        (directory / "attrs.json").unlink()
         (directory / "attrs.yaml").write_text("dims: [\n")
         with pytest.raises(InvalidAnnotationError, match="Could not parse YAML"):
             dc.annotations(directory)
@@ -276,7 +346,6 @@ class TestTheAttrsFile:
     def test_bad_json(self, regions, tmp_path):
         """Unparseable JSON names the file too."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.yaml").unlink()
         (directory / "attrs.json").write_text("{")
         with pytest.raises(InvalidAnnotationError, match="Could not parse JSON"):
             dc.annotations(directory)
@@ -284,14 +353,14 @@ class TestTheAttrsFile:
     def test_which_cannot_be_read(self, regions, tmp_path):
         """A file which does not decode names itself, not the codec."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.yaml").write_bytes(b"dims: [\xff\xfe]\n")
+        (directory / "attrs.json").write_bytes(b'{"dims": ["\xff\xfe"]}')
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
     def test_no_attrs_file(self, regions, tmp_path):
         """A directory without one is read on the caller's dimensions."""
         directory = regions.save(tmp_path / "picks")
-        (directory / "attrs.yaml").unlink()
+        (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=DIMS).dims == DIMS
 
 
@@ -401,7 +470,7 @@ class TestWriting:
         """A set with vertices states all three parts."""
         directory = with_vertices.save(tmp_path / "picks")
         written = {x.name for x in directory.iterdir()}
-        assert written == {"attrs.yaml", "annotations.csv", "vertices.csv"}
+        assert written == {"attrs.json", "annotations.csv", "vertices.csv"}
 
     def test_save_over_itself(self, regions, tmp_path):
         """Saving twice into one directory rewrites it."""
@@ -422,5 +491,5 @@ class TestWriting:
     def test_the_attrs_name_their_model(self, regions, tmp_path):
         """The document says what it holds, as every stored object does."""
         directory = regions.save(tmp_path / "picks")
-        text = (directory / "attrs.yaml").read_text()
-        assert "object_type: AnnotationSetAttrs" in text
+        text = (directory / "attrs.json").read_text()
+        assert '"object_type": "AnnotationSetAttrs"' in text

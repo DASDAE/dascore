@@ -380,6 +380,12 @@ class TestTags:
         """No tags is an empty tuple, not None."""
         assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].tags == ()
 
+    def test_a_tag_holding_a_comma(self):
+        """A comma separates tags, so a tag holding one would become two."""
+        frame = pd.DataFrame({"tags": [("a,b", "c")]})
+        with pytest.raises(ParameterError, match="hold a comma"):
+            AnnotationSet(frame, dims=DIMS)
+
 
 class TestIdentity:
     """Ids are the producer's, and nothing here invents one."""

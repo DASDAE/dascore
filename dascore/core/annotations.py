@@ -53,12 +53,7 @@ from dascore.models import (
 )
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import (
-    iterate,
-    optional_import,
-    to_str,
-    validate_acquisition_key,
-)
+from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # Columns any set may carry, whatever dimensions it declares.
@@ -664,7 +659,7 @@ class AnnotationSet:
         self._attrs = _build_attrs(
             attrs, dims, creation_info, acquisition_key, history, columns
         )
-        frame = _normalize_times(_coerce_frame(data, "annotations"))
+        frame = _normalize_blanks(_normalize_times(_coerce_frame(data, "annotations")))
         spellings = _read_spellings(frame, self._attrs.dims)
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
@@ -732,20 +727,23 @@ class AnnotationSet:
         polygon needs them -- its vertices. It reads back through
         [dascore.annotations](`dascore.annotations`).
 
+        The attributes are written as JSON rather than as YAML, so storing
+        a set needs nothing beyond the standard library; a set authored by
+        hand may spell them in YAML, which reads back the same.
+
         Parameters
         ----------
         path
             The directory to write into.
         """
-        yaml = optional_import("yaml", required_for="YAML annotation storage")
         directory = pathlib.Path(path)
         directory.mkdir(parents=True, exist_ok=True)
         # Defaults are dropped, so the document says what the set says;
         # dims has no default, so it is always written. The attributes name
         # their own model, which is what the file holds.
         document = self._attrs.model_dump(mode="json", exclude_defaults=True)
-        with open(directory / f"{ATTRS_STEM}.yaml", "w") as stream:
-            stream.write(yaml.safe_dump(document, sort_keys=False))
+        with open(directory / f"{ATTRS_STEM}.json", "w") as stream:
+            json.dump(document, stream, indent=2)
         _write_table(self._df, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
         if not self._vertices.empty:
             _write_table(self._vertices, directory / f"{VERTEX_STEM}{TABLE_SUFFIX}")
@@ -1296,11 +1294,49 @@ def _normalize_times(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_tags(frame) -> pd.DataFrame:
-    """Replace every tags cell with the tags it states, one spelling."""
+    """
+    Replace every tags cell with the tags it states, one spelling.
+
+    A comma is what separates one tag from the next, so a tag holding one
+    is refused rather than quietly becoming two the next time the set is
+    read.
+    """
     if "tags" not in frame.columns:
         return frame
     read = [_read_tags(x) or None for x in frame["tags"]]
+    split = sorted({x for tags in read if tags for x in tags if "," in x})
+    if split:
+        listed = ", ".join(repr(x) for x in split)
+        msg = (
+            f"The tag(s) {listed} hold a comma, which is what separates one "
+            "tag from the next; a tag is one label."
+        )
+        raise ParameterError(msg)
     return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
+
+
+def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Read a cell holding the empty string as stating nothing.
+
+    A table cannot tell an empty cell from a cell holding no characters,
+    and reading one back says unset, so a set says unset too rather than
+    holding a value which cannot survive being written down.
+    """
+    changed = {}
+    for name in frame.columns:
+        series = frame[name]
+        if getattr(series.dtype, "kind", "") not in "OTU":
+            continue
+        blank = series.map(lambda x: isinstance(x, str) and not x)
+        if blank.any():
+            changed[name] = series.where(~blank, None)
+    if not changed:
+        return frame
+    out = frame.copy()
+    for name, series in changed.items():
+        out[name] = series
+    return out
 
 
 def _read_basis(value, dims):
@@ -1365,6 +1401,10 @@ def _writable_cell(value):
     a basis as the JSON its curve dumps, a sequence as the comma-separated
     list `tags` is read from. An extra holding a nested object survives as
     that text rather than as the object, which is what a table can say.
+
+    The same holds for an extra holding a time: only a declared dimension
+    is known to hold times, so only it is read back as one, and an extra
+    keeps the text it was written as.
     """
     if not _stated(value):
         return value

@@ -26,6 +26,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pydantic import ValidationError
 
 from dascore.core.annotations import (
     _END,
@@ -179,26 +180,38 @@ def _dimension_spellings(dims: Sequence[str]) -> frozenset[str]:
     return frozenset(x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}"))
 
 
-def _read_cells(frame: pd.DataFrame, dims: Sequence[str], path: Path) -> pd.DataFrame:
-    """Read a table's text cells as the values each column holds."""
+def _read_cells(
+    frame: pd.DataFrame, dims: Sequence[str], path: Path, ordered: bool = False
+) -> pd.DataFrame:
+    """
+    Read a table's text cells as the values each column holds.
+
+    Only the vertices are ordered, so only they read ``seq`` as the number
+    it is: the annotations table does not reserve that name, and an
+    annotation carrying its own ``seq`` means whatever it says.
+    """
     spellings = _dimension_spellings(dims)
     out = {}
     for name in frame.columns:
         series = frame[name]
         if str(name) in spellings:
             out[name] = _read_dimension(series, path)
-        elif str(name) == _ORDINAL:
+        elif ordered and str(name) == _ORDINAL:
             out[name] = _read_ordinal(series, path)
         elif str(name) == "basis":
             out[name] = _read_basis(series, path)
-        elif str(name) in _TEXT_COLUMNS:
+        elif str(name) in _TEXT_COLUMNS or series.isna().all():
+            # A column no row states says nothing about what it holds, and
+            # reading its emptiness as a type would invent one.
             out[name] = series
         else:
             out[name] = series.map(lambda x: parse_cell(x) if isinstance(x, str) else x)
     return pd.DataFrame(out)
 
 
-def _read_set_table(path: Path, dims: Sequence[str], what: str) -> pd.DataFrame | None:
+def _read_set_table(
+    path: Path, dims: Sequence[str], what: str, ordered: bool = False
+) -> pd.DataFrame | None:
     """
     Read one of a set's tables, with its cells typed.
 
@@ -207,7 +220,7 @@ def _read_set_table(path: Path, dims: Sequence[str], what: str) -> pd.DataFrame 
     """
     if _is_blank(path):
         return None
-    return _read_cells(read_table(path, what=what), dims, path)
+    return _read_cells(read_table(path, what=what), dims, path, ordered=ordered)
 
 
 def _is_blank(path: Path) -> bool:
@@ -256,7 +269,7 @@ def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
     vertex_path = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
     vertices = None
     if vertex_path.exists():
-        vertices = _read_set_table(vertex_path, stated, "no vertices")
+        vertices = _read_set_table(vertex_path, stated, "no vertices", ordered=True)
     return AnnotationSet(frame, dims=dims, vertices=vertices, attrs=attrs, **kwargs)
 
 
@@ -290,6 +303,16 @@ def _declared_dims(attrs: Mapping, dims, source: Path) -> tuple[str, ...]:
             "Annotations are read in the dimensions they are stated in: write "
             f"them in {ATTRS_STEM}{_OBJECT_SUFFIXES[0]} or pass "
             "dims=('distance', 'time')."
+        )
+        raise ParameterError(msg)
+    # A lone string is a sequence of its own letters, and typing the cells
+    # against eight one-character dimensions would fail somewhere far from
+    # here. One dimension is still stated as a list of one.
+    if isinstance(stated, str):
+        msg = (
+            f"{quote_path(source)} states its dimensions as the string "
+            f"{stated!r}, which is a sequence of letters. State them as a "
+            f"list, even a list of one: ['{stated}']."
         )
         raise ParameterError(msg)
     return tuple(str(x) for x in stated)
@@ -337,7 +360,10 @@ def annotations(
                 return _load_directory(path, dims, **kwargs)
             if path.exists():
                 return _load_file(path, dims, **kwargs)
-        except ParameterError as error:
+        # ValidationError too: a stored document which does not build the
+        # models is a bad file, and it is named as one here rather than
+        # arriving as pydantic's report on a call the caller did not make.
+        except (ParameterError, ValidationError) as error:
             raise InvalidAnnotationError(str(error)) from error
         msg = f"{quote_path(path)} does not exist, so it holds no annotations."
         raise InvalidAnnotationError(msg)
