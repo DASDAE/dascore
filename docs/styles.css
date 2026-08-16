@@ -76,3 +76,23 @@ tbody tr:nth-child(odd) {
     display: block;
     margin-bottom: 10px;
 }
+
+/* Link added to tutorial pages by filters/lite_button.lua, which opens the
+   page as a live notebook in the JupyterLite site. */
+.lite-launch {
+    display: inline-block;
+    margin-bottom: 1.2rem;
+    padding: 0.35rem 0.8rem;
+    border: 1px solid rgb(190, 190, 190);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+
+.lite-launch::before {
+    content: "▶ ";
+}
+
+.lite-launch:hover {
+    border-color: rgb(120, 120, 120);
+}

@@ -1,5 +1,8 @@
 name: "prepare for doc build"
-description: "Installs quarto, renders api docs, prints quarto version"
+description: >
+  Installs quarto, renders api docs, and builds the JupyterLite site the
+  tutorial pages link to. Quarto copies docs/lite into the published site as
+  a project resource, so this must run before `quarto render`/`publish`.
 
 runs:
   using: "composite"
@@ -21,3 +24,25 @@ runs:
       shell: bash
       run: |
         python scripts/build_api_docs.py
+
+    # The notebooks install dascore from a wheel bundled into the JupyterLite
+    # site rather than from PyPI, so the tutorials always run against the same
+    # version the surrounding docs were built from.
+    - name: build dascore wheel for the browser
+      shell: bash
+      run: |
+        python -m pip install build
+        python -m build --wheel
+
+    - name: build tutorial notebooks
+      shell: bash
+      run: |
+        python scripts/build_notebooks.py
+
+    - name: build JupyterLite site
+      shell: bash
+      run: |
+        jupyter lite build \
+          --contents docs/lite_contents \
+          --output-dir docs/lite \
+          --piplite-wheels dist/dascore-*.whl

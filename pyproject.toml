@@ -90,6 +90,11 @@ docs = [
     "nbformat",
     # quarto's own notebook driver does `from yaml import safe_load`.
     "pyyaml",
+    # The JupyterLite site the tutorial pages link to. jupyter-server is not
+    # used at runtime, but jupyterlite-core requires it to add custom content.
+    "jupyterlite-core",
+    "jupyterlite-pyodide-kernel",
+    "jupyter-server",
 ]
 
 test = [
