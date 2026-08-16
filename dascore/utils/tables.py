@@ -65,7 +65,10 @@ def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
                 # object beside the frame pandas builds would cost several
                 # times what the frame itself does.
                 _check_widths(reader, header, path)
-    except (OSError, UnicodeDecodeError) as read_error:
+    # csv.Error too: a cell longer than csv.field_size_limit stops the
+    # header scan, and without this it would leave this function as a bare
+    # _csv.Error rather than as whatever the caller's format raises.
+    except (OSError, UnicodeDecodeError, csv.Error) as read_error:
         msg = f"Could not read {quote_path(path)}: {read_error}."
         raise ParameterError(msg) from read_error
     if not header:
