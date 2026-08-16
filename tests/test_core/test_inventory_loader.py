@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import tempfile
 from pathlib import Path
@@ -1584,6 +1585,21 @@ class TestUnreadableTables:
         """A file which cannot be read at all says which one it was."""
         root = write_inventory(tmp_path / "binary", {**MINIMAL, **TRACKS})
         (root / "fiber_arrays/DAS.L001/path/coupling.csv").write_bytes(b"\xff\xfe\x00")
+        with pytest.raises(InvalidInventoryError, match="Could not read"):
+            dc.inventory(root)
+
+    def test_a_table_with_an_oversized_cell(self, tmp_path):
+        """A cell the csv module refuses to scan is an unreadable table.
+
+        Pandas would read it, but the header and row-width scan runs first
+        and stops; what matters is that it stops as an inventory error
+        rather than as a bare _csv.Error out of the standard library.
+        """
+        root = write_inventory(tmp_path / "wide", {**MINIMAL, **TRACKS})
+        cell = "x" * (csv.field_size_limit() + 1)
+        (root / "fiber_arrays/DAS.L001/path/coupling.csv").write_text(
+            f"start_distance,end_distance,coupling_type,description\n0,340,conduit,{cell}\n"
+        )
         with pytest.raises(InvalidInventoryError, match="Could not read"):
             dc.inventory(root)
 

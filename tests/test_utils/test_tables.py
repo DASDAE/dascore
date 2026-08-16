@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+
 import pandas as pd
 import pytest
 
@@ -79,6 +81,13 @@ class TestReadTable:
         """An unreadable file raises the caller's error, not OSError."""
         with pytest.raises(ParameterError, match="Could not read"):
             read_table(tmp_path / "absent.csv")
+
+    def test_oversized_cell_refused(self, tmp_path):
+        """A cell past the csv module's limit stops the scan, not the caller."""
+        limit = csv.field_size_limit()
+        path = _write(tmp_path, "a,b\n" + "x" * (limit + 1) + ",2\n")
+        with pytest.raises(ParameterError, match="field larger than field limit"):
+            read_table(path)
 
 
 class TestRowCells:
