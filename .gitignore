@@ -116,3 +116,11 @@ prof/
 .vscode/
 #JetBrains
 .idea/
+
+# JupyterLite site and the notebooks it is built from (see
+# scripts/build_notebooks.py); both are build artifacts.
+docs/lite/
+docs/lite_contents/
+docs/tutorial/lite_tmp_*
+# `jupyter lite build` keeps its incremental-build state here.
+.jupyterlite.doit.db
