@@ -24,8 +24,14 @@ REGISTRY_PATH = ROOT / "dascore" / "data_registry.txt"
 CONSTANTS_PATH = ROOT / "dascore" / "constants.py"
 REPO_PATH = ROOT / ".test_data_repo"
 CACHE_PATH = ROOT / ".test_data_cache"
+# The raw host is the canonical form (it passes CORS, so browsers can fetch
+# registry files); the github.com redirect form is still accepted so branches
+# that predate the switch prime a correct cache rather than an empty one.
 URL_REGEX = re.compile(
-    r"^https?://github\.com/dasdae/test_data/raw/master/(?P<subpath>.+)$",
+    r"^https?://(?:"
+    r"raw\.githubusercontent\.com/dasdae/test_data/master"
+    r"|github\.com/dasdae/test_data/raw/master"
+    r")/(?P<subpath>.+)$",
     re.IGNORECASE,
 )
 
@@ -85,6 +91,11 @@ def main() -> int:
         shutil.copy2(source, dest)
         copied += 1
         total_bytes += source.stat().st_size
+    # Skipping every entry means the registry urls stopped matching URL_REGEX.
+    # Without this the cache saves empty and CI silently falls back to
+    # downloading each file at test time.
+    if not copied:
+        errors.append("no registry entries matched URL_REGEX; the cache would be empty")
     print(  # noqa: T201
         f"Copied {copied} files ({total_bytes / 1_000_000:.0f} MB) to {dest_dir}"
         f" ({skipped} skipped)"
