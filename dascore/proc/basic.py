@@ -24,6 +24,7 @@ from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
+    device,
     is_python_scalar,
     nan_reduce,
     to_numpy,
@@ -67,7 +68,13 @@ def _pad_data(data, pad_width, constant_values):
         blocks = []
         for count in (before, after):
             shape[axis] = count
-            blocks.append(xp.full(tuple(shape), constant_values, dtype=data.dtype))
+            block = xp.full(
+                tuple(shape),
+                constant_values,
+                dtype=data.dtype,
+                device=device(data),
+            )
+            blocks.append(block)
         data = xp.concat((blocks[0], data, blocks[1]), axis=axis)
     return data
 
@@ -78,7 +85,7 @@ def _null_mask(data, include_inf):
     # Only floating point data can hold a null; anything else, including
     # the string arrays some formats store, has nothing to find.
     if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
-        return xp.zeros(data.shape, dtype=xp.bool)
+        return xp.zeros(data.shape, dtype=xp.bool, device=device(data))
     return ~xp.isfinite(data) if include_inf else xp.isnan(data)
 
 
@@ -442,7 +449,7 @@ def normalize(
         raise ValueError(msg)
     # A zero divisor means there is nothing but zeros and nulls to scale, so
     # divide those by one; the zeros stay zero and the nulls stay null.
-    one = xp.asarray(1, dtype=divisor.dtype)
+    one = xp.asarray(1, dtype=divisor.dtype, device=device(divisor))
     new_data = data / xp.where(divisor == 0, one, divisor)
     return self.new(data=new_data)
 
@@ -595,7 +602,7 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     data = patch.data
     xp = array_namespace(data)
     to_replace = _null_mask(data, include_inf)
-    fill = xp.asarray(value, dtype=data.dtype)
+    fill = xp.asarray(value, dtype=data.dtype, device=device(data))
     return patch.new(data=xp.where(to_replace, fill, data))
 
 
@@ -891,8 +898,9 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    xp = array_namespace(patch.data)
-    return patch.update(data=xp.full(patch.data.shape, fill_value))
+    data = patch.data
+    xp = array_namespace(data)
+    return patch.update(data=xp.full(data.shape, fill_value, device=device(data)))
 
 
 @patch_function()

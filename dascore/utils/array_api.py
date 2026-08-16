@@ -257,7 +257,8 @@ def asarray_like(array: Any, like: Any) -> Any:
 def _replace_nan(array: Any, value: float) -> Any:
     """Return a floating point array with its nans replaced by a value."""
     xp = array_namespace(array)
-    return xp.where(xp.isnan(array), xp.asarray(value, dtype=array.dtype), array)
+    fill = xp.asarray(value, dtype=array.dtype, device=device(array))
+    return xp.where(xp.isnan(array), fill, array)
 
 
 def _all_nan(array: Any, axis, keepdims: bool) -> Any:
@@ -283,7 +284,7 @@ def _nan_extremum(name, array, axis, keepdims):
     out = getattr(xp, name)(_replace_nan(array, fill), axis=axis, keepdims=keepdims)
     # Numpy returns nan for a slice of nothing but nans; the fill value would
     # otherwise leak out here.
-    nan = xp.asarray(float("nan"), dtype=array.dtype)
+    nan = xp.asarray(float("nan"), dtype=array.dtype, device=device(array))
     return xp.where(_all_nan(array, axis, keepdims), nan, out)
 
 
@@ -295,7 +296,8 @@ def _nan_count(array, axis, keepdims):
     counts = xp.sum(xp.astype(~xp.isnan(array), xp.int64), axis=axis, keepdims=keepdims)
     counts = xp.astype(counts, xp.float64)
     # Empty slices divide to nan rather than raising, as numpy does.
-    return xp.where(counts == 0, xp.asarray(float("nan")), counts)
+    nan = xp.asarray(float("nan"), device=device(array))
+    return xp.where(counts == 0, nan, counts)
 
 
 def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
@@ -315,10 +317,11 @@ def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any
     # Only std is left; it needs the mean with the reduced axes still in
     # place. The magnitude keeps complex deviations from cancelling out.
     deviation = xp.abs(array - _nan_reduce("mean", array, axis, keepdims=True)) ** 2
+    zero = xp.asarray(0, dtype=deviation.dtype, device=device(array))
     # Masked with the input's nans, not the deviation's; an infinity makes
     # an indeterminate deviation which numpy keeps rather than skips.
     center = xp.sum(
-        xp.where(xp.isnan(array), xp.asarray(0, dtype=deviation.dtype), deviation),
+        xp.where(xp.isnan(array), zero, deviation),
         axis=axis,
         keepdims=keepdims,
     )

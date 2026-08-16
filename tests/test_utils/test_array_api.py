@@ -465,6 +465,42 @@ class TestRegisterBackend:
         assert set(func.backends) == {"numpy"}
 
 
+class TestDevices:
+    """Tests for patches whose data are not on the backend's default device."""
+
+    @pytest.fixture(scope="class")
+    def device(self, xps):
+        """A device which is not the default one."""
+        # array_api_strict has fake devices for exactly this purpose.
+        return xps.__array_namespace_info__().devices()[1]
+
+    @pytest.fixture(scope="class")
+    def device_patch(self, random_patch, xps, device) -> dc.Patch:
+        """A patch whose data live on a non-default device."""
+        data = xps.asarray(np.asarray(random_patch.data), device=device)
+        return random_patch.new(data=data)
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda patch: patch.pad(time=(1, 2), samples=True),
+            lambda patch: patch.fillna(0),
+            lambda patch: patch.full(1.0),
+            lambda patch: patch.normalize("time", norm="bit"),
+            lambda patch: patch.where(patch.data > 0),
+            lambda patch: patch.mean("time"),
+            lambda patch: patch.std("time"),
+            lambda patch: patch.min("time"),
+            lambda patch: patch.demean("time"),
+        ],
+    )
+    def test_output_device(self, call, device_patch, device):
+        """Data allocated by a patch function land on the input's device."""
+        with suppress_warnings(NumpyFallbackWarning):
+            out = call(device_patch)
+        assert out.data.device == device
+
+
 class TestNanReduce:
     """Tests for reductions which ignore nan values."""
 
