@@ -757,6 +757,93 @@ class TestAcquisition:
         assert acq.location_code == ""
 
 
+class TestEpochContainment:
+    """An entry may not describe time its container does not."""
+
+    @staticmethod
+    def _array(array_kwargs, path_kwargs):
+        """A fiber array holding one optical path, each with its own epoch."""
+        path = inv.OpticalPath(
+            name="main",
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            **path_kwargs,
+        )
+        return inv.FiberArray(code="L001", optical_paths=(path,), **array_kwargs)
+
+    def test_a_path_starting_before_its_array(self):
+        """The array did not exist then, so nothing can resolve to the path."""
+        array = self._array({"start_time": "2024-01-01"}, {"start_time": "2020-01-01"})
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_path_ending_after_its_array(self):
+        """The far bound is checked the same way as the near one."""
+        array = self._array(
+            {"start_time": "2024-01-01", "end_time": "2025-01-01"},
+            {"start_time": "2024-06-01", "end_time": "2030-01-01"},
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_path_entirely_after_its_array(self):
+        """Neither bound is out of order, and the whole epoch is elsewhere."""
+        array = self._array(
+            {"start_time": "2024-01-01", "end_time": "2025-01-01"},
+            {"start_time": "2026-01-01"},
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_an_unset_bound_defers_to_the_container(self):
+        """A path stating no start begins when its fiber array does."""
+        array = self._array({"start_time": "2024-01-01"}, {})
+        assert array.check() is array
+
+    def test_a_contained_epoch_is_legal(self):
+        """The ordinary case: a path living inside its array's lifetime."""
+        array = self._array(
+            {"start_time": "2024-01-01", "end_time": "2026-01-01"},
+            {"start_time": "2024-06-01", "end_time": "2025-01-01"},
+        )
+        assert array.check() is array
+
+    def test_an_acquisition_outside_its_array(self):
+        """Acquisitions are contained by the same rule as paths."""
+        array = inv.FiberArray(
+            code="L001",
+            start_time="2024-01-01",
+            acquisitions=(inv.Acquisition(code="RAW", start_time="2020-01-01"),),
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_fiber_array_outside_its_network(self):
+        """And the rule holds one level up, for what a network contains."""
+        array = inv.FiberArray(code="L001", start_time="2020-01-01")
+        network = inv.Network(code="XX", start_time="2024-01-01", fiber_arrays=(array,))
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            network.check()
+
+    def test_a_channel_outside_its_station(self):
+        """Stations contain channels the same way."""
+        station = inv.Station(
+            code="STA1",
+            start_time="2024-01-01",
+            channels=(inv.Channel(code="BHZ", start_time="2020-01-01"),),
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            station.check()
+
+    def test_the_error_names_both_epochs(self):
+        """A reader has to see which range reaches outside which."""
+        array = self._array({"start_time": "2024-01-01"}, {"start_time": "2020-01-01"})
+        with pytest.raises(InvalidInventoryError) as info:
+            array.check()
+        message = str(info.value)
+        assert "2020-01-01" in message and "2024-01-01" in message
+        assert "'main'" in message
+
+
 class TestEpochs:
     """Half-open epoch rules across the tree."""
 
