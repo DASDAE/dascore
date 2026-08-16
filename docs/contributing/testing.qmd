@@ -77,7 +77,9 @@ abs: differs in ['data_hash']
       after:  cd1928741a7ac2fa4789853cf430661d
 ```
 
-Add to the `get_calls` mapping in that script whenever a function is rewritten; one which isn't listed isn't checked.
+The script compares two lists. `get_calls` holds calls against the example patches, which carry datetime coordinates, units, and complex data from a transform. `MATRIX_CALLS` is run against every array `make_arrays` builds, so each call is checked for every dtype and for the values implementations tend to disagree about: nan, infinities, a whole slice of nulls, and numbers large enough to overflow. Add to whichever fits when a function is rewritten; one which isn't listed isn't checked.
+
+The matrix is worth the runtime. A hand written list of calls missed a rewritten `Patch.where` returning float32 where it used to return float64, because the example patch happens to be float64; running the same call against a float32 array found it immediately.
 
 ## Writing Tests
 

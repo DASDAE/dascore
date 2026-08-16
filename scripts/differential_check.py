@@ -17,8 +17,13 @@ Usage:
 
     python scripts/differential_check.py --ref <git ref>
 
-CALLS below is the list of comparisons. Add to it whenever a patch function
-is rewritten; a function which isn't listed isn't checked.
+There are two lists of comparisons. get_calls holds calls against the
+example patches, which carry datetime coordinates, units, and complex data
+from a transform. MATRIX_CALLS is run against every array make_arrays
+builds, so each call is checked for every dtype and for the values
+implementations tend to disagree about: nan, infinities, a whole slice of
+nulls, and numbers big enough to overflow. Add to whichever fits when a
+patch function is rewritten; one which isn't listed isn't checked.
 """
 
 from __future__ import annotations
@@ -36,6 +41,115 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
+
+
+# Data covering the dtypes patch data can hold and the values which
+# implementations tend to disagree about. A hand written list of calls
+# misses these; the where in #921 kept a float32 patch float32 where numpy
+# had promoted it to float64, and only this matrix noticed.
+def make_arrays() -> dict:
+    """Return arrays covering the dtypes and values patch data can hold."""
+    rng = np.random.default_rng(42)
+    base = rng.normal(size=(6, 8))
+    imaginary = rng.normal(size=(6, 8))
+    arrays = {
+        "float64": base,
+        "float32": base.astype("float32"),
+        "int32": (base * 100).astype("int32"),
+        "int64": (base * 100).astype("int64"),
+        "bool": base > 0,
+        "complex128": base + 1j * imaginary,
+        "complex64": (base + 1j * imaginary).astype("complex64"),
+        "all_nan": np.full((6, 8), np.nan),
+        "zeros": np.zeros((6, 8)),
+        "tiny": np.full((1, 1), 3.0),
+        "single_row": base[:1],
+        "huge": base * 1e300,
+    }
+    nan = base.copy()
+    nan[1, 2], nan[3, :] = np.nan, np.nan
+    arrays["with_nan"] = nan
+    infinite = base.copy()
+    infinite[0, 0], infinite[0, 1] = np.inf, -np.inf
+    arrays["with_inf"] = infinite
+    both = nan.copy()
+    both[2, 2], both[2, 3] = np.inf, -np.inf
+    arrays["nan_and_inf"] = both
+    return arrays
+
+
+# Applied to every array above, so a dtype or a special value which
+# changes an answer shows up wherever it happens.
+MATRIX_CALLS = {
+    "abs": lambda patch: patch.abs(),
+    "add": lambda patch: patch + 1,
+    "all": lambda patch: patch.all("time"),
+    "angle": lambda patch: patch.angle(),
+    "any": lambda patch: patch.any("time"),
+    "conj": lambda patch: patch.conj(),
+    "demean": lambda patch: patch.demean("time"),
+    "demedian": lambda patch: patch.demedian("time"),
+    "dropna_all": lambda patch: patch.dropna("distance", how="all"),
+    "dropna_any": lambda patch: patch.dropna("time", how="any"),
+    "fillna_0": lambda patch: patch.fillna(0),
+    "fillna_noinf": lambda patch: patch.fillna(2, include_inf=False),
+    "flip_both": lambda patch: patch.flip(*patch.dims),
+    "flip_one": lambda patch: patch.flip("time"),
+    "full_float": lambda patch: patch.full(1.5),
+    "full_int": lambda patch: patch.full(2),
+    "gt": lambda patch: patch > 0,
+    "imag": lambda patch: patch.imag(),
+    "max": lambda patch: patch.max("distance"),
+    "mean": lambda patch: patch.mean("time"),
+    "mean_all": lambda patch: patch.mean(),
+    "median": lambda patch: patch.median("time"),
+    "min": lambda patch: patch.min("time"),
+    "mul": lambda patch: patch * 2,
+    "norm_bit": lambda patch: patch.normalize("time", norm="bit"),
+    "norm_l1": lambda patch: patch.normalize("time", norm="l1"),
+    "norm_l2": lambda patch: patch.normalize("time", norm="l2"),
+    "norm_max": lambda patch: patch.normalize("time", norm="max"),
+    "np_exp": lambda patch: np.exp(patch),
+    "pad": lambda patch: patch.pad(time=(1, 2), samples=True),
+    "pad_both": lambda patch: patch.pad(time=1, distance=1, samples=True),
+    "pad_fill": lambda patch: patch.pad(distance=1, samples=True, constant_values=7),
+    "pad_noexpand": lambda patch: patch.pad(time=1, samples=True, expand_coords=False),
+    "real": lambda patch: patch.real(),
+    "reduce": lambda patch: patch.add.reduce(dim="time"),
+    "roll": lambda patch: patch.roll(time=2, samples=True),
+    "roll_coord": lambda patch: patch.roll(time=2, samples=True, update_coord=True),
+    "square": lambda patch: patch**2,
+    "standardize": lambda patch: patch.standardize("time"),
+    "std": lambda patch: patch.std("time"),
+    "sum": lambda patch: patch.sum("time"),
+    "transpose": lambda patch: patch.transpose(),
+    "update_coords": lambda patch: patch.update_coords(
+        distance=patch.get_array("distance") + 1
+    ),
+    "where_arr": lambda patch: patch.where(np.asarray(patch.data) > 0),
+    "where_other": lambda patch: patch.where(np.asarray(patch.data) > 0, other=0),
+}
+
+
+def _matrix_patch(array):
+    """Wrap an array in a patch with evenly sampled coordinates."""
+    coords = {
+        "distance": np.arange(array.shape[0]) * 1.0,
+        "time": np.arange(array.shape[1]) * 0.5,
+    }
+    return dc.Patch(data=array, coords=coords, dims=("distance", "time"))
+
+
+def get_matrix_calls() -> dict:
+    """Return every call in MATRIX_CALLS against every array."""
+    out = {}
+    for array_name, array in make_arrays().items():
+        patch = _matrix_patch(array)
+        out[f"matrix/{array_name}/input"] = lambda patch=patch: patch
+        for call_name, call in MATRIX_CALLS.items():
+            key = f"matrix/{array_name}/{call_name}"
+            out[key] = lambda call=call, patch=patch: call(patch)
+    return out
 
 
 def get_calls() -> dict:
@@ -166,7 +280,7 @@ def dump(path: Path) -> None:
     """Write the fingerprint of every call to path."""
     warnings.simplefilter("ignore")
     out = {}
-    for name, call in get_calls().items():
+    for name, call in (get_calls() | get_matrix_calls()).items():
         try:
             out[name] = digest(call())
         except Exception as error:

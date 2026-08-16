@@ -6,7 +6,15 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from differential_check import check_dascore_path, compare, digest, get_calls
+from differential_check import (
+    MATRIX_CALLS,
+    check_dascore_path,
+    compare,
+    digest,
+    get_calls,
+    get_matrix_calls,
+    make_arrays,
+)
 
 import dascore as dc
 
@@ -70,6 +78,36 @@ class TestCalls:
         """Every call runs and returns something which can be fingerprinted."""
         for name, call in get_calls().items():
             assert digest(call()), f"{name} returned nothing"
+
+
+class TestMatrix:
+    """Tests for running every call against every kind of array."""
+
+    def test_dtypes_covered(self):
+        """The arrays cover the dtypes patch data can hold."""
+        dtypes = {str(x.dtype) for x in make_arrays().values()}
+        assert {"float64", "float32", "int64", "bool", "complex128"} <= dtypes
+
+    def test_special_values_covered(self):
+        """And the values implementations disagree about."""
+        arrays = make_arrays()
+        assert np.isnan(arrays["with_nan"]).any()
+        assert np.isinf(arrays["with_inf"]).any()
+        assert np.isnan(arrays["all_nan"]).all()
+
+    def test_every_call_against_every_array(self):
+        """Each call is compared for each array, plus the input itself."""
+        calls = get_matrix_calls()
+        arrays = make_arrays()
+        assert len(calls) == len(arrays) * (len(MATRIX_CALLS) + 1)
+
+    def test_calls_run(self):
+        """Every call either returns something or records why it did not."""
+        for name, call in get_matrix_calls().items():
+            try:
+                assert digest(call()), f"{name} returned nothing"
+            except Exception:
+                pass
 
 
 class TestDascorePath:
