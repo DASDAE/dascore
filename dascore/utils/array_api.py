@@ -12,6 +12,7 @@ lives in [compat](`dascore.compat`).
 from __future__ import annotations
 
 import warnings
+from contextlib import suppress
 from typing import Any, TypeGuard
 
 import array_api_compat.numpy as np_namespace
@@ -221,12 +222,18 @@ def to_numpy(array: Any) -> np.ndarray:
     """
     # asarray returns numpy arrays unchanged and handles any backend which
     # implements __array__.
-    try:
+    with suppress(TypeError, ValueError, RuntimeError):
         return np.asarray(array)
-    except (TypeError, ValueError, RuntimeError):
-        # Arrays which live on another device (eg a gpu) refuse implicit
-        # conversion, so they must be copied to the host first.
-        return np.asarray(to_device(array, "cpu"))
+    # Arrays on another device (eg a gpu) refuse implicit conversion and
+    # have to be copied to the host. Which device that is has no standard
+    # spelling: most backends call it "cpu", while array_api_strict names
+    # its own devices and reports the host as the default one.
+    xp = array_namespace(array)
+    for host in (xp.__array_namespace_info__().default_device(), "cpu"):
+        with suppress(TypeError, ValueError, RuntimeError):
+            return np.asarray(to_device(array, host))
+    msg = f"cannot convert an array on device {device(array)} to numpy"
+    raise TypeError(msg)
 
 
 def asarray_like(array: Any, like: Any) -> Any:

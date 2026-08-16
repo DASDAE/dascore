@@ -23,9 +23,7 @@ from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
     array_namespace,
-    asarray_like,
     device,
-    is_python_scalar,
     nan_reduce,
     to_numpy,
 )
@@ -768,7 +766,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     return patch.new(data=roll_arr)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def where(
     patch: PatchType, cond: ArrayLike | PatchType, other: Any | PatchType = np.nan
 ) -> PatchType:
@@ -790,6 +788,13 @@ def where(
     -------
     PatchType
         A new patch with values from patch where cond is True, and other elsewhere.
+
+    Notes
+    -----
+    This function is numpy backed. Whether the array API standard could
+    express it depends on the dtypes involved: numpy promotes an integer
+    fill against float data, or a float64 fill against float32 data, and
+    the standard has no mixed kind promotion at all.
 
     Examples
     --------
@@ -821,21 +826,16 @@ def where(
 
     cond = cond.data if isinstance(cond, cls) else cond
     other = other.data if isinstance(other, cls) else other
-    cond_array = array(cond)
+    cond_array, other_array = array(cond), array(other)
 
     # Ensure condition is boolean
-    if not array_namespace(cond_array).isdtype(cond_array.dtype, "bool"):
+    if not np.issubdtype(cond_array.dtype, np.bool_):
         msg = "Condition must be a boolean array or patch with boolean data"
         raise ValueError(msg)
 
-    # The operands have to share the patch's array namespace, except a
-    # python scalar, which every backend takes and promotes as numpy does.
-    data = patch.data
-    xp = array_namespace(data)
-    cond_array = asarray_like(cond_array, data)
-    if not is_python_scalar(other):
-        other = asarray_like(array(other), data)
-    return patch.new(data=xp.where(cond_array, data, other))
+    # Use numpy.where to apply condition
+    new_data = np.where(cond_array, patch.data, other_array)
+    return patch.new(data=new_data)
 
 
 @patch_function(backend="array_api")

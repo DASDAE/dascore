@@ -51,6 +51,24 @@ def backend_patch(random_patch, to_backend) -> dc.Patch:
     return to_backend(random_patch)
 
 
+class _StuckArray:
+    """An array-like which cannot be moved to the host at all."""
+
+    def __init__(self, array):
+        self.shape = array.shape
+        self.dtype = array.dtype
+        self.device = "nowhere"
+
+    def __array__(self, dtype=None, copy=None):
+        msg = "Implicit conversion to a numpy array is not allowed."
+        raise TypeError(msg)
+
+    def to_device(self, device, stream=None):
+        """Refuse, as a device with no host transfer would."""
+        msg = f"cannot move to {device}"
+        raise ValueError(msg)
+
+
 class _DeviceArray:
     """An array-like which must be moved to the host to become numpy."""
 
@@ -113,6 +131,17 @@ class TestToNumpy:
         out = to_numpy(_DeviceArray(array))
         assert isinstance(out, np.ndarray)
         assert np.allclose(out, array)
+
+    def test_device_array_on_another_device(self, xps):
+        """A backend which names its own devices still converts."""
+        device = xps.__array_namespace_info__().devices()[1]
+        array = xps.asarray(np.array([1.0, 2.0]), device=device)
+        assert np.allclose(to_numpy(array), [1.0, 2.0])
+
+    def test_stuck_array(self):
+        """An array which cannot reach the host is an error, not a guess."""
+        with pytest.raises(TypeError, match="cannot convert an array"):
+            to_numpy(_StuckArray(np.array([1.0, 2.0])))
 
 
 class TestAsArrayLike:
@@ -330,13 +359,6 @@ ARRAY_API_CASES = {
     ),
     "dascore.proc.basic.standardize": _Case(
         calls=(lambda patch: patch.standardize("time"),),
-    ),
-    "dascore.proc.basic.where": _Case(
-        calls=(
-            lambda patch: patch.where(patch.data > 0),
-            lambda patch: patch.where(patch > 0),
-            lambda patch: patch.where(patch.data > 0, other=0),
-        ),
     ),
     "dascore.proc.coords.update_coords": _Case(
         calls=(
