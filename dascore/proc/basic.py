@@ -21,12 +21,26 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
+from dascore.utils.array_api import array_namespace, nan_reduce
 from dascore.utils.misc import _get_nullish
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
+
+
+def _as_float(data):
+    """
+    Promote data which cannot hold a fraction to floats.
+
+    Numpy promotes when dividing or subtracting a float; the array API
+    standard has no mixed kind promotion, so it has to be explicit.
+    """
+    xp = array_namespace(data)
+    if xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        return data
+    return xp.astype(data, xp.float64)
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -313,7 +327,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 def normalize(
     self: PatchType,
     dim: str,
@@ -353,18 +367,21 @@ def normalize(
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
     axis = self.get_axis(dim)
-    data = self.data
+    data = _as_float(self.data)
+    xp = array_namespace(data)
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
         # Equivalent to np.linalg.norm, but skips NaN rather than letting a
         # single null blank every sample sharing its slice. The float exponent
         # promotes ints so the powers cannot overflow a narrow dtype.
-        norm_values = np.nansum(np.abs(data) ** float(order), axis=axis) ** (1 / order)
-        divisor = np.expand_dims(norm_values, axis=axis)
+        powers = xp.abs(data) ** float(order)
+        norm_values = nan_reduce("sum", powers, axis=axis) ** (1 / order)
+        divisor = xp.expand_dims(norm_values, axis=axis)
     elif norm == "max":
-        divisor = np.expand_dims(np.nanmax(np.abs(data), axis=axis), axis=axis)
+        maxes = nan_reduce("max", xp.abs(data), axis=axis)
+        divisor = xp.expand_dims(maxes, axis=axis)
     elif norm == "bit":
-        divisor = np.abs(data)
+        divisor = xp.abs(data)
     else:
         msg = (
             f"Norm value of {norm} is not supported. "
@@ -373,11 +390,12 @@ def normalize(
         raise ValueError(msg)
     # A zero divisor means there is nothing but zeros and nulls to scale, so
     # divide those by one; the zeros stay zero and the nulls stay null.
-    new_data = data / np.where(divisor == 0, 1, divisor)
+    one = xp.asarray(1, dtype=divisor.dtype)
+    new_data = data / xp.where(divisor == 0, one, divisor)
     return self.new(data=new_data)
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 def standardize(
     self: PatchType,
     dim: str,
@@ -414,9 +432,9 @@ def standardize(
     ```
     """
     axis = self.get_axis(dim)
-    data = self.data
-    mean = np.nanmean(data, axis=axis, keepdims=True)
-    std = np.nanstd(data, axis=axis, keepdims=True)
+    data = _as_float(self.data)
+    mean = nan_reduce("mean", data, axis=axis, keepdims=True)
+    std = nan_reduce("std", data, axis=axis, keepdims=True)
     new_data = (data - mean) / std
     return self.new(data=new_data)
 
@@ -885,7 +903,7 @@ def demedian(patch, dim: str = "time"):
     return patch.new(data=new_data)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def demean(patch, dim: str = "time"):
     """
     Remove the mean along a given dimension of a DASCore patch.
@@ -937,10 +955,10 @@ def demean(patch, dim: str = "time"):
     >>> plt.close(fig)
     """
     axis = patch.get_axis(dim)
-    data = patch.data
+    data = _as_float(patch.data)
 
     # Compute mean along axis, keep dims for broadcasting
-    mea = np.nanmean(data, axis=axis, keepdims=True)
+    mea = nan_reduce("mean", data, axis=axis, keepdims=True)
 
     new_data = data - mea
 

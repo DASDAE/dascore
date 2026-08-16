@@ -29,13 +29,18 @@ def backend(request) -> str:
 
 
 @pytest.fixture(scope="class")
-def to_backend(backend):
-    """Return a function which moves a patch's data to the backend."""
+def to_array(backend):
+    """Return a function which moves an array to the backend under test."""
     module_name, func_name = BACKENDS[backend]
-    factory = getattr(importlib.import_module(module_name), func_name)
+    return getattr(importlib.import_module(module_name), func_name)
+
+
+@pytest.fixture(scope="class")
+def to_backend(to_array):
+    """Return a function which moves a patch's data to the backend."""
 
     def _to_backend(patch: dc.Patch) -> dc.Patch:
         """Return the patch with its data on the array backend."""
-        return patch.new(data=factory(np.asarray(patch.data)))
+        return patch.new(data=to_array(np.asarray(patch.data)))
 
     return _to_backend
