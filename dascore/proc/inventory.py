@@ -25,7 +25,12 @@ from dascore.core._spool_inventory import (
     validate_enrich_selection,
 )
 from dascore.core.coords import BaseCoord, get_coord
-from dascore.core.inventory import Interrogator, Inventory, ResolvedContext
+from dascore.core.inventory import (
+    Interrogator,
+    Inventory,
+    ResolvedContext,
+    axis_columns,
+)
 from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
@@ -321,13 +326,18 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     Return the coordinate names a blanket request copies.
 
-    The geometry axes and the annotation groups: what the path says about
+    The geometry columns and the annotation groups: what the path says about
     each channel. Optical distance and the typed-track fields are asked for
     by name, since they restate what the patch's own axis and the inventory
     already record.
     """
-    labels = inventory.coordinate_reference_system.coordinate_labels
-    out = ["x", "y", "z"][: len(labels)] if path.geometry else []
+    crs = inventory.coordinate_reference_system
+    labels = crs.coordinate_labels
+    # The axes are copied under their canonical names, and only where some
+    # segment actually places the fiber; the rest come under their own.
+    axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
+    out = ["x", "y", "z"][: len(labels)] if axes else []
+    out += [x for x in path.geometry_columns() if x not in axes]
     seen = dict.fromkeys(x.group for x in path.annotations)
     return out + [x for x in seen if x]
 

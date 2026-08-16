@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Mapping, Sized
+from contextlib import suppress
 from functools import cache
 from types import MappingProxyType, UnionType
 from typing import (
@@ -506,43 +507,92 @@ OpticalComponent: TypeAlias = Annotated[
 
 class Geometry(InventoryModel):
     """
-    Geometry for an interval of an optical path.
+    Measured curves along an interval of an optical path.
 
     A geometry is a piecewise segment placed by its ``distance`` array: at
-    least two strictly increasing optical distances, each paired with the
-    coordinate at that point (interpreted using the inventory CRS). Coverage
-    is the half-open span of the array; there is no separate length field. A
-    coil, or other "clump", is a segment whose coordinates repeat while
-    distance advances.
-    Interpolation between points is piecewise linear in the CRS and never
-    crosses segments; uncovered distance has undefined coordinates.
+    least two strictly increasing optical distances, each paired with one
+    value of every column the segment states. Coverage is the half-open span
+    of the array; there is no separate length field. A coil, or other
+    "clump", is a segment whose columns repeat while distance advances.
+
+    A column whose name the inventory CRS declares -- or the canonical
+    ``x``, ``y``, ``z`` alias of one -- is that position axis, and takes the
+    CRS's units. Every other column is a numeric quantity along the fiber in
+    its own right, carrying its own entry in ``units``: borehole depth where
+    the CRS is spent on easting/northing/elevation, pipeline chainage, fiber
+    azimuth.
+
+    Interpolation between points is piecewise linear and never crosses
+    segments; uncovered distance has undefined values. Two segments may
+    cover the same distance as long as they state different columns -- a
+    depth survey and an azimuth survey of one borehole -- and then they
+    share a name, being two measurements of one stretch of fiber.
+
+    Examples
+    --------
+    >>> from dascore.core.inventory import Geometry
+    >>>
+    >>> # A surveyed run, placed by the CRS's axes.
+    >>> trench = Geometry(
+    ...     name="trench",
+    ...     distance=(0.0, 100.0),
+    ...     coordinates={"x": (0.0, 86.6), "y": (0.0, 0.0), "z": (-0.5, -0.5)},
+    ... )
+    >>>
+    >>> # A curve which is not a position at all.
+    >>> chainage = Geometry(
+    ...     name="chainage",
+    ...     distance=(0.0, 100.0),
+    ...     coordinates={"chainage": (1200.0, 1290.0)},
+    ...     units={"chainage": "m"},
+    ... )
     """
 
     _identity_field: ClassVar[str] = "name"
     name: str = Field(default="", description="Human-readable geometry name.")
     distance: tuple[float, ...] = Field(
         description=(
-            "Optical distances paired to coordinates; at least two strictly "
+            "Optical distances paired to values; at least two strictly "
             "increasing values whose span is the segment's coverage."
         ),
     )
-    coordinates: tuple[tuple[float, ...], ...] = Field(
-        description="Coordinate points; same length as distance.",
+    coordinates: FrozenDictType[str, tuple[float, ...]] = Field(
+        description=(
+            "Columns measured along this segment, keyed by name; each holds "
+            "one value per distance."
+        ),
+    )
+    units: FrozenDictType[str, str] = Field(
+        default_factory=dict,
+        description="Units of the columns which are not position axes.",
     )
 
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
         _check_control_points(self.distance, "Geometry distance", minimum=2)
-        if len(self.coordinates) != len(self.distance):
-            msg = "Geometry coordinates and distance must have the same length."
+        if not self.coordinates:
+            msg = "Geometry states no columns, so it describes nothing."
             raise InvalidInventoryError(msg)
-        dims = {len(coord) for coord in self.coordinates}
-        if len(dims) > 1 or 0 in dims:
-            msg = "Geometry coordinate points must share one nonzero dimensionality."
+        wrong = sorted(
+            name
+            for name, values in self.coordinates.items()
+            if len(values) != len(self.distance)
+        )
+        if wrong:
+            msg = (
+                f"Geometry column(s) {wrong} do not have one value per "
+                f"distance; distance states {len(self.distance)}."
+            )
             raise InvalidInventoryError(msg)
-        if not np.all(np.isfinite(np.asarray(self.coordinates, dtype=float))):
-            msg = "Geometry coordinate values must be finite."
+        for name, values in self.coordinates.items():
+            if not np.all(np.isfinite(np.asarray(values, dtype=float))):
+                msg = f"Geometry column {name!r} must hold finite values."
+                raise InvalidInventoryError(msg)
+        # Units name a column or nothing; the alternative is a unit sitting
+        # on a column the segment never states, which no reader would find.
+        if orphaned := sorted(set(self.units) - set(self.coordinates)):
+            msg = f"Geometry states units for {orphaned}, which it has no column for."
             raise InvalidInventoryError(msg)
         return self
 
@@ -551,23 +601,25 @@ class Geometry(InventoryModel):
         """The (start, end) optical distance covered by this segment."""
         return (self.distance[0], self.distance[-1])
 
-    def interpolate(self, distances) -> np.ndarray:
+    def interpolate(self, distances) -> dict[str, np.ndarray]:
         """
-        Return coordinates at the requested optical distances.
+        Return each column's values at the requested optical distances.
 
-        Distances outside this segment's coverage return NaN rows. Coverage is
+        Distances outside this segment's coverage return NaN. Coverage is
         half-open ``[first, last)``; inclusion of the outermost track endpoint
         is handled by the caller (`OpticalPath.coordinates_at`).
         """
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
-        coords = np.asarray(self.coordinates, dtype=float)
-        out = np.full((len(dist), coords.shape[1]), np.nan)
         start, end = self.interval
         inside = (dist >= start) & (dist < end)
-        for dim in range(coords.shape[1]):
-            out[inside, dim] = np.interp(
-                dist[inside], np.asarray(self.distance), coords[:, dim]
+        knots = np.asarray(self.distance, dtype=float)
+        out = {}
+        for name, values in self.coordinates.items():
+            column = np.full(len(dist), np.nan)
+            column[inside] = np.interp(
+                dist[inside], knots, np.asarray(values, dtype=float)
             )
+            out[name] = column
         return out
 
 
@@ -988,7 +1040,53 @@ def _overlapping_epochs(items, key) -> list[tuple]:
     return out
 
 
-_MIXED_DIMS_MSG = "Geometry segments mix coordinate dimensionalities {dims}."
+def axis_columns(segment, crs) -> dict[str, int]:
+    """
+    Return which of a segment's columns name which canonical axis.
+
+    A column resolves to an axis when the CRS declares its name, or when it
+    is the canonical ``x``/``y``/``z`` alias of an axis the CRS has. Every
+    other column is a quantity along the fiber rather than a position.
+    """
+    out = {}
+    for name in segment.coordinates:
+        with suppress(InvalidInventoryError):
+            out[name] = crs.axis_index(name)
+    return out
+
+
+def _placed(segment, name: str, distances) -> np.ndarray:
+    """
+    One column of a segment, over distances already claimed for it.
+
+    ``interpolate`` stops at its own half-open coverage, which excludes the
+    run end a mask includes, so that point is filled from the last control
+    point rather than left NaN.
+    """
+    column = segment.interpolate(distances)[name]
+    column[np.isnan(column)] = segment.coordinates[name][-1]
+    return column
+
+
+def _axis_set_errors(segment, axes: Mapping[str, int], crs) -> list[str]:
+    """Return what is wrong with the set of axes one segment states."""
+    what = f"Geometry {segment.name!r}" if segment.name else "A geometry"
+    spellings: dict[int, list[str]] = {}
+    for name, index in axes.items():
+        spellings.setdefault(index, []).append(name)
+    errors = [
+        f"{what} states axis {crs.coordinate_labels[index]!r} twice, as "
+        f"{sorted(names)}."
+        for index, names in sorted(spellings.items())
+        if len(names) > 1
+    ]
+    if axes and len(spellings) != len(crs.coordinate_labels):
+        errors.append(
+            f"{what} states the axes {sorted(axes)} but the inventory CRS "
+            f"declares {list(crs.coordinate_labels)}; a segment states every "
+            "axis or none of them."
+        )
+    return errors
 
 
 def _track_identity_fields() -> Mapping[str, str]:
@@ -1024,6 +1122,12 @@ RESERVED_GROUP_NAMES = frozenset(
     | {"optical_components", "geometry", "coupling", "annotations"}
     | set(VALID_COORDINATE_LABELS)
 )
+
+
+# The reserved names a geometry column may not take. The coordinate labels
+# are left out of it: a column named for one is how a segment states that
+# axis, and one the CRS does not declare is free to be a column of its own.
+_RESERVED_COLUMN_NAMES = RESERVED_GROUP_NAMES - set(VALID_COORDINATE_LABELS)
 
 
 def _times_equal(time1, time2) -> bool:
@@ -1098,33 +1202,61 @@ class OpticalPath(TimeRangedModel):
             position = nxt
         return tuple(out)
 
-    def coordinates_at(self, distances) -> np.ndarray:
+    def coordinates_at(self, distances, crs) -> np.ndarray:
         """
         Return CRS coordinates at the requested optical distances.
 
-        Uncovered distance returns NaN rows. Segment coverage is half-open,
-        with the end of each coverage run included: a distance on a
-        segment's last control point belongs to that segment unless another
+        The CRS is what decides a column is an axis, and only those are
+        assembled: a segment naming none of them contributes no position,
+        however much else it measures, and does not decide the position
+        track's coverage either. Uncovered distance returns NaN rows.
+        Coverage is half-open, with the end of each run included: a distance
+        on a segment's last control point belongs to it unless another
         segment claims it.
         """
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
-        if not self.geometry:
-            return np.full((len(dist), 1), np.nan)
-        dims = {len(seg.coordinates[0]) for seg in self.geometry}
-        if len(dims) > 1:
-            raise InvalidInventoryError(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
-        out = np.full((len(dist), dims.pop()), np.nan)
-        masks = interval_masks(dist, [x.interval for x in self.geometry])
-        for segment, mask in zip(self.geometry, masks, strict=True):
+        out = np.full((len(dist), len(crs.coordinate_labels)), np.nan)
+        placing = [x for x in self.geometry if axis_columns(x, crs)]
+        masks = interval_masks(dist, [x.interval for x in placing])
+        for segment, mask in zip(placing, masks, strict=True):
+            axes = axis_columns(segment, crs)
+            if errors := _axis_set_errors(segment, axes, crs):
+                # A checked inventory cannot get here; an unchecked one says
+                # so rather than filling a position from whichever spelling
+                # the mapping held last.
+                raise InvalidInventoryError(" ".join(errors))
             if not np.any(mask):
                 continue
-            # interpolate() reports its own coverage, which excludes the
-            # run end the mask includes, so fill that from the last point.
-            seg_coords = segment.interpolate(dist[mask])
-            last = np.asarray(segment.coordinates, dtype=float)[-1]
-            seg_coords[np.isnan(seg_coords[:, 0])] = last
-            out[mask] = seg_coords
+            rows = np.flatnonzero(mask)
+            for name, index in axes.items():
+                out[rows, index] = _placed(segment, name, dist[mask])
         return out
+
+    def column_at(self, name: str, distances) -> np.ndarray | None:
+        """
+        Return one geometry column's values at the requested distances.
+
+        None when no segment states the column. Coverage follows
+        `OpticalPath.coordinates_at`, and values never bridge two segments:
+        distance between them is uncovered, whatever either side holds.
+        """
+        stating = [x for x in self.geometry if name in x.coordinates]
+        if not stating:
+            return None
+        dist = np.atleast_1d(np.asarray(distances, dtype=float))
+        out = np.full(len(dist), np.nan)
+        masks = interval_masks(dist, [x.interval for x in stating])
+        for segment, mask in zip(stating, masks, strict=True):
+            if np.any(mask):
+                out[np.flatnonzero(mask)] = _placed(segment, name, dist[mask])
+        return out
+
+    def geometry_columns(self) -> tuple[str, ...]:
+        """Return every column name this path's geometry segments state."""
+        seen: dict[str, None] = {}
+        for segment in self.geometry:
+            seen.update(dict.fromkeys(segment.coordinates))
+        return tuple(seen)
 
     def check(self, tolerance: float = 1e-9) -> Self:
         """
@@ -1150,21 +1282,78 @@ class OpticalPath(TimeRangedModel):
                         f"{name} interval ({lo}, {hi}) extends past path "
                         f"span ({start}, {end})."
                     )
-        dims = {len(seg.coordinates[0]) for seg in self.geometry}
-        if len(dims) > 1:
-            errors.append(_MIXED_DIMS_MSG.format(dims=sorted(dims)))
-        for name, spans in (("geometry", geo_spans), ("coupling", coup_spans)):
-            overlap = intervals_overlap(spans)
-            if overlap is not None:
-                errors.append(
-                    f"Overlapping {name} intervals {overlap[0]} and "
-                    f"{overlap[1]}; {name} is a function track."
-                )
+        overlap = intervals_overlap(coup_spans)
+        if overlap is not None:
+            errors.append(
+                f"Overlapping coupling intervals {overlap[0]} and "
+                f"{overlap[1]}; coupling is a function track."
+            )
+        errors.extend(self._check_geometry_columns())
         errors.extend(self._check_annotation_groups())
         if errors:
             msg = "Optical path validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
         return self
+
+    def _check_geometry_columns(self) -> list[str]:
+        """
+        Check the geometry columns of this path against each other.
+
+        Each column is its own function track, so two segments may overlap
+        as long as they do not state the same column over the same distance.
+        Overlapping segments do share a name, being two measurements of one
+        stretch of fiber, or the bare ``geometry`` coordinate would have two
+        of them for a channel. The rules needing the CRS -- which columns
+        are axes -- are the inventory's, since only it knows the axes.
+        """
+        spans: dict[str, list[tuple[float, float]]] = {}
+        units: dict[str, set[str]] = {}
+        for segment in self.geometry:
+            for name in segment.coordinates:
+                spans.setdefault(name, []).append(segment.interval)
+                if name in segment.units:
+                    units.setdefault(name, set()).add(segment.units[name])
+        groups = {x.group for x in self.annotations if x.group}
+        errors = [
+            f"Geometry column {name!r} is a reserved name; a column becomes "
+            "a coordinate and cannot shadow a structural coordinate or a "
+            "typed track."
+            for name in sorted(set(spans) & _RESERVED_COLUMN_NAMES)
+        ]
+        errors += [
+            f"Geometry column {name!r} states a dotted name, which is how a "
+            "field of a typed track is asked for; a column is asked for by a "
+            "name of its own."
+            for name in sorted(x for x in spans if "." in x)
+        ]
+        errors += [
+            f"{name!r} is both a geometry column and an annotation group; "
+            "one name is one coordinate."
+            for name in sorted(set(spans) & groups)
+        ]
+        for first, second in itertools.combinations(self.geometry, 2):
+            lo = max(first.interval[0], second.interval[0])
+            hi = min(first.interval[1], second.interval[1])
+            if first.name != second.name and lo < hi:
+                errors.append(
+                    f"Geometry segments {first.name!r} and {second.name!r} "
+                    f"both cover ({lo}, {hi}); segments which overlap state "
+                    "different columns of one stretch of fiber, so they "
+                    "share its name."
+                )
+        for name in sorted(spans):
+            if (overlap := intervals_overlap(spans[name])) is not None:
+                errors.append(
+                    f"Overlapping geometry intervals {overlap[0]} and "
+                    f"{overlap[1]} for column {name!r}; a column is a "
+                    "function track."
+                )
+            if len(stated := units.get(name, set())) > 1:
+                errors.append(
+                    f"Geometry column {name!r} is stated in {sorted(stated)}; "
+                    "a column has one unit."
+                )
+        return errors
 
     def _check_annotation_groups(self) -> list[str]:
         """Check that each annotation group holds one kind of value."""
@@ -1229,22 +1418,14 @@ class OpticalPath(TimeRangedModel):
             dist = np.asarray(seg.distance, dtype=float)
             inside = (dist > new_lo) & (dist < new_hi)
             new_dist = np.concatenate([[new_lo], dist[inside], [new_hi]])
-            coords = np.asarray(seg.coordinates, dtype=float)
-            new_coords = np.stack(
-                [
-                    np.interp(new_dist, dist, coords[:, dim])
-                    for dim in range(coords.shape[1])
-                ],
-                axis=1,
-            )
-            geometry.append(
-                seg.model_copy(
-                    update={
-                        "distance": tuple(new_dist),
-                        "coordinates": tuple(map(tuple, new_coords)),
-                    }
-                )
-            )
+            new_coords = {
+                name: tuple(np.interp(new_dist, dist, np.asarray(values, dtype=float)))
+                for name, values in seg.coordinates.items()
+            }
+            # new(), not model_copy(): a copy skips the validators, and
+            # would leave `coordinates` a plain mutable dict whose columns
+            # nothing had checked against the new distance array.
+            geometry.append(seg.new(distance=tuple(new_dist), coordinates=new_coords))
         outer = self.end_distance
         coupling = clip_intervals(self.coupling, lo, hi, outer)
         annotations = clip_intervals(self.annotations, lo, hi, outer)
@@ -1283,13 +1464,13 @@ class OpticalPath(TimeRangedModel):
         geometry = []
         for seg in self.geometry:
             dist = np.asarray(seg.distance, dtype=float)
-            coords = np.asarray(seg.coordinates, dtype=float)
             geometry.append(
-                seg.model_copy(
-                    update={
-                        "distance": tuple(flip(dist)[::-1]),
-                        "coordinates": tuple(map(tuple, coords[::-1])),
-                    }
+                seg.new(
+                    distance=tuple(flip(dist)[::-1]),
+                    coordinates={
+                        name: tuple(values[::-1])
+                        for name, values in seg.coordinates.items()
+                    },
                 )
             )
         geometry.sort(key=lambda s: s.distance[0])
@@ -1957,8 +2138,17 @@ class Inventory(InventoryModel):
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
         shapes: dict[str, set[str]] = {}
+        crs = self.coordinate_reference_system
+        columns: dict[str, None] = {}
         for path in self._optical_paths():
             groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
+            # The axes are listed above whatever any path states; what a
+            # path adds is the columns which are not positions.
+            for segment in path.geometry:
+                axes = axis_columns(segment, crs)
+                columns.update(
+                    dict.fromkeys(x for x in segment.coordinates if x not in axes)
+                )
             for track in TRACK_IDENTITY_FIELDS:
                 for item in getattr(path, track):
                     fields = tracks.setdefault(track, {})
@@ -1975,6 +2165,7 @@ class Inventory(InventoryModel):
             out[track] = None
             names = (f"{track}.{x}" for x in fields)
             out.update(dict.fromkeys(x for x in names if x not in unusable))
+        out.update(columns)
         out.update(groups)
         return tuple(out)
 
@@ -2008,9 +2199,7 @@ class Inventory(InventoryModel):
         for net in self.networks:
             for array in net.fiber_arrays:
                 for path in array.optical_paths:
-                    for segment in path.geometry:
-                        what = f"Geometry {segment.name!r}"
-                        check_width(len(segment.coordinates[0]), what)
+                    errors.extend(self._check_geometry_axes(path, crs))
             for station in net.stations:
                 if station.coordinates is not None:
                     check_width(len(station.coordinates), f"Station {station.code!r}")
@@ -2019,6 +2208,40 @@ class Inventory(InventoryModel):
                         continue
                     what = f"Channel {station.code!r}.{channel.code!r}"
                     check_width(len(channel.coordinates), what)
+        return errors
+
+    @staticmethod
+    def _check_geometry_axes(path, crs) -> list[str]:
+        """
+        Check one path's geometry against the CRS.
+
+        Which columns are axes is the CRS's to say, so the rules needing it
+        live here rather than on the path: that a segment states every axis
+        or none, that it does not spell one twice, that it leaves the axes'
+        units to the CRS, and that two segments do not place the same axis
+        over one distance -- which the path cannot see, two spellings of an
+        axis being two names to it.
+        """
+        errors = []
+        spans: dict[int, list[tuple[float, float]]] = {}
+        for segment in path.geometry:
+            axes = axis_columns(segment, crs)
+            errors += _axis_set_errors(segment, axes, crs)
+            if on_axes := sorted(set(segment.units) & set(axes)):
+                what = f"Geometry {segment.name!r}" if segment.name else "A geometry"
+                errors.append(
+                    f"{what} states units for the axis column(s) {on_axes}; "
+                    "the CRS states the units of its own axes."
+                )
+            for index in set(axes.values()):
+                spans.setdefault(index, []).append(segment.interval)
+        for index in sorted(spans):
+            if (overlap := intervals_overlap(spans[index])) is not None:
+                errors.append(
+                    f"Overlapping geometry intervals {overlap[0]} and "
+                    f"{overlap[1]} for axis {crs.coordinate_labels[index]!r}; "
+                    "an axis is a function track."
+                )
         return errors
 
     def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:

@@ -477,6 +477,9 @@ class _Table(NamedTuple):
     # field, so nothing else records where a row sits and it must place
     # each row unambiguously.
     places: bool = False
+    # The field every column but the order gathers into, keyed by header.
+    # None where each column names a field of the object directly.
+    columns: str | None = None
 
 
 # Keyed by CSV stem, which is the attribute the table fills. Held as a
@@ -487,7 +490,9 @@ _TABLES: Mapping[str, _Table] = {
     "optical_components": _Table(order="sequence", places=True),
     "coupling": _Table(),
     "annotations": _Table(),
-    "geometry": _Table(points=True, group="segment", order="distance"),
+    "geometry": _Table(
+        points=True, group="segment", order="distance", columns="coordinates"
+    ),
     "distance_map": _Table(points=True, order="distance"),
 }
 
@@ -535,14 +540,18 @@ def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
     return out
 
 
-def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[dict]:
+def _point_rows(
+    frame: pd.DataFrame, table: _Table, path: Path, units: Mapping[str, str]
+) -> list[dict]:
     """
     Read a table whose every row is one control point.
 
     Points gather into objects holding parallel arrays: one object per
     value of the grouping column, or a single object when the attribute
-    is one. Coordinate columns are named by the CRS and are stored on the
-    canonical axes, so the frame decides which column is which.
+    is one. Where the table gathers its columns (``geometry``), every
+    column but the ordering one becomes an entry of that mapping keyed by
+    its header, so a name the file never states is a column the segment
+    does not have.
     """
     require_columns(frame, [table.order, table.group], path)
     require_stated(frame, [table.order, table.group], path)
@@ -558,8 +567,9 @@ def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[di
     out = []
     for name, rows in groups:
         point: dict[str, Any] = {} if name is None else {"name": str(name)}
+        gathered: dict[str, tuple] = {}
         for column in rows.columns:
-            if column == table.group or column in axes:
+            if column == table.group:
                 continue
             stated = rows[column].notna()
             if not stated.any():
@@ -584,33 +594,16 @@ def _point_rows(frame: pd.DataFrame, table: _Table, path: Path, axes) -> list[di
                     "is stated by every point or by none."
                 )
                 raise InvalidInventoryError(msg)
-            point[column] = tuple(rows[column])
-        if axes:
-            point["coordinates"] = _coordinates(rows, axes, path)
+            if table.columns is not None and column != table.order:
+                gathered[column] = tuple(rows[column])
+            else:
+                point[column] = tuple(rows[column])
+        if table.columns is not None:
+            point[table.columns] = gathered
+            if stated := {x: units[x] for x in gathered if x in units}:
+                point["units"] = stated
         out.append(point)
     return out
-
-
-def _coordinates(rows: pd.DataFrame, axes: Mapping[str, int], path: Path):
-    """
-    Gather a geometry table's labelled columns onto the canonical axes.
-
-    The CRS names the axes and states their order, so a header is read by
-    which axis it names rather than by where it sits in the file.
-    """
-    ordered = sorted(axes, key=lambda label: axes[label])
-    out = []
-    for _, row in rows.iterrows():
-        stated = [row[label] for label in ordered]
-        if any(pd.isnull(x) for x in stated):
-            missing = [x for x, v in zip(ordered, stated, strict=True) if pd.isnull(v)]
-            msg = (
-                f"{_quote(path)} leaves {', '.join(missing)} empty for a point; "
-                "a coordinate states every axis its frame declares."
-            )
-            raise InvalidInventoryError(msg)
-        out.append(tuple(stated))
-    return tuple(out)
 
 
 def _is_path_dir(child: Path) -> bool:
@@ -835,35 +828,93 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     if frame.empty:
         msg = f"{_quote(path)} states no rows, so it describes no {stem}."
         raise InvalidInventoryError(msg)
-    axes = _geometry_axes(frame, crs, path) if stem == "geometry" else {}
+    units: Mapping[str, str] = {}
+    if stem == "geometry":
+        frame, units = _geometry_columns(frame, crs, path)
     if not table.points:
         rows = _object_rows(frame, table, path)
         if stem == "annotations":
             _parse_annotations(rows, path)
         return rows
-    built = _point_rows(frame, table, path, axes)
+    built = _point_rows(frame, table, path, units)
     # A single object rather than a collection: the table has no grouping
     # column because every point belongs to the one map it describes.
     return built if table.group is not None else built[0]
 
 
-def _geometry_axes(frame: pd.DataFrame, crs, path: Path) -> dict[str, int]:
-    """
-    Return which column names which canonical axis.
+# A scalar column may state its units in its header, `depth (m)`. The axes
+# take theirs from the CRS, so a unit on one of those is refused below.
+_UNIT_SUFFIX = re.compile(r"^(?P<name>.*?)\s*\((?P<units>[^()]*)\)$")
 
-    Coordinates are stored on the canonical axes while a geometry table
-    names them the way its frame does, so the CRS decides both which
-    headers are legal and what each one means.
+
+def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     """
+    Read a geometry table's headers, and refuse what cannot be a column.
+
+    A header naming an axis the CRS declares is that axis and takes the
+    CRS's units; every other one is a numeric column in its own right, and
+    may carry its units in parentheses. The axes are all stated or none
+    are, since guessing the missing one is not a reader's job. Text is
+    refused: a value which varies along the fiber without being a number
+    is what annotations are for.
+    """
+
+    def is_axis(name: str) -> bool:
+        """Whether the CRS reads this header as one of its own axes."""
+        try:
+            crs.axis_index(name)
+        except InvalidInventoryError:
+            return False
+        return True
+
     labels = tuple(crs.coordinate_labels)
-    stated = {x for x in frame.columns} - {"segment", "distance"}
-    if stated != set(labels):
+    renamed, units = {}, {}
+    for header in frame.columns:
+        if header in {"segment", "distance"}:
+            continue
+        name, unit = header, ""
+        if (match := _UNIT_SUFFIX.match(header)) is not None:
+            name, unit = match.group("name"), match.group("units").strip()
+        renamed[header] = name
+        if unit and is_axis(name):
+            msg = (
+                f"{_quote(path)} states units for {name!r}, which is a "
+                "position axis; the CRS states the units of its own axes."
+            )
+            raise InvalidInventoryError(msg)
+        if unit:
+            units[name] = unit
+    # Counted against the structural columns as well: `distance (m)` renames
+    # to a column the table already has, and two of them would reach pandas
+    # rather than this message.
+    written = [*renamed.values(), "segment", "distance"]
+    if repeated := sorted({x for x in written if written.count(x) > 1}):
         msg = (
-            f"{_quote(path)} states the coordinate columns {sorted(stated)}, "
-            f"but its frame declares {list(labels)}."
+            f"{_quote(path)} names the column(s) {repeated} more than once; "
+            "one column states one thing."
         )
         raise InvalidInventoryError(msg)
-    return {label: index for index, label in enumerate(labels)}
+    axes = {x for x in renamed.values() if is_axis(x)}
+    if axes and len(axes) != len(labels):
+        msg = (
+            f"{_quote(path)} states the axis column(s) {sorted(axes)}, but "
+            f"its frame declares {list(labels)}; a segment states every axis "
+            "or none of them."
+        )
+        raise InvalidInventoryError(msg)
+    frame = frame.rename(columns=renamed).copy()
+    for column in sorted(set(renamed.values())):
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if (bad := frame[column].notna() & values.isna()).any():
+            msg = (
+                f"{_quote(path)} states {frame.loc[bad, column].iloc[0]!r} in "
+                f"column {column!r}, which is not a number. A geometry column "
+                "is numeric; text which varies along the fiber belongs in "
+                "annotations.csv."
+            )
+            raise InvalidInventoryError(msg)
+        frame[column] = values
+    return frame, units
 
 
 def _parse_annotations(rows: list[dict], path: Path) -> None:

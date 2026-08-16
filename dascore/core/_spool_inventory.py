@@ -33,6 +33,7 @@ from dascore.core.inventory import (
     VALID_COORDINATE_LABELS,
     Inventory,
     ResolvedContext,
+    axis_columns,
 )
 from dascore.core.inventory_loader import BLESSED_NAME, find_inventory
 from dascore.exceptions import (
@@ -665,12 +666,25 @@ def _get_geometry_coord(inventory, path, label, distances):
         index = crs.axis_index(label)
     except InvalidInventoryError:
         return None
-    if not path.geometry:
+    # Geometry which places nothing defines no axis, so the caller's
+    # on_missing policy rules rather than a column of nan.
+    if not any(axis_columns(x, crs) for x in path.geometry):
         return None
-    coords = path.coordinates_at(distances)
-    if index >= coords.shape[1]:
-        return None
+    # axis_index refuses a label this CRS has no axis for, and the array is
+    # one column per axis, so the index is always one of its columns.
+    coords = path.coordinates_at(distances, crs)
     return get_coord(data=coords[:, index], units=crs.units[index])
+
+
+def _get_geometry_column_coord(path, name, distances):
+    """Return one geometry column which is not a position, with its units."""
+    values = path.column_at(name, distances)
+    if values is None:
+        return None
+    # The path has already refused two segments measuring one column in two
+    # units, so whichever states it states the one they agree on.
+    units = next((x.units[name] for x in path.geometry if name in x.units), None)
+    return get_coord(data=values, units=units)
 
 
 def get_coord_values(inventory, path, name, distances):
@@ -687,7 +701,13 @@ def get_coord_values(inventory, path, name, distances):
             path, track, field or TRACK_IDENTITY_FIELDS[track], distances
         )
     if name in VALID_COORDINATE_LABELS:
-        return _get_geometry_coord(inventory, path, name, distances)
+        # A coordinate label this CRS does not declare is not an axis here,
+        # and is free to be a geometry column of its own -- depth, where the
+        # CRS is spent on easting, northing, and elevation.
+        if (coord := _get_geometry_coord(inventory, path, name, distances)) is not None:
+            return coord
+    if (coord := _get_geometry_column_coord(path, name, distances)) is not None:
+        return coord
     return _get_annotation_coord(path, name, distances)
 
 

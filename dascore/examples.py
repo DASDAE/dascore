@@ -805,7 +805,13 @@ def inventory_patch_pair():
             Geometry(
                 name="trench",
                 distance=(100.0, 400.0),
-                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+                # The canonical axis names, so the segment states the CRS's
+                # axes whatever this inventory's CRS happens to call them.
+                coordinates={
+                    "x": (-117.0, -117.0),
+                    "y": (40.0, 40.1),
+                    "z": (1500.0, 1500.0),
+                },
             ),
         ),
         coupling=(

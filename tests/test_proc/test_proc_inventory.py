@@ -322,6 +322,96 @@ class TestChannelResolution:
             patch.enrich(inventory, attrs=False, coords=("distance",))
 
 
+class TestGeometryColumns:
+    """A geometry column which is not a position still reaches the patch."""
+
+    @staticmethod
+    def _with_depth(inventory, **kwargs):
+        """Add a borehole-depth column over part of the path."""
+        segment = Geometry(
+            name="hole",
+            distance=(100.0, 200.0),
+            coordinates={"borehole_depth": (0.0, 100.0)},
+            units={"borehole_depth": "m"},
+            **kwargs,
+        )
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        return _replace_path(inventory, geometry=(*path.geometry, segment))
+
+    def test_a_column_becomes_a_coordinate(self, patch, inventory):
+        """With the units the segment states for it."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        coord = out.get_coord("borehole_depth")
+        # Channel 0 is path distance 100, the top of the hole.
+        assert coord.values[0] == 0.0
+        assert coord.units is not None and "m" in str(coord.units)
+
+    def test_uncovered_channels_are_nan(self, patch, inventory):
+        """The column covers 100 to 200; the path runs to 400."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        values = out.get_coord("borehole_depth").values
+        assert not np.isnan(values[0])
+        assert np.isnan(values[-1])
+
+    def test_a_blanket_request_includes_it(self, patch, inventory):
+        """It is one of the things the path says about a channel."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False)
+        assert "borehole_depth" in set(out.coords.coord_map)
+
+    def test_get_names_lists_it(self, inventory):
+        """So a reader can find it without opening the CSV."""
+        inv = self._with_depth(inventory)
+        assert "borehole_depth" in inv.get_names().coords
+
+    def test_selection_trims_channels(self, patch, inventory):
+        """Selecting on a column is selecting on the fiber it describes."""
+        inv = self._with_depth(inventory)
+        spool = dc.spool(patch).attach_inventory(inv)
+        out = spool.select(borehole_depth=(0, 50))[0]
+        depth = out.get_coord("distance")
+        # 100 to 150 m of path is the upper half of the hole, and the
+        # acquisition maps path distance 100 onto channel 0.
+        assert depth.max() < patch.get_coord("distance").max()
+
+    def test_an_axis_is_missing_where_nothing_places_the_fiber(self, patch, inventory):
+        """Geometry which measures but does not place defines no axis."""
+        segment = Geometry(
+            name="hole",
+            distance=(100.0, 200.0),
+            coordinates={"borehole_depth": (0.0, 100.0)},
+        )
+        inv = _replace_path(inventory, geometry=(segment,))
+        with pytest.raises(PatchError, match="defines no 'x'"):
+            patch.enrich(inv, attrs=False, coords=("x",))
+        # And a blanket request does not offer one either.
+        out = patch.enrich(inv, attrs=False)
+        assert "x" not in set(out.coords.coord_map)
+        assert "borehole_depth" in set(out.coords.coord_map)
+
+    def test_a_column_does_not_bridge_segments(self, patch, inventory):
+        """Two holes are two holes, and the fiber between them is neither."""
+        first = Geometry(
+            name="hole 1",
+            distance=(100.0, 150.0),
+            coordinates={"borehole_depth": (0.0, 50.0)},
+        )
+        second = Geometry(
+            name="hole 2",
+            distance=(300.0, 350.0),
+            coordinates={"borehole_depth": (0.0, 50.0)},
+        )
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        inv = _replace_path(inventory, geometry=(*path.geometry, first, second))
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        values = out.get_coord("borehole_depth").values
+        assert not np.isnan(values[10])  # in the first hole
+        assert not np.isnan(values[200])  # channel 200 is the top of the second
+        assert np.isnan(values[100])  # between them, and in neither
+
+
 class TestCoords:
     """What the optical path projects onto the patch."""
 
@@ -536,11 +626,18 @@ class TestEdgeCases:
             patch.enrich(inv, attrs=False, coords=("coupling.medium",))
 
     def test_axis_missing_from_geometry(self, patch, inventory):
-        """A two-dimensional geometry has no third axis to return."""
+        """A two-axis CRS has no third axis to return."""
         flat = Geometry(
-            name="flat", distance=(100.0, 400.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+            name="flat",
+            distance=(100.0, 400.0),
+            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)},
         )
-        inv = _replace_path(inventory, geometry=(flat,))
+        crs = CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        inv = _replace_path(
+            inventory.new(coordinate_reference_system=crs), geometry=(flat,)
+        )
         with pytest.raises(PatchError, match="defines no 'z'"):
             patch.enrich(inv, attrs=False, coords=("z",))
 
@@ -680,8 +777,12 @@ class TestEnrichContracts:
 
     def test_geometry_endpoint_is_local(self, patch, inventory):
         """The same rule holds for the geometry track."""
-        first = Geometry(distance=(100.0, 200.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
-        second = Geometry(distance=(300.0, 400.0), coordinates=((3.0, 3.0), (4.0, 4.0)))
+        columns = {"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)}
+        first = Geometry(distance=(100.0, 200.0), coordinates=columns)
+        second = Geometry(
+            distance=(300.0, 400.0),
+            coordinates={"x": (3.0, 4.0), "y": (3.0, 4.0), "z": (3.0, 4.0)},
+        )
         inv = _replace_path(inventory, geometry=(first, second))
         out = patch.enrich(inv, attrs=False, coords=("x",))
         # channel 100 is path distance 200, the last point of the first segment

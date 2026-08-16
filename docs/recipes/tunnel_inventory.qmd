@@ -217,7 +217,7 @@ print("borehole 3 sensing fiber:", at["borehole 3 down"][0], "to", at["borehole 
 
 # Where the fiber is
 
-Geometry places optical distance in space, one row per control point, grouped into segments. The columns after `segment` and `distance` are the axes the coordinate reference system declared, and naming any others is an error rather than an extra.
+Geometry holds the curves measured along the fiber, one row per control point, grouped into segments. A column whose name the coordinate reference system declares is that position axis, and a segment stating one states them all; any other column is a number in its own right, which this deployment has no use for but a borehole survey would.
 
 The survey points are the ones lettered in @fig-tunnel. Each straight run of fiber goes from one to the next, so the table is those points paired with the component that runs between them.
 
