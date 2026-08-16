@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 import pandas as pd
 import pytest
@@ -61,7 +62,10 @@ class TestRegistryURLs:
 
     def test_urls_are_absolute_https(self, registry_df):
         """Every registry url should be an absolute https url."""
-        bad = [url for url in registry_df["url"] if not url.startswith("https://")]
+        split = [(url, urlsplit(url)) for url in registry_df["url"]]
+        # netloc guards against values like "https:///path", which have a
+        # valid scheme but no host and so are not absolute urls.
+        bad = [u for u, parts in split if parts.scheme != "https" or not parts.netloc]
         assert not bad, f"Registry urls must be absolute https urls: {bad}"
 
 
