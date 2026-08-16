@@ -1,0 +1,115 @@
+---
+title: Inventory Attachment
+execute:
+  warning: false
+---
+
+The [inventory tutorial](../tutorial/inventory.qmd) covers what an inventory says and the verbs which use it. This note is about the machinery in between: what happens when a spool has an inventory, when that inventory is read, and why several things which look like they should read it do not.
+
+The short version is that attaching an inventory and reading one are separate events, deliberately, and that most of what a spool does sits between them.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import dascore as dc
+from dascore.examples import inventory_patch_pair
+
+patch, inventory = inventory_patch_pair()
+
+archive = Path(tempfile.mkdtemp()) / "archive"
+archive.mkdir()
+patch.io.write(archive / "patch.h5", "DASDAE")
+inventory.to_yaml(archive / ".inventory.yaml")
+```
+
+## Three moments, at three times
+
+A directory which carries its own inventory involves three separate events, and keeping them apart is most of the design.
+
+| Moment | When | Cost |
+|---|---|---|
+| Discovery | opening the spool | a `stat` of each spelling |
+| Reading | the first question only an inventory can answer | one parse |
+| Refreshing | when asked, and never otherwise | one parse |
+
+Discovery is eager because it has to be: whether the directory carries an inventory is a fact about the directory, and a spool which learned it later would answer the same question two different ways over its lifetime. It is also cheap — [`find_inventory`](`dascore.core.inventory_loader.find_inventory`) stats for `.inventory/`, `.inventory.yaml`, `.inventory.yml`, and `.inventory.json`, and stops.
+
+Reading is lazy because it need not happen at all. A spool opened to count its patches, sort them, chunk them, or extract one has no use for an inventory, and a malformed one must not stop any of that.
+
+```{python}
+spool = dc.spool(archive).update()
+
+# Attached, unread: an InventoryRef holds where it is, not what it says.
+reference = spool._inventory
+assert reference._inventory is None
+
+# None of this is a question an inventory can answer.
+assert len(spool) == 1
+_ = spool.get_contents()
+assert reference._inventory is None
+```
+
+The consequence worth stating plainly: a malformed inventory cannot stop you loading data. Only the inventory-backed calls fail, and when they do they name the directory it came from and say the spool picked it up on opening — which is the part a reader needs, since nobody typed a path for it.
+
+## Deciding without reading
+
+Laziness is only worth having if the decision to read is itself free. A spool asked to `select` has to know whether the query is one the index can answer, and it settles that without touching the inventory.
+
+It can, because the observing-system facts are the *models'* — `gauge_length`, `pulse_width`, `interrogator.model` and the rest are the same set for every inventory that ever existed, so which names an inventory *could* state is known from `dascore.core.inventory` alone. `Spool._classify_query` compares the requested names against three sets: what the index has as attrs, what it has as coordinates, and that fixed vocabulary. Only a name outside all three is a question the inventory must be read to answer.
+
+```{python}
+# A query the index can answer entirely, on a spool with an inventory.
+start = spool.get_contents()["time_min"].min()
+assert len(spool.select(time=(start, None))) == 1
+assert reference._inventory is None
+
+# `zone` is an annotation group; nothing but the inventory knows it.
+_ = spool.select(zone="north")
+assert reference._inventory is not None
+```
+
+One rule inside that decision is worth its own sentence: **a name the index already carries keeps the index's meaning.** If an archive has a `latitude` coordinate of its own, attaching an inventory which could also place channels in latitude does not move that name into the inventory's namespace. The alternative — letting an attachment silently change what an existing name selects on — would make attaching an inventory a data-changing operation, which is exactly what it is designed not to be.
+
+## Comparison never reads either side
+
+Two spools compare equal on what they *are*, and an attachment is a place or a value rather than the document behind it. `InventoryRef.__eq__` compares paths; an `Inventory` compares as itself; a place is never equal to a value.
+
+Resolving both sides and comparing the documents was considered and rejected. It would mean `==` does file I/O, that comparing spools can raise out of an unreadable inventory, and — worst — that the answer depends on whether something happened to read one first. The same reasoning covers `+`: combining two spools compares their attachments, and combining must not be the thing which discovers that a file three directories away is malformed.
+
+## Read once, with no modification time
+
+An inventory is read once and held. There is no modification-time check, and re-reading never happens behind the caller's back.
+
+```{python}
+# Change the file under the running program.
+inventory.new(schema_version=1).to_yaml(archive / ".inventory.yaml")
+
+held = reference._inventory
+_ = spool.select(zone="north")
+assert reference._inventory is held  # the same object; nothing re-read
+```
+
+This is the opposite of how the spool index behaves, and deliberately so. The index is a *cache* whose truth is the files, so a file whose modification time has moved is a thing to re-scan. An inventory is an **input**: a file which changes under a running program is a new input, not a stale one, and quietly adopting it would rewrite metadata on patches which had already been described.
+
+Refreshing is therefore something a program says, not something it gets. `attach_inventory()` with no argument means "the one this directory carries, read it again"; the same path again means the same thing for one named by hand. That is the whole authoring loop — edit the file, re-attach, see the change.
+
+One exception, and it is not really one: a read which *failed* is not a read, and is tried again next time. An unreadable inventory is a thing to go and fix, and holding on to the failure would mean the fix could not be seen without rebuilding the spool.
+
+## One holder, however the spool is sliced
+
+A spool copy-constructs from its parent — `select`, `sort`, and `chunk` each return a new one — so a naive attachment would be copied along with it, and a spool sliced ten ways would read its inventory ten times.
+
+The holder is shared instead. Every spool descended from one attachment points at the same `InventoryRef`, whose read is guarded by a lock held across the parse rather than merely around the assignment, so threads mapping over one spool cannot each read a large authoring directory.
+
+```{python}
+sliced = spool.select(time=(start, None))
+sorted_spool = spool.sort("time")
+chunked = spool.chunk(time=None)
+
+assert sliced._inventory is reference
+assert sorted_spool._inventory is reference
+assert chunked._inventory is reference
+```
+
+Two consequences follow from sharing rather than copying. A spool sliced any number of ways reads its inventory once, which is the point. And two views of one parent can never disagree about what it says — which matters more than the parse it saves, because two slices of one spool giving different metadata for one channel would be a hard bug to see and a harder one to believe.
