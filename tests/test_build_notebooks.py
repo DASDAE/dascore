@@ -201,9 +201,7 @@ class TestSiteUrl:
         monkeypatch.setenv("DASCORE_DOC_SITE_URL", "https://dascore.netlify.app/")
         assert build_notebooks.get_site_url() == "https://dascore.netlify.app"
 
-    def test_links_follow_the_configured_site(
-        self, build_notebooks, tutorial_page
-    ):
+    def test_links_follow_the_configured_site(self, build_notebooks, tutorial_page):
         """A page link should sit under whichever site was requested."""
         out = build_notebooks.qmd_link_to_url(
             "coords.qmd", "", tutorial_page, "https://dascore.netlify.app"

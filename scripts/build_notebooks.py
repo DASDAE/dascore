@@ -148,7 +148,9 @@ def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | Non
         return None
     # Non-python executable blocks render as empty code cells; an empty cell
     # in place of content is worse than no cell at all.
-    cells = [c for c in cells if c["cell_type"] != "code" or "".join(c["source"]).strip()]
+    cells = [
+        c for c in cells if c["cell_type"] != "code" or "".join(c["source"]).strip()
+    ]
     for cell in cells:
         if cell["cell_type"] == "markdown":
             cell["source"] = rewrite_links(cell["source"], source, site_url)
@@ -177,7 +179,8 @@ def build(out_dir: Path, site_url: str) -> int:
     # A crashed run can leave a copy behind, and it would then be rendered
     # into the real site by the next doc build.
     for stale in TUTORIAL_DIR.glob(f"{TEMP_PREFIX}*"):
-        stale.unlink()
+        if stale.is_file():
+            stale.unlink()
     written = 0
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
