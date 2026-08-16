@@ -178,6 +178,19 @@ class TestPostProcess:
         )
         assert build_notebooks.post_process(path, tutorial_page, site_url) is None
 
+    def test_page_with_only_empty_code_is_skipped(
+        self, build_notebooks, tmp_path, tutorial_page, site_url
+    ):
+        """A page whose only code cells are empty has nothing to run.
+
+        Such a page would otherwise yield a notebook holding just the setup
+        cell, which the tutorial page would then advertise as runnable.
+        """
+        cells = [{"cell_type": "markdown", "source": ["hi\n"]}, _code("  \n")]
+        path = tmp_path / "diagrams.ipynb"
+        path.write_text(json.dumps(_notebook(cells)))
+        assert build_notebooks.post_process(path, tutorial_page, site_url) is None
+
 
 class TestExtraPackages:
     """The browser kernel needs a few packages dascore does not require."""

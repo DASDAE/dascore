@@ -136,9 +136,9 @@ Do not modify docs/_quarto.yml because it will be overwritten.
 
 ## Runnable tutorials
 
-Each tutorial page carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
+Every tutorial page with runnable code carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
 
-The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute dascore.org urls, and pointing it at the Pyodide kernel:
+The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute urls on whichever site is being built, and pointing it at the Pyodide kernel:
 
 ```bash
 python scripts/build_notebooks.py

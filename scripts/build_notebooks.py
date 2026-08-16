@@ -144,13 +144,16 @@ def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | Non
     """Adjust a rendered notebook for the browser, or None if it has no code."""
     notebook = json.loads(notebook_path.read_text())
     cells = notebook.get("cells", [])
-    if not any(cell["cell_type"] == "code" for cell in cells):
-        return None
     # Non-python executable blocks render as empty code cells; an empty cell
-    # in place of content is worse than no cell at all.
+    # in place of content is worse than no cell at all. This has to happen
+    # before the check below, or a page whose only code cells are empty
+    # becomes a notebook holding nothing but the setup cell, which the docs
+    # would then advertise as runnable.
     cells = [
         c for c in cells if c["cell_type"] != "code" or "".join(c["source"]).strip()
     ]
+    if not any(cell["cell_type"] == "code" for cell in cells):
+        return None
     for cell in cells:
         if cell["cell_type"] == "markdown":
             cell["source"] = rewrite_links(cell["source"], source, site_url)
