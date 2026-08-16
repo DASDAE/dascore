@@ -6,8 +6,9 @@ project:
   output-dir: _site
   # The JupyterLite site is built by scripts/build_notebooks.py plus
   # `jupyter lite build` (see .github/actions/prep_doc_build); quarto only
-  # copies it. Both directories hold notebooks and prebuilt html, so they are
-  # kept out of the render list -- quarto would otherwise treat them as pages.
+  # copies it. Both directories hold notebooks, and lite/ also holds prebuilt
+  # html, so they are kept out of the render list -- quarto would otherwise
+  # treat them as pages to render.
   resources:
     - lite/**
   render:

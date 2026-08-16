@@ -5,8 +5,8 @@ The .qmd files stay the source of truth; the notebooks are build artifacts.
 Each page is rendered through quarto (from inside the docs project, so the
 cross-reference filter runs) and then adjusted for a browser kernel:
 
-* links to other doc pages become absolute dascore.org urls, since the site
-  is not around to serve relative ones,
+* links to other doc pages become absolute urls on the site being built, since
+  a notebook is opened outside the site and cannot resolve relative ones,
 * the kernelspec points at the Pyodide kernel rather than a local interpreter,
 * a setup cell installing dascore is prepended.
 
@@ -29,6 +29,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 TUTORIAL_DIR = DOCS / "tutorial"
+# Not configurable: docs/filters/lite_button.lua looks for the notebooks here,
+# and prep_doc_build hands the same path to `jupyter lite build`.
+OUT_DIR = DOCS / "lite_contents" / "tutorial"
 
 # Links in the notebooks point back at the rendered site, which differs by
 # deployment: dev publishes to netlify and releases publish to dascore.org.
@@ -55,6 +58,8 @@ SETUP_SOURCE = f"""\
 %pip install -q dascore {" ".join(EXTRA_PACKAGES)}
 """
 
+SETUP_CELL_ID = "dascore-setup"
+
 # Prefix for the transient per-page copies build() renders through quarto.
 TEMP_PREFIX = "lite_tmp_"
 
@@ -77,8 +82,10 @@ def qmd_link_to_url(target: str, anchor: str, source: Path, site_url: str) -> st
         path = Path(target)
     else:
         # Relative to the directory of the page being rendered.
-        path = (source.parent / target).resolve().relative_to(DOCS.resolve())
-        path = Path("/") / path
+        resolved = (source.parent / target).resolve()
+        if not resolved.is_relative_to(DOCS.resolve()):
+            sys.exit(f"{source.name}: link target {target!r} escapes {DOCS}")
+        path = Path("/") / resolved.relative_to(DOCS.resolve())
     return f"{site_url}{path.with_suffix('.html').as_posix()}{anchor or ''}"
 
 
@@ -164,25 +171,54 @@ def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | Non
             cell["execution_count"] = None
     setup = {
         "cell_type": "code",
+        # nbformat 4.5 requires an id on every cell; quarto gives the cells it
+        # renders one, so without this the setup cell is the only invalid cell.
+        "id": SETUP_CELL_ID,
         "execution_count": None,
         "metadata": {},
         "outputs": [],
-        "source": SETUP_SOURCE.splitlines(keepends=True),
+        # No trailing newline on the last line, which would render as a blank
+        # line at the bottom of the first cell every reader sees.
+        "source": SETUP_SOURCE.rstrip("\n").splitlines(keepends=True),
     }
     notebook["cells"] = [setup, *cells]
     notebook["metadata"]["kernelspec"] = KERNELSPEC
     return notebook
 
 
+def find_unrewritten_links(notebook: dict) -> list[str]:
+    """Return any .qmd link targets a notebook still carries.
+
+    LINK_REGEX only recognises the plain `](target.qmd)` form, so a titled or
+    angle-bracketed target would pass through and ship a relative link that
+    404s in JupyterLite. Checking the result catches that at build time rather
+    than leaving it for a reader to click.
+    """
+    markdown = [
+        "".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "markdown"
+    ]
+    return re.findall(r"\]\([^)]*\.qmd[^)]*\)", "\n".join(markdown))
+
+
 def build(out_dir: Path, site_url: str) -> int:
     """Render every tutorial page with code into out_dir."""
     if shutil.which("quarto") is None:
         sys.exit("quarto is required to build the notebooks but was not found")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Rebuilt from scratch: a renamed page, or one that loses its last code
+    # cell, would otherwise leave a notebook behind that still gets published
+    # and still gets a launch link, with content the page no longer matches.
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
     # A crashed run can leave a copy behind, and it would then be rendered
     # into the real site by the next doc build.
     for stale in TUTORIAL_DIR.glob(f"{TEMP_PREFIX}*"):
-        if stale.is_file():
+        # Quarto leaves a `<stem>_files/` sidecar beside the page, so this has
+        # to remove directories too; skipping them republishes them as a
+        # project resource named after an internal temp file.
+        if stale.is_dir():
+            shutil.rmtree(stale)
+        else:
             stale.unlink()
     written = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -196,6 +232,11 @@ def build(out_dir: Path, site_url: str) -> int:
             if notebook is None:
                 print(f"  {source.name}: no code cells, skipping")  # noqa: T201
                 continue
+            if leftover := find_unrewritten_links(notebook):
+                sys.exit(
+                    f"{source.name}: these links were not rewritten and would "
+                    f"break in the notebook: {leftover}"
+                )
             destination = out_dir / f"{source.stem}.ipynb"
             destination.write_text(json.dumps(notebook, indent=1) + "\n")
             print(f"  {source.name} -> {destination.name}")  # noqa: T201
@@ -210,18 +251,12 @@ def main() -> None:
     """Parse arguments and build the notebooks."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--out-dir",
-        type=Path,
-        default=ROOT / "docs" / "lite_contents" / "tutorial",
-        help="Directory to write the notebooks into.",
-    )
-    parser.add_argument(
         "--site-url",
         default=get_site_url(),
         help="Base url the notebooks link back to (env DASCORE_DOC_SITE_URL).",
     )
     args = parser.parse_args()
-    build(args.out_dir.resolve(), args.site_url.rstrip("/"))
+    build(OUT_DIR, args.site_url.rstrip("/"))
 
 
 if __name__ == "__main__":

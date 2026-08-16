@@ -141,11 +141,12 @@ Every tutorial page with runnable code carries an "Open in JupyterLite" link, wh
 The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute urls on whichever site is being built, and pointing it at the Pyodide kernel:
 
 ```bash
+python -m build --wheel
 python scripts/build_notebooks.py
 jupyter lite build --contents docs/lite_contents --output-dir docs/lite --piplite-wheels dist/dascore-*.whl
 ```
 
-CI runs both steps in `.github/actions/prep_doc_build`, before quarto renders the site, and quarto copies `docs/lite` into `_site` as a project resource. A tutorial page only gets the link when a notebook exists for it, so a page with no code cells simply does not show one, and rendering the docs without building the notebooks first drops the links rather than producing broken ones.
+CI runs these steps in `.github/actions/prep_doc_build`, before quarto renders the site, and quarto copies `docs/lite` into `_site` as a project resource. A tutorial page only gets the link when a notebook exists for it, so a page with no code cells simply does not show one, and rendering the docs without building the notebooks first drops the links rather than producing broken ones.
 
 The wheel passed to `--piplite-wheels` is bundled into the site and is what the notebooks' first cell installs. That deliberately pins the tutorials to the same DASCore the surrounding docs were built from, rather than whatever is currently on PyPI.
 

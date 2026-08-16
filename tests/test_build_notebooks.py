@@ -13,9 +13,27 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import sys
 from pathlib import Path
 
 import pytest
+
+# Modules a tutorial may import because dascore requires them (or is them).
+_DASCORE_PROVIDED = {
+    "dascore",
+    "h5py",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pint",
+    "pooch",
+    "pydantic",
+    "rich",
+    "scipy",
+    "upath",
+    "IPython",
+}
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "build_notebooks.py"
@@ -51,6 +69,17 @@ def tutorial_page(build_notebooks):
 def site_url(build_notebooks):
     """The default base url notebooks link back to."""
     return build_notebooks.DEFAULT_SITE_URL
+
+
+@pytest.fixture(scope="module")
+def tutorial_imports(build_notebooks):
+    """Every top-level module imported by a tutorial page's python cells."""
+    modules = set()
+    for page in build_notebooks.TUTORIAL_DIR.glob("*.qmd"):
+        for block in _PYTHON_BLOCK_REGEX.findall(page.read_text()):
+            for name in _IMPORT_REGEX.findall(block):
+                modules.add(name.split(".")[0])
+    return modules
 
 
 class TestQmdLinkToUrl:
@@ -93,20 +122,48 @@ class TestQmdLinkToUrl:
         assert ".qmd" not in out
 
 
-class TestMermaidRegex:
+class TestPrepareSource:
     """Executable mermaid blocks need chrome, so they become plain fences."""
 
-    def test_executable_block_becomes_fence(self, build_notebooks):
-        """```{mermaid} should lose its braces."""
-        text = "intro\n```{mermaid}\ngraph TD;\n```\n"
-        out = build_notebooks.MERMAID_REGEX.sub("```mermaid", text)
-        assert "```mermaid\ngraph TD;" in out
-        assert "{mermaid}" not in out
+    @pytest.fixture()
+    def prepared(self, build_notebooks, tmp_path):
+        """Run prepare_source over a page holding each fence variant."""
+        page = tmp_path / "page.qmd"
+        page.write_text(
+            "intro\n"
+            "```{mermaid}\ngraph TD;\n```\n"
+            "```{python}\nx = 1\n```\n"
+            # Indented, so the line anchor decides whether it is converted.
+            "    ```{mermaid}\nnot a fence\n    ```\n"
+        )
+        out = build_notebooks.prepare_source(page)
+        yield out.read_text(), out, page
+        out.unlink(missing_ok=True)
 
-    def test_indented_python_block_untouched(self, build_notebooks):
+    def test_executable_block_becomes_fence(self, prepared):
+        """```{mermaid} should lose its braces."""
+        text, _, _page = prepared
+        assert "```mermaid\ngraph TD;" in text
+
+    def test_python_block_untouched(self, prepared):
+        """Python fences must still execute, so they keep their braces."""
+        text, _, _page = prepared
+        assert "```{python}\nx = 1" in text
+
+    def test_indented_block_untouched(self, prepared):
         """Only fences at the start of a line are converted."""
-        text = "```{python}\nx = 1\n```\n"
-        assert build_notebooks.MERMAID_REGEX.sub("```mermaid", text) == text
+        text, _, _page = prepared
+        assert "    ```{mermaid}" in text
+
+    def test_copy_sits_beside_the_page(self, build_notebooks, prepared):
+        """The copy must stay in the quarto project to keep the filters.
+
+        Rendered from outside the project, quarto applies no filters and the
+        cross references survive as unresolved aliases.
+        """
+        _text, path, page = prepared
+        assert path.parent == page.parent
+        assert path.name.startswith(build_notebooks.TEMP_PREFIX)
 
 
 def _notebook(cells):
@@ -192,13 +249,50 @@ class TestPostProcess:
         assert build_notebooks.post_process(path, tutorial_page, site_url) is None
 
 
-class TestExtraPackages:
-    """The browser kernel needs a few packages dascore does not require."""
+# Modules a tutorial could import that neither the stdlib nor dascore's
+# requirements provide. Kept as a map so an unaccounted import names the
+# distribution to add to EXTRA_PACKAGES.
+_EXTRA_IMPORTS = {"yaml": "pyyaml", "tabulate": "tabulate", "findiff": "findiff"}
 
-    def test_setup_cell_installs_extras(self, build_notebooks):
-        """Each extra the doc examples import must be in the setup cell."""
-        for package in build_notebooks.EXTRA_PACKAGES:
-            assert package in build_notebooks.SETUP_SOURCE
+_IMPORT_REGEX = re.compile(r"^\s*(?:import|from)\s+([A-Za-z_][\w.]*)", re.MULTILINE)
+# Executable python fences; prose is skipped, or an English sentence opening
+# with "from ..." reads as an import.
+_PYTHON_BLOCK_REGEX = re.compile(r"^```\{python[^}]*\}\n(.*?)^```", re.M | re.S)
+
+
+class TestExtraPackages:
+    """The browser kernel needs packages dascore does not require.
+
+    Note what this can and cannot catch. The three current extras are needed
+    *indirectly* -- dascore optional-imports yaml and findiff, and pandas
+    reaches for tabulate inside `to_markdown` -- so no tutorial imports them by
+    name and nothing here would notice one going missing. That case is covered
+    by running the doc examples under Pyodide in test_wasm.yml, which fails
+    without them. What is left for this file is the case CI would only catch
+    after a reader hits it: a tutorial gaining an import that nobody installs.
+    """
+
+    def test_no_unaccounted_imports(self, build_notebooks, tutorial_imports):
+        """Every module a tutorial imports must be installed in the browser.
+
+        A new import that is neither stdlib, nor supplied by dascore, nor
+        listed in EXTRA_PACKAGES would traceback on the reader's first run.
+        """
+        known = (
+            set(sys.stdlib_module_names)
+            | _DASCORE_PROVIDED
+            | {
+                module
+                for module, distribution in _EXTRA_IMPORTS.items()
+                if distribution in build_notebooks.EXTRA_PACKAGES
+            }
+        )
+        unaccounted = tutorial_imports - known
+        assert not unaccounted, (
+            "these tutorial imports are not installed in the browser; add the "
+            "distribution to EXTRA_PACKAGES in scripts/build_notebooks.py "
+            f"(and to _EXTRA_IMPORTS here if it is new): {sorted(unaccounted)}"
+        )
 
 
 class TestSiteUrl:
