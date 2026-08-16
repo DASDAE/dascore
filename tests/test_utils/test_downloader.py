@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 import pytest
 
@@ -39,6 +41,28 @@ class TestRegistryDF:
             if line.strip() and not line.startswith("#")
         ]
         assert registry_df["name"].tolist() == expected
+
+
+class TestRegistryURLs:
+    """The registry urls must be fetchable from a browser (eg Pyodide)."""
+
+    # github.com/<owner>/<repo>/raw/... answers with a 302 whose
+    # Access-Control-Allow-Origin header is empty. Every hop of a redirect
+    # chain must pass CORS, so browsers abort before reaching the raw host.
+    redirect_pattern = re.compile(r"https?://(www\.)?github\.com/[^/]+/[^/]+/raw/")
+
+    def test_no_redirecting_github_urls(self, registry_df):
+        """Registry urls must not use the redirecting github.com/../raw/ form."""
+        bad = [url for url in registry_df["url"] if self.redirect_pattern.match(url)]
+        assert not bad, (
+            "These registry urls redirect and fail CORS in the browser; use "
+            f"raw.githubusercontent.com instead: {bad}"
+        )
+
+    def test_urls_are_absolute_https(self, registry_df):
+        """Every registry url should be an absolute https url."""
+        bad = [url for url in registry_df["url"] if not url.startswith("https://")]
+        assert not bad, f"Registry urls must be absolute https urls: {bad}"
 
 
 class TestFetch:

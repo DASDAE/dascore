@@ -58,8 +58,15 @@ The name, hash, and url might look something like this:
 ```
 jingle_test_file.jgl
 12e087d2c1cd08c9afd18334e17e21787be0b646151b39802541ee11a516976a
-https://github.com/dasdae/test_data/raw/master/das/jingle_test_file.jgl
+https://raw.githubusercontent.com/dasdae/test_data/master/das/jingle_test_file.jgl
 ```
+
+:::{.callout-important}
+Use `raw.githubusercontent.com` URLs, not `github.com/<owner>/<repo>/raw/...`. The latter is a
+redirect, and the redirect response carries an empty `Access-Control-Allow-Origin` header, so
+browsers refuse it. That breaks fetching data from DASCore running in WebAssembly (Pyodide,
+JupyterLite). `tests/test_utils/test_downloader.py` enforces this.
+:::
 
 ```{python}
 #| eval: false
