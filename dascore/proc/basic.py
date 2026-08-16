@@ -23,9 +23,9 @@ from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
     array_namespace,
-    device,
+    get_device,
     nan_reduce,
-    to_numpy,
+    numpy_fallback_array,
 )
 from dascore.utils.misc import _get_nullish
 from dascore.utils.patch import (
@@ -33,6 +33,19 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
 )
+
+# The dtype kinds the array API standard defines these for. Numpy is more
+# permissive, eg it takes the absolute value of a boolean array.
+_ELEMENTWISE_DTYPES = ("integral", "real floating", "complex floating")
+
+
+def _elementwise(patch, name, numpy_func):
+    """Apply an elementwise function, using the patch's own namespace."""
+    data = patch.data
+    xp = array_namespace(data)
+    if not xp.isdtype(data.dtype, _ELEMENTWISE_DTYPES):
+        return patch.new(data=numpy_fallback_array(name, data, numpy_func))
+    return patch.new(data=getattr(xp, name)(data))
 
 
 def _get_imag(data):
@@ -49,42 +62,6 @@ def _get_angle(data):
     if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
         data = xp.astype(data, xp.float64)
     return xp.atan2(_get_imag(data), xp.real(data))
-
-
-def _pad_data(data, pad_width, constant_values):
-    """
-    Pad data with a constant value.
-
-    The array API standard has no pad, but padding with a constant is
-    just concatenating a block of that value onto each end.
-    """
-    xp = array_namespace(data)
-    for axis, (before, after) in enumerate(pad_width):
-        if not (before or after):
-            continue
-        shape = list(data.shape)
-        blocks = []
-        for count in (before, after):
-            shape[axis] = count
-            block = xp.full(
-                tuple(shape),
-                constant_values,
-                dtype=data.dtype,
-                device=device(data),
-            )
-            blocks.append(block)
-        data = xp.concat((blocks[0], data, blocks[1]), axis=axis)
-    return data
-
-
-def _null_mask(data, include_inf):
-    """Return a mask of the nullish values in data."""
-    xp = array_namespace(data)
-    # Only floating point data can hold a null; anything else, including
-    # the string arrays some formats store, has nothing to find.
-    if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
-        return xp.zeros(data.shape, dtype=xp.bool, device=device(data))
-    return ~xp.isfinite(data) if include_inf else xp.isnan(data)
 
 
 def _as_float(data):
@@ -322,7 +299,7 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return patch.new(data=array_namespace(patch.data).abs(patch.data))
+    return _elementwise(patch, "abs", np.abs)
 
 
 @patch_function(backend="array_api")
@@ -339,7 +316,7 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return patch.new(data=array_namespace(patch.data).conj(patch.data))
+    return _elementwise(patch, "conj", np.conj)
 
 
 @patch_function(backend="array_api")
@@ -353,7 +330,7 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return patch.new(data=array_namespace(patch.data).real(patch.data))
+    return _elementwise(patch, "real", np.real)
 
 
 @patch_function(backend="array_api")
@@ -447,7 +424,7 @@ def normalize(
         raise ValueError(msg)
     # A zero divisor means there is nothing but zeros and nulls to scale, so
     # divide those by one; the zeros stay zero and the nulls stay null.
-    one = xp.asarray(1, dtype=divisor.dtype, device=device(divisor))
+    one = xp.asarray(1, dtype=divisor.dtype, device=get_device(divisor))
     new_data = data / xp.where(divisor == 0, one, divisor)
     return self.new(data=new_data)
 
@@ -541,10 +518,11 @@ def dropna(
     >>> out = patch.dropna("distance", how="all")
     """
     axis = patch.get_axis(dim)
-    data = patch.data
-    xp = array_namespace(data)
-    func = xp.any if how == "any" else xp.all
-    to_drop = _null_mask(data, include_inf)
+    func = np.any if how == "any" else np.all
+    if include_inf:
+        to_drop = ~np.isfinite(patch.data)
+    else:
+        to_drop = pd.isnull(patch.data)
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
@@ -554,18 +532,16 @@ def dropna(
     # get slices for trimming data.
     # Annotated because the entries are not all slices; ty reads the
     # list as list[slice] from its initializer otherwise.
-    # Taken by index rather than by mask; the standard only allows a
-    # boolean index which covers the whole array. This function is still
-    # numpy backed because the output shape depends on the data, which a
-    # lazy backend cannot know without computing it.
-    new_data = xp.take(data, xp.nonzero(to_keep)[0], axis=axis)
+    slices: list[Any] = [slice(None)] * len(patch.dims)
+    slices[axis] = to_keep
+    new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
-    cm = patch.coords.update(**{dim: coord[to_numpy(to_keep)]})
+    cm = patch.coords.update(**{dim: coord[to_keep]})
     attrs = patch.attrs
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     """
     Return a patch with nullish values replaced by a value.
@@ -597,14 +573,17 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    data = patch.data
-    xp = array_namespace(data)
-    to_replace = _null_mask(data, include_inf)
-    fill = xp.asarray(value, dtype=data.dtype, device=device(data))
-    return patch.new(data=xp.where(to_replace, fill, data))
+    if include_inf:
+        to_replace = ~np.isfinite(patch.data)
+    else:
+        to_replace = pd.isnull(patch.data)
+    new_data = patch.data.copy()
+    new_data[to_replace] = value
+
+    return patch.new(data=new_data)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
@@ -715,7 +694,7 @@ def pad(
         new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
 
     # Pad data, update coord manager, and return.
-    new_data = _pad_data(patch.data, pad_width, constant_values)
+    new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
     new_coords = patch.coords.update(**new_coords)
     return patch.new(data=new_data, coords=new_coords)
 
@@ -900,7 +879,7 @@ def full(patch, fill_value):
     """
     data = patch.data
     xp = array_namespace(data)
-    return patch.update(data=xp.full(data.shape, fill_value, device=device(data)))
+    return patch.update(data=xp.full(data.shape, fill_value, device=get_device(data)))
 
 
 @patch_function()

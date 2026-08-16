@@ -903,6 +903,16 @@ class TestArrayBackends:
             out, expected = call(patch), call(numpy_patch)
         self._assert_matches_numpy(out, expected, backend)
 
+    @pytest.mark.parametrize("name", ["abs", "conj", "real", "imag", "angle"])
+    def test_elementwise_on_booleans(self, name, backend_patch, random_patch, backend):
+        """The standard has no absolute value of a boolean, but numpy does."""
+        array = np.asarray(random_patch.data) > 0.5
+        numpy_patch = random_patch.new(data=array)
+        patch = backend_patch.new(data=to_backend_array(backend_patch, array))
+        with suppress_warnings(NumpyFallbackWarning):
+            out, expected = getattr(patch, name)(), getattr(numpy_patch, name)()
+        self._assert_matches_numpy(out, expected, backend)
+
     @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
     def test_normalize_integer_data(self, norm, backend_patch, random_patch, backend):
         """Every normalization divides, so integer data must promote."""

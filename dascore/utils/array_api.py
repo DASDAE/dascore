@@ -29,11 +29,13 @@ __all__ = [
     "backend_name",
     "can_nan_reduce",
     "device",
+    "get_device",
     "is_foreign",
     "is_numpy",
     "is_python_scalar",
     "namespace_name",
     "nan_reduce",
+    "numpy_fallback_array",
     "to_numpy",
     "warn_numpy_fallback",
 ]
@@ -77,6 +79,52 @@ def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
     # Numpy scalars are excluded by is_array but count here; they carry
     # __array_namespace__, so they must not be treated as foreign arrays.
     return is_array(array) or isinstance(array, np.generic)
+
+
+def get_device(array: Any) -> Any:
+    """
+    Return the device an array lives on, or None if it has none.
+
+    Array-likes which only implement __array__ have no device, and None
+    means the default device to every function which takes one.
+
+    Parameters
+    ----------
+    array
+        Any array.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import get_device
+    >>>
+    >>> assert get_device(np.array([1, 2])) is not None
+    """
+    return device(array) if hasattr(array, "device") else None
+
+
+def numpy_fallback_array(name: str, array: Any, func, *args, **kwargs) -> Any:
+    """
+    Apply a numpy function to an array from another backend.
+
+    The array is converted to numpy, the function applied, and the result
+    converted back, with a warning naming what happened.
+
+    Parameters
+    ----------
+    name
+        The name of the operation, used in the warning.
+    array
+        The array to apply func to.
+    func
+        The numpy function to apply.
+    *args
+        Further arguments for func.
+    **kwargs
+        Keyword arguments for func.
+    """
+    warn_numpy_fallback(name, backend_name(array), stacklevel=3)
+    return asarray_like(func(to_numpy(array), *args, **kwargs), array)
 
 
 def is_python_scalar(value: Any) -> bool:
@@ -222,18 +270,27 @@ def to_numpy(array: Any) -> np.ndarray:
     """
     # asarray returns numpy arrays unchanged and handles any backend which
     # implements __array__.
-    with suppress(TypeError, ValueError, RuntimeError):
+    try:
         return np.asarray(array)
-    # Arrays on another device (eg a gpu) refuse implicit conversion and
-    # have to be copied to the host. Which device that is has no standard
-    # spelling: most backends call it "cpu", while array_api_strict names
-    # its own devices and reports the host as the default one.
-    xp = array_namespace(array)
-    for host in (xp.__array_namespace_info__().default_device(), "cpu"):
-        with suppress(TypeError, ValueError, RuntimeError):
-            return np.asarray(to_device(array, host))
-    msg = f"cannot convert an array on device {device(array)} to numpy"
-    raise TypeError(msg)
+    except (TypeError, ValueError, RuntimeError):
+        # Arrays on another device (eg a gpu) refuse implicit conversion
+        # and have to be copied to the host. Which device that is has no
+        # standard spelling: most backends call it "cpu", while
+        # array_api_strict names its own and reports the host as its
+        # default. An array which is already on the host is left alone, so
+        # a failure which had nothing to do with devices keeps its own
+        # exception rather than being reported as one.
+        current = get_device(array)
+        # Something with no device at all cannot be on the wrong one, so
+        # the failure was about something else and belongs to the caller.
+        if current is None:
+            raise
+        xp = array_namespace(array)
+        hosts = (xp.__array_namespace_info__().default_device(), "cpu")
+        for host in (x for x in hosts if x != current):
+            with suppress(TypeError, ValueError, RuntimeError):
+                return np.asarray(to_device(array, host))
+        raise
 
 
 def asarray_like(array: Any, like: Any) -> Any:
@@ -264,7 +321,7 @@ def asarray_like(array: Any, like: Any) -> Any:
 def _replace_nan(array: Any, value: float) -> Any:
     """Return a floating point array with its nans replaced by a value."""
     xp = array_namespace(array)
-    fill = xp.asarray(value, dtype=array.dtype, device=device(array))
+    fill = xp.asarray(value, dtype=array.dtype, device=get_device(array))
     return xp.where(xp.isnan(array), fill, array)
 
 
@@ -291,7 +348,7 @@ def _nan_extremum(name, array, axis, keepdims):
     out = getattr(xp, name)(_replace_nan(array, fill), axis=axis, keepdims=keepdims)
     # Numpy returns nan for a slice of nothing but nans; the fill value would
     # otherwise leak out here.
-    nan = xp.asarray(float("nan"), dtype=array.dtype, device=device(array))
+    nan = xp.asarray(float("nan"), dtype=array.dtype, device=get_device(array))
     return xp.where(_all_nan(array, axis, keepdims), nan, out)
 
 
@@ -303,7 +360,7 @@ def _nan_count(array, axis, keepdims):
     counts = xp.sum(xp.astype(~xp.isnan(array), xp.int64), axis=axis, keepdims=keepdims)
     counts = xp.astype(counts, xp.float64)
     # Empty slices divide to nan rather than raising, as numpy does.
-    nan = xp.asarray(float("nan"), device=device(array))
+    nan = xp.asarray(float("nan"), device=get_device(array))
     return xp.where(counts == 0, nan, counts)
 
 
@@ -324,7 +381,7 @@ def _nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any
     # Only std is left; it needs the mean with the reduced axes still in
     # place. The magnitude keeps complex deviations from cancelling out.
     deviation = xp.abs(array - _nan_reduce("mean", array, axis, keepdims=True)) ** 2
-    zero = xp.asarray(0, dtype=deviation.dtype, device=device(array))
+    zero = xp.asarray(0, dtype=deviation.dtype, device=get_device(array))
     # Masked with the input's nans, not the deviation's; an infinity makes
     # an indeterminate deviation which numpy keeps rather than skips.
     center = xp.sum(
@@ -414,7 +471,8 @@ def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
     if (func := getattr(xp, f"nan{name}", None)) is not None:
         return func(array, axis=axis, keepdims=keepdims)
     if not xp.isdtype(array.dtype, NAN_REDUCE_DTYPES[name]):
-        warn_numpy_fallback(f"nan{name}", backend_name(array))
-        out = getattr(np, f"nan{name}")(to_numpy(array), axis=axis, keepdims=keepdims)
-        return asarray_like(out, array)
+        numpy_func = getattr(np, f"nan{name}")
+        return numpy_fallback_array(
+            f"nan{name}", array, numpy_func, axis=axis, keepdims=keepdims
+        )
     return _nan_reduce(name, array, axis=axis, keepdims=keepdims)

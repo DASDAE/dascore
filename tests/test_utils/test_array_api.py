@@ -76,6 +76,7 @@ class _DeviceArray:
         self._array = array
         self.shape = array.shape
         self.dtype = array.dtype
+        self.device = "elsewhere"
 
     def __array__(self, dtype=None, copy=None):
         msg = "Implicit conversion to a numpy array is not allowed."
@@ -138,9 +139,22 @@ class TestToNumpy:
         array = xps.asarray(np.array([1.0, 2.0]), device=device)
         assert np.allclose(to_numpy(array), [1.0, 2.0])
 
+    def test_keeps_the_real_error(self):
+        """A failure which has nothing to do with devices keeps its own."""
+        dask_array = pytest.importorskip("dask.array")
+
+        def _boom(block):
+            """Fail the way a user's function would."""
+            msg = "the user's function raised"
+            raise ValueError(msg)
+
+        array = dask_array.from_array(np.arange(4.0)).map_blocks(_boom, dtype=float)
+        with pytest.raises(ValueError, match="the user's function raised"):
+            to_numpy(array)
+
     def test_stuck_array(self):
-        """An array which cannot reach the host is an error, not a guess."""
-        with pytest.raises(TypeError, match="cannot convert an array"):
+        """An array which cannot reach the host keeps its own error."""
+        with pytest.raises(TypeError, match="Implicit conversion"):
             to_numpy(_StuckArray(np.array([1.0, 2.0])))
 
 
@@ -311,13 +325,6 @@ ARRAY_API_CASES = {
         setup=lambda patch: patch.dft("time"),
     ),
     "dascore.proc.basic.demean": _Case(calls=(lambda patch: patch.demean("time"),)),
-    "dascore.proc.basic.fillna": _Case(
-        calls=(
-            lambda patch: patch.fillna(0),
-            lambda patch: patch.fillna(1.5, include_inf=False),
-        ),
-        setup=lambda patch: dc.get_example_patch("patch_with_null"),
-    ),
     "dascore.proc.basic.flip": _Case(
         calls=(
             lambda patch: patch.flip("time"),
@@ -338,13 +345,6 @@ ARRAY_API_CASES = {
             lambda patch: patch.normalize("time", norm="l2"),
             lambda patch: patch.normalize("time", norm="max"),
             lambda patch: patch.normalize("time", norm="bit"),
-        ),
-    ),
-    "dascore.proc.basic.pad": _Case(
-        calls=(
-            lambda patch: patch.pad(time=(2, 3), samples=True),
-            lambda patch: patch.pad(time=2, samples=True, expand_coords=False),
-            lambda patch: patch.pad(time=1, samples=True, constant_values=1.0),
         ),
     ),
     "dascore.proc.basic.real": _Case(
