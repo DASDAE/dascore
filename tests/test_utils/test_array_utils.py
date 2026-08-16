@@ -852,17 +852,23 @@ class TestArrayBackends:
             out = np.fmod(backend_patch, 2)
         self._assert_matches_numpy(out, np.fmod(random_patch, 2), backend)
 
-    def test_aggregation_without_equivalent(self, backend_patch, random_patch, backend):
-        """Aggregations the standard lacks are applied by numpy."""
-        with pytest.warns(NumpyFallbackWarning, match="nanmedian"):
-            out = backend_patch.aggregate("time", method="median")
-        expected = random_patch.aggregate("time", method="median")
-        self._assert_matches_numpy(out, expected, backend)
+    def test_reduction_dtype_without_equivalent(
+        self, backend_patch, random_patch, backend
+    ):
+        """A dtype the standard cannot reduce is reduced by numpy."""
+        array = np.asarray(random_patch.data) > 0.5
+        numpy_patch = random_patch.new(data=array)
+        patch = backend_patch.new(data=to_backend_array(backend_patch, array))
+        # The standard has no minimum of a boolean array, but numpy does.
+        with suppress_warnings(NumpyFallbackWarning):
+            out = patch.min("time")
+        self._assert_matches_numpy(out, numpy_patch.min("time"), backend)
 
     def test_multi_dimension_fallback_warns_once(
         self, backend_patch, random_patch, backend
     ):
         """The patch crosses to numpy once, not once per dimension."""
+        # aggregate is numpy backed, so its dispatcher does the conversion.
         with pytest.warns(NumpyFallbackWarning) as warnings_raised:
             out = backend_patch.aggregate(dim=None, method="median")
         assert len(warnings_raised) == 1

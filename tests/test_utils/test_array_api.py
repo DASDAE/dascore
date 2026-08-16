@@ -237,9 +237,6 @@ class _Case(NamedTuple):
 # setup runs on the numpy patch, before it is moved to another backend.
 ARRAY_API_CASES = {
     "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
-    "dascore.proc.aggregate.aggregate": _Case(
-        call=lambda patch: patch.aggregate("time", method="mean"),
-    ),
     "dascore.proc.aggregate.all": _Case(call=lambda patch: patch.all("time")),
     "dascore.proc.aggregate.any": _Case(call=lambda patch: patch.any("time")),
     "dascore.proc.aggregate.max": _Case(call=lambda patch: patch.max("time")),

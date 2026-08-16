@@ -29,7 +29,7 @@ and more details.
 """
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, options=sorted(_AGG_FUNCS))
 def aggregate(
     patch: PatchType,
@@ -39,6 +39,13 @@ def aggregate(
 ) -> PatchType:
     """
     Aggregate values along a specified dimension.
+
+    Notes
+    -----
+    Whether an aggregation can be applied by the patch's own array backend
+    depends on the method, so this function always uses numpy. The
+    shortcuts, such as [`Patch.mean`](`dascore.proc.aggregate.mean`), do
+    not; use those to keep the data on their backend.
 
     Parameters
     ----------

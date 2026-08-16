@@ -4,6 +4,7 @@ Utilities for working with patches and arrays.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import inspect
 from collections.abc import Iterable
@@ -20,21 +21,17 @@ from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
-    backend_name,
-    can_nan_reduce,
     is_foreign,
     is_numpy,
     nan_reduce,
-    to_numpy,
-    warn_numpy_fallback,
 )
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
-    _to_numpy_arg,
     align_patch_coords,
     get_dim_axis_value,
+    numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
 
@@ -480,34 +477,24 @@ class PatchUFunc:
         )
 
 
-def _backend_can_reduce(func, data):
-    """Determine if a reduction can be applied in the data's own namespace."""
-    if (name := NAN_REDUCTIONS.get(func)) is not None:
-        return can_nan_reduce(name, data)
-    return func in REDUCTIONS
-
-
 def _apply_reduction(func, data, axis):
-    """Apply a reduction to data, using its own array namespace if it can."""
+    """
+    Apply a reduction to data, using its own array namespace if it can.
+
+    nan_reduce handles the dtypes the standard cannot reduce.
+    """
     if is_numpy(data):
         return func(data, axis=axis)
     if (name := NAN_REDUCTIONS.get(func)) is not None:
         return nan_reduce(name, data, axis=axis)
+    # Only the shortcuts get here with data from another backend, and they
+    # all name a reduction dascore knows; aggregate itself is numpy backed.
     return getattr(array_namespace(data), REDUCTIONS[func])(data, axis=axis)
 
 
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     """Apply an aggregation operator to patch."""
     data = patch.data
-    # Reductions the standard doesn't define, such as median, and callables
-    # dascore knows nothing about are applied by numpy. The whole patch
-    # crosses the boundary once here rather than once per dimension.
-    if not is_numpy(data) and not _backend_can_reduce(func, data):
-        name = getattr(func, "__name__", "aggregation")
-        warn_numpy_fallback(name, backend_name(data), stacklevel=4)
-        numpy_patch = patch.new(data=to_numpy(data))
-        out = _apply_aggregator(numpy_patch, dim, func, dim_reduce)
-        return out.new(data=asarray_like(out.data, data))
     dims = tuple(iterate(patch.dims if dim is None else dim))
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
     if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):
@@ -637,7 +624,9 @@ def apply_array_func(func, *args, **kwargs):
     """
     _raise_on_out(kwargs)
     if (data := _get_foreign_data(args, kwargs)) is not None:
-        return _numpy_fallback_call(_apply_array_func, func, args, kwargs, data)
+        name = getattr(func, "__name__", "operation")
+        runner = functools.partial(_apply_array_func, func)
+        return numpy_fallback(name, data, runner, args, kwargs, stacklevel=2)
     return _apply_array_func(func, *args, **kwargs)
 
 
@@ -730,18 +719,6 @@ def _backend_can_apply(ufunc, key, args, kwargs, data):
     return _get_backend_ufunc(ufunc, data) is not None
 
 
-def _numpy_fallback_call(runner, func, args, kwargs, data):
-    """Apply an operation numpy can perform but the input's backend cannot."""
-    name = getattr(func, "__name__", "operation")
-    warn_numpy_fallback(name, backend_name(data), stacklevel=3)
-    args = tuple(_to_numpy_arg(x) for x in args)
-    kwargs = {i: _to_numpy_arg(v) for i, v in kwargs.items()}
-    out = runner(func, *args, **kwargs)
-    if isinstance(out, dc.Patch):
-        out = out.new(data=asarray_like(out.data, data))
-    return out
-
-
 def apply_ufunc(ufunc, *args, **kwargs):
     """
     Apply a ufunc to one or more patches.
@@ -792,7 +769,9 @@ def apply_ufunc(ufunc, *args, **kwargs):
     if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
         out = func(ufunc, *args, **kwargs)
     else:
-        out = _numpy_fallback_call(func, ufunc, args, kwargs, data)
+        name = getattr(ufunc, "__name__", "operation")
+        runner = functools.partial(func, ufunc)
+        out = numpy_fallback(name, data, runner, args, kwargs, stacklevel=2)
     return _clear_units_if_bool_dtype(out)
 
 

@@ -275,20 +275,42 @@ def _to_numpy_arg(obj):
     return obj
 
 
-def _numpy_fallback(func, patch, args, kwargs, backend):
-    """Run a numpy-only implementation on non-numpy patches."""
-    warn_numpy_fallback(func.__name__, backend, stacklevel=4)
-    args = tuple(_to_numpy_arg(x) for x in args)
-    kwargs = {i: _to_numpy_arg(v) for i, v in kwargs.items()}
-    numpy_patch = _to_numpy_arg(patch)
-    out = func(numpy_patch, *args, **kwargs)
-    # The function did nothing, so neither should the conversion. This keeps
-    # the identity check the patch function machinery uses for history.
-    if out is numpy_patch:
-        return patch
+def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
+    """
+    Apply a function numpy can perform but the patch's backend cannot.
+
+    Every patch and array argument is converted to numpy, the function is
+    applied, and a patch it returns is converted back to the backend of
+    data. Used wherever dascore meets an operation the array API standard
+    cannot express.
+
+    Parameters
+    ----------
+    name
+        The name of the operation, used in the warning.
+    data
+        The array whose backend the output should end up on.
+    func
+        The function to apply.
+    args
+        Positional arguments for func; patches and arrays are converted.
+    kwargs
+        Keyword arguments for func; patches and arrays are converted.
+    stacklevel
+        The stack level, as understood by warnings.warn, of the caller.
+    """
+    warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
+    converted = tuple(_to_numpy_arg(x) for x in args)
+    kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
+    out = func(*converted, **kwargs)
+    # A function which returned one of its inputs unchanged returns the
+    # original, so callers still see the no-op they would have seen.
+    for original, numpy_arg in zip(args, converted, strict=True):
+        if out is numpy_arg:
+            return original
     # Only patches carry data back to the original backend.
     if isinstance(out, dc.Patch):
-        out = out.new(data=asarray_like(out.data, patch.data))
+        out = out.new(data=asarray_like(out.data, data))
     return out
 
 
@@ -303,7 +325,7 @@ def _dispatch_backend(backends, patch, args, kwargs):
         msg = f"No implementation for {name} arrays. Registered backends: {keys}"
         raise NotImplementedError(msg)
     if key == NUMPY_BACKEND and name != NUMPY_BACKEND:
-        return _numpy_fallback(func, patch, args, kwargs, name)
+        return numpy_fallback(func.__name__, patch.data, func, (patch, *args), kwargs)
     return func(patch, *args, **kwargs)
 
 
