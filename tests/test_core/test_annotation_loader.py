@@ -200,6 +200,42 @@ class TestWhatATableCannotSay:
         loaded = dc.annotations(annotations.save(tmp_path / "picks"))
         assert loaded[0].extra["when"] == "2020-01-01T00:00:00.000000000"
 
+    def test_an_ambiguous_value_is_refused_at_the_write(self, tmp_path):
+        """A value column a table would retype could make a group mix kinds,
+        so the set refuses to write a store it would not read.
+        """
+        frame = pd.DataFrame(
+            {"group": ["phase"] * 2, "value": ["P", "true"], "distance": [1.0, 2.0]}
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        with pytest.raises(ParameterError, match="read back as a boolean"):
+            annotations.save(tmp_path / "picks")
+
+    def test_an_unambiguous_value_still_writes(self, tmp_path):
+        """Only text a table would read as another kind is refused."""
+        frame = pd.DataFrame(
+            {"group": ["phase"] * 2, "value": ["P", "S"], "distance": [1.0, 2.0]}
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+
+    def test_a_non_finite_looking_extra_stays_text(self, tmp_path):
+        """A cell reading 'nan' is text, not a value which then vanishes."""
+        frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "note": ["nan"]})
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded[0].extra["note"] == "nan"
+
+    def test_an_extra_some_rows_leave_blank(self, tmp_path):
+        """A blank cell is unset; the rows which state one still read."""
+        frame = pd.DataFrame(
+            {"group": ["a", "b"], "distance": [1.0, 2.0], "note": ["seen", None]}
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded[0].extra["note"] == "seen"
+        assert "note" not in loaded[1].extra
+
     def test_a_numeric_looking_extra_reads_as_a_number(self, tmp_path):
         """A cell is read the way its own text states it, as every table is."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "zip": ["01234"]})
@@ -208,12 +244,69 @@ class TestWhatATableCannotSay:
         assert loaded[0].extra["zip"] == 1234
 
 
+class TestSavingOverASet:
+    """Writing states the whole directory, not only the parts it has."""
+
+    def test_a_stale_vertices_table_is_cleared(self, with_vertices, regions, tmp_path):
+        """A set without vertices leaves none behind for the next read."""
+        directory = tmp_path / "picks"
+        with_vertices.save(directory)
+        regions.save(directory)
+        assert not (directory / "vertices.csv").exists()
+        assert dc.annotations(directory) == regions
+
+    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
+    def test_a_hand_authored_yaml_is_superseded(self, tmp_path):
+        """Saving a set read from YAML does not leave two attrs files."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "attrs.yaml").write_text(yaml.safe_dump({"dims": list(DIMS)}))
+        (directory / "annotations.csv").write_text("group,distance\nnoise,1.0\n")
+        loaded = dc.annotations(directory)
+        loaded.save(directory)
+        assert not (directory / "attrs.yaml").exists()
+        assert dc.annotations(directory) == loaded
+
+    def test_a_file_owing_this_format_nothing_is_left(self, regions, tmp_path):
+        """Only the spellings a set claims are cleared."""
+        directory = regions.save(tmp_path / "picks")
+        (directory / "attrs.bak").write_text("mine")
+        regions.save(directory)
+        assert (directory / "attrs.bak").read_text() == "mine"
+
+    def test_a_shouted_spelling_is_read_and_superseded(self, regions, tmp_path):
+        """A file is matched by its name, not by its case."""
+        directory = regions.save(tmp_path / "picks")
+        (directory / "attrs.json").rename(directory / "attrs.JSON")
+        loaded = dc.annotations(directory)
+        assert loaded == regions
+        loaded.save(directory)
+        assert {x.name for x in directory.iterdir() if x.stem == "attrs"} == {
+            "attrs.json"
+        }
+
+
 class TestTheDoor:
     """Everything a set may be loaded from goes through one function."""
 
     def test_a_set_is_itself(self, regions):
         """Loading a set which is already loaded hands it back."""
         assert dc.annotations(regions) is regions
+
+    def test_a_set_refuses_overrides(self, regions):
+        """Silently dropping them would make one door mean two things."""
+        with pytest.raises(ParameterError, match="already built"):
+            dc.annotations(regions, dims=("time", "distance"))
+        with pytest.raises(ParameterError, match="already built"):
+            dc.annotations(regions, acquisition_key="N.A.00.das")
+
+    def test_a_directory_refuses_what_it_states(self, regions, tmp_path):
+        """A directory holds its own attributes and vertices."""
+        directory = regions.save(tmp_path / "picks")
+        with pytest.raises(InvalidAnnotationError, match="a set directory"):
+            dc.annotations(directory, attrs={"dims": DIMS})
+        with pytest.raises(InvalidAnnotationError, match="a set directory"):
+            dc.annotations(directory, vertices=pd.DataFrame())
 
     def test_a_dataframe(self):
         """A frame becomes a set, as the constructor makes one."""
@@ -270,14 +363,21 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
             dc.annotations(path)
 
-    def test_stated_as_a_bare_string(self, tmp_path):
-        """A lone string is a sequence of its own letters, so it is refused."""
+    @pytest.mark.parametrize("source", ["file", "caller"])
+    def test_stated_as_a_bare_string(self, tmp_path, source):
+        """One dimension may be a lone string, as the constructor takes it,
+        rather than a sequence of its own letters.
+        """
         directory = tmp_path / "picks"
         directory.mkdir()
-        (directory / "attrs.json").write_text('{"dims": "distance"}')
+        stated = '{"dims": "distance"}' if source == "file" else "{}"
+        (directory / "attrs.json").write_text(stated)
         (directory / "annotations.csv").write_text("group,distance\na,1.0\n")
-        with pytest.raises(InvalidAnnotationError, match="sequence of letters"):
-            dc.annotations(directory)
+        dims = None if source == "file" else "distance"
+        loaded = dc.annotations(directory, dims=dims)
+        assert loaded.dims == ("distance",)
+        # The cells were typed against one dimension, not eight letters.
+        assert loaded[0].region.bounds["distance"] == (1.0, 1.0)
 
     def test_a_document_which_does_not_build(self, tmp_path):
         """A bad stored document is named as a bad file, not as a bad call."""
@@ -432,6 +532,28 @@ class TestTheTables:
         loaded = dc.annotations(path, dims=("time",))
         assert "time" not in loaded[0].region.bounds
 
+    def test_a_minute_resolution_time(self, tmp_path):
+        """Numpy writes only the fields a unit carries, and they all read back."""
+        frame = pd.DataFrame(
+            {
+                "group": ["a"],
+                "time_start": [np.datetime64("2020-01-01T12:30")],
+                "time_end": [np.datetime64("2020-01-01T12:35")],
+            }
+        )
+        annotations = dc.AnnotationSet(frame, dims=("time",))
+        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        assert loaded == annotations
+        assert isinstance(loaded[0].region.bounds["time"][0], np.datetime64)
+
+    def test_a_text_dimension_column_agrees_with_its_region(self):
+        """The frame and the geometry built from it say the same thing."""
+        frame = pd.DataFrame({"time_start": ["2020-01-01"], "time_end": ["2020-01-02"]})
+        out = dc.AnnotationSet(frame, dims=("time",))
+        held = out.to_dataframe()["time_start"][0]
+        assert isinstance(held, pd.Timestamp | np.datetime64)
+        assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01")
+
     def test_an_id_which_looks_like_a_number(self, tmp_path):
         """An id is the label its vertices name it by, never a number."""
         frame = pd.DataFrame({"id": ["1"], "geometry": ["path"]})
@@ -441,6 +563,11 @@ class TestTheTables:
         annotations = dc.AnnotationSet(frame, dims=("distance",), vertices=vertices)
         loaded = dc.annotations(annotations.save(tmp_path / "picks"))
         assert loaded[0].id == "1"
+        # The frame too, not only the model: Annotation.id is typed str, so
+        # it would coerce an int back and hide the damage.
+        assert loaded.to_dataframe()["id"][0] == "1"
+        assert loaded.to_vertices()["id"][0] == "1"
+        assert loaded == annotations
 
 
 class TestWriting:
@@ -487,6 +614,14 @@ class TestWriting:
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"n": 1}]})
         text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
         assert '{""n"": 1}' in text
+
+    def test_an_extra_json_cannot_spell(self, tmp_path):
+        """A nested value with no json type is written as its text rather
+        than dying as a circular reference.
+        """
+        frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"s": {1}}]})
+        text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
+        assert '{""s"": ""1""}' in text
 
     def test_the_attrs_name_their_model(self, regions, tmp_path):
         """The document says what it holds, as every stored object does."""
