@@ -274,8 +274,8 @@ class TestSavingOverASet:
         regions.save(directory)
         assert (directory / "attrs.bak").read_text() == "mine"
 
-    def test_a_shouted_spelling_is_read_and_superseded(self, regions, tmp_path):
-        """A file is matched by its name, not by its case."""
+    def test_a_shouted_suffix_is_read_and_superseded(self, regions, tmp_path):
+        """One data model stands behind a suffix however it is spelled."""
         directory = regions.save(tmp_path / "picks")
         (directory / "attrs.json").rename(directory / "attrs.JSON")
         loaded = dc.annotations(directory)
@@ -393,9 +393,18 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="Extra inputs"):
             dc.annotations(directory)
 
-    def test_the_caller_wins(self, regions, tmp_path):
-        """A caller stating dimensions states them for the whole read."""
+    def test_a_directory_which_states_them_refuses_others(self, regions, tmp_path):
+        """Reading the cells against other dimensions would type them
+        differently and build a set which is not the one stored.
+        """
         directory = regions.save(tmp_path / "picks")
+        with pytest.raises(InvalidAnnotationError, match="its own dimensions"):
+            dc.annotations(directory, dims=("time", "distance"))
+
+    def test_a_directory_which_states_none_takes_them(self, regions, tmp_path):
+        """Where a directory states none, the caller's are the only ones."""
+        directory = regions.save(tmp_path / "picks")
+        (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=("time", "distance")).dims == (
             "time",
             "distance",
@@ -550,6 +559,19 @@ class TestTheTables:
         loaded = dc.annotations(annotations.save(tmp_path / "picks"))
         assert loaded == annotations
         assert isinstance(loaded[0].region.bounds["time"][0], np.datetime64)
+
+    def test_a_dimension_some_rows_leave_blank(self):
+        """Times as text beside empty cells read as times and as unset."""
+        frame = pd.DataFrame(
+            {
+                "group": ["a", "b"],
+                "time_start": ["2020-01-01", None],
+                "time_end": ["2020-01-02", None],
+            }
+        )
+        out = dc.AnnotationSet(frame, dims=("time",))
+        assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01")
+        assert "time" not in out[1].region.bounds
 
     def test_a_text_dimension_column_agrees_with_its_region(self):
         """The frame and the geometry built from it say the same thing."""

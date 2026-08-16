@@ -69,9 +69,11 @@ def _read_object(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError) as error:
         msg = f"Could not read {quote_path(path)}: {error}."
         raise ParameterError(msg) from error
-    # Casefolded, as the inventory matches its object files: a shouted
-    # ATTRS.JSON is the file attrs.json would be, and reading it as YAML
-    # for its spelling would fail on a document which is not wrong.
+    # The suffix is casefolded, as the inventory casefolds its own: an
+    # attrs.JSON is the file attrs.json would be, and reading it as YAML
+    # for its spelling would fail on a document which is not wrong. The
+    # stem is not: the part names are exact, as every other name a format
+    # reserves is.
     if path.suffix.casefold() == OBJECT_SUFFIXES[0]:
         try:
             data = json.loads(text)
@@ -304,6 +306,11 @@ def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
         vertices=kwargs.pop("vertices", None),
     )
     attrs = _read_attrs(directory)
+    # Dimensions too, once the directory has stated them: reading the
+    # cells against other dimensions would type them differently and
+    # build a set which is not the one stored here.
+    if attrs.get("dims"):
+        _refuse_overrides("a directory stating its own dimensions", dims=dims)
     _refuse_stray_tables(directory)
     table = directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}"
     if not table.exists():

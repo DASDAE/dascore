@@ -756,14 +756,24 @@ class AnnotationSet:
         -------
         The directory written to, so a save reads straight back.
         """
+        # Everything is spelled out before the directory is touched: a
+        # table which refuses to be written -- an ambiguous value does --
+        # would otherwise raise with the stale parts already deleted and
+        # the attributes already replaced, leaving half a set behind.
+        # Defaults are dropped from the document, so it says what the set
+        # says; dims has no default, so it is always written, and the
+        # attributes name their own model, which is what the file holds.
+        document = self._attrs.model_dump(mode="json", exclude_defaults=True)
+        annotation_text = _write_table(self._df)
+        vertex_text = None if self._vertices.empty else _write_table(self._vertices)
         directory = pathlib.Path(path)
         directory.mkdir(parents=True, exist_ok=True)
         vertex_table = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
         attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
-        # Only the spellings this format claims, and matched the way the
-        # loader matches them: a notes.txt or an attrs.bak beside them
-        # participates in no convention and is not this function's to
-        # delete, while a shouted attrs.YAML is one the loader would read.
+        # Only the spellings this format claims: a notes.txt or an
+        # attrs.bak beside them participates in no convention and is not
+        # this function's to delete. The suffix is matched without regard
+        # to case, as the loader matches it.
         superseded = [
             x
             for x in directory.iterdir()
@@ -771,19 +781,15 @@ class AnnotationSet:
             and x.suffix.casefold() in OBJECT_SUFFIXES
             and x != attrs_file
         ]
-        if self._vertices.empty:
+        if vertex_text is None:
             superseded.append(vertex_table)
         for stale in superseded:
             stale.unlink(missing_ok=True)
-        # Defaults are dropped, so the document says what the set says;
-        # dims has no default, so it is always written. The attributes name
-        # their own model, which is what the file holds.
-        document = self._attrs.model_dump(mode="json", exclude_defaults=True)
         with open(attrs_file, "w") as stream:
             json.dump(document, stream, indent=2)
-        _write_table(self._df, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
-        if not self._vertices.empty:
-            _write_table(self._vertices, vertex_table)
+        _write_text(annotation_text, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
+        if vertex_text is not None:
+            _write_text(vertex_text, vertex_table)
         return directory
 
     # --- what the set holds
@@ -1479,9 +1485,16 @@ def _write_table(frame: pd.DataFrame, path=None) -> str:
     spelled = pd.DataFrame({name: _writable(frame[name]) for name in frame.columns})
     text = spelled.to_csv(index=False)
     if path is not None:
-        with open(path, "w", newline="", encoding="utf-8") as stream:
-            stream.write(text)
+        _write_text(text, path)
     return text
+
+
+def _write_text(text: str, path) -> None:
+    """Write table text exactly as it was spelled."""
+    # newline="" so the line terminators pandas wrote are the ones which
+    # land, rather than each one growing a carriage return on Windows.
+    with open(path, "w", newline="", encoding="utf-8") as stream:
+        stream.write(text)
 
 
 def _writable(series: pd.Series) -> pd.Series:
