@@ -1040,6 +1040,39 @@ def _overlapping_epochs(items, key) -> list[tuple]:
     return out
 
 
+def _epoch_span(item) -> str:
+    """Name an epoch's range the way an error can show it."""
+    start = "the beginning" if np.isnat(item.start_time) else str(item.start_time)
+    end = "ongoing" if np.isnat(item.end_time) else str(item.end_time)
+    return f"{start} to {end}"
+
+
+def _containment_errors(parent, children, what: str, name) -> list[str]:
+    """
+    Return errors for children whose epoch reaches outside their container.
+
+    A bound a child leaves unset defers to its container rather than
+    reaching past it: an optical path stating no start begins when its
+    fiber array does. A bound it states has to fall inside the range its
+    container states, or the child describes time its container says did
+    not happen -- and since resolution walks down from the container, that
+    is metadata no query can reach.
+    """
+    start, end = parent.start_time, parent.end_time
+    errors = []
+    for child in children:
+        before = not np.isnat(start) and not np.isnat(child.start_time)
+        before = before and child.start_time < start
+        after = not np.isnat(end) and not np.isnat(child.end_time)
+        after = after and child.end_time > end
+        if before or after or not child.overlaps(parent):
+            errors.append(
+                f"{what} {name(child)} is valid {_epoch_span(child)}, outside "
+                f"its container's {_epoch_span(parent)}."
+            )
+    return errors
+
+
 def axis_columns(segment, crs) -> dict[str, int]:
     """
     Return which of a segment's columns name which canonical axis.
@@ -1662,6 +1695,9 @@ class Station(TimeRangedModel):
                 self.channels, lambda x: (x.location_code, x.code)
             )
         ]
+        errors += _containment_errors(
+            self, self.channels, "Channel", lambda x: repr(x.code)
+        )
         if errors:
             msg = f"Station {self.code!r} validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
@@ -1712,6 +1748,12 @@ class FiberArray(TimeRangedModel):
             self.acquisitions, lambda x: (x.location_code, x.code)
         ):
             errors.append(f"Acquisition epochs for {key} overlap in time.")
+        errors += _containment_errors(
+            self, self.optical_paths, "Optical path", lambda x: repr(x.name)
+        )
+        errors += _containment_errors(
+            self, self.acquisitions, "Acquisition", lambda x: repr(x.code)
+        )
         if errors:
             msg = f"Fiber array {self.code!r} validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
@@ -1762,6 +1804,9 @@ class Network(TimeRangedModel):
                 errors.append(
                     f"Duplicate {kind} code {code!r} for overlapping time ranges."
                 )
+            errors += _containment_errors(
+                self, items, kind.capitalize(), lambda x: repr(x.code)
+            )
         if errors:
             msg = f"Network {self.code!r} validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
