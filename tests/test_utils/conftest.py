@@ -1,4 +1,11 @@
-"""Fixtures for testing dascore's utilities."""
+"""
+Fixtures for testing dascore's utilities.
+
+Patch data can be backed by any array library implementing the array API
+standard, so the backend fixtures here run a test once per backend without
+the test naming any of them. See "Testing array backends" in
+docs/contributing/testing.qmd.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +29,14 @@ BACKENDS = {
 
 @pytest.fixture(params=sorted(BACKENDS), scope="class")
 def backend(request) -> str:
-    """The name of the array backend under test."""
+    """
+    The name of the array backend under test.
+
+    Parametrized, so asking for this fixture, or for one which needs it,
+    runs the test against every backend in BACKENDS. The import happens
+    here rather than at the top of the module so an environment without
+    the test extras skips these tests instead of the whole file.
+    """
     module_name, _ = BACKENDS[request.param]
     pytest.importorskip(module_name)
     return request.param

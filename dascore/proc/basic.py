@@ -21,13 +21,65 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
-from dascore.utils.array_api import array_namespace, nan_reduce
+from dascore.utils.array_api import (
+    array_namespace,
+    asarray_like,
+    is_python_scalar,
+    nan_reduce,
+    to_numpy,
+)
 from dascore.utils.misc import _get_nullish
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
+
+
+def _get_imag(data):
+    """Return the imaginary part, which is zero for real data."""
+    xp = array_namespace(data)
+    if xp.isdtype(data.dtype, "complex floating"):
+        return xp.imag(data)
+    return xp.zeros_like(data)
+
+
+def _get_angle(data):
+    """Return the phase angle of the data; the standard has no function."""
+    xp = array_namespace(data)
+    if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        data = xp.astype(data, xp.float64)
+    return xp.atan2(_get_imag(data), xp.real(data))
+
+
+def _pad_data(data, pad_width, constant_values):
+    """
+    Pad data with a constant value.
+
+    The array API standard has no pad, but padding with a constant is
+    just concatenating a block of that value onto each end.
+    """
+    xp = array_namespace(data)
+    for axis, (before, after) in enumerate(pad_width):
+        if not (before or after):
+            continue
+        shape = list(data.shape)
+        blocks = []
+        for count in (before, after):
+            shape[axis] = count
+            blocks.append(xp.full(tuple(shape), constant_values, dtype=data.dtype))
+        data = xp.concat((blocks[0], data, blocks[1]), axis=axis)
+    return data
+
+
+def _null_mask(data, include_inf):
+    """Return a mask of the nullish values in data."""
+    xp = array_namespace(data)
+    # Only floating point data can hold a null; anything else, including
+    # the string arrays some formats store, has nothing to find.
+    if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        return xp.zeros(data.shape, dtype=xp.bool)
+    return ~xp.isfinite(data) if include_inf else xp.isnan(data)
 
 
 def _as_float(data):
@@ -254,7 +306,7 @@ def update(
     return self.__class__(data=data, coords=coords, attrs=attrs)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def abs(patch: PatchType) -> PatchType:
     """
     Take the absolute value of the patch data.
@@ -265,10 +317,10 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return patch.new(data=np.abs(patch.data))
+    return patch.new(data=array_namespace(patch.data).abs(patch.data))
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def conj(patch: PatchType) -> PatchType:
     """
     Apply the complex conjugate of the patch data.
@@ -282,10 +334,10 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return patch.new(data=np.conj(patch.data))
+    return patch.new(data=array_namespace(patch.data).conj(patch.data))
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def real(patch: PatchType) -> PatchType:
     """
     Return a new patch with the real part of the data array.
@@ -296,10 +348,10 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return patch.new(data=np.real(patch.data))
+    return patch.new(data=array_namespace(patch.data).real(patch.data))
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def imag(patch: PatchType) -> PatchType:
     """
     Return a new patch with the imaginary part of the data array.
@@ -310,10 +362,10 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return patch.new(data=np.imag(patch.data))
+    return patch.new(data=_get_imag(patch.data))
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 def angle(patch: PatchType) -> PatchType:
     """
     Return a new patch with the phase angles from the data array.
@@ -324,7 +376,7 @@ def angle(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.angle()
     """
-    return patch.new(data=np.angle(patch.data))
+    return patch.new(data=_get_angle(patch.data))
 
 
 @patch_function(data_type="", backend="array_api")
@@ -484,11 +536,10 @@ def dropna(
     >>> out = patch.dropna("distance", how="all")
     """
     axis = patch.get_axis(dim)
-    func = np.any if how == "any" else np.all
-    if include_inf:
-        to_drop = ~np.isfinite(patch.data)
-    else:
-        to_drop = pd.isnull(patch.data)
+    data = patch.data
+    xp = array_namespace(data)
+    func = xp.any if how == "any" else xp.all
+    to_drop = _null_mask(data, include_inf)
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
@@ -498,16 +549,18 @@ def dropna(
     # get slices for trimming data.
     # Annotated because the entries are not all slices; ty reads the
     # list as list[slice] from its initializer otherwise.
-    slices: list[Any] = [slice(None)] * len(patch.dims)
-    slices[axis] = to_keep
-    new_data = patch.data[tuple(slices)]
+    # Taken by index rather than by mask; the standard only allows a
+    # boolean index which covers the whole array. This function is still
+    # numpy backed because the output shape depends on the data, which a
+    # lazy backend cannot know without computing it.
+    new_data = xp.take(data, xp.nonzero(to_keep)[0], axis=axis)
     coord = patch.get_coord(dim)
-    cm = patch.coords.update(**{dim: coord[to_keep]})
+    cm = patch.coords.update(**{dim: coord[to_numpy(to_keep)]})
     attrs = patch.attrs
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     """
     Return a patch with nullish values replaced by a value.
@@ -539,17 +592,14 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    if include_inf:
-        to_replace = ~np.isfinite(patch.data)
-    else:
-        to_replace = pd.isnull(patch.data)
-    new_data = patch.data.copy()
-    new_data[to_replace] = value
-
-    return patch.new(data=new_data)
+    data = patch.data
+    xp = array_namespace(data)
+    to_replace = _null_mask(data, include_inf)
+    fill = xp.asarray(value, dtype=data.dtype)
+    return patch.new(data=xp.where(to_replace, fill, data))
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
@@ -660,12 +710,12 @@ def pad(
         new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
 
     # Pad data, update coord manager, and return.
-    new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
+    new_data = _pad_data(patch.data, pad_width, constant_values)
     new_coords = patch.coords.update(**new_coords)
     return patch.new(data=new_data, coords=new_coords)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def roll(patch, samples=False, update_coord=False, **kwargs):
     """
     Roll patch array elements along a given dimension.
@@ -700,7 +750,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
 
-    roll_arr = np.roll(arr, value, axis=axis)
+    roll_arr = array_namespace(arr).roll(arr, value, axis=axis)
 
     # update coords if True
     if update_coord:
@@ -711,7 +761,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     return patch.new(data=roll_arr)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def where(
     patch: PatchType, cond: ArrayLike | PatchType, other: Any | PatchType = np.nan
 ) -> PatchType:
@@ -764,19 +814,24 @@ def where(
 
     cond = cond.data if isinstance(cond, cls) else cond
     other = other.data if isinstance(other, cls) else other
-    cond_array, other_array = array(cond), array(other)
+    cond_array = array(cond)
 
     # Ensure condition is boolean
-    if not np.issubdtype(cond_array.dtype, np.bool_):
+    if not array_namespace(cond_array).isdtype(cond_array.dtype, "bool"):
         msg = "Condition must be a boolean array or patch with boolean data"
         raise ValueError(msg)
 
-    # Use numpy.where to apply condition
-    new_data = np.where(cond_array, patch.data, other_array)
-    return patch.new(data=new_data)
+    # The operands have to share the patch's array namespace, except a
+    # python scalar, which every backend takes and promotes as numpy does.
+    data = patch.data
+    xp = array_namespace(data)
+    cond_array = asarray_like(cond_array, data)
+    if not is_python_scalar(other):
+        other = asarray_like(array(other), data)
+    return patch.new(data=xp.where(cond_array, data, other))
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def flip(patch, *dims, flip_coords=True):
     """
     Flip patch data and (optionally coords) along specified dimensions.
@@ -807,12 +862,12 @@ def flip(patch, *dims, flip_coords=True):
     if not dims:
         return patch  # no-op
     axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes) if dims else patch.data
+    data = array_namespace(patch.data).flip(patch.data, axis=axes)
     coords = patch.coords.flip(*dims) if flip_coords else patch.coords
     return patch.new(data=data, coords=coords)
 
 
-@patch_function(data_type="")
+@patch_function(data_type="", backend="array_api")
 def full(patch, fill_value):
     """
     Return an identical patch with the data replaced by fill_value.
@@ -836,8 +891,8 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    array = np.full(patch.data.shape, fill_value)
-    return patch.update(data=array)
+    xp = array_namespace(patch.data)
+    return patch.update(data=xp.full(patch.data.shape, fill_value))
 
 
 @patch_function()

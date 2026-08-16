@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import NamedTuple
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -220,45 +221,137 @@ class TestNonStandardArrayLike:
         assert out.dims == array_like_patch.dims[::-1]
 
 
+def _assert_coords_match(out, expected):
+    """
+    Assert two patches have the same coordinates.
+
+    Compared value by value rather than with ==, since a coordinate can
+    hold nulls, eg after a pad which doesn't expand it, and a null is not
+    equal to itself.
+    """
+    assert out.coords.dims == expected.coords.dims
+    assert set(out.coords.coord_map) == set(expected.coords.coord_map)
+    for name in expected.coords.coord_map:
+        left, right = out.get_array(name), expected.get_array(name)
+        assert left.dtype == right.dtype
+        null = pd.isnull(left)
+        assert np.array_equal(null, pd.isnull(right))
+        assert np.array_equal(left[~null], right[~null])
+
+
 def _identity(patch):
     """Return the patch unchanged."""
     return patch
 
 
 class _Case(NamedTuple):
-    """How to exercise one patch function on a non-numpy backend."""
+    """
+    How to exercise one patch function on a non-numpy backend.
 
-    call: Callable
+    Each entry in calls is run as its own test, so covering another
+    argument combination costs one line.
+    """
+
+    calls: tuple[Callable, ...]
     setup: Callable = _identity
 
 
 # Every patch function which declares the array API backend needs an entry
-# here, which is also the inventory of what has been converted so far.
-# setup runs on the numpy patch, before it is moved to another backend.
+# here, which is also the inventory of what has been converted so far. The
+# test below collects the patch functions dascore defines and fails if one
+# declares the array API backend without an entry.
+#
+# setup runs on the numpy patch, before it is moved to another backend, so
+# a function which is still numpy backed can be used to build the input
+# without its own conversion warning muddying the case.
 ARRAY_API_CASES = {
-    "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
-    "dascore.proc.aggregate.all": _Case(call=lambda patch: patch.all("time")),
-    "dascore.proc.aggregate.any": _Case(call=lambda patch: patch.any("time")),
-    "dascore.proc.aggregate.max": _Case(call=lambda patch: patch.max("time")),
-    "dascore.proc.aggregate.mean": _Case(call=lambda patch: patch.mean("time")),
-    "dascore.proc.aggregate.min": _Case(call=lambda patch: patch.min("time")),
-    "dascore.proc.aggregate.std": _Case(call=lambda patch: patch.std("time")),
-    "dascore.proc.aggregate.sum": _Case(call=lambda patch: patch.sum("time")),
-    "dascore.proc.basic.demean": _Case(call=lambda patch: patch.demean("time")),
+    "dascore.proc.aggregate.all": _Case(calls=(lambda patch: patch.all("time"),)),
+    "dascore.proc.aggregate.any": _Case(calls=(lambda patch: patch.any("time"),)),
+    "dascore.proc.aggregate.max": _Case(calls=(lambda patch: patch.max("time"),)),
+    "dascore.proc.aggregate.mean": _Case(calls=(lambda patch: patch.mean("time"),)),
+    "dascore.proc.aggregate.min": _Case(calls=(lambda patch: patch.min("time"),)),
+    "dascore.proc.aggregate.std": _Case(calls=(lambda patch: patch.std("time"),)),
+    "dascore.proc.aggregate.sum": _Case(calls=(lambda patch: patch.sum("time"),)),
+    "dascore.proc.basic.abs": _Case(calls=(lambda patch: patch.abs(),)),
+    "dascore.proc.basic.angle": _Case(
+        calls=(lambda patch: patch.angle(),),
+        setup=lambda patch: patch.dft("time"),
+    ),
+    "dascore.proc.basic.conj": _Case(
+        calls=(lambda patch: patch.conj(),),
+        setup=lambda patch: patch.dft("time"),
+    ),
+    "dascore.proc.basic.demean": _Case(calls=(lambda patch: patch.demean("time"),)),
+    "dascore.proc.basic.fillna": _Case(
+        calls=(
+            lambda patch: patch.fillna(0),
+            lambda patch: patch.fillna(1.5, include_inf=False),
+        ),
+        setup=lambda patch: dc.get_example_patch("patch_with_null"),
+    ),
+    "dascore.proc.basic.flip": _Case(
+        calls=(
+            lambda patch: patch.flip("time"),
+            lambda patch: patch.flip(*patch.dims),
+            lambda patch: patch.flip("time", flip_coords=False),
+        ),
+    ),
+    "dascore.proc.basic.full": _Case(
+        calls=(lambda patch: patch.full(1.0), lambda patch: patch.full(0)),
+    ),
+    "dascore.proc.basic.imag": _Case(
+        calls=(lambda patch: patch.imag(),),
+        setup=lambda patch: patch.dft("time"),
+    ),
     "dascore.proc.basic.normalize": _Case(
-        call=lambda patch: patch.normalize("time", norm="l2"),
+        calls=(
+            lambda patch: patch.normalize("time", norm="l1"),
+            lambda patch: patch.normalize("time", norm="l2"),
+            lambda patch: patch.normalize("time", norm="max"),
+            lambda patch: patch.normalize("time", norm="bit"),
+        ),
+    ),
+    "dascore.proc.basic.pad": _Case(
+        calls=(
+            lambda patch: patch.pad(time=(2, 3), samples=True),
+            lambda patch: patch.pad(time=2, samples=True, expand_coords=False),
+            lambda patch: patch.pad(time=1, samples=True, constant_values=1.0),
+        ),
+    ),
+    "dascore.proc.basic.real": _Case(
+        calls=(lambda patch: patch.real(),),
+        setup=lambda patch: patch.dft("time"),
+    ),
+    "dascore.proc.basic.roll": _Case(
+        calls=(
+            lambda patch: patch.roll(time=5, samples=True),
+            lambda patch: patch.roll(time=5, samples=True, update_coord=True),
+        ),
     ),
     "dascore.proc.basic.standardize": _Case(
-        call=lambda patch: patch.standardize("time"),
+        calls=(lambda patch: patch.standardize("time"),),
+    ),
+    "dascore.proc.basic.where": _Case(
+        calls=(
+            lambda patch: patch.where(patch.data > 0),
+            lambda patch: patch.where(patch > 0),
+            lambda patch: patch.where(patch.data > 0, other=0),
+        ),
+    ),
+    "dascore.proc.coords.update_coords": _Case(
+        calls=(
+            lambda patch: patch.update_coords(distance=patch.get_array("distance") + 1),
+        ),
     ),
     "dascore.proc.coords.make_broadcastable_to": _Case(
-        call=lambda patch: patch.make_broadcastable_to((patch.shape[0], 3)),
+        calls=(lambda patch: patch.make_broadcastable_to((patch.shape[0], 3)),),
         setup=lambda patch: patch.mean("time"),
     ),
     "dascore.proc.coords.squeeze": _Case(
-        call=lambda patch: patch.squeeze(),
+        calls=(lambda patch: patch.squeeze(),),
         setup=lambda patch: patch.select(distance=0, samples=True),
     ),
+    "dascore.proc.coords.transpose": _Case(calls=(lambda patch: patch.transpose(),)),
 }
 
 
@@ -275,6 +368,13 @@ def _get_patch_functions() -> dict[str, Callable]:
                 out[f"{obj.__module__}.{obj.__qualname__}"] = obj
     return out
 
+
+# One test per argument combination, per backend.
+_CASE_CALLS = [
+    (name, index)
+    for name, case in sorted(ARRAY_API_CASES.items())
+    for index in range(len(case.calls))
+]
 
 PATCH_FUNCTIONS = _get_patch_functions()
 ARRAY_API_FUNCTIONS = {
@@ -300,25 +400,31 @@ class TestArrayApiPatchFunctions:
         stale = sorted(set(ARRAY_API_CASES) - set(ARRAY_API_FUNCTIONS))
         assert not stale, f"remove the ARRAY_API_CASES entry for: {stale}"
 
-    @pytest.mark.parametrize("name", sorted(ARRAY_API_CASES))
-    def test_backend_preserved(self, name, random_patch, to_backend, backend):
+    @pytest.mark.parametrize("name,index", _CASE_CALLS)
+    def test_backend_preserved(self, name, index, random_patch, to_backend, backend):
         """The function runs on another backend, unconverted, with no warning."""
         case = ARRAY_API_CASES[name]
+        call = case.calls[index]
         numpy_patch = case.setup(random_patch)
         patch = to_backend(numpy_patch)
         with warnings_as_errors():
-            out = case.call(patch)
+            out = call(patch)
         # A function which returns its input proves nothing about the backend.
         assert out is not patch
         assert backend_name(out.data) == backend
         # The whole patch must match what the numpy implementation returns.
-        expected = case.call(numpy_patch)
+        expected = call(numpy_patch)
         array = np.asarray(out.data)
         assert array.dtype == expected.data.dtype
         assert out.dims == expected.dims
-        assert out.coords == expected.coords
-        assert out.attrs == expected.attrs
         assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
+        _assert_coords_match(out, expected)
+        # History records the arguments, whose repr differs by backend.
+        exclude = {"history"}
+        assert out.attrs.model_dump(exclude=exclude) == expected.attrs.model_dump(
+            exclude=exclude
+        )
+        assert len(out.attrs.history) == len(expected.attrs.history)
 
 
 class TestRegisterBackend:

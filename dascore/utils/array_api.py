@@ -30,6 +30,7 @@ __all__ = [
     "device",
     "is_foreign",
     "is_numpy",
+    "is_python_scalar",
     "namespace_name",
     "nan_reduce",
     "to_numpy",
@@ -75,6 +76,27 @@ def is_numpy(array: Any) -> TypeGuard[np.ndarray]:
     # Numpy scalars are excluded by is_array but count here; they carry
     # __array_namespace__, so they must not be treated as foreign arrays.
     return is_array(array) or isinstance(array, np.generic)
+
+
+def is_python_scalar(value: Any) -> bool:
+    """
+    Return True if the value is a scalar every array API function accepts.
+
+    Parameters
+    ----------
+    value
+        Any object.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import is_python_scalar
+    >>>
+    >>> assert is_python_scalar(1.0)
+    >>> assert not is_python_scalar(np.float64(1.0))  # subclasses float
+    """
+    # Not isinstance; np.float64 subclasses float but is not a python scalar.
+    return type(value) in (int, float, bool)
 
 
 def is_foreign(array: Any) -> bool:

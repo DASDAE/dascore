@@ -235,7 +235,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     return self.new(coords=new_coord, dims=new_coord.dims, attrs=self.attrs)
 
 
-@patch_function()
+@patch_function(backend="array_api")
 def update_coords(self: PatchType, **kwargs) -> PatchType:
     """
     Update the coordinates of a patch.

@@ -891,6 +891,18 @@ class TestArrayBackends:
             expected = getattr(numpy_patch, name)("time")
         self._assert_matches_numpy(out, expected, backend)
 
+    @pytest.mark.parametrize("dtype", ["int32", "bool"])
+    @pytest.mark.parametrize("name", ["angle", "fillna"])
+    def test_non_float_data(self, name, dtype, backend_patch, random_patch, backend):
+        """Data which can hold neither a fraction nor a null still work."""
+        array = (np.asarray(random_patch.data) * 10).astype(dtype)
+        numpy_patch = random_patch.new(data=array)
+        patch = backend_patch.new(data=to_backend_array(backend_patch, array))
+        call = (lambda x: x.angle()) if name == "angle" else (lambda x: x.fillna(0))
+        with suppress_warnings(NumpyFallbackWarning):
+            out, expected = call(patch), call(numpy_patch)
+        self._assert_matches_numpy(out, expected, backend)
+
     @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
     def test_normalize_integer_data(self, norm, backend_patch, random_patch, backend):
         """Every normalization divides, so integer data must promote."""

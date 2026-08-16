@@ -23,6 +23,7 @@ from dascore.utils.array_api import (
     asarray_like,
     is_foreign,
     is_numpy,
+    is_python_scalar,
     nan_reduce,
 )
 from dascore.utils.misc import iterate
@@ -196,12 +197,6 @@ def _get_backend_ufunc(ufunc, array):
     return getattr(array_namespace(array), name, None)
 
 
-def _is_python_scalar(value):
-    """Return True for a scalar every array API function accepts."""
-    # Not isinstance; np.float64 subclasses float but is not a python scalar.
-    return type(value) in (int, float, bool)
-
-
 def _is_inexact(array):
     """Return True if the array holds real or complex floating point values."""
     xp = array_namespace(array)
@@ -212,7 +207,7 @@ def _as_backend(value, template):
     """Put a ufunc operand in the same array namespace as template."""
     # Python scalars are valid operands for any backend, as are arrays which
     # already belong to it.
-    if _is_python_scalar(value) or array_namespace(value) is array_namespace(template):
+    if is_python_scalar(value) or array_namespace(value) is array_namespace(template):
         return value
     return asarray_like(value, template)
 
@@ -675,7 +670,7 @@ def _get_foreign_data(args, kwargs):
 
 def _operand_can_apply(value, data):
     """Determine if a ufunc operand can be used with the data's namespace."""
-    if _is_python_scalar(value):
+    if is_python_scalar(value):
         return True
     if getattr(value, "dtype", None) is None:
         return False
