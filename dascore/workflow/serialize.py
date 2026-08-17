@@ -42,7 +42,8 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array_api import is_foreign, to_numpy
-from dascore.utils.misc import _maybe_make_parent_directory, optional_import
+from dascore.utils.documents import DocumentFormat, read_document, write_document
+from dascore.utils.paths import quote_path
 from dascore.warnings import DASCoreWarning
 
 # The two encoding modes; see the module docstring.
@@ -77,9 +78,15 @@ _TIMEDELTA = "$timedelta64"
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
 DIGEST_SIZE = 8
 
-# The suffixes a document is written and read as YAML for; anything else is
-# JSON, which is what a suffix-less path gets.
+# The suffixes a workflow is written and read as, enumerated rather than
+# inferred: a path spelled `.txt` is a caller who meant something this does
+# not do, and picking a format for them would hide it. A path with no
+# suffix at all is JSON.
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+JSON_SUFFIXES = frozenset({".json", ""})
+
+# Named when pyyaml is missing, which it may be: it is an optional install.
+_REQUIRED_FOR = "reading and writing a workflow as YAML"
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -179,31 +186,42 @@ def decode(obj: Any) -> Any:
     return obj
 
 
-def write_document(document: Mapping, path: Path) -> Path:
+def write_workflow(document: Mapping, path: Path) -> Path:
     """
-    Write a document to a file, in the format its suffix names.
+    Write a workflow document to a file, in the format its suffix names.
 
-    ``.yaml`` and ``.yml`` write YAML; every other suffix writes JSON.
+    ``.yaml`` and ``.yml`` write YAML, ``.json`` and a bare name write
+    JSON, and anything else is refused.
     """
-    path = Path(path)
-    _maybe_make_parent_directory(path)
-    if path.suffix.lower() in YAML_SUFFIXES:
-        yaml = optional_import("yaml", required_for="writing a workflow as YAML")
-        text = yaml.safe_dump(dict(document), sort_keys=False)
-    else:
-        text = json.dumps(document, indent=2, sort_keys=True)
-    path.write_text(text, encoding="utf-8")
-    return path
+    return write_document(
+        document, path, _file_format(path), required_for=_REQUIRED_FOR
+    )
 
 
-def read_document(path: Path) -> Any:
-    """Return the document a file holds; see `write_document`."""
-    path = Path(path)
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() in YAML_SUFFIXES:
-        yaml = optional_import("yaml", required_for="reading a workflow from YAML")
-        return yaml.safe_load(text)
-    return json.loads(text)
+def read_workflow(path: Path) -> Any:
+    """Return the workflow document a file holds; see `write_workflow`."""
+    return read_document(
+        path,
+        _file_format(path),
+        error=ParameterError,
+        holds="describes no workflow",
+        required_for=_REQUIRED_FOR,
+    )
+
+
+def _file_format(path: Path) -> DocumentFormat:
+    """Return the format a path names, refusing a suffix which names none."""
+    suffix = Path(path).suffix.lower()
+    if suffix in YAML_SUFFIXES:
+        return "yaml"
+    if suffix in JSON_SUFFIXES:
+        return "json"
+    msg = (
+        f"{quote_path(Path(path))} has a suffix which names no format. Use "
+        f"one of {sorted(YAML_SUFFIXES | JSON_SUFFIXES - {''})}, or no "
+        "suffix at all."
+    )
+    raise ParameterError(msg)
 
 
 def _digest_bytes(data: bytes | memoryview) -> str:

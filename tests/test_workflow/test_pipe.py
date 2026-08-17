@@ -288,6 +288,32 @@ class TestDocuments:
         assert not text.lstrip().startswith("{")
         assert "tasks:" in text
 
+    def test_unknown_suffix_refused(self, chain, tmp_path):
+        """A suffix which names no format is refused, not guessed at."""
+        with pytest.raises(ParameterError, match="names no format"):
+            chain.save(tmp_path / "pipe.txt")
+
+    def test_unparsable_file(self, chain, tmp_path):
+        """A file which does not parse names itself in the error."""
+        path = tmp_path / "pipe.json"
+        path.write_text("{not json at all")
+        with pytest.raises(ParameterError, match="Could not parse JSON"):
+            Pipe.load(path)
+
+    def test_unparsable_yaml(self, chain, tmp_path):
+        """A YAML file which does not parse says so as YAML."""
+        path = tmp_path / "pipe.yaml"
+        path.write_text("tasks: [unclosed")
+        with pytest.raises(ParameterError, match="Could not parse YAML"):
+            Pipe.load(path)
+
+    def test_file_holding_no_document(self, chain, tmp_path):
+        """A file holding something other than a document is refused."""
+        path = tmp_path / "pipe.json"
+        path.write_text("[1, 2, 3]")
+        with pytest.raises(ParameterError, match="describes no workflow"):
+            Pipe.load(path)
+
     def test_edited_document_refused(self, chain, tmp_path):
         """A document whose fingerprint disagrees with it is refused."""
         document = chain.to_dict()

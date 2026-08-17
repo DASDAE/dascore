@@ -29,7 +29,7 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
 from dascore.workflow.pipe import Pipe, unique_name
-from dascore.workflow.serialize import read_document, write_document
+from dascore.workflow.serialize import read_workflow, write_workflow
 from dascore.workflow.task import Task
 
 
@@ -336,12 +336,12 @@ class Provenance(DascoreBaseModel):
         """
         Write this record to a file.
 
-        The suffix picks the format, as it does for a pipe: ``.yaml`` or
-        ``.yml`` write YAML, anything else writes JSON.
+        The suffix picks the format, as it does for a pipe; see
+        [`write_workflow`](`dascore.workflow.serialize.write_workflow`).
         """
-        return write_document(self.to_dict(), Path(path))
+        return write_workflow(self.to_dict(), Path(path))
 
     @classmethod
     def load(cls, path: str | Path) -> Provenance:
         """Return the record a file holds; see `save`."""
-        return cls.from_dict(read_document(Path(path)))
+        return cls.from_dict(read_workflow(Path(path)))

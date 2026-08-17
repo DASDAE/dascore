@@ -39,7 +39,7 @@ from pydantic import Field, model_validator
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
-from dascore.workflow.serialize import digest, read_document, write_document
+from dascore.workflow.serialize import digest, read_workflow, write_workflow
 from dascore.workflow.task import Task
 
 # What separates a node id from the number which makes it unique, when one
@@ -278,15 +278,15 @@ class Pipe(DascoreBaseModel):
         """
         Write this pipe to a file.
 
-        The suffix picks the format: ``.yaml`` or ``.yml`` write YAML, and
-        anything else writes JSON.
+        The suffix picks the format; see
+        [`write_workflow`](`dascore.workflow.serialize.write_workflow`).
         """
-        return write_document(self.to_dict(), Path(path))
+        return write_workflow(self.to_dict(), Path(path))
 
     @classmethod
     def load(cls, path: str | Path) -> Pipe:
         """Return the pipe a file holds; see `save`."""
-        return cls.from_dict(read_document(Path(path)))
+        return cls.from_dict(read_workflow(Path(path)))
 
     def to_mermaid(self) -> str:
         """

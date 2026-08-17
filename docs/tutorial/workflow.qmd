@@ -141,7 +141,7 @@ print(branched.to_mermaid())
 
 ## Saving and loading
 
-A pipe can be written to JSON or YAML — the suffix decides — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name.
+A pipe can be written to JSON or YAML — `.yaml` and `.yml` write YAML, `.json` or a bare name write JSON, and any other suffix is refused rather than guessed at — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name.
 
 ```{python}
 import tempfile
