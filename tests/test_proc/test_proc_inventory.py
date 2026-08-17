@@ -525,7 +525,7 @@ class TestCoords:
         assert "zone" in set(out.coords.coord_map)
 
     def test_point_markers_cover_nothing(self, patch, inventory):
-        """An label marking a spot documents it without covering it."""
+        """A label marking a spot documents it without covering it."""
         labels = (
             OpticalPathLabel(
                 start_distance=150.0, end_distance=150.0, group="zone", value="clamp"

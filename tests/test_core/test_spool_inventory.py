@@ -1497,7 +1497,7 @@ class TestSharedNames:
 
     def test_a_group_may_share_an_attrs_name(self, patch, inventory):
         """
-        An label group is free to be named after an acquisition field.
+        A label group is free to be named after an acquisition field.
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the

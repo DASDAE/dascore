@@ -1132,7 +1132,7 @@ class TestTrackTables:
         ],
     )
     def test_a_value_is_read_as_its_text_states(self, make_inventory, text, expected):
-        """A CSV has no types, so an label's value is read by content."""
+        """A CSV has no types, so a label's value is read by content."""
         files = {
             **MINIMAL,
             **TRACKS,

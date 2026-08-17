@@ -405,7 +405,7 @@ def check_stampable(name: str, rows: pd.DataFrame) -> None:
     """
     Refuse a stamp which would overwrite the plan's own bookkeeping.
 
-    An label group may be named anything the inventory does not
+    A label group may be named anything the inventory does not
     reserve, and the stamp is assigned onto the outputs — so a group
     called `output_id` would replace the column binding each output to
     its members, and one called `time_min` an envelope. Overwriting a

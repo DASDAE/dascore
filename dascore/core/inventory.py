@@ -115,11 +115,11 @@ ResourceIdStr = Annotated[
 
 
 def _label_value(value):
-    """Normalize an label value so its Python type survives validation."""
+    """Normalize a label value so its Python type survives validation."""
     return normalize_value(value, error=InvalidInventoryError)
 
 
-# The value kind decides an label group's shape, so it must be exact.
+# The value kind decides a label group's shape, so it must be exact.
 LabelValue = Annotated[str | bool | int | float, BeforeValidator(_label_value)]
 
 
@@ -714,14 +714,14 @@ class OpticalPathLabel(_IntervalModel):
     @field_validator("value")
     @classmethod
     def _reject_empty_string(cls, value):
-        """An label whose value is empty states nothing.
+        """A label whose value is empty states nothing.
 
         It would also be indistinguishable from an uncovered channel, since
         a string coordinate spells absence as the empty string.
         """
         if isinstance(value, str) and not value:
             msg = (
-                "An label value may not be the empty string; it would "
+                "A label value may not be the empty string; it would "
                 "state nothing and would read as an uncovered channel."
             )
             raise ValueError(msg)
@@ -1146,7 +1146,7 @@ def _track_identity_fields() -> Mapping[str, str]:
     return MappingProxyType(out)
 
 
-# Names an label group may not take: a group becomes a patch coordinate
+# Names a label group may not take: a group becomes a patch coordinate
 # at enrichment, where it would shadow one of these.
 RESERVED_GROUP_NAMES = frozenset(
     {"time", "distance", "channel", "instrument_distance"}
@@ -1358,7 +1358,7 @@ class OpticalPath(TimeRangedModel):
             for name in sorted(x for x in spans if "." in x)
         ]
         errors += [
-            f"{name!r} is both a geometry column and an label group; "
+            f"{name!r} is both a geometry column and a label group; "
             "one name is one coordinate."
             for name in sorted(set(spans) & groups)
         ]
