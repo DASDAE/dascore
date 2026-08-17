@@ -192,10 +192,27 @@ class TestPythonTimes:
         """A pandas timedelta is the same span as numpy's."""
         assert digest(pd.Timedelta("5s")) == digest(np.timedelta64(5, "s"))
 
-    def test_out_of_range_time(self):
-        """A time nanoseconds cannot hold is refused, not truncated."""
+    @pytest.mark.parametrize("value", ["1500-01-01", "2300-01-01"])
+    def test_out_of_range_time(self, value):
+        """
+        A time nanoseconds cannot hold is refused.
+
+        Numpy wraps such a time silently on some versions and raises on
+        others, so hashing whatever it wrapped to would make two centuries
+        apart the same parameter.
+        """
         with pytest.raises(ParameterError, match="nanoseconds"):
-            digest(np.datetime64("1500-01-01"))
+            digest(np.datetime64(value))
+
+    def test_sub_nanosecond_time(self):
+        """A span too fine for nanoseconds is refused, not truncated."""
+        with pytest.raises(ParameterError, match="nanoseconds"):
+            digest(np.timedelta64(5, "ps"))
+
+    def test_not_a_time_round_trips(self):
+        """A missing time is a value like any other."""
+        assert np.isnat(round_trip(np.datetime64("NaT", "s")))
+        assert np.isnat(round_trip(np.timedelta64("NaT", "s")))
 
 
 class TestNumbersAndBytes:
@@ -288,6 +305,18 @@ class TestArrays:
         """An array of times digests as the instants it holds."""
         seconds = np.array([1, 2], dtype="datetime64[s]")
         assert digest(seconds) == digest(seconds.astype("datetime64[ns]"))
+
+    def test_time_array_with_missing_values(self):
+        """An array of times may hold missing ones."""
+        times = np.array(["2020-01-01", "NaT"], dtype="datetime64[s]")
+        out = round_trip(times)
+        assert out[0] == times[0] and np.isnat(out[1])
+
+    def test_out_of_range_time_array(self):
+        """An array holding a time nanoseconds cannot hold is refused."""
+        times = np.array(["1500-01-01"], dtype="datetime64[s]")
+        with pytest.raises(ParameterError, match="nanoseconds"):
+            digest(times)
 
     def test_zero_dimensional_object_array(self):
         """A zero dimensional object array holds one value, not none."""

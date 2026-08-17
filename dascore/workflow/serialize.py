@@ -261,12 +261,17 @@ def _encode_time(value: np.datetime64 | np.timedelta64) -> Any:
     tag = _DATETIME if isinstance(value, np.datetime64) else _TIMEDELTA
     unit = "datetime64[ns]" if tag == _DATETIME else "timedelta64[ns]"
     try:
-        return {tag: int(value.astype(unit).astype(np.int64))}
+        out = value.astype(unit)
     except OverflowError:
-        # DASCore works in nanoseconds throughout, so a time outside that
-        # range is refused here rather than silently truncated.
+        out = None
+    # DASCore works in nanoseconds throughout, and a time outside that range
+    # wraps silently -- to a value centuries away -- on some numpy versions
+    # and raises on others. Either way it is refused rather than hashed as
+    # whatever it wrapped to, which is checked by converting it back.
+    if out is None or (not np.isnat(value) and out.astype(value.dtype) != value):
         msg = f"{value} cannot be represented in nanoseconds."
-        raise ParameterError(msg) from None
+        raise ParameterError(msg)
+    return {tag: int(out.astype(np.int64))}
 
 
 def _to_datetime64(value: datetime.datetime | datetime.date) -> np.datetime64:
@@ -364,12 +369,29 @@ def _normalize_array(array: np.ndarray) -> np.ndarray:
     # Times normalize to nanoseconds for the same reason scalar ones do: the
     # unit an array of times was built with is not part of its values.
     if dtype.kind in "Mm":
-        dtype = np.dtype(f"<{dtype.kind}8[ns]")
+        return _times_as_nanoseconds(array)
     # A big-endian array holds the same values as its little-endian twin, so
     # the byte order it happens to be stored in is normalized away.
     elif dtype.byteorder == ">":
         dtype = dtype.newbyteorder("<")
     return array.astype(dtype, copy=False)
+
+
+def _times_as_nanoseconds(array: np.ndarray) -> np.ndarray:
+    """Return an array of times as nanoseconds, refusing any which wrap."""
+    # An out of range time raises on some numpy versions and wraps silently
+    # -- to a value centuries away -- on others, so both are refused; see
+    # `_encode_time`.
+    try:
+        out = array.astype(np.dtype(f"<{array.dtype.kind}8[ns]"))
+        kept = ~np.isnat(array)
+        wrapped = not np.array_equal(out[kept].astype(array.dtype), array[kept])
+    except OverflowError:
+        wrapped = True
+    if wrapped:
+        msg = "Some times in the array cannot be represented in nanoseconds."
+        raise ParameterError(msg)
+    return out
 
 
 def _array_data(array: np.ndarray) -> Any:
