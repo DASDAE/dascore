@@ -8,23 +8,26 @@ python values into a JSON tree with a fixed shape, then hashes its canonical
 text.
 
 Two modes exist. ``"fingerprint"`` encodes values for hashing: an array
-becomes a digest of its bytes, a parameter left at ``None`` is dropped, and
-values which cannot be reconstructed are named rather than reproduced.
-``"document"`` encodes values for storage: an array becomes a nested list, and
-nothing is dropped, so that reading the document back gives the value again.
+becomes a digest of its bytes and a value left at ``None`` is dropped.
+``"document"`` encodes values for storage: an array becomes a nested list and
+nothing is dropped, so most values read back. A function, a partial, or a
+value with no encoding of its own is named rather than reproduced in either
+mode, and a dataframe has no document form at all; decoding any of them
+raises.
 
-Stability rests on four things which do not change between python versions:
-`json`, `repr` of a float, numpy's byte layout, and blake2b. Python's own
-``hash`` is never used -- it is salted per process.
+Stability rests on `json`, `repr` of a float, numpy's byte layout and blake2b,
+none of which change between python versions, and -- for frames and quantities
+only -- on pandas' object hash and pint's short unit format. Python's own
+``hash`` is never used: it is salted per process.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import inspect
 import json
-import threading
-import weakref
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Set
 from enum import Enum
 from functools import partial
@@ -37,8 +40,9 @@ from pint import Quantity
 
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
-from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_model_tag
+from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array_api import is_foreign, to_numpy
+from dascore.warnings import DASCoreWarning
 
 # The two encoding modes; see the module docstring.
 FINGERPRINT = "fingerprint"
@@ -47,11 +51,15 @@ DOCUMENT = "document"
 EncodeMode = Literal["fingerprint", "document"]
 
 # Every tag is a single key starting with "$", which no python identifier and
-# no dascore field name can be, so a tagged value is never mistaken for a
-# plain mapping.
+# no dascore field name can be. A mapping whose keys come from data rather
+# than from source can still hold one, so `_encode_mapping` writes any
+# mapping with a "$" key as an escaped `$dict` instead; without that a lone
+# {"$datetime64": 0} key would read back, and fingerprint, as a datetime.
 _ARRAY = "$array"
 _BOOL = "$bool"
+_BYTES = "$bytes"
 _CALLABLE = "$callable"
+_COMPLEX = "$complex"
 _DATAFRAME = "$dataframe"
 _DATETIME = "$datetime64"
 _DICT = "$dict"
@@ -67,15 +75,6 @@ _TIMEDELTA = "$timedelta64"
 
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
 DIGEST_SIZE = 8
-
-# Digests of arrays already seen, keyed by id. An array passed to the same
-# call in a loop -- a mask given to `where`, an inventory given to `enrich` --
-# is then hashed once rather than once per patch. Entries are dropped when
-# the array is collected, so the cache holds no array alive and cannot grow
-# past what the caller is already holding.
-_ARRAY_DIGESTS: dict[int, str] = {}
-_ARRAY_REFS: dict[int, weakref.ref] = {}
-_ARRAY_LOCK = threading.Lock()
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -192,6 +191,17 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         return _encode_time(obj)
     if isinstance(obj, np.generic):
         return _encode_value(obj.item(), mode)
+    # A pandas Timestamp is a datetime and a Timedelta is a timedelta, so
+    # both are covered here. Without them a time DASCore accepts everywhere
+    # would fall through to the opaque tag and lose its value.
+    if isinstance(obj, datetime.datetime | datetime.date):
+        return _encode_time(_to_datetime64(obj))
+    if isinstance(obj, datetime.timedelta):
+        return _encode_time(np.timedelta64(obj))
+    if isinstance(obj, complex):
+        return {_COMPLEX: [_encode_float(obj.real), _encode_float(obj.imag)]}
+    if isinstance(obj, bytes | bytearray):
+        return {_BYTES: bytes(obj).hex()}
     if isinstance(obj, Quantity):
         return _encode_quantity(obj, mode)
     if isinstance(obj, Enum):
@@ -203,7 +213,7 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         return {_SLICE: [_encode_value(x, mode) for x in parts]}
     if obj is Ellipsis:
         return {_ELLIPSIS: True}
-    if _is_task(obj):
+    if isinstance(obj, _task_class()):
         # Checked before the model branch below, which every task also
         # answers to: a task carries a version its fields do not show.
         return {_TASK: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
@@ -223,7 +233,7 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         return _encode_partial(obj, mode)
     if callable(obj):
         return _encode_callable(obj)
-    return {_OPAQUE: _spell_type(type(obj))}
+    return _encode_opaque(obj)
 
 
 def _encode_value(obj: Any, mode: EncodeMode) -> Any:
@@ -250,7 +260,22 @@ def _encode_time(value: np.datetime64 | np.timedelta64) -> Any:
     """
     tag = _DATETIME if isinstance(value, np.datetime64) else _TIMEDELTA
     unit = "datetime64[ns]" if tag == _DATETIME else "timedelta64[ns]"
-    return {tag: int(value.astype(unit).astype(np.int64))}
+    try:
+        return {tag: int(value.astype(unit).astype(np.int64))}
+    except OverflowError:
+        # DASCore works in nanoseconds throughout, so a time outside that
+        # range is refused here rather than silently truncated.
+        msg = f"{value} cannot be represented in nanoseconds."
+        raise ParameterError(msg) from None
+
+
+def _to_datetime64(value: datetime.datetime | datetime.date) -> np.datetime64:
+    """Return a python date or datetime as a numpy one."""
+    # An aware datetime is moved onto UTC, which is the only zone numpy has;
+    # converting one directly is deprecated and then dropped.
+    if isinstance(value, datetime.datetime) and value.tzinfo is not None:
+        value = value.astimezone(datetime.UTC).replace(tzinfo=None)
+    return np.datetime64(value)
 
 
 def _encode_quantity(value: Quantity, mode: EncodeMode) -> Any:
@@ -263,10 +288,21 @@ def _encode_quantity(value: Quantity, mode: EncodeMode) -> Any:
     return {_QUANTITY: [_encode_value(value.magnitude, mode), f"{value.units:~}"]}
 
 
+def model_values(model: DascoreBaseModel) -> dict[str, Any]:
+    """
+    Return a model's fields and extras, as the objects they are.
+
+    Not model_dump: a dump turns a nested model into a plain mapping, losing
+    which class it was, and its json mode adds a key which is not a field.
+    """
+    out = {name: getattr(model, name) for name in type(model).model_fields}
+    out.update(model.__pydantic_extra__ or {})
+    return out
+
+
 def _encode_model(model: DascoreBaseModel, mode: EncodeMode) -> Any:
     """Encode a dascore model as its tag and its fields."""
-    fields = {name: getattr(model, name) for name in type(model).model_fields}
-    fields.update(model.__pydantic_extra__ or {})
+    fields = model_values(model)
     # A class no tag can name -- a parametrized generic -- is still spelled
     # out, so that two of them do not fingerprint alike; a document holding
     # one refuses to decode rather than rebuilding the wrong class.
@@ -276,12 +312,14 @@ def _encode_model(model: DascoreBaseModel, mode: EncodeMode) -> Any:
 
 def _encode_dataframe(df: pd.DataFrame | pd.Series, mode: EncodeMode) -> Any:
     """
-    Encode a dataframe as a digest of its values.
+    Encode a dataframe as a digest of its labels, dtypes and values.
 
-    A frame is a parameter to exactly one patch function today
-    (``coords_from_df``) and hashing it is all a fingerprint needs. It has no
-    document form: writing a frame into a pipe file, with its dtypes and its
-    index, is a storage format rather than a parameter encoding.
+    The labels are hashed as well as the values because a frame's columns
+    are parameters in their own right: ``coords_from_df`` names the coords
+    it builds after them.
+
+    There is no document form: a frame, with its dtypes and its index, is a
+    storage format rather than a parameter encoding.
     """
     if mode == DOCUMENT:
         msg = (
@@ -289,74 +327,70 @@ def _encode_dataframe(df: pd.DataFrame | pd.Series, mode: EncodeMode) -> Any:
             "task the values it needs instead of the frame holding them."
         )
         raise ParameterError(msg)
-    hashed = pd.util.hash_pandas_object(df, index=True).to_numpy()
-    return {_DATAFRAME: _digest_bytes(hashed.tobytes())}
+    frame = df.to_frame() if isinstance(df, pd.Series) else df
+    values = pd.util.hash_pandas_object(df, index=True).to_numpy()
+    payload = {
+        "columns": [str(x) for x in frame.columns],
+        "dtypes": [str(x) for x in frame.dtypes],
+        "values": _digest_bytes(values.tobytes()),
+    }
+    return {_DATAFRAME: digest(payload)}
 
 
 def _encode_array(array: Any, mode: EncodeMode) -> Any:
     """Encode an array by its dtype, shape and contents."""
-    original = array
+    # hash_array lives in dascore.utils.array, which imports dascore itself,
+    # so naming it at module scope is a cycle; it is the tree's one array
+    # hash and is used rather than repeated.
+    from dascore.utils.array import hash_array  # noqa: PLC0415
+
     array = to_numpy(array) if is_foreign(array) else np.asarray(array)
     if array.dtype == object:
         # An object array holds python values, which have no bytes to hash;
         # each element is encoded on its own terms instead.
-        return [_encode_value(x, mode) for x in array.tolist()]
-    # A big-endian array holds the same values as its little-endian twin, so
-    # the byte order it happens to be stored in is normalized away.
-    array = array.astype(array.dtype.newbyteorder("<"), copy=False)
+        return _encode_value(array.tolist(), mode)
+    array = _normalize_array(array)
     out = {"dtype": array.dtype.str, "shape": list(array.shape)}
     if mode == DOCUMENT:
-        out["data"] = _encode_value(array.tolist(), mode)
+        out["data"] = _encode_value(_array_data(array), mode)
     else:
-        out["hash"] = _array_digest(array, original)
+        out["hash"] = hash_array(array)
     return {_ARRAY: out}
 
 
-def _array_digest(array: np.ndarray, original: Any) -> str:
-    """
-    Return the digest of an array's bytes, hashing each array once.
-
-    The cache is keyed on the array the caller passed rather than on the
-    normalized copy, which is a fresh object every call and would never hit.
-    """
-    key = id(original)
-    with _ARRAY_LOCK:
-        if (out := _ARRAY_DIGESTS.get(key)) is not None:
-            return out
-    # A view, and any datetime array, cannot export a buffer directly, so
-    # the values are copied into a layout numpy can hand out as bytes.
-    out = _digest_bytes(np.ascontiguousarray(array).view(np.uint8).data)
-    _remember_array(key, original, out)
-    return out
+def _normalize_array(array: np.ndarray) -> np.ndarray:
+    """Return the array in the layout its values are hashed and written in."""
+    dtype = array.dtype
+    # Times normalize to nanoseconds for the same reason scalar ones do: the
+    # unit an array of times was built with is not part of its values.
+    if dtype.kind in "Mm":
+        dtype = np.dtype(f"<{dtype.kind}8[ns]")
+    # A big-endian array holds the same values as its little-endian twin, so
+    # the byte order it happens to be stored in is normalized away.
+    elif dtype.byteorder == ">":
+        dtype = dtype.newbyteorder("<")
+    return array.astype(dtype, copy=False)
 
 
-def _remember_array(key: int, array: np.ndarray, value: str) -> None:
-    """Cache an array's digest for as long as the array itself lives."""
-
-    def _forget(_ref, key=key):
-        with _ARRAY_LOCK:
-            _ARRAY_DIGESTS.pop(key, None)
-            _ARRAY_REFS.pop(key, None)
-
-    # A view of another array, or an array a backend owns, may refuse a weak
-    # reference; the digest is then simply not cached.
-    try:
-        ref = weakref.ref(array, _forget)
-    except TypeError:
-        return
-    with _ARRAY_LOCK:
-        _ARRAY_DIGESTS[key] = value
-        _ARRAY_REFS[key] = ref
+def _array_data(array: np.ndarray) -> Any:
+    """Return an array's values in a form a document can hold."""
+    # tolist gives a datetime array back as python datetimes, which lose
+    # their unit; the counts they are stored as do not.
+    if array.dtype.kind in "Mm":
+        return array.view(np.int64).tolist()
+    return array.tolist()
 
 
 def _encode_mapping(mapping: Mapping, mode: EncodeMode) -> Any:
     """
-    Encode a mapping, dropping what a fingerprint should not see.
+    Encode a mapping, dropping every None in fingerprint mode.
 
-    A parameter left at None is dropped in fingerprint mode: a call which
-    passes a default explicitly is the same call as one which leaves it out.
+    A parameter left at its None default is then the same call as one left
+    out. It applies at every depth, so a dict parameter loses its None
+    values too: ``{"time": None, "distance": (1, 2)}`` encodes as
+    ``{"distance": (1, 2)}``.
     """
-    if not all(isinstance(key, str) for key in mapping):
+    if not all(isinstance(key, str) and not key.startswith("$") for key in mapping):
         return _encode_odd_keyed_mapping(mapping, mode)
     items = mapping.items()
     if mode == FINGERPRINT:
@@ -365,7 +399,12 @@ def _encode_mapping(mapping: Mapping, mode: EncodeMode) -> Any:
 
 
 def _encode_odd_keyed_mapping(mapping: Mapping, mode: EncodeMode) -> Any:
-    """Encode a mapping whose keys are not all strings as sorted pairs."""
+    """
+    Encode a mapping as sorted pairs, which any key can survive.
+
+    Used for a mapping whose keys are not all strings, and for one holding a
+    key which would otherwise be read back as a tag.
+    """
     pairs = [
         [_encode_value(key, mode), _encode_value(value, mode)]
         for key, value in mapping.items()
@@ -417,6 +456,23 @@ def _source_digest(func: Callable) -> str | None:
     return _digest_bytes(source.encode("utf8"))
 
 
+def _encode_opaque(obj: Any) -> Any:
+    """
+    Encode a value nothing else describes by naming its class.
+
+    Two values of such a class are indistinguishable, so this warns: a
+    fingerprint which cannot see a parameter's value is a fingerprint two
+    different calls can share.
+    """
+    name = _spell_type(type(obj))
+    msg = (
+        f"A value of type {name} has no encoding of its own, so only its "
+        "type is hashed. Two different values of it share one fingerprint."
+    )
+    warnings.warn(msg, DASCoreWarning, stacklevel=2)
+    return {_OPAQUE: name}
+
+
 def _spell_type(cls: type) -> str:
     """Spell a class the way an opaque encoding names it."""
     # Never repr(obj): the default holds the object's address, which changes
@@ -434,12 +490,13 @@ def _is_array(obj: Any) -> bool:
     return isinstance(obj, np.ndarray) or is_foreign(obj)
 
 
-def _is_task(obj: Any) -> bool:
-    """Return True if an object is a Task, without importing one."""
-    # Not an isinstance check: task.py imports this module, so naming Task
-    # here is a cycle. Every Task is a DascoreBaseModel and is checked
-    # before this, so only a Task reaches it with a `to_dict`.
-    return hasattr(obj, "fingerprint") and hasattr(obj, "to_dict")
+def _task_class() -> type:
+    """Return the Task class, which cannot be named at module scope."""
+    # task.py imports this module, so importing it back is deferred; the
+    # module object is in sys.modules by the time any value is encoded.
+    from dascore.workflow.task import Task  # noqa: PLC0415
+
+    return Task
 
 
 def _decode_mapping(obj: Mapping) -> Any:
@@ -449,11 +506,6 @@ def _decode_mapping(obj: Mapping) -> Any:
         if (decoder := _DECODERS.get(key)) is not None:
             return decoder(obj[key])
     return {key: decode(value) for key, value in obj.items()}
-
-
-def _decode_float(value: str) -> float:
-    """Decode one of the floats JSON cannot spell."""
-    return float(value)
 
 
 def _decode_datetime(value: int) -> np.datetime64:
@@ -491,19 +543,21 @@ def _decode_array(value: Mapping) -> np.ndarray:
             "values, so the array itself cannot be read back from it."
         )
         raise ParameterError(msg)
-    array = np.asarray(decode(value["data"]), dtype=np.dtype(value["dtype"]))
+    dtype = np.dtype(value["dtype"])
+    data = decode(value["data"])
+    # A time array is written as the counts it is stored as, so it is read
+    # back as those before it is given its dtype again.
+    source = np.int64 if dtype.kind in "Mm" else dtype
+    array = np.asarray(data, dtype=source).astype(dtype)
     return array.reshape(value["shape"])
 
 
 def _decode_model(value: Mapping) -> DascoreBaseModel:
     """Decode a dascore model from its tag and fields."""
-    cls = resolve_model_tag(value[TAG_FIELD])
-    if cls is None:
-        msg = (
-            f"Nothing registers the {TAG_FIELD} {value[TAG_FIELD]!r}, so the "
-            "model it names cannot be rebuilt."
-        )
-        raise ParameterError(msg)
+    # resolve_tagged_model rather than a check of its own: a document naming
+    # a class nothing registers fails the same way here as it does for the
+    # task holding it.
+    cls = resolve_tagged_model(value[TAG_FIELD])
     return cls(**{key: decode(val) for key, val in value["fields"].items()})
 
 
@@ -549,12 +603,14 @@ def _refuse(kind: str):
 _DECODERS: dict[str, Callable[[Any], Any]] = {
     _ARRAY: _decode_array,
     _BOOL: bool,
+    _BYTES: bytes.fromhex,
     _CALLABLE: _refuse("function"),
+    _COMPLEX: lambda pair: complex(*(decode(x) for x in pair)),
     _DATAFRAME: _refuse("dataframe"),
     _DATETIME: _decode_datetime,
     _DICT: _decode_dict,
     _ELLIPSIS: lambda _: Ellipsis,
-    _FLOAT: _decode_float,
+    _FLOAT: float,
     _MODEL: _decode_model,
     _OPAQUE: _refuse("value"),
     _PARTIAL: _refuse("partial"),

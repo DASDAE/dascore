@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import gc
+import datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path, PureWindowsPath
@@ -12,8 +12,9 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
-from dascore.workflow import serialize
+from dascore.exceptions import InvalidModelTagError, ParameterError
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 from dascore.workflow.serialize import (
     DOCUMENT,
     canonical_json,
@@ -29,6 +30,14 @@ def round_trip(value):
     return decode(encode(value, mode=DOCUMENT))
 
 
+def _normalized(dtype):
+    """Return the dtype an array of this one is stored and read back as."""
+    # Times are normalized to nanoseconds, as scalar ones are.
+    kind = np.dtype(dtype).kind
+    names = {"M": "datetime64[ns]", "m": "timedelta64[ns]"}
+    return names.get(kind, dtype)
+
+
 class Color(Enum):
     """An enum whose members stand for strings."""
 
@@ -39,14 +48,6 @@ class Color(Enum):
 class TestDigest:
     """Tests for the digest itself."""
 
-    def test_length(self):
-        """The digest is 8 bytes written as hex."""
-        assert len(digest("something")) == 16
-
-    def test_stable(self):
-        """Equal values digest alike, whatever built them."""
-        assert digest({"dim": "time"}) == digest({"dim": "" + "time"})
-
     def test_hard_coded(self):
         """
         The digest of a fixed value never changes.
@@ -56,6 +57,11 @@ class TestDigest:
         canonical text, and blake2b.
         """
         assert digest({"a": 1, "b": [1.5, "x"]}) == "3cdfb6194bc1acd6"
+
+    def test_mode_matters(self):
+        """The two modes encode an array differently, so they digest so."""
+        array = np.arange(3)
+        assert digest(array) != digest(array, mode=DOCUMENT)
 
     def test_key_order_ignored(self):
         """A mapping digests the same however it was built."""
@@ -148,6 +154,78 @@ class TestTimes:
         assert digest(np.datetime64(10, "ns")) != digest(np.timedelta64(10, "ns"))
 
 
+class TestPythonTimes:
+    """Tests for the times which are not numpy's."""
+
+    def test_datetime(self):
+        """A python datetime is the instant it names."""
+        value = datetime.datetime(2020, 1, 1, 0, 0, 1)
+        assert digest(value) == digest(np.datetime64("2020-01-01T00:00:01"))
+        assert round_trip(value) == np.datetime64(value)
+
+    def test_datetime_values_matter(self):
+        """Two different datetimes are two different parameters."""
+        first = datetime.datetime(2020, 1, 1)
+        assert digest(first) != digest(datetime.datetime(1999, 5, 5))
+
+    def test_aware_datetime_moved_to_utc(self):
+        """A datetime carrying a zone is the instant it stands for."""
+        zone = datetime.timezone(datetime.timedelta(hours=2))
+        aware = datetime.datetime(2020, 1, 1, 2, tzinfo=zone)
+        assert digest(aware) == digest(np.datetime64("2020-01-01T00:00:00"))
+
+    def test_date(self):
+        """A bare date is midnight on that day."""
+        assert digest(datetime.date(2020, 1, 1)) == digest(np.datetime64("2020-01-01"))
+
+    def test_timestamp(self):
+        """A pandas timestamp is the same instant as numpy's."""
+        assert digest(pd.Timestamp("2020-01-01")) == digest(np.datetime64("2020-01-01"))
+
+    def test_timedelta(self):
+        """A python timedelta is the span it names."""
+        value = datetime.timedelta(seconds=5)
+        assert digest(value) == digest(np.timedelta64(5, "s"))
+        assert round_trip(value) == np.timedelta64(5, "s")
+
+    def test_pandas_timedelta(self):
+        """A pandas timedelta is the same span as numpy's."""
+        assert digest(pd.Timedelta("5s")) == digest(np.timedelta64(5, "s"))
+
+    def test_out_of_range_time(self):
+        """A time nanoseconds cannot hold is refused, not truncated."""
+        with pytest.raises(ParameterError, match="nanoseconds"):
+            digest(np.datetime64("1500-01-01"))
+
+
+class TestNumbersAndBytes:
+    """Tests for the values JSON has no spelling for."""
+
+    def test_complex_round_trip(self):
+        """A complex number comes back as itself."""
+        assert round_trip(complex(1.5, -2)) == complex(1.5, -2)
+
+    def test_complex_values_matter(self):
+        """The two halves of a complex number both count."""
+        assert digest(complex(1, 2)) != digest(complex(2, 1))
+
+    def test_complex_is_not_a_pair(self):
+        """A complex number is not the tuple of its parts."""
+        assert digest(complex(1, 2)) != digest((1.0, 2.0))
+
+    def test_bytes_round_trip(self):
+        """Bytes come back as themselves."""
+        assert round_trip(b"\x00\xff") == b"\x00\xff"
+
+    def test_bytes_values_matter(self):
+        """Two different byte strings are two different parameters."""
+        assert digest(b"a") != digest(b"b")
+
+    def test_bytes_is_not_a_string(self):
+        """Bytes are not the string which spells them."""
+        assert digest(b"a") != digest("a")
+
+
 class TestArrays:
     """Tests for array parameters."""
 
@@ -188,6 +266,33 @@ class TestArrays:
         assert np.array_equal(out, array)
         assert out.dtype == array.dtype
 
+    @pytest.mark.parametrize(
+        "dtype",
+        [
+            "int64",
+            "float64",
+            "bool",
+            "datetime64[s]",
+            "timedelta64[s]",
+            "complex128",
+            "<U3",
+        ],
+    )
+    def test_round_trip_every_dtype(self, dtype):
+        """A document holds an array's values whatever they are."""
+        original = np.arange(3).astype(dtype)
+        out = round_trip(original)
+        assert np.array_equal(out, original.astype(_normalized(dtype)))
+
+    def test_time_array_unit_normalized(self):
+        """An array of times digests as the instants it holds."""
+        seconds = np.array([1, 2], dtype="datetime64[s]")
+        assert digest(seconds) == digest(seconds.astype("datetime64[ns]"))
+
+    def test_zero_dimensional_object_array(self):
+        """A zero dimensional object array holds one value, not none."""
+        assert encode(np.array("a", dtype=object)) == "a"
+
     def test_fingerprint_cannot_round_trip(self, array):
         """An array reduced to a digest refuses to come back."""
         with pytest.raises(ParameterError, match="cannot be read back"):
@@ -198,39 +303,6 @@ class TestArrays:
         strict = pytest.importorskip("array_api_strict")
         foreign = strict.asarray(np.asarray(array, dtype=np.float64))
         assert digest(foreign) == digest(array.astype(np.float64))
-
-    def test_repeat_operand_cached(self, array, monkeypatch):
-        """An array given twice is hashed once."""
-        calls = []
-        original = np.ascontiguousarray
-
-        def _counted(value, *args, **kwargs):
-            calls.append(value)
-            return original(value, *args, **kwargs)
-
-        monkeypatch.setattr(np, "ascontiguousarray", _counted)
-        assert digest(array) == digest(array)
-        assert len(calls) == 1
-
-    def test_cache_released(self, array):
-        """The cache holds no array alive once its owner drops it."""
-        held = np.arange(4)
-        digest(held)
-        key = id(held)
-        assert key in serialize._ARRAY_DIGESTS
-        del held
-        gc.collect()
-        assert key not in serialize._ARRAY_DIGESTS
-
-    def test_unweakreferenceable_array(self, monkeypatch):
-        """An array which refuses a weak reference is still hashed."""
-
-        def _refuse(*args, **kwargs):
-            raise TypeError("cannot weakly reference this")
-
-        monkeypatch.setattr(serialize.weakref, "ref", _refuse)
-        array = np.arange(3) + 100
-        assert digest(array) == digest(np.arange(3) + 100)
 
 
 class TestCollections:
@@ -246,8 +318,10 @@ class TestCollections:
 
     def test_set_sorted(self):
         """A set has no order, so its encoding is sorted."""
-        assert digest({1, 2, 3}) == digest({3, 2, 1})
-        assert encode({3, 1, 2}) == [1, 2, 3]
+        # Strings, whose sets do not iterate in sorted order by luck the way
+        # a set of small ints does.
+        assert digest({"b", "a", "c"}) == digest({"c", "a", "b"})
+        assert encode({"c", "a", "b"}) == ["a", "b", "c"]
 
     def test_frozenset(self):
         """A frozenset is a set."""
@@ -264,6 +338,17 @@ class TestCollections:
     def test_none_kept_in_document(self):
         """A document keeps what it was given, so it can give it back."""
         assert round_trip({"a": 1, "b": None}) == {"a": 1, "b": None}
+
+    def test_tag_shaped_key_is_not_a_tag(self):
+        """A mapping which spells a tag is not read back as one."""
+        spoof = {"$datetime64": 5}
+        assert digest(spoof) != digest(np.datetime64(5, "ns"))
+        assert round_trip(spoof) == spoof
+
+    def test_tag_shaped_key_survives_nesting(self):
+        """The escape holds for the tag the escape itself uses."""
+        spoof = {"$dict": [["a", 1]]}
+        assert round_trip(spoof) == spoof
 
     def test_non_string_keys(self):
         """A mapping keyed by something other than strings round trips."""
@@ -302,7 +387,9 @@ class TestQuantities:
 
     def test_unit_not_normalized(self):
         """The same length written two ways is not the same call."""
-        assert digest(dc.get_quantity("1 m")) != digest(dc.get_quantity("100 cm"))
+        # Magnitudes which survive a conversion unchanged, so the units are
+        # the only thing left to tell the two apart.
+        assert digest(dc.get_quantity("1.0 m")) != digest(dc.get_quantity("1.0 km"))
 
     def test_array_magnitude(self):
         """A quantity over an array round trips too."""
@@ -364,15 +451,25 @@ class TestOddballs:
 
     def test_opaque_value(self):
         """A value nothing else describes is named by its class."""
-        assert encode(object()) == {"$opaque": "builtins.object"}
+        with suppress_warnings(DASCoreWarning):
+            assert encode(object()) == {"$opaque": "builtins.object"}
+
+    def test_opaque_warns(self):
+        """Reducing a value to its type name is said out loud."""
+        with pytest.warns(DASCoreWarning, match="only its type is hashed"):
+            digest(object())
 
     def test_opaque_holds_no_address(self):
         """An address changes every run and would never digest alike."""
-        assert "0x" not in canonical_json(object())
+        with suppress_warnings(DASCoreWarning):
+            assert "0x" not in canonical_json(object())
 
     def test_opaque_cannot_round_trip(self):
         """A value encoded by name only cannot be rebuilt."""
-        with pytest.raises(ParameterError, match="cannot be rebuilt"):
+        with (
+            suppress_warnings(DASCoreWarning),
+            pytest.raises(ParameterError, match="cannot be rebuilt"),
+        ):
             decode(encode(object()))
 
     def test_plain_value_decodes_to_itself(self):
@@ -404,7 +501,7 @@ class TestModels:
     def test_unknown_tag_refused(self):
         """A document naming no known model refuses to decode."""
         document = {"$model": {"object_type": "NotAModelAnyoneHas", "fields": {}}}
-        with pytest.raises(ParameterError, match="Nothing registers"):
+        with pytest.raises(InvalidModelTagError, match="Nothing registers"):
             decode(document)
 
 
@@ -424,9 +521,17 @@ class TestDataFrames:
         """Two frames holding the same values digest alike."""
         assert digest(df) == digest(df.copy())
 
+    def test_column_names_matter(self, df):
+        """Two frames holding the same numbers under other names differ."""
+        assert digest(df) != digest(df.rename(columns={"a": "z"}))
+
+    def test_dtypes_matter(self, df):
+        """A column read as floats is not the same column read as ints."""
+        assert digest(df) != digest(df.assign(a=df["a"].astype(float)))
+
     def test_series(self, df):
-        """A series is a frame's column."""
-        assert isinstance(digest(df["a"]), str)
+        """A series digests by its values, like the frame it came from."""
+        assert digest(df["a"]) != digest(df["a"] + 1)
 
     def test_no_document_form(self, df):
         """A frame cannot be written into a document."""

@@ -11,25 +11,27 @@ Examples
 --------
 >>> from dascore.workflow import Task
 >>>
->>> class AddNumber(Task):
+>>> class AddNumberExample(Task):
 ...     '''Add a number to what it is given.'''
 ...     value: int = 1
 ...
 ...     def run(self, number):
 ...         return number + self.value
 >>>
->>> task = AddNumber(value=2)
+>>> task = AddNumberExample(value=2)
 >>> assert task.run(1) == 3
 >>> # The same task, however it was built, has the same fingerprint.
->>> assert task.fingerprint == AddNumber(value=2).fingerprint
->>> assert task.fingerprint != AddNumber(value=3).fingerprint
+>>> assert task.fingerprint == AddNumberExample(value=2).fingerprint
+>>> assert task.fingerprint != AddNumberExample(value=3).fingerprint
 """
 
 from __future__ import annotations
 
 import inspect
+import warnings
+import weakref
 from collections.abc import Callable
-from functools import cached_property, lru_cache
+from functools import cached_property
 from typing import Any, ClassVar, Self
 
 from pydantic import ConfigDict
@@ -41,14 +43,12 @@ from dascore.models.registry import (
     NAMESPACE_SEP,
     TAG_FIELD,
     get_model_tag,
+    resolve_model_tag,
     resolve_tagged_model,
 )
 from dascore.utils.misc import suppress_warnings
-from dascore.workflow.serialize import DOCUMENT, decode, digest, encode
-
-# How many distinct tasks `intern` keeps. Enough that a long spool loop
-# reuses its tasks, small enough that it cannot become a leak.
-INTERN_SIZE = 4096
+from dascore.warnings import DASCoreWarning
+from dascore.workflow.serialize import DOCUMENT, decode, digest, encode, model_values
 
 # The keys a task's document holds beside its parameters.
 _VERSION_KEY = "version"
@@ -88,11 +88,12 @@ class Task(DascoreBaseModel):
         """
         Return the digest which identifies this task and its parameters.
 
-        The fingerprint names the class, its version and its parameters. It
-        deliberately does not name the module the class lives in, nor the
-        source of its body, nor the backend which will run it: DASCore moves
-        its own code around, and neither a move nor a faster kernel makes an
-        operation a different operation.
+        The fingerprint names the top level package, the class name, the
+        version and the parameters. It deliberately leaves out the submodule
+        the class lives in, the source of its body, and the backend which
+        will run it: DASCore moves its own code around, and neither a move
+        within a package nor a faster kernel makes an operation a different
+        operation.
         """
         payload = {
             "task": _qualified_tag(type(self)),
@@ -113,9 +114,9 @@ class Task(DascoreBaseModel):
         Examples
         --------
         >>> from dascore.workflow import Task
-        >>> class Scale(Task):
+        >>> class ScaleExample(Task):
         ...     factor: float = 1.0
-        >>> assert Scale().update(factor=2.0).factor == 2.0
+        >>> assert ScaleExample().update(factor=2.0).factor == 2.0
         """
         return type(self)(**{**self._params(), **kwargs})
 
@@ -128,6 +129,7 @@ class Task(DascoreBaseModel):
         message, can find the class the tag stands for.
         """
         cls = type(self)
+        _check_nameable(cls, self.tag)
         return {
             TAG_FIELD: self.tag,
             _VERSION_KEY: self.__version__,
@@ -145,10 +147,11 @@ class Task(DascoreBaseModel):
         not a reason to import whatever it names.
         """
         tag = document.get(TAG_FIELD)
-        task_class = resolve_tagged_model(tag, default=None)
+        task_class = resolve_tagged_model(tag)
         if not issubclass(task_class, Task):
             msg = f"The tag {tag!r} names {task_class.__name__}, which is not a Task."
             raise ParameterError(msg)
+        _check_version(task_class, document.get(_VERSION_KEY))
         params = {
             key: decode(value) for key, value in document.get(_PARAMS_KEY, {}).items()
         }
@@ -156,12 +159,7 @@ class Task(DascoreBaseModel):
 
     def _params(self) -> dict[str, Any]:
         """Return this task's parameters, as the objects they are."""
-        # Not model_dump: a dump turns a nested model into a plain mapping,
-        # losing which class it was, and its json mode adds a key which is
-        # not a parameter.
-        out = {name: getattr(self, name) for name in type(self).model_fields}
-        out.update(self.__pydantic_extra__ or {})
-        return out
+        return model_values(self)
 
     def __eq__(self, other) -> bool:
         """Two tasks are equal if they are the same task, given the same."""
@@ -178,24 +176,61 @@ class Task(DascoreBaseModel):
 
     def __reduce__(self):
         """
-        Pickle a task by its document rather than by its class.
+        Pickle a task by its tag, and its parameters as themselves.
 
         A task class synthesized from a function is not reachable at any
         attribute path, so the default pickling cannot find it again in
-        another process; its tag can.
+        another process; its tag can. The parameters are left to pickle,
+        which carries values a document cannot -- a function, a frame -- and
+        carries an array as bytes rather than as a list of numbers.
         """
-        return (from_dict, (self.to_dict(),))
+        _check_nameable(type(self), self.tag)
+        return (_rebuild, (self.tag, self._params()))
 
 
-def from_dict(document: dict[str, Any]) -> Task:
-    """Return the task a document describes; see `Task.from_dict`."""
-    return Task.from_dict(document)
+def _rebuild(tag: str, params: dict[str, Any]) -> Task:
+    """Return the task a tag and its parameters name; see `Task.__reduce__`."""
+    task_class = resolve_tagged_model(tag)
+    return task_class(**params)
 
 
-@lru_cache(maxsize=INTERN_SIZE)
-def _intern(task: Task) -> Task:
-    """Return the first task seen which equals this one."""
-    return task
+def _check_nameable(task_class: type[Task], tag: str | None) -> None:
+    """
+    Refuse to write down a task whose class nothing could look up.
+
+    A class defined inside a function is not registered, and one whose tag
+    two classes claim is struck from the registry. Either way the failure
+    belongs where the task is written, not in whoever reads it later.
+    """
+    if resolve_model_tag(tag or "") is not task_class:
+        msg = (
+            f"{task_class.__qualname__} is not registered under the tag "
+            f"{tag!r}, so nothing could read it back. A task class has to "
+            "be defined at module level, under a name no other class in "
+            "its package claims."
+        )
+        raise ParameterError(msg)
+
+
+def _check_version(task_class: type[Task], version: object) -> None:
+    """Say so when a document was written by another version of a task."""
+    # Not an error: an old pipe should still load and run. The version has
+    # already done its work by changing the fingerprint, and refusing the
+    # document would only hide what it was.
+    if version is not None and version != task_class.__version__:
+        msg = (
+            f"The document holds {task_class.__name__} version {version!r}, "
+            f"and this one is {task_class.__version__!r}. It will not "
+            "fingerprint the way it did when it was written."
+        )
+        warnings.warn(msg, DASCoreWarning, stacklevel=3)
+
+
+# The canonical instance of each task, held only while something else holds
+# it: interning is for sharing one object, not for keeping it alive. A task's
+# parameters can be as big as an array, so a cache which retained them would
+# hold that memory long after the caller dropped it.
+_INTERNED: weakref.WeakValueDictionary[str, Task] = weakref.WeakValueDictionary()
 
 
 def intern(task: Task) -> Task:
@@ -209,11 +244,18 @@ def intern(task: Task) -> Task:
     Examples
     --------
     >>> from dascore.workflow import Task, intern
-    >>> class Scale(Task):
+    >>> class ScaleExample(Task):
     ...     factor: float = 1.0
-    >>> assert intern(Scale()) is intern(Scale())
+    >>> assert intern(ScaleExample()) is intern(ScaleExample())
     """
-    return _intern(task)
+    existing = _INTERNED.get(task.fingerprint)
+    # Two classes can only share a fingerprint if neither could be named in
+    # a document, in which case they are left as the separate objects they
+    # are rather than one standing in for the other.
+    if existing is not None and type(existing) is type(task):
+        return existing
+    _INTERNED[task.fingerprint] = task
+    return task
 
 
 def _qualified_tag(cls: type) -> str:
@@ -259,7 +301,9 @@ class FunctionTask(Task):
         function itself is what checks its own arguments.
         """
         bound = cls._signature.bind_partial(*args, **kwargs)
-        bound.apply_defaults()
+        # Not apply_defaults: model_construct fills a missing field from the
+        # class default, which pydantic copies. Binding the function's own
+        # default object instead would share a mutable one between tasks.
         values = dict(bound.arguments)
         # A **kwargs group arrives as one mapping and is spread back out,
         # which is how validation would have attached those names.
@@ -305,12 +349,12 @@ def task(func: Callable | None = None, *, version: str = "1.0") -> Any:
     >>> from dascore.workflow import task
     >>>
     >>> @task
-    ... def add(a, b=1):
+    ... def add_example(a, b=1):
     ...     '''Add two numbers.'''
     ...     return a + b
     >>>
-    >>> assert add(a=1, b=2).run() == 3
-    >>> assert add(a=1).run() == 2
+    >>> assert add_example(a=1, b=2).run() == 3
+    >>> assert add_example(a=1).run() == 2
     """
 
     def decorator(function: Callable) -> type[Task]:
