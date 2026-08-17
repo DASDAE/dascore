@@ -144,7 +144,7 @@ def double(patch: PatchType) -> PatchType:
     return patch.new(data=xp.multiply(patch.data, 2))
 ```
 
-Most of DASCore's patch functions are still written against NumPy, and make no promise about data from another backend: depending on the body they may raise, or quietly return a NumPy-backed patch. Operators and NumPy functions applied to a patch (`patch * 2`, `np.sqrt(patch)`, `np.mean(patch)`) are the exception: they stay in the array's own namespace when the standard can express them, and otherwise convert to NumPy and back, which issues a `NumpyFallbackWarning`.
+Most of DASCore's patch functions are still written against NumPy, and make no promise about data from another backend: depending on the body they may raise, or quietly return a NumPy-backed patch. Operators and ufuncs (`patch * 2`, `np.sqrt(patch)`) always work: they stay in the array's own namespace when the standard can express them, and otherwise convert to NumPy and back, which issues a `NumpyFallbackWarning`. NumPy functions such as `np.mean(patch)`, and reductions of dtypes the standard excludes, always take that second path.
 
 Array-likes which merely support `__array__`, rather than implementing the standard, are handled by NumPy and report `"numpy"` as their backend.
 

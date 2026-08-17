@@ -852,6 +852,16 @@ class TestArrayBackends:
             out = np.fmod(backend_patch, 2)
         self._assert_matches_numpy(out, np.fmod(random_patch, 2), backend)
 
+    def test_foreign_array_operand_converted(
+        self, backend_patch, random_patch, backend
+    ):
+        """An operand which is a bare array from the backend crosses too."""
+        array = np.asarray(random_patch.data) + 1
+        other = to_backend_array(backend_patch, array)
+        with suppress_warnings(NumpyFallbackWarning):
+            out = np.fmod(backend_patch, other)
+        self._assert_matches_numpy(out, np.fmod(random_patch, array), backend)
+
     def test_reduction_dtype_without_equivalent(
         self, backend_patch, random_patch, backend
     ):
@@ -865,14 +875,17 @@ class TestArrayBackends:
         self._assert_matches_numpy(out, numpy_patch.min("time"), backend)
 
     def test_aggregation_the_standard_lacks(self, backend_patch, random_patch):
-        """An aggregation with no name in the standard is left to numpy."""
+        """An aggregation with no name in the standard goes straight to the func."""
         # aggregate promises nothing about the backend of its output, so
-        # only the values have to survive.
+        # everything but the backend has to survive.
         out = backend_patch.aggregate(dim=None, method="median")
         expected = random_patch.aggregate(dim=None, method="median")
+        array = np.asarray(out.data)
+        assert array.dtype == expected.data.dtype
         assert out.dims == expected.dims
         assert out.coords == expected.coords
-        assert np.allclose(np.asarray(out.data), np.asarray(expected.data))
+        assert out.attrs == expected.attrs
+        assert np.allclose(array, np.asarray(expected.data))
 
     @pytest.mark.parametrize("dtype", ["int32", "bool"])
     @pytest.mark.parametrize(

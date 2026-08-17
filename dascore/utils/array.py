@@ -483,16 +483,15 @@ def _apply_reduction(func, data, axis):
 
     nan_reduce handles the dtypes the standard cannot reduce.
     """
-    if is_numpy(data):
-        return func(data, axis=axis)
-    if (name := NAN_REDUCTIONS.get(func)) is not None:
-        return nan_reduce(name, data, axis=axis)
-    if (name := REDUCTIONS.get(func)) is not None:
-        return getattr(array_namespace(data), name)(data, axis=axis)
-    # An aggregation the standard has no name for, eg a median or a callable
-    # the caller passed to aggregate. Numpy applies it to whatever it can
-    # make of the array, which is what it did before dascore knew about
-    # other backends; the backend of the result is numpy's business.
+    if not is_numpy(data):
+        if (name := NAN_REDUCTIONS.get(func)) is not None:
+            return nan_reduce(name, data, axis=axis)
+        if (name := REDUCTIONS.get(func)) is not None:
+            return getattr(array_namespace(data), name)(data, axis=axis)
+    # Numpy data, or an aggregation the standard has no name for: a median, or
+    # a callable passed to aggregate. It gets the array as-is, exactly as
+    # before dascore knew about other backends, and decides the output's
+    # backend.
     return func(data, axis=axis)
 
 

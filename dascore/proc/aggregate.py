@@ -44,7 +44,7 @@ def aggregate(
     -----
     Whether an aggregation can be applied by the patch's own array backend
     depends on the method, so this function makes no promise about the
-    backend of its output. The shortcuts, such as
+    backend of its output. Most shortcuts, such as
     [`Patch.mean`](`dascore.proc.aggregate.mean`), do keep the data on their
     backend; use those where one fits.
 

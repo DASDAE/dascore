@@ -144,9 +144,9 @@ class TestPatchBackends:
         assert backend_name(out.data) == backend
         assert "distance" not in out.dims
 
-    def test_numpy_only_function_leaves_the_backend_alone(self, backend_patch):
-        """Numpy-only functions neither convert the data nor warn about it."""
-        # What the body makes of a foreign array is the body's business.
+    def test_numpy_only_function_does_not_warn(self, backend_patch):
+        """Nothing converts or warns for a numpy-only function; its body decides."""
+        # detrend hands the array to scipy, which gives numpy data back.
         with warnings_as_errors():
             out = backend_patch.detrend("time")
         assert out.shape == backend_patch.shape
@@ -213,9 +213,8 @@ class _Case(NamedTuple):
 
 
 # The patch functions whose bodies are written to the array API standard, and
-# so run on any backend. It is a hand-kept inventory rather than something
-# discovered from the functions; nothing on a patch function declares which
-# backends its body supports.
+# so run on any backend. Nothing on a patch function declares that, so this
+# inventory is hand-kept: add an entry when you convert one.
 # setup runs on the numpy patch, before it is moved to another backend.
 ARRAY_API_CASES = {
     "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
@@ -245,7 +244,7 @@ ARRAY_API_CASES = {
 
 
 class TestArrayApiPatchFunctions:
-    """Every patch function written to the standard must work on it."""
+    """The patch functions listed as written to the standard must work on it."""
 
     @pytest.mark.parametrize("name", sorted(ARRAY_API_CASES))
     def test_backend_preserved(self, name, random_patch, to_backend, backend):

@@ -270,11 +270,6 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     converted = tuple(_to_numpy_arg(x) for x in args)
     kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
     out = func(*converted, **kwargs)
-    # A function which returned one of its inputs unchanged returns the
-    # original, so callers still see the no-op they would have seen.
-    for original, numpy_arg in zip(args, converted, strict=True):
-        if out is numpy_arg:
-            return original
     # Only patches carry data back to the original backend.
     if isinstance(out, dc.Patch):
         out = out.new(data=asarray_like(out.data, data))
