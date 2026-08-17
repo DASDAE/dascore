@@ -1075,7 +1075,7 @@ TRACKS = {
         "0,340,conduit,\n"
         "340,355,trench,backfilled\n"
     ),
-    "fiber_arrays/DAS.L001/path/annotations.csv": (
+    "fiber_arrays/DAS.L001/path/labels.csv": (
         "start_distance,end_distance,group,value\n"
         "0,340,rock_type,granite\n"
         "0,120,noisy,true\n"
@@ -1102,7 +1102,7 @@ class TestTrackTables:
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
         assert [x.name for x in path.optical_components] == ["fiber 1", "splice 1"]
         assert [x.coupling_type for x in path.coupling] == ["conduit", "trench"]
-        assert {x.group for x in path.annotations} == {
+        assert {x.group for x in path.labels} == {
             "rock_type",
             "noisy",
             "frost_depth",
@@ -1132,15 +1132,15 @@ class TestTrackTables:
         ],
     )
     def test_a_value_is_read_as_its_text_states(self, make_inventory, text, expected):
-        """A CSV has no types, so an annotation's value is read by content."""
+        """A CSV has no types, so an label's value is read by content."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n0,340,g,{text}\n"
             ),
         }
-        value = one_path(make_inventory(files)).annotations[0].value
+        value = one_path(make_inventory(files)).labels[0].value
         assert value == expected and isinstance(value, type(expected))
 
     def test_a_group_holding_two_kinds(self, make_inventory):
@@ -1148,7 +1148,7 @@ class TestTrackTables:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n"
                 "0,120,zone,north\n"
                 "120,340,zone,true\n"
@@ -1210,7 +1210,7 @@ class TestTrackTables:
             make_inventory(files)
 
     def test_a_column_of_text_is_refused(self, make_inventory):
-        """Text along distance is what annotations are for."""
+        """Text along distance is what labels are for."""
         files = {
             **MINIMAL,
             **TRACKS,
@@ -1218,7 +1218,7 @@ class TestTrackTables:
                 "segment,distance,zone\nS100,100.0,north\nS100,102.0,south\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match=r"annotations\.csv"):
+        with pytest.raises(InvalidInventoryError, match=r"labels\.csv"):
             make_inventory(files)
 
     def test_a_structural_column_restated_with_units(self, make_inventory):
@@ -1340,14 +1340,20 @@ class TestTrackTables:
         assert acquisition.channel_to_distance([512])[0] == 500.0
 
     def test_a_stem_naming_no_attribute(self, make_inventory):
-        """A table is matched to the model by name, so a typo is a typo."""
+        """A spreadsheet which never said it was a track is left where it lies.
+
+        An entity directory is somewhere a crew keeps its own working files,
+        and this format has no claim on one it does not recognise.
+        """
         files = {
             **MINIMAL,
             "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
             "fiber_arrays/DAS.L001/geometrys.csv": "segment,distance\nS,0\n",
+            "fiber_arrays/DAS.L001/crew_notes.csv": "who,when\nderrick,tuesday\n",
         }
-        with pytest.raises(InvalidInventoryError, match="names no attribute"):
-            make_inventory(files)
+        inventory = make_inventory(files)
+        (array,) = inventory.networks[0].fiber_arrays
+        assert array.code == "L001"
 
     def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
         """Only an attribute rows can build may be stated as a table."""
@@ -1641,12 +1647,12 @@ class TestUnreadableTables:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n0,120,noisy,\n"
             ),
         }
-        annotation = one_path(make_inventory(files)).annotations[0]
-        assert annotation.value is True
+        label = one_path(make_inventory(files)).labels[0]
+        assert label.value is True
 
     def test_a_path_restating_a_start_which_disagrees(self, make_inventory):
         """A path directory's name is a restated address like any other."""
@@ -1730,7 +1736,7 @@ class TestUnreadableTables:
 DECLARED_BY = {
     "optical_components": inv.OpticalPath,
     "coupling": inv.OpticalPath,
-    "annotations": inv.OpticalPath,
+    "labels": inv.OpticalPath,
     "geometry": inv.OpticalPath,
     "distance_map": inv.Acquisition,
 }
@@ -1946,12 +1952,12 @@ class TestGapsMutationTestingFound:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n"
                 f"0,120,thickness,{first}\n120,340,thickness,{second}\n"
             ),
         }
-        values = [x.value for x in one_path(make_inventory(files)).annotations]
+        values = [x.value for x in one_path(make_inventory(files)).labels]
         assert sorted(values) == [1, 1.5]
 
     @pytest.mark.parametrize("text", ["TRUE", "True", " true "])
@@ -1960,22 +1966,22 @@ class TestGapsMutationTestingFound:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n0,120,noisy,{text}\n"
             ),
         }
-        assert one_path(make_inventory(files)).annotations[0].value is True
+        assert one_path(make_inventory(files)).labels[0].value is True
 
     def test_a_decimal_point_keeps_a_value_a_float(self, make_inventory):
         """1.0 is written as a float and stays one, unlike 1."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n0,120,thickness,1.0\n"
             ),
         }
-        value = one_path(make_inventory(files)).annotations[0].value
+        value = one_path(make_inventory(files)).labels[0].value
         assert isinstance(value, float) and value == 1.0
 
     def test_an_epoch_ending_exactly_where_the_next_begins(self, make_inventory):

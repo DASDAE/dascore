@@ -326,7 +326,7 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     Return the coordinate names a blanket request copies.
 
-    The geometry columns and the annotation groups: what the path says about
+    The geometry columns and the label groups: what the path says about
     each channel. Optical distance and the typed-track fields are asked for
     by name, since they restate what the patch's own axis and the inventory
     already record.
@@ -338,7 +338,7 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
     out = ["x", "y", "z"][: len(labels)] if axes else []
     out += [x for x in path.geometry_columns() if x not in axes]
-    seen = dict.fromkeys(x.group for x in path.annotations)
+    seen = dict.fromkeys(x.group for x in path.labels)
     return out + [x for x in seen if x]
 
 

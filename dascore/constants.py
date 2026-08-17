@@ -278,10 +278,10 @@ attrs
 
 enrich_coords_description = """
 coords
-    True (the default) to add the geometry axes and annotation groups of
+    True (the default) to add the geometry axes and label groups of
     the resolved optical path, a tuple of names to add exactly those, or
     False to add none. Names may be `distance` for optical distance, a
-    coordinate label the inventory's CRS defines, an annotation group, or
+    coordinate label the inventory's CRS defines, a label group, or
     a qualified track field such as `coupling.medium`.
 """.strip()
 

@@ -44,7 +44,7 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.core.inventory_loader import BLESSED_NAME
 from dascore.examples import get_example_patch, inventory_patch_pair
@@ -1497,7 +1497,7 @@ class TestSharedNames:
 
     def test_a_group_may_share_an_attrs_name(self, patch, inventory):
         """
-        An annotation group is free to be named after an acquisition field.
+        An label group is free to be named after an acquisition field.
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the
@@ -1507,9 +1507,9 @@ class TestSharedNames:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
                         start_distance=0.0,
                         end_distance=100.0,
                         group="gauge_length",
@@ -1866,12 +1866,12 @@ class TestConformSubdivision:
         """
         coord = patch.get_coord("time")
         when = coord.min() + (coord.max() - coord.min()) / 2
-        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].annotations[0]
+        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
         split = _split_epochs(
             inventory,
             when,
             second={
-                "annotations": (
+                "labels": (
                     moved.new(value="moved", start_distance=100.0, end_distance=400.0),
                 )
             },
@@ -2185,12 +2185,12 @@ def two_zones(inventory):
     return inventory.replace(
         path,
         path.new(
-            annotations=(
-                *path.annotations,
-                OpticalPathAnnotation(
+            labels=(
+                *path.labels,
+                OpticalPathLabel(
                     start_distance=110.0, end_distance=150.0, group="hole", value="a"
                 ),
-                OpticalPathAnnotation(
+                OpticalPathLabel(
                     start_distance=300.0, end_distance=340.0, group="hole", value="a"
                 ),
             )
@@ -2714,9 +2714,9 @@ class TestChannelSelectEdges:
         numeric = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
                         start_distance=100.0,
                         end_distance=200.0,
                         group="frost_depth",
@@ -2804,10 +2804,10 @@ def uneven_spool(patch, inventory):
     array = inventory.networks[0].fiber_arrays[0]
     acquisition, path = array.acquisitions[0], array.optical_paths[0]
     holes = (
-        OpticalPathAnnotation(
+        OpticalPathLabel(
             start_distance=110.0, end_distance=150.0, group="hole", value="a"
         ),
-        OpticalPathAnnotation(
+        OpticalPathLabel(
             start_distance=300.0, end_distance=340.0, group="hole", value="a"
         ),
     )
@@ -2816,8 +2816,8 @@ def uneven_spool(patch, inventory):
         array.new(
             acquisitions=(acquisition, acquisition.new(location_code="01")),
             optical_paths=(
-                path.new(annotations=(*path.annotations, *holes)),
-                path.new(location_code="01", annotations=(*path.annotations, holes[0])),
+                path.new(labels=(*path.labels, *holes)),
+                path.new(location_code="01", labels=(*path.labels, holes[0])),
             ),
         ),
     )
@@ -2914,8 +2914,8 @@ def _float_grid_pair(distance, span):
         name="main",
         location_code="",
         optical_components=(FiberSegment(name="c", optical_length=span + 10),),
-        annotations=(
-            OpticalPathAnnotation(
+        labels=(
+            OpticalPathLabel(
                 start_distance=span * 0.23,
                 end_distance=span * 0.61,
                 group="zone",
@@ -3075,8 +3075,8 @@ class TestChannelSelectContracts:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    OpticalPathAnnotation(
+                labels=(
+                    OpticalPathLabel(
                         start_distance=100.0,
                         end_distance=200.0,
                         group="output_id",

@@ -49,8 +49,8 @@ def build_inventory() -> inv.Inventory:
                 start_distance=0.0, end_distance=200.0, coupling_type="trench"
             ),
         ),
-        annotations=(
-            inv.OpticalPathAnnotation(
+        labels=(
+            inv.OpticalPathLabel(
                 start_distance=0.0, end_distance=100.0, group="zone", value="east"
             ),
         ),
@@ -112,20 +112,20 @@ def build_full_inventory() -> inv.Inventory:
                 depth=1.0,
             ),
         ),
-        annotations=(
-            inv.OpticalPathAnnotation(
+        labels=(
+            inv.OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="zone", value="north"
             ),
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=150.0, end_distance=300.0, group="noisy", value=True
             ),
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=150.0, end_distance=300.0, group="quiet", value=False
             ),
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="count", value=0
             ),
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=200.0, end_distance=300.0, group="offset", value=0.0
             ),
         ),
@@ -186,12 +186,12 @@ class TestGeometryColumns:
     """A geometry states named numeric columns, of which some are axes."""
 
     @staticmethod
-    def _inventory(*geometry, crs=None, annotations=()):
+    def _inventory(*geometry, crs=None, labels=()):
         """Wrap geometry segments in the smallest inventory holding them."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=1000.0),),
             geometry=geometry,
-            annotations=annotations,
+            labels=labels,
         )
         array = inv.FiberArray(code="L001", optical_paths=(path,))
         return inv.Inventory(
@@ -289,11 +289,11 @@ class TestGeometryColumns:
     def test_a_column_which_is_also_an_annotation_group(self):
         """One name is one coordinate, whichever track would define it."""
         column = inv.Geometry(distance=(0.0, 10.0), coordinates={"zone": (0.0, 1.0)})
-        annotation = inv.OpticalPathAnnotation(
+        label = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=10.0, group="zone", value=1.0
         )
         with pytest.raises(InvalidInventoryError, match="one name is one coordinate"):
-            self._inventory(column, annotations=(annotation,)).check()
+            self._inventory(column, labels=(label,)).check()
 
     def test_units_on_an_axis_are_refused(self):
         """The CRS states the units of its own axes."""
@@ -540,17 +540,17 @@ class TestPathTracks:
             path.check()
 
     def test_boolean_annotations_overlap_freely(self):
-        """Membership annotations overlap, within and across groups."""
+        """Membership labels overlap, within and across groups."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0, end_distance=60.0, group="noisy"
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=50.0, end_distance=70.0, group="noisy"
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=40.0, end_distance=80.0, group="repaired"
                 ),
             ),
@@ -561,14 +561,14 @@ class TestPathTracks:
         """A single-valued group cannot claim two values at one distance."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0,
                     end_distance=60.0,
                     group="rock_type",
                     value="granite",
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=50.0,
                     end_distance=70.0,
                     group="rock_type",
@@ -583,11 +583,11 @@ class TestPathTracks:
         """Mixing value kinds in one group is a modeling error."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0, end_distance=10.0, group="zone", value="east"
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=20.0, end_distance=30.0, group="zone", value=True
                 ),
             ),
@@ -599,14 +599,14 @@ class TestPathTracks:
         """Numeric groups are single valued but otherwise ordinary."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0,
                     end_distance=40.0,
                     group="frost_depth",
                     value=1.2,
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=40.0,
                     end_distance=90.0,
                     group="frost_depth",
@@ -1017,8 +1017,8 @@ class TestPathOperations:
     def test_reverse_rewrites_all_tracks(self, path):
         """Reverse rewrites all tracks."""
         rev = path.reverse()
-        # 0-100 annotation on a 0-250 path becomes 150-250.
-        assert rev.annotations[0].interval == (150.0, 250.0)
+        # 0-100 label on a 0-250 path becomes 150-250.
+        assert rev.labels[0].interval == (150.0, 250.0)
         # 0-200 coupling becomes 50-250.
         assert rev.coupling[0].interval == (50.0, 250.0)
         rev.check()
@@ -1867,18 +1867,18 @@ class TestPointMarkers:
         assert path.check() is path
 
     def test_point_annotation(self):
-        """Point annotation."""
-        anno = inv.OpticalPathAnnotation(
+        """Point label."""
+        label = inv.OpticalPathLabel(
             start_distance=350.0, end_distance=350.0, group="wellhead"
         )
-        assert anno.interval == (350.0, 350.0)
+        assert label.interval == (350.0, 350.0)
 
     def test_point_markers_survive_select(self):
         """A clamp inside the clip is not coverage, but it is not nothing."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=50.0, end_distance=50.0, group="clamp"
                 ),
             ),
@@ -1889,33 +1889,33 @@ class TestPointMarkers:
             ),
         )
         kept = path.select(distance=(10.0, 90.0))
-        assert [x.interval for x in kept.annotations] == [(50.0, 50.0)]
+        assert [x.interval for x in kept.labels] == [(50.0, 50.0)]
         assert [x.interval for x in kept.coupling] == [(25.0, 25.0)]
 
     def test_point_markers_outside_the_clip_are_dropped(self):
         """A marker beyond the requested window does not belong to the piece."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=95.0, end_distance=95.0, group="clamp"
                 ),
             ),
         )
-        assert path.select(distance=(10.0, 90.0)).annotations == ()
+        assert path.select(distance=(10.0, 90.0)).labels == ()
 
     def test_point_marker_at_the_outer_endpoint_is_kept(self):
         """The outermost endpoint of the path is included, as everywhere."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=100.0, end_distance=100.0, group="end_cap"
                 ),
             ),
         )
         kept = path.select(distance=(10.0, 100.0))
-        assert [x.interval for x in kept.annotations] == [(100.0, 100.0)]
+        assert [x.interval for x in kept.labels] == [(100.0, 100.0)]
 
     def test_reversed_interval_rejected(self):
         """An end before the start is rejected."""
@@ -2256,13 +2256,13 @@ class TestConstraintsMatchDescriptions:
                 units=("meter",) * 4,
             )
 
-    def test_annotation_value_keeps_numpy_type(self):
+    def test_label_value_keeps_numpy_type(self):
         """A mask element is a flag, not the number one."""
-        annotation = inv.OpticalPathAnnotation(
+        label = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="noisy", value=np.bool_(True)
         )
-        assert annotation.value is True
-        counted = inv.OpticalPathAnnotation(
+        assert label.value is True
+        counted = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="shots", value=np.int64(5)
         )
         assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
@@ -2274,10 +2274,10 @@ class TestConstraintsMatchDescriptions:
         with pytest.raises(ValidationError):
             inv.FiberSegment(optical_length=10.0, loss_db=(0.4, np.inf))
 
-    def test_annotation_value_must_be_finite(self):
+    def test_label_value_must_be_finite(self):
         """A non-finite value cannot survive a JSON round trip."""
         with pytest.raises(ValidationError, match="must be finite"):
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=0.0, end_distance=1.0, group="g", value=np.inf
             )
 
@@ -2294,20 +2294,20 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
     )
     cable = inv.Cable(resource_id="cable-1", name="trunk")
     segment = inv.FiberSegment(name="run", optical_length=100.0, container=cable)
-    annotations = (
-        inv.OpticalPathAnnotation(
+    labels = (
+        inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="zone", value="east"
         ),
-        inv.OpticalPathAnnotation(
+        inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="noisy", value=True
         ),
-        inv.OpticalPathAnnotation(
+        inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="masked", value=False
         ),
-        inv.OpticalPathAnnotation(
+        inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="shots", value=0
         ),
-        inv.OpticalPathAnnotation(
+        inv.OpticalPathLabel(
             start_distance=50.0, end_distance=100.0, group="offset", value=0.0
         ),
     )
@@ -2351,7 +2351,7 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
                                 inv.OpticalPath(
                                     location_code="01",
                                     optical_components=(segment,),
-                                    annotations=annotations,
+                                    labels=labels,
                                 ),
                             ),
                         ),
@@ -2464,16 +2464,16 @@ class TestSerializationIsLossless:
         inventory = SAMPLE_INVENTORIES[name]
         assert dc.inventory(inventory.to_yaml()) == inventory
 
-    def test_an_annotation_value_of_one_survives(self):
+    def test_an_label_value_of_one_survives(self):
         """`1 == True`, and the value's default is True, so it was dropped."""
         pytest.importorskip("yaml")
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0, end_distance=10.0, group="hole", value=1
                 ),
-                inv.OpticalPathAnnotation(
+                inv.OpticalPathLabel(
                     start_distance=20.0, end_distance=30.0, group="hole", value=2
                 ),
             ),
@@ -2490,27 +2490,27 @@ class TestSerializationIsLossless:
 
     def test_an_annotation_still_names_its_class(self):
         """Restoring the value must not displace the document's tag."""
-        annotation = inv.OpticalPathAnnotation(
+        label = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="hole", value=2
         )
-        dumped = annotation.model_dump(mode="json")
-        assert dumped["object_type"] == "OpticalPathAnnotation"
+        dumped = label.model_dump(mode="json")
+        assert dumped["object_type"] == "OpticalPathLabel"
 
     def test_a_deliberately_excluded_value_stays_out(self):
         """What a caller filtered is not what exclude_defaults dropped."""
-        annotation = inv.OpticalPathAnnotation(
+        label = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="hole", value=2
         )
-        assert "value" not in annotation.model_dump(mode="json", exclude={"value"})
-        assert "value" not in annotation.model_dump(mode="json", include={"group"})
+        assert "value" not in label.model_dump(mode="json", exclude={"value"})
+        assert "value" not in label.model_dump(mode="json", include={"group"})
 
     def test_a_flag_annotation_stays_terse(self):
         """A value which really is the default is still left out."""
         pytest.importorskip("yaml")
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
+            labels=(
+                inv.OpticalPathLabel(
                     start_distance=0.0, end_distance=10.0, group="noisy"
                 ),
             ),
@@ -2594,7 +2594,7 @@ class TestSerializationIsLossless:
         other = inv.Inventory(schema_version=default + 1)
         assert dc.inventory(other.to_yaml()).schema_version == default + 1
 
-    def test_empty_annotation_value_is_rejected(self):
+    def test_empty_label_value_is_rejected(self):
         """An empty value would have to survive serialization to mean anything.
 
         It used to be legal, and this guarded it against being pruned and
@@ -2603,7 +2603,7 @@ class TestSerializationIsLossless:
         the empty string, so a covered one could not be told apart.
         """
         with pytest.raises(ValidationError, match="may not be the empty string"):
-            inv.OpticalPathAnnotation(
+            inv.OpticalPathLabel(
                 start_distance=0.0, end_distance=50.0, group="rock", value=""
             )
 
@@ -2746,12 +2746,12 @@ class TestGetNames:
             inv._track_identity_fields()
 
     def test_coords_hold_the_tracks_and_groups(self, names):
-        """The path's tracks, their fields, and its annotation groups."""
+        """The path's tracks, their fields, and its label groups."""
         assert "coupling" in names.coords  # bare: the identity field
         assert "coupling.medium" in names.coords
         assert "geometry" in names.coords
         assert "optical_components.fiber_type" in names.coords
-        assert "zone" in names.coords  # the annotation group
+        assert "zone" in names.coords  # the label group
 
     def test_coords_hold_both_axis_spellings(self, names):
         """A CRS axis is selectable as stored and as this CRS reads it."""
@@ -2779,7 +2779,7 @@ class TestGetNames:
         """An inventory with no coupling has no coupling to select on."""
         base = build_inventory()
         path = base.networks[0].fiber_arrays[0].optical_paths[0]
-        bare = base.replace(path, path.new(coupling=(), annotations=()))
+        bare = base.replace(path, path.new(coupling=(), labels=()))
         coords = set(bare.get_names().coords)
         assert not {x for x in coords if x.startswith("coupling")}
         assert "zone" not in coords

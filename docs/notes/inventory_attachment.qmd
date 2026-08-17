@@ -64,7 +64,7 @@ start = spool.get_contents()["time_min"].min()
 assert len(spool.select(time=(start, None))) == 1
 assert reference._inventory is None
 
-# `zone` is an annotation group; nothing but the inventory knows it.
+# `zone` is an label group; nothing but the inventory knows it.
 _ = spool.select(zone="north")
 assert reference._inventory is not None
 ```

@@ -489,7 +489,7 @@ class _Table(NamedTuple):
 _TABLES: Mapping[str, _Table] = {
     "optical_components": _Table(order="sequence", places=True),
     "coupling": _Table(),
-    "annotations": _Table(),
+    "labels": _Table(),
     "geometry": _Table(
         points=True, group="segment", order="distance", columns="coordinates"
     ),
@@ -770,10 +770,15 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
     """
     Fill the attributes an entity directory's tables state.
 
-    A table is matched to the model purely by name, so a stem which names
-    no attribute of the declared type is a typo rather than a new track,
-    and an attribute stated both inline and as a table is one fact spelled
-    twice.
+    A table is matched to the model purely by name, and an attribute stated
+    both inline and as a table is one fact spelled twice.
+
+    A stem naming no attribute at all is left where it lies. An entity
+    directory is somewhere a crew keeps its own working files, and this
+    format has no claim on a spreadsheet which never said it was one --
+    the same indifference the loader shows a photo or a field note. A stem
+    which names a real attribute this format does not read as a table is a
+    different matter, and still raises: that one did say it was one.
     """
     for child in sorted(entity.iterdir()):
         if child.name.startswith(".") or child.is_dir():
@@ -782,11 +787,7 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
             continue
         stem = _table_stem(child)
         if stem not in model.model_fields:
-            msg = (
-                f"{_quote(child)} names no attribute of {model.__name__}, which "
-                f"{_quote(attrs)} declares."
-            )
-            raise InvalidInventoryError(msg)
+            continue
         if (table := _TABLES.get(stem)) is None:
             # Not "is not row-shaped": Station.channels is as row-shaped as
             # anything here and still has no table, so saying that would be
@@ -833,8 +834,8 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
         frame, units = _geometry_columns(frame, crs, path)
     if not table.points:
         rows = _object_rows(frame, table, path)
-        if stem == "annotations":
-            _parse_annotations(rows, path)
+        if stem == "labels":
+            _parse_labels(rows, path)
         return rows
     built = _point_rows(frame, table, path, units)
     # A single object rather than a collection: the table has no grouping
@@ -856,7 +857,7 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     may carry its units in parentheses. The axes are all stated or none
     are, since guessing the missing one is not a reader's job. Text is
     refused: a value which varies along the fiber without being a number
-    is what annotations are for.
+    is what labels are for.
     """
 
     def is_axis(name: str) -> bool:
@@ -910,16 +911,16 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
                 f"{_quote(path)} states {frame.loc[bad, column].iloc[0]!r} in "
                 f"column {column!r}, which is not a number. A geometry column "
                 "is numeric; text which varies along the fiber belongs in "
-                "annotations.csv."
+                "labels.csv."
             )
             raise InvalidInventoryError(msg)
         frame[column] = values
     return frame, units
 
 
-def _parse_annotations(rows: list[dict], path: Path) -> None:
+def _parse_labels(rows: list[dict], path: Path) -> None:
     """
-    Read each annotation's value as its own text states it, in place.
+    Read each label's value as its own text states it, in place.
 
     A group's kind is decided by its values, and the model makes the kind
     decide the group's shape, so a group which mixes kinds would be two
