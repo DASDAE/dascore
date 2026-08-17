@@ -54,6 +54,7 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
+from dascore.utils.documents import parse_document, write_document
 from dascore.utils.intervals import (
     clip_intervals,
     interval_masks,
@@ -2501,14 +2502,15 @@ class Inventory(NamespaceOwner, InventoryModel):
                 "Load a path with dascore.inventory."
             )
             raise InvalidInventoryError(msg)
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as error:
-            # A document which does not parse is an invalid inventory, and
-            # says so as one: a caller who asked for an inventory should
-            # not have to know which parser was reaching for the file.
-            msg = f"Could not parse YAML from {_yaml_label(text)}: {error}."
-            raise InvalidInventoryError(msg) from error
+        # A document which does not parse is an invalid inventory, and says
+        # so as one: a caller who asked for an inventory should not have to
+        # know which parser was reaching for the text.
+        data = parse_document(
+            text,
+            "yaml",
+            label=_yaml_label(text),
+            error=InvalidInventoryError,
+        )
         return cls._from_mapping(data, _yaml_label(text))
 
     @classmethod
@@ -2561,8 +2563,6 @@ def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> s
     # envelope it was written against even when that is the default.
     dumped = inventory.model_dump(mode="json", exclude_defaults=True)
     data = {"schema_version": inventory.schema_version} | dumped
-    out = yaml.safe_dump(data, sort_keys=False)
     if path is not None:
-        with open(path, "w") as fh:
-            fh.write(out)
-    return out
+        return write_document(data, path, "yaml").read_text(encoding="utf-8")
+    return yaml.safe_dump(data, sort_keys=False)

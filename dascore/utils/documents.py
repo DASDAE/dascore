@@ -58,7 +58,12 @@ def read_document(
     except (OSError, UnicodeDecodeError) as problem:
         msg = f"Could not read {quote_path(path)}: {problem}."
         raise error(msg) from problem
-    document = _parse(text, path, file_format, error=error)
+    document = parse_document(
+        text,
+        file_format,
+        label=quote_path(path),
+        error=error,
+    )
     if not isinstance(document, Mapping):
         msg = f"{quote_path(path)} holds no mapping, so it {holds}."
         raise error(msg)
@@ -88,22 +93,36 @@ def write_document(
     return path
 
 
-def _parse(
+def parse_document(
     text: str,
-    path: Path,
     file_format: DocumentFormat,
     *,
-    error: type[Exception],
+    label: str,
+    error: type[Exception] = ParameterError,
 ) -> Any:
-    """Return whatever a document's text holds, naming the file if it cannot."""
+    """
+    Return whatever a document's text holds, naming its source if it cannot.
+
+    Parameters
+    ----------
+    text
+        The document's text.
+    file_format
+        Either "json" or "yaml".
+    label
+        What to call the text in an error: a file's name, or a phrase for
+        text which came from somewhere else.
+    error
+        The exception raised for text which does not parse.
+    """
     if file_format == "json":
         try:
             return json.loads(text)
         except ValueError as problem:
-            msg = f"Could not parse JSON from {quote_path(path)}: {problem}."
+            msg = f"Could not parse JSON from {label}: {problem}."
             raise error(msg) from problem
     try:
         return yaml.safe_load(text)
     except yaml.YAMLError as problem:
-        msg = f"Could not parse YAML from {quote_path(path)}: {problem}."
+        msg = f"Could not parse YAML from {label}: {problem}."
         raise error(msg) from problem
