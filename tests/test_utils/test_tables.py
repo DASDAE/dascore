@@ -9,13 +9,22 @@ import pytest
 
 from dascore.exceptions import ParameterError
 from dascore.utils.tables import (
+    DOCUMENT_KEY,
     ordered_rows,
     parse_cell,
+    read_parquet,
+    read_parquet_metadata,
     read_table,
     require_columns,
     require_stated,
     row_cells,
+    write_parquet,
 )
+
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
 
 
 def _write(path, text: str, name: str = "table.csv", encoding: str = "utf-8"):
@@ -209,3 +218,73 @@ class TestParseCell:
     def test_text(self):
         """Anything else is the string it was written as."""
         assert parse_cell("car") == "car"
+
+
+@pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+class TestParquet:
+    """Parquet keeps what a column holds, and what the file says about itself."""
+
+    def test_types_survive(self, tmp_path):
+        """A column comes back as what it was written as."""
+        frame = pd.DataFrame({"a": [1.5], "b": [True], "c": ["text"]})
+        path = tmp_path / "table.parquet"
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert out.equals(frame)
+
+    def test_a_column_of_no_one_type(self, tmp_path):
+        """A column parquet has no shape for is written as documents."""
+        frame = pd.DataFrame({"value": ["car", True, 3]})
+        path = tmp_path / "table.parquet"
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert list(out["value"]) == ["car", True, 3]
+
+    def test_a_nested_cell(self, tmp_path):
+        """A mapping is a document, and reads back as the mapping it was."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"meta": [{"a": [1, 2]}, None]}), path)
+        out, _ = read_parquet(path)
+        assert list(out["meta"]) == [{"a": [1, 2]}, None]
+
+    def test_metadata_round_trips(self, tmp_path):
+        """What a format states about its table comes back to it."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": [1]}), path, {"dascore:dims": '["time"]'})
+        _, stated = read_parquet(path)
+        assert stated == {"dascore:dims": '["time"]'}
+
+    def test_metadata_without_the_table(self, tmp_path):
+        """The footer alone, for a caller which only needs what it says."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": [1]}), path, {"dascore:dims": '["time"]'})
+        assert read_parquet_metadata(path) == {"dascore:dims": '["time"]'}
+
+    def test_no_columns_refused(self, tmp_path):
+        """An empty table states nothing, as an empty CSV does."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame(), path)
+        with pytest.raises(ParameterError, match="states no track"):
+            read_parquet(path, what="no track")
+
+    def test_a_file_which_is_not_parquet(self, tmp_path):
+        """Whatever pyarrow raises, the caller sees its own error."""
+        path = _write(tmp_path, "a,b\n1,2\n", name="table.parquet")
+        with pytest.raises(ParameterError, match="Could not read"):
+            read_parquet(path)
+        with pytest.raises(ParameterError, match="Could not read"):
+            read_parquet_metadata(path)
+
+    def test_a_document_column_which_is_not_there(self, tmp_path):
+        """A file naming a column it does not hold says so."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": [1]}), path, {DOCUMENT_KEY: '["b"]'})
+        with pytest.raises(ParameterError, match="holds no such column"):
+            read_parquet(path)
+
+    def test_a_document_which_does_not_parse(self, tmp_path):
+        """A cell a file names as a document is read as one, or named."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": ["{oops"]}), path, {DOCUMENT_KEY: '["a"]'})
+        with pytest.raises(ParameterError, match="not a JSON document"):
+            read_parquet(path)

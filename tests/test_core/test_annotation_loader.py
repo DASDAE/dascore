@@ -15,10 +15,16 @@ try:
 except ImportError:
     yaml = None
 
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
+
 import dascore as dc
 from dascore.core.annotation_loader import find_annotations
-from dascore.core.annotations import Line, Moveout
+from dascore.core.annotations import DIMS_KEY, Line, Moveout
 from dascore.exceptions import InvalidAnnotationError, ParameterError
+from dascore.utils.tables import write_parquet
 
 DIMS = ("distance", "time")
 
@@ -1360,7 +1366,7 @@ class TestCarriedAnnotations:
         """A directory states what it carries once."""
         regions.save(data / ".annotations")
         (data / ".annotations.csv").write_text("group,time\nq,1\n")
-        with pytest.raises(InvalidAnnotationError, match="twice over"):
+        with pytest.raises(InvalidAnnotationError, match="more than once"):
             dc.annotations(data)
 
     def test_the_wrong_kind_of_thing(self, data):
@@ -1398,3 +1404,171 @@ class TestCarriedAnnotations:
         (data / "attrs.json").write_text('{"object_type": "SomethingElse"}')
         regions.save(data / ".annotations")
         assert dc.annotations(data) == regions
+
+
+@pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+class TestParquet:
+    """The same tables, with their types kept, for a set too big to want text."""
+
+    @pytest.fixture
+    def mixed(self) -> dc.AnnotationSet:
+        """A set whose columns hold what a CSV would have to spell as text."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r1", "r2"],
+                "group": ["noise", "quiet"],
+                "value": ["car", True],
+                "tags": [("road", "car"), None],
+                "time_start": [
+                    np.datetime64("2020-01-01T00:00:10"),
+                    np.datetime64("2020-01-01T00:00:20"),
+                ],
+                "time_end": [
+                    np.datetime64("2020-01-01T00:00:12"),
+                    np.datetime64("2020-01-01T00:00:22"),
+                ],
+                "score": [0.9, 0.2],
+                "checked": [True, False],
+                "meta": [{"a": 1}, None],
+            }
+        )
+        return dc.AnnotationSet(frame, dims=DIMS, acquisition_key="NET.ARR.00.das")
+
+    def test_a_bare_table(self, mixed, tmp_path):
+        """A set of regions is one file, and reads back as the set it was."""
+        loaded = dc.annotations(mixed.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded.to_dataframe().equals(mixed.to_dataframe())
+
+    def test_the_dimensions_travel_with_the_file(self, mixed, tmp_path):
+        """A parquet file states its dimensions where it can: its footer."""
+        path = mixed.to_parquet(tmp_path / "picks.parquet")
+        assert dc.annotations(path).dims == DIMS
+
+    def test_restating_the_dimensions(self, mixed, tmp_path):
+        """Agreement is allowed, disagreement is not, as with every spelling."""
+        path = mixed.to_parquet(tmp_path / "picks.parquet")
+        assert dc.annotations(path, dims=DIMS).dims == DIMS
+        with pytest.raises(InvalidAnnotationError, match="where the two agree"):
+            dc.annotations(path, dims=("depth",))
+
+    def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
+        """A column with no one type is written as documents, not as text."""
+        loaded = dc.annotations(mixed.to_parquet(tmp_path / "picks.parquet"))
+        assert [type(x).__name__ for x in loaded.to_dataframe()["value"]] == [
+            "str",
+            "bool",
+        ]
+        assert loaded[0].extra["meta"] == {"a": 1}
+        assert loaded[0].tags == ("road", "car")
+
+    def test_text_stays_text(self, tmp_path):
+        """A typed format has a boolean, so a cell reading 'true' is the word."""
+        frame = pd.DataFrame({"group": ["a"], "note": ["true"], "time": [1.0]})
+        picks = dc.AnnotationSet(frame, dims=("time",))
+        loaded = dc.annotations(picks.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded[0].extra["note"] == "true"
+
+    def test_a_value_a_csv_would_refuse(self, tmp_path):
+        """Text a table would read back as a boolean is safe where types are kept."""
+        frame = pd.DataFrame({"group": ["a"], "value": ["true"], "time": [1.0]})
+        picks = dc.AnnotationSet(frame, dims=("time",))
+        with pytest.raises(ParameterError, match="a table would read back"):
+            picks.to_csv()
+        loaded = dc.annotations(picks.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded[0].value == "true"
+
+    def test_a_directory(self, with_vertices, curve, tmp_path):
+        """Every part a set states is written under its own name."""
+        directory = with_vertices.save(tmp_path / "picks", format="parquet")
+        assert sorted(x.name for x in directory.iterdir()) == [
+            "annotations.parquet",
+            "attrs.json",
+            "vertices.parquet",
+        ]
+        loaded = dc.annotations(directory)
+        assert loaded == with_vertices
+        assert loaded[1].geometry.basis == curve
+
+    def test_a_collection(self, regions, picks, tmp_path):
+        """A set is a set whichever encoding it is written in."""
+        root = tmp_path / "sets"
+        regions.save(root / "hand", format="parquet")
+        picks.save(root / "phasenet")
+        assert sorted(dc.annotations(root).attrs.sets) == ["hand", "phasenet"]
+
+    def test_carried_beside_data(self, regions, tmp_path):
+        """The hidden name takes the parquet spelling too."""
+        directory = tmp_path / "data"
+        directory.mkdir()
+        regions.to_parquet(directory / ".annotations.parquet")
+        assert dc.annotations(directory).to_dataframe().equals(regions.to_dataframe())
+
+    def test_the_other_encoding_is_superseded(self, regions, tmp_path):
+        """A set written twice states itself once, not once per encoding."""
+        directory = regions.save(tmp_path / "picks")
+        assert (directory / "annotations.csv").exists()
+        regions.save(directory, format="parquet")
+        assert not (directory / "annotations.csv").exists()
+        assert dc.annotations(directory) == regions
+        regions.save(directory)
+        assert not (directory / "annotations.parquet").exists()
+
+    def test_both_encodings_at_once(self, regions, tmp_path):
+        """A directory holding both says two things; neither is chosen."""
+        directory = regions.save(tmp_path / "picks")
+        regions.to_parquet(directory / "annotations.parquet")
+        with pytest.raises(InvalidAnnotationError, match="each of its parts once"):
+            dc.annotations(directory)
+
+    def test_a_bare_table_refuses_vertices(self, with_vertices, tmp_path):
+        """One file states one grain, whatever its encoding."""
+        with pytest.raises(ParameterError, match="a bare table has no row for"):
+            with_vertices.to_parquet(tmp_path / "picks.parquet")
+
+    def test_an_unknown_encoding(self, regions, tmp_path):
+        """A set is written in an encoding it has, and says which it has."""
+        with pytest.raises(ParameterError, match="not a table encoding"):
+            regions.save(tmp_path / "picks", format="feather")
+
+    def test_vertices_declare_nothing(self, with_vertices, tmp_path):
+        """Vertices are read in the dimensions of the set they belong to."""
+        directory = with_vertices.save(tmp_path / "picks", format="parquet")
+        frame = with_vertices.to_vertices()
+        write_parquet(frame, directory / "vertices.parquet", {DIMS_KEY: '["time"]'})
+        with pytest.raises(InvalidAnnotationError, match="states them once"):
+            dc.annotations(directory)
+
+    def test_dimensions_which_are_not_a_document(self, regions, tmp_path):
+        """What the footer states is read, and named where it is not readable."""
+        path = tmp_path / "picks.parquet"
+        write_parquet(regions.to_dataframe(), path, {DIMS_KEY: "time, distance"})
+        with pytest.raises(InvalidAnnotationError, match="not a JSON document"):
+            dc.annotations(path)
+
+    def test_dimensions_which_name_none(self, regions, tmp_path):
+        """A file which declares its dimensions names them."""
+        path = tmp_path / "picks.parquet"
+        write_parquet(regions.to_dataframe(), path, {DIMS_KEY: "[]"})
+        with pytest.raises(InvalidAnnotationError, match="names none"):
+            dc.annotations(path)
+
+    def test_a_stray_parquet_table(self, regions, tmp_path):
+        """A near-miss on the convention is a near-miss in either encoding."""
+        directory = regions.save(tmp_path / "picks")
+        regions.to_parquet(directory / "annotation.parquet")
+        with pytest.raises(InvalidAnnotationError, match=r"annotation\.parquet"):
+            dc.annotations(directory)
+
+    def test_a_file_which_is_not_parquet(self, tmp_path):
+        """Whatever pyarrow makes of it, the error names the file."""
+        path = tmp_path / "picks.parquet"
+        path.write_text("group,time\na,1\n")
+        with pytest.raises(InvalidAnnotationError, match="Could not read"):
+            dc.annotations(path, dims=("time",))
+
+    def test_a_table_which_is_neither(self, tmp_path):
+        """A bare set is a table, and the message names the encodings it takes."""
+        path = tmp_path / "picks.txt"
+        path.write_text("group\na\n")
+        with pytest.raises(InvalidAnnotationError, match=r"\.csv or \.parquet"):
+            dc.annotations(path, dims=("time",))

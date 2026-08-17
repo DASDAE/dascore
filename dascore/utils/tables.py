@@ -14,12 +14,18 @@ error type wraps them once, at whatever boundary reads its tables.
 from __future__ import annotations
 
 import csv
+import json
+from collections.abc import Mapping, Sized
 from pathlib import Path
 
 import pandas as pd
 
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import optional_import
 from dascore.utils.paths import quote_path
+
+# The metadata key a parquet file names its document columns in.
+DOCUMENT_KEY = "dascore:documents"
 
 
 def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame:
@@ -129,6 +135,206 @@ def _check_widths(reader, header: list[str], path: Path, start: int = 2) -> None
                 f"its header names {len(header)} columns."
             )
             raise ParameterError(msg)
+
+
+def write_parquet(frame: pd.DataFrame, path, metadata: Mapping | None = None) -> None:
+    """
+    Write a dataframe as one parquet file, keeping the values it holds.
+
+    Parquet stores types, so a column comes back as what it was written as
+    rather than as text a reader has to guess at. A column with no single
+    type -- one holding both text and booleans, or a model, or a nested
+    mapping -- has no parquet type of its own; each of its cells is written
+    as a JSON document instead, and the file names those columns in its
+    metadata so a reader gets the values back rather than their spelling.
+
+    Parameters
+    ----------
+    frame
+        The table to write.
+    path
+        Where to write it.
+    metadata
+        Key-value strings for the file's own metadata, which
+        [read_parquet](`dascore.utils.tables.read_parquet`) hands back. A
+        format states here what its table cannot say in a column.
+
+    Examples
+    --------
+    >>> import tempfile
+    >>> from pathlib import Path
+    >>> import pandas as pd
+    >>> from dascore.utils.tables import read_parquet, write_parquet
+    >>> frame = pd.DataFrame({"group": ["rail"], "value": [True]})
+    >>> with tempfile.TemporaryDirectory() as folder:
+    ...     path = Path(folder) / "coupling.parquet"
+    ...     write_parquet(frame, path, {"dascore:dims": "distance"})
+    ...     out, stated = read_parquet(path)
+    >>> out.equals(frame), stated["dascore:dims"]
+    (True, 'distance')
+    """
+    write_parquet_table(parquet_table(frame, metadata), path)
+
+
+def parquet_table(frame: pd.DataFrame, metadata: Mapping | None = None):
+    """
+    Return a dataframe as the parquet table it is written from.
+
+    Spelled out before anything is written, so a caller storing several
+    tables at once can prepare them all before it touches the directory.
+    See [write_parquet](`dascore.utils.tables.write_parquet`), which is
+    this and the write together.
+    """
+    arrow = optional_import("pyarrow", required_for="parquet tables")
+    spelled, documents = {}, []
+    for name in frame.columns:
+        series = frame[name]
+        if _one_type(series):
+            spelled[name] = series
+            continue
+        documents.append(str(name))
+        spelled[name] = series.map(_document)
+    stated = {str(k): str(v) for k, v in (metadata or {}).items()}
+    if documents:
+        stated[DOCUMENT_KEY] = json.dumps(documents)
+    table = arrow.Table.from_pandas(
+        pd.DataFrame(spelled, index=frame.index), preserve_index=False
+    )
+    # Added to what pyarrow wrote rather than replacing it: the pandas key
+    # it puts there is how a frame's own dtypes survive the round trip.
+    kept = {**(table.schema.metadata or {}), **stated}
+    return table.replace_schema_metadata(kept)
+
+
+def write_parquet_table(table, path) -> None:
+    """Write a prepared parquet table, as `parquet_table` returns it."""
+    parquet = optional_import("pyarrow.parquet", required_for="parquet tables")
+    parquet.write_table(table, path)
+
+
+def read_parquet(path, what: str = "nothing") -> tuple[pd.DataFrame, dict[str, str]]:
+    """
+    Read one parquet file, and whatever it states about itself.
+
+    Returns the table and its metadata, with the columns
+    [write_parquet](`dascore.utils.tables.write_parquet`) stored as JSON
+    documents read back as the values they hold.
+
+    Parameters
+    ----------
+    path
+        The parquet file to read.
+    what
+        What a table with no columns fails to state, for that error message.
+    """
+    parquet = optional_import("pyarrow.parquet", required_for="parquet tables")
+    try:
+        table = parquet.read_table(path)
+    except Exception as error:
+        # Any error pyarrow raises: it reports a truncated file, an
+        # unreadable one and something which is not parquet at all through
+        # several types of its own, and the caller's format names them all
+        # the same way.
+        msg = f"Could not read {quote_path(path)}: {error}."
+        raise ParameterError(msg) from error
+    stated = _stated_metadata(table.schema.metadata)
+    frame = table.to_pandas()
+    if not len(frame.columns):
+        msg = f"{quote_path(path)} has no columns, so it states {what}."
+        raise ParameterError(msg)
+    for name in json.loads(stated.pop(DOCUMENT_KEY, "[]")):
+        if name not in frame.columns:
+            msg = (
+                f"{quote_path(path)} names {name!r} as a column of documents, "
+                "and holds no such column."
+            )
+            raise ParameterError(msg)
+        frame[name] = frame[name].map(lambda x: _read_document(x, name, path))
+    return frame, stated
+
+
+def read_parquet_metadata(path) -> dict[str, str]:
+    """
+    Return what a parquet file states about itself, reading no rows.
+
+    The footer alone, so a caller which needs what a file says before it
+    decides how to read the table -- which dimensions its columns are in,
+    say -- does not pay for the table to find out.
+
+    Parameters
+    ----------
+    path
+        The parquet file to read.
+    """
+    parquet = optional_import("pyarrow.parquet", required_for="parquet tables")
+    try:
+        schema = parquet.read_schema(path)
+    except Exception as error:
+        msg = f"Could not read {quote_path(path)}: {error}."
+        raise ParameterError(msg) from error
+    return _stated_metadata(schema.metadata)
+
+
+def _one_type(series: pd.Series) -> bool:
+    """Whether a column holds one type parquet has a column shape for."""
+    if series.dtype != object:
+        return True
+    # Text is the one type an object column may still hold: pandas gives
+    # some string columns object dtype, and a whole column of text is
+    # exactly what parquet stores as a string column.
+    return all(isinstance(x, str) for x in series if _is_stated(x))
+
+
+def _is_stated(value) -> bool:
+    """Whether a cell states anything, whatever kind of thing it holds."""
+    if value is None:
+        return False
+    if isinstance(value, Sized) and not isinstance(value, str):
+        # A container states itself; asking pandas whether it is null
+        # answers once per element, which has no truth value.
+        return True
+    return not pd.isna(value)
+
+
+def _document(value):
+    """Spell one cell of a column parquet has no single type for."""
+    if not _is_stated(value):
+        return None
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    return json.dumps(value, default=str)
+
+
+def _read_document(cell, name: str, path) -> object:
+    """Read one cell of a column the file names as documents."""
+    if not isinstance(cell, str):
+        # Every spelling of a null becomes the one which was written: a
+        # column of documents holds values, and None is the value pandas
+        # hands back for a cell parquet stored as null.
+        return None if not _is_stated(cell) else cell
+    try:
+        return json.loads(cell)
+    except ValueError as error:
+        msg = (
+            f"The column {name!r} of {quote_path(path)} holds "
+            f"{cell!r}, which is not a JSON document: {error}."
+        )
+        raise ParameterError(msg) from error
+
+
+def _stated_metadata(metadata) -> dict[str, str]:
+    """Return the key-value metadata a file states, as text."""
+    out = {}
+    for key, value in (metadata or {}).items():
+        try:
+            name = key.decode()
+        except UnicodeDecodeError:  # pragma: no cover
+            continue
+        # What pyarrow writes for itself, which is not the caller's to read.
+        if name == "pandas" or name.startswith("ARROW:"):
+            continue
+        out[name] = value.decode(errors="replace")
+    return out
 
 
 def row_cells(row) -> dict[str, str]:
