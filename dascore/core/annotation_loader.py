@@ -51,7 +51,6 @@ from dascore.core.annotations import (
     DIMS_KEY,
     OBJECT_SUFFIXES,
     RESERVED_COLUMNS,
-    TABLE_SUFFIX,
     TABLE_SUFFIXES,
     VERTEX_STEM,
     AnnotationSet,
@@ -261,9 +260,12 @@ def _read_cells(
     it is: the annotations table does not reserve that name, and an
     annotation carrying its own ``seq`` means whatever it says.
 
-    A typed table -- parquet -- states what each column holds, so only the
-    columns which did arrive as text are read at all, and text stays text:
-    a cell reading 'true' in a format which has a boolean is the word.
+    A typed table -- parquet -- states what each column holds, so only its
+    text columns are read further, and only as far as a dimension or a
+    basis: text elsewhere is text, since a format with a boolean of its own
+    would have used one. Stating a type is not the same as stating a usable
+    one, so a dimension or a vertex order which arrives as something a
+    coordinate cannot be is refused rather than trusted.
     """
     spellings = _dimension_spellings(dims)
     out = {}
@@ -271,7 +273,12 @@ def _read_cells(
         series = frame[name]
         if typed and not _is_text(series):
             # The file stated what this column holds, so nothing here has
-            # to work it out from a spelling.
+            # to work it out from a spelling -- only check that what it
+            # states is a thing the column is allowed to hold.
+            if str(name) in spellings:
+                _check_kind(series, name, path, "iufMm", "numbers or times")
+            elif ordered and str(name) == _ORDINAL:
+                _check_kind(series, name, path, "iuf", "a number")
             out[name] = series
         elif str(name) in spellings:
             out[name] = _read_dimension(series, path)
@@ -290,6 +297,17 @@ def _read_cells(
         else:
             out[name] = series.map(_read_extra)
     return pd.DataFrame(out)
+
+
+def _check_kind(series: pd.Series, name, path: Path, kinds: str, what: str) -> None:
+    """Refuse a typed column whose type the field it names cannot be."""
+    if series.dtype.kind in kinds:
+        return
+    msg = (
+        f"The column {str(name)!r} of {quote_path(path)} holds "
+        f"{series.dtype}, where it states {what}."
+    )
+    raise ParameterError(msg)
 
 
 def _read_extra(cell):
@@ -318,12 +336,14 @@ def _read_set_table(
     """
     Read one of a set's tables, with its cells typed.
 
-    A CSV table stating nothing at all is what a set of no annotations
-    writes, so it reads back as none rather than as a table with no
-    columns; a parquet file always states its columns, empty or not.
+    A table stating nothing at all is what a set of no annotations writes
+    -- a blank CSV, or a parquet file with no columns -- so it reads back
+    as none rather than as a table which states nothing.
     """
     if _is_parquet(path):
-        frame, _ = read_parquet(path, what=what)
+        frame, _ = read_parquet(path, what=what, empty=True)
+        if not len(frame.columns):
+            return None
         return _read_cells(frame, dims, path, ordered=ordered, typed=True)
     if _is_blank(path):
         return None
@@ -591,7 +611,16 @@ def find_annotations(directory: str | os.PathLike) -> Path | None:
     """
     root = Path(directory)
     tree = root / BLESSED_NAME
-    tables = [tree.with_suffix(x) for x in TABLE_SUFFIXES]
+    named = ", ".join(tree.with_suffix(x).name for x in TABLE_SUFFIXES)
+    # The suffix is matched without regard to case, as every other table
+    # this format finds is: a `.annotations.PARQUET` is the file the lower
+    # case name would be, and reading one and not the other would make the
+    # carried name mean less than the visible one.
+    tables = [
+        x
+        for x in _entries(root)
+        if x.stem == BLESSED_NAME and x.suffix.casefold() in TABLE_SUFFIXES
+    ]
     found = [x for x in (tree, *tables) if x.exists()]
     if not found:
         return None
@@ -604,7 +633,6 @@ def find_annotations(directory: str | os.PathLike) -> Path | None:
         raise InvalidAnnotationError(msg)
     (only,) = found
     if only == tree and not only.is_dir():
-        named = ", ".join(x.name for x in tables)
         msg = (
             f"{quote_path(only)} is a file. The annotations a directory carries "
             f"are the set directory {BLESSED_NAME}/, or a bare table: {named}."
@@ -655,23 +683,11 @@ def _child_sets(directory: Path) -> list[Path]:
         if _one_spelling(child, ATTRS_STEM, OBJECT_SUFFIXES) is not None:
             msg = (
                 f"{quote_path(child)} states the attributes of a set but no "
-                f"{ANNOTATION_STEM}{TABLE_SUFFIX}, so it states no annotations."
+                f"{ANNOTATION_STEM} table, so it states no annotations."
             )
             raise ParameterError(msg)
     _refuse_colliding_names(directory, out)
     return out
-
-
-def _states_annotations(path: Path) -> bool:
-    """
-    Whether a directory states annotations of its own, in either encoding.
-
-    A file states none: the scans below walk what a directory holds, and a
-    plain file among them is not a set which spelled itself oddly.
-    """
-    if not path.is_dir():
-        return False
-    return _one_spelling(path, ANNOTATION_STEM, TABLE_SUFFIXES) is not None
 
 
 def _refuse_colliding_names(directory: Path, children: Sequence[Path]) -> None:
@@ -755,8 +771,8 @@ def _declares_dims(directory: Path, attrs: Mapping) -> bool:
     """
     if attrs.get("dims"):
         return True
-    table = _one_spelling(directory, ANNOTATION_STEM, (TABLE_SUFFIX,))
-    return table is not None and _read_pragma(table)[0] is not None
+    table = _one_spelling(directory, ANNOTATION_STEM, TABLE_SUFFIXES)
+    return table is not None and _read_table_dims(table)[0] is not None
 
 
 def _merge_sets(
@@ -971,15 +987,15 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     _refuse_stray_tables(
         directory,
         (ANNOTATION_STEM, VERTEX_STEM),
-        f"which name no part of a set. A set states {ANNOTATION_STEM}"
-        f"{TABLE_SUFFIX} and, where it has vertices, {VERTEX_STEM}{TABLE_SUFFIX}.",
+        f"which name no part of a set. A set states {ANNOTATION_STEM} and, "
+        f"where it has vertices, {VERTEX_STEM}, each as a "
+        f"{' or a '.join(TABLE_SUFFIXES)} table.",
     )
     table = _one_spelling(directory, ANNOTATION_STEM, TABLE_SUFFIXES)
     if table is None:
         msg = (
-            f"{quote_path(directory)} holds no {ANNOTATION_STEM}{TABLE_SUFFIX} "
-            f"and no {BLESSED_NAME}, so it states no annotations and carries "
-            "none."
+            f"{quote_path(directory)} holds no {ANNOTATION_STEM} table and no "
+            f"{BLESSED_NAME}, so it states no annotations and carries none."
         )
         raise ParameterError(msg)
     declared, skip = _read_table_dims(table)
@@ -1074,9 +1090,11 @@ def _declared_dims(
             stated = declared
         elif tuple(str(x) for x in iterate(stated)) != declared:
             spelled = "was given" if dims is not None else "is stated in its attributes"
+            named = table or source
+            where = f"in its {DIMS_KEY}" if _is_parquet(named) else "above its header"
             msg = (
-                f"{quote_path(table or source)} declares the dimensions "
-                f"{', '.join(declared)} above its header, but "
+                f"{quote_path(named)} declares the dimensions "
+                f"{', '.join(declared)} {where}, but "
                 f"{', '.join(str(x) for x in iterate(stated))} {spelled}. "
                 "Dimensions may be spelled twice where the two agree."
             )

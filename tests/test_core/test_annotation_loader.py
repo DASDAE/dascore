@@ -17,6 +17,7 @@ except ImportError:
 
 try:
     import pyarrow
+    import pyarrow.parquet
 except ImportError:
     pyarrow = None
 
@@ -24,7 +25,7 @@ import dascore as dc
 from dascore.core.annotation_loader import find_annotations
 from dascore.core.annotations import DIMS_KEY, Line, Moveout
 from dascore.exceptions import InvalidAnnotationError, ParameterError
-from dascore.utils.tables import write_parquet
+from dascore.utils.tables import DOCUMENT_KEY, write_parquet
 
 DIMS = ("distance", "time")
 
@@ -555,7 +556,7 @@ class TestTheTables:
         """A directory without one states no annotations."""
         directory = tmp_path / "picks"
         directory.mkdir()
-        with pytest.raises(InvalidAnnotationError, match=r"no annotations\.csv"):
+        with pytest.raises(InvalidAnnotationError, match="no annotations table"):
             dc.annotations(directory, dims=DIMS)
 
     def test_a_table_which_cannot_be_read(self, regions, tmp_path):
@@ -811,7 +812,7 @@ class TestCollections:
         (half / "attrs.json").write_text('{"dims": ["time"]}')
         # The half-set is not what is wrong here: this directory states no
         # annotations of its own, and holds no set to make it a collection.
-        with pytest.raises(InvalidAnnotationError, match=r"holds no annotations\.csv"):
+        with pytest.raises(InvalidAnnotationError, match="holds no annotations table"):
             dc.annotations(root, dims=("time",))
 
     def test_a_tree_of_collections(self, regions, tmp_path):
@@ -1406,6 +1407,13 @@ class TestCarriedAnnotations:
         assert dc.annotations(data) == regions
 
 
+def _forge(frame: pd.DataFrame, path, documents: str) -> None:
+    """Write a parquet file whose document footer this library did not write."""
+    table = pyarrow.Table.from_pandas(frame, preserve_index=False)
+    kept = {**(table.schema.metadata or {}), DOCUMENT_KEY: documents}
+    pyarrow.parquet.write_table(table.replace_schema_metadata(kept), path)
+
+
 @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
 class TestParquet:
     """The same tables, with their types kept, for a set too big to want text."""
@@ -1477,6 +1485,57 @@ class TestParquet:
         loaded = dc.annotations(picks.to_parquet(tmp_path / "picks.parquet"))
         assert loaded[0].value == "true"
 
+    def test_a_set_of_no_annotations(self, tmp_path):
+        """A set which states nothing writes a table which states nothing."""
+        empty = dc.AnnotationSet(None, dims=("time",))
+        assert dc.annotations(empty.save(tmp_path / "picks", format="parquet")) == empty
+        loaded = dc.annotations(empty.to_parquet(tmp_path / "picks.parquet"))
+        assert len(loaded) == 0
+
+    def test_an_empty_set_beside_a_full_one(self, picks, tmp_path):
+        """One set holding nothing does not take its collection down with it."""
+        root = tmp_path / "sets"
+        picks.save(root / "phasenet", format="parquet")
+        dc.AnnotationSet(None, dims=("time",)).save(root / "empty", format="parquet")
+        assert len(dc.annotations(root)) == len(picks)
+
+    def test_numbers_numpy_made(self, tmp_path):
+        """A value from numpy is the number it is, not the text str() gives."""
+        frame = pd.DataFrame(
+            {
+                "group": ["g", "g", "h"],
+                "value": [np.int64(3), 5, "text"],
+                "time": [1.0, 2.0, 3.0],
+            }
+        )
+        picks = dc.AnnotationSet(frame, dims=("time",))
+        loaded = dc.annotations(picks.save(tmp_path / "picks", format="parquet"))
+        assert [x.value for x in loaded] == [3, 5, "text"]
+
+    def test_a_time_inside_a_document(self, tmp_path):
+        """A time has no JSON type, so it is spelled as DASCore spells one."""
+        frame = pd.DataFrame(
+            {
+                "group": ["a", "b"],
+                "meta": [{"when": np.datetime64("2020-01-01T00:00:01")}, "note"],
+                "time": [1.0, 2.0],
+            }
+        )
+        picks = dc.AnnotationSet(frame, dims=("time",))
+        loaded = dc.annotations(picks.save(tmp_path / "picks", format="parquet"))
+        assert loaded[0].extra["meta"] == {"when": "2020-01-01T00:00:01.000000000"}
+
+    @pytest.mark.parametrize(
+        ("stated", "message"),
+        [(json.dumps("group"), "it is a list of names"), ("{oops", "not a JSON")],
+    )
+    def test_a_footer_this_cannot_read(self, stated, message, tmp_path):
+        """A footer another writer left is read, or named where it cannot be."""
+        path = tmp_path / "picks.parquet"
+        _forge(pd.DataFrame({"group": ["a"], "time": [1.0]}), path, stated)
+        with pytest.raises(InvalidAnnotationError, match=message):
+            dc.annotations(path, dims=("time",))
+
     def test_a_directory(self, with_vertices, curve, tmp_path):
         """Every part a set states is written under its own name."""
         directory = with_vertices.save(tmp_path / "picks", format="parquet")
@@ -1502,6 +1561,32 @@ class TestParquet:
         directory.mkdir()
         regions.to_parquet(directory / ".annotations.parquet")
         assert dc.annotations(directory).to_dataframe().equals(regions.to_dataframe())
+
+    def test_carried_whatever_case_it_names(self, regions, tmp_path):
+        """The carried name is matched as every other table name is."""
+        directory = tmp_path / "data"
+        directory.mkdir()
+        regions.to_parquet(directory / ".annotations.PARQUET")
+        assert dc.annotations(directory).to_dataframe().equals(regions.to_dataframe())
+
+    def test_a_typed_column_which_cannot_be_a_dimension(self, tmp_path):
+        """Stating a type is not stating one a coordinate can be."""
+        path = tmp_path / "picks.parquet"
+        write_parquet(pd.DataFrame({"group": ["a"], "time": [True]}), path)
+        with pytest.raises(InvalidAnnotationError, match="where it states numbers"):
+            dc.annotations(path, dims=("time",))
+
+    def test_a_typed_vertex_order_which_is_not_a_number(self, with_vertices, tmp_path):
+        """A vertex states its place in the order as a number, typed or not."""
+        directory = with_vertices.save(tmp_path / "picks", format="parquet")
+        vertices = with_vertices.to_vertices()
+        stamps = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
+        vertices["seq"] = list(stamps) * (len(vertices) // 2) + list(
+            stamps[: len(vertices) % 2]
+        )
+        write_parquet(vertices, directory / "vertices.parquet")
+        with pytest.raises(InvalidAnnotationError, match="where it states a number"):
+            dc.annotations(directory)
 
     def test_the_other_encoding_is_superseded(self, regions, tmp_path):
         """A set written twice states itself once, not once per encoding."""

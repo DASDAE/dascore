@@ -171,7 +171,9 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
 
     Both backings, since which one pandas gives text is not the caller's
     choice: a `str` column is arrow-backed wherever pyarrow is installed
-    and numpy-backed where it is not, and the two are unrelated classes.
+    and numpy-backed where it is not. Neither class is a subclass of the
+    other -- they share only `BaseStringArray` -- so registering one does
+    not dispatch the other.
     """
     out = pd.to_datetime(arr, errors="coerce", format="mixed")
     return out.to_numpy(dtype="datetime64[ns]")

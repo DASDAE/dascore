@@ -102,8 +102,8 @@ OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
 # What a parquet table names its dimensions in, since it has no comment
 # line to declare them in and its footer is the place a format states what
-# its columns cannot. Spelled as GeoParquet spells its own: a JSON
-# document under a namespaced key.
+# its columns cannot. A JSON document, as GeoParquet's `geo` key holds one;
+# namespaced, so a file may carry both without either reading the other's.
 DIMS_KEY = "dascore:dims"
 
 # What a range column is spelled with.
@@ -791,10 +791,13 @@ class AnnotationSet:
 
         The parquet spelling of
         [to_csv](`dascore.core.annotations.AnnotationSet.to_csv`), for a
-        set too big to want text. It keeps what a CSV cannot: every
-        column comes back as the type it was written as, so nothing has to
-        be read back from its spelling, and the dimensions travel in the
-        file's own metadata rather than having to be stated again.
+        set too big to want text. It keeps what a CSV cannot: a column
+        parquet has a type for comes back as that type rather than as a
+        spelling to be guessed at, and the dimensions travel in the file's
+        own metadata rather than having to be stated again. A column with
+        no one type is written as JSON, which keeps the value of each cell
+        but not every python type it may have been held in -- a tuple comes
+        back as a list.
 
         Needs pyarrow, which CSV does not; a set of regions can always be
         written as a table, whatever is installed.
@@ -842,8 +845,8 @@ class AnnotationSet:
 
         The tables are CSV unless another encoding is asked for. Parquet
         writes the same parts under the same names, with its own suffix, and
-        keeps every column's type rather than its spelling; it needs pyarrow,
-        where CSV needs nothing.
+        keeps a column's type rather than its spelling wherever it has one
+        for it; it needs pyarrow, where CSV needs nothing.
 
         Writing states the whole directory, so a part this set does not
         have is removed rather than left behind. A stale vertices table, the
@@ -893,12 +896,17 @@ class AnnotationSet:
             for x in directory.iterdir()
             if x.suffix.casefold() in claimed.get(x.stem, ()) and x not in writing
         ]
-        for stale in superseded:
-            stale.unlink(missing_ok=True)
+        # Written before the superseded parts are cleared, not after: a
+        # write which fails partway -- a full disk, a permission changed
+        # under it -- then leaves the set it was replacing still in the
+        # directory, and a reader finds two spellings of one part and says
+        # so, rather than finding the set gone.
         with open(attrs_file, "w") as stream:
             json.dump(document, stream, indent=2)
         for stem, payload in spelled.items():
             _write_spelled(payload, directory / f"{stem}{suffix}")
+        for stale in superseded:
+            stale.unlink(missing_ok=True)
         return directory
 
     # --- what the set holds

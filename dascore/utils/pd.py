@@ -394,9 +394,10 @@ def _filter_contains(query_dict, df, bool_index):
     for key, val in query_dict.items():
         _check_misdirected_range_query(key, val, df)
         # An ellipsis names no value, so it matches nothing and is dropped
-        # before the check rather than handed to it: pandas' arrow-backed
-        # string columns refuse a value arrow has no type for, where its
-        # numpy-backed ones quietly never match.
+        # before `isin` sees it: pandas' arrow-backed string columns refuse a
+        # value arrow has no type for, where its numpy-backed ones quietly
+        # never match. The range check above still sees it -- an open bound
+        # in a membership query is what that check exists to name.
         wanted = [x for x in val if x is not ...]
         bool_index = np.logical_and(bool_index, df[key].isin(wanted))
     return bool_index
