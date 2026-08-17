@@ -585,7 +585,11 @@ class AnnotationSetAttrs(_AnnotationModel):
             "The attributes of each set loaded together, keyed by the name the "
             "`set` column holds. What a child set declares for itself -- its "
             "own dimensions, provenance and columns -- is kept here rather "
-            "than written into every row of it."
+            "than written into every row of it, and a row reaches it back "
+            "through its label. What it says describes its own table, not the "
+            "merged one: a column of whole numbers which another set does not "
+            "state holds them as floats once the two are one table, since that "
+            "is what a missing number makes of them."
         ),
     )
 
@@ -709,6 +713,7 @@ class AnnotationSet:
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
         _check_values(frame)
+        _check_set_labels(frame, self._attrs)
         ids = _check_ids(frame)
         frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
         vertex_frame = _normalize_times(
@@ -848,6 +853,7 @@ class AnnotationSet:
     def __getitem__(self, position: int) -> Annotation:
         """Return one annotation by its position."""
         row = self._df.iloc[position]
+        label = _text(row.get("set"))
         return Annotation(
             geometry=self._geometry(row),
             id=_text(row.get("id")),
@@ -855,13 +861,29 @@ class AnnotationSet:
             value=row["value"] if _stated(row.get("value")) else True,
             tags=_read_tags(row.get("tags")),
             parent=_text(row.get("parent")),
-            # A set may span acquisitions, so a row naming one overrides
-            # the set-level address rather than sitting beside it.
-            acquisition_key=_text(row.get("acquisition_key"))
-            or self._attrs.acquisition_key,
-            set=_text(row.get("set")),
+            acquisition_key=self._acquisition_key(row, label),
+            set=label,
             extra=_read_extra(row, self._attrs.dims, self._spellings),
         )
+
+    def _acquisition_key(self, row, label: str) -> str:
+        """
+        Return the address of the data one annotation was made on.
+
+        A set may span acquisitions, so a row naming one overrides the
+        set-level address rather than sitting beside it. Where sets were
+        loaded together, the row's own set answers before the collection
+        does: the collection is not what any of them was picked on, and the
+        label is what reaches back to the set which was. A collection which
+        states an address of its own still answers for a set which states
+        none, which is what makes stating it once useful.
+        """
+        if stated := _text(row.get("acquisition_key")):
+            return stated
+        child = self._attrs.sets.get(label)
+        if child is not None and child.acquisition_key:
+            return child.acquisition_key
+        return self._attrs.acquisition_key
 
     def __eq__(self, other) -> bool:
         """Two sets are equal when their attributes and frames are."""
@@ -1067,6 +1089,43 @@ def _check_ranges(frame: pd.DataFrame, spellings) -> None:
                 "which ends before it starts."
             )
             raise ParameterError(msg)
+
+
+def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
+    """
+    Refuse a row whose set label names none of the sets stated.
+
+    Sets loaded together keep their rows in one table and what each of them
+    states in ``attrs.sets``; a row whose label names no set -- or names
+    nothing at all -- has lost that half, and would quietly answer with the
+    collection's provenance rather than its own. Only checked where sets are
+    stated: a set on its own may carry a `set` column meaning whatever it
+    means, and a collection which happens to hold no rows labels none.
+    """
+    if not attrs.sets or frame.empty:
+        return
+    stated = ", ".join(sorted(attrs.sets))
+    if "set" not in frame.columns:
+        msg = (
+            f"This states the sets {stated} and no set column, so no row says "
+            "which of them it came from."
+        )
+        raise ParameterError(msg)
+    labels = frame["set"].map(_text)
+    if not labels.all():
+        rows = ", ".join(str(x) for x in frame.index[labels == ""][:5])
+        msg = (
+            f"Row(s) {rows} state no set, where the sets {stated} are stated. A "
+            "row loaded with others says which of them it came from."
+        )
+        raise ParameterError(msg)
+    if unknown := sorted(set(labels) - set(attrs.sets)):
+        msg = (
+            f"The set label(s) {', '.join(unknown)} name no set stated here, "
+            f"which states {stated}. A label reaches back to what its set says "
+            "about itself, so it names one of them."
+        )
+        raise ParameterError(msg)
 
 
 def _check_values(frame: pd.DataFrame) -> None:

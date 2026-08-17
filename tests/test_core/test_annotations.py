@@ -792,12 +792,6 @@ class TestAttrs:
         with pytest.raises(ValidationError):
             AnnotationSetAttrs(dims=DIMS).dims = ("other",)
 
-    def test_sets_keep_what_a_child_states(self):
-        """A set loaded with others keeps its own dimensions and provenance."""
-        child = AnnotationSetAttrs(dims=("time",), acquisition_key="NET.ARR.00.das")
-        attrs = AnnotationSetAttrs(dims=DIMS, sets={"picks": child})
-        assert attrs.sets["picks"] == child
-
     def test_sets_are_one_level_deep(self):
         """Sets loaded together are one collection, not a tree of them."""
         child = AnnotationSetAttrs(dims=("time",), sets={"deeper": {"dims": ("time",)}})

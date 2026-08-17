@@ -10,8 +10,9 @@ A directory of those directories is a collection, and reads as one set
 whose ``set`` column names which of them each row came from: one return
 type, so nothing downstream has to ask which layout it was handed. What a
 set declares only for itself -- its dimensions, its provenance, its
-documented columns -- is kept under ``attrs.sets``, and its identity is
-the ``id`` it already had, which is why ids are unique across a collection.
+documented columns -- is kept under ``attrs.sets``, and a row's identity is
+still the ``id`` it already had, so an id two sets share is refused rather
+than qualified by the set it came from.
 
 CSV has no types, so this module decides what each column holds before the
 models see it: a dimension column is numbers or times, a ``basis`` cell is
@@ -27,7 +28,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ from dascore.core.annotations import (
     TABLE_SUFFIX,
     VERTEX_STEM,
     AnnotationSet,
+    _text,
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
@@ -100,11 +102,27 @@ def _read_object(path: Path) -> dict[str, Any]:
     return dict(data)
 
 
+def _entries(directory: Path) -> list[Path]:
+    """
+    Return what a directory holds, as this format's own error.
+
+    ``iterdir`` and the ``exists`` calls in the scans raise ``OSError`` -- a
+    directory whose permissions were tightened is the ordinary case -- and
+    that would leave `annotations` unwrapped, where every other failure to
+    read a stored set arrives as an annotation error.
+    """
+    try:
+        return sorted(directory.iterdir())
+    except OSError as error:
+        msg = f"Could not read {quote_path(directory)}: {error}."
+        raise ParameterError(msg) from error
+
+
 def _one_spelling(directory: Path, stem: str, suffixes: Sequence[str]) -> Path | None:
     """Return the one file a stem names, or None; two spellings raise."""
     found = [
         x
-        for x in sorted(directory.iterdir())
+        for x in _entries(directory)
         if x.stem == stem and x.suffix.casefold() in suffixes
     ]
     if len(found) > 1:
@@ -264,24 +282,26 @@ def _is_blank(path: Path) -> bool:
         return False
 
 
-def _refuse_stray_tables(directory: Path) -> None:
+def _refuse_stray_tables(directory: Path, known: Collection[str], what: str) -> None:
     """
-    Refuse a table whose name names no part of a set.
+    Refuse a table whose name names no part of what a directory holds.
 
     A ``vertexes.csv`` beside an ``annotations.csv`` claims to participate
     in this convention and gets it wrong, which is worth more than being
-    quietly skipped.
+    quietly skipped. Hidden names are not tables here, as they are not sets:
+    an editor's ``.annotations.csv.swp`` or a half-copied ``.annotations.csv``
+    is a companion the directory keeps, and taking a directory down for one
+    would make a stray sync file fatal.
     """
-    known = {ANNOTATION_STEM, VERTEX_STEM}
     stray = sorted(
-        x.name for x in directory.glob(f"*{TABLE_SUFFIX}") if x.stem not in known
+        x.name
+        for x in _entries(directory)
+        if not x.name.startswith(".")
+        and x.suffix.casefold() == TABLE_SUFFIX
+        and x.stem not in known
     )
     if stray:
-        msg = (
-            f"{quote_path(directory)} holds the table(s) {', '.join(stray)}, which "
-            f"name no part of a set. A set states {ANNOTATION_STEM}{TABLE_SUFFIX} "
-            f"and, where it has vertices, {VERTEX_STEM}{TABLE_SUFFIX}."
-        )
+        msg = f"{quote_path(directory)} holds the table(s) {', '.join(stray)}, {what}"
         raise ParameterError(msg)
 
 
@@ -313,43 +333,53 @@ def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
         vertices=kwargs.pop("vertices", None),
     )
     attrs = _read_attrs(directory)
-    children = _child_sets(directory)
-    if children and (directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}").exists():
-        listed = ", ".join(x.name for x in children)
-        msg = (
-            f"{quote_path(directory)} states annotations of its own and holds "
-            f"the set(s) {listed}. A directory is one set or a directory of "
-            "them, not both."
-        )
-        raise ParameterError(msg)
-    if children:
+    # A directory which states annotations is a set, and nothing below it is
+    # looked at: a folder someone kept beside its tables -- a backup of an
+    # attrs file, an older copy of the set -- is no more this format's
+    # business than a notes.txt is, and reading the directory as a
+    # collection because of one would refuse a set which is complete.
+    if _states_annotations(directory):
+        return _load_set(directory, attrs, dims, **kwargs)
+    if children := _child_sets(directory):
         return _load_collection(directory, children, attrs, dims, **kwargs)
     return _load_set(directory, attrs, dims, **kwargs)
+
+
+def _states_annotations(path: Path) -> bool:
+    """Whether a directory states annotations of its own; a file states none."""
+    if not path.is_dir():
+        return False
+    return _one_spelling(path, ANNOTATION_STEM, (TABLE_SUFFIX,)) is not None
 
 
 def _child_sets(directory: Path) -> list[Path]:
     """
     Return the set directories a directory of sets holds, in name order.
 
-    A directory is one of them where it states annotations. One which
-    states only attributes is half a set and says so; one holding sets of
-    its own is refused, since sets loaded together are one collection
-    rather than a tree. Anything else is a directory which participates in
-    no convention here -- the data the sets describe, a folder of figures --
-    and is left alone.
+    Only reached for a directory which states no annotations itself. The
+    sets are found first and nothing is refused until at least one is: a
+    directory holding none of them is not a collection at all -- it is the
+    data, or a directory carrying its annotations under the hidden name --
+    and complaining about what sits in it would refuse a directory this
+    format has no claim on.
+
+    Once it is a collection, a child which states attributes and no
+    annotations is half a set and says so, and one holding sets of its own
+    is refused, since sets loaded together are one collection rather than a
+    tree. Anything else is left alone -- the data the sets describe, a
+    folder of figures -- as is a directory holding only vertices, which is
+    never looked for without the annotations it belongs to.
     """
-    out = []
-    table = f"{ANNOTATION_STEM}{TABLE_SUFFIX}"
     # Hidden names are skipped as the file scanner skips them: a
     # `.inventory` beside the sets describes the data, not the annotations.
-    children = sorted(
-        x for x in directory.iterdir() if x.is_dir() and not x.name.startswith(".")
-    )
-    for child in children:
-        if (child / table).exists():
-            out.append(child)
-            continue
-        if nested := [x.name for x in sorted(child.iterdir()) if (x / table).exists()]:
+    children = [
+        x for x in _entries(directory) if x.is_dir() and not x.name.startswith(".")
+    ]
+    out = [x for x in children if _states_annotations(x)]
+    if not out:
+        return []
+    for child in (x for x in children if x not in out):
+        if nested := [x.name for x in _entries(child) if _states_annotations(x)]:
             msg = (
                 f"{quote_path(child)} holds the set(s) {', '.join(nested)}. Sets "
                 "loaded together are one collection, not a tree of them."
@@ -358,10 +388,33 @@ def _child_sets(directory: Path) -> list[Path]:
         if _one_spelling(child, ATTRS_STEM, OBJECT_SUFFIXES) is not None:
             msg = (
                 f"{quote_path(child)} states the attributes of a set but no "
-                f"{table}, so it states no annotations."
+                f"{ANNOTATION_STEM}{TABLE_SUFFIX}, so it states no annotations."
             )
             raise ParameterError(msg)
+    _refuse_colliding_names(directory, out)
     return out
+
+
+def _refuse_colliding_names(directory: Path, children: Sequence[Path]) -> None:
+    """
+    Refuse set names which differ only in case.
+
+    The name is the label: it is the `set` column and the key in
+    ``attrs.sets``, so two which fold together are one set on a filesystem
+    which folds them and two on this one. A symlinked set is allowed, by
+    contrast -- a collection is a convenience for reading, not an authored
+    identity, so pointing one at a set kept elsewhere is a fair use of it.
+    """
+    folded: dict[str, str] = {}
+    for child in children:
+        first = folded.setdefault(child.name.casefold(), child.name)
+        if first != child.name:
+            msg = (
+                f"{quote_path(directory)} holds the sets {first} and {child.name}, "
+                "whose names differ only in case. A set name is the label its "
+                "rows carry, so it must name one set on any filesystem."
+            )
+            raise ParameterError(msg)
 
 
 def _load_collection(
@@ -370,11 +423,10 @@ def _load_collection(
     """
     Load the sets a directory of them holds, as one set.
 
-    Every set comes back through one door, so a caller which was handed a
-    directory does not have to ask which layout it was: the annotations
-    are one table with a ``set`` column naming which set each row came
-    from, and what a set declares only for itself is kept in
-    ``attrs.sets``.
+    Each child is read in its own dimensions, then merged by `_merge_sets`.
+    The refusals here are the ones only a collection can hit: sets stated
+    twice, a table beside them, and dimensions given for a set which
+    declares its own.
     """
     if attrs.get("sets"):
         msg = (
@@ -382,33 +434,30 @@ def _load_collection(
             "them in directories. A collection states each of its sets once."
         )
         raise ParameterError(msg)
-    _refuse_collection_tables(directory)
+    _refuse_stray_tables(
+        directory,
+        (),
+        "which name no set. A set is a directory here, so a table beside them "
+        "states nothing; a bare table is read on its own.",
+    )
     if attrs.get("dims"):
         _refuse_overrides("a directory of sets stating its own dimensions", dims=dims)
-    # The dimensions to read a child which declares none in: the caller's,
-    # else the ones stated beside the sets.
+    # The caller's dimensions, else the ones stated beside the sets, stand in
+    # for a child which declares none; a child which declares its own is read
+    # in those, and is refused the argument as it would be on its own, rather
+    # than having it dropped where nobody can see it happen.
     default = dims if dims is not None else attrs.get("dims")
     loaded = {}
     for child in children:
         child_attrs = _read_attrs(child)
-        # A child which declares its own is read in those; the collection's
-        # stand in for one which declares none rather than being refused as
-        # a second spelling of a fact the child never stated.
-        given = None if child_attrs.get("dims") else default
-        loaded[child.name] = _load_set(child, child_attrs, given)
-    return _merge_sets(loaded, attrs, **kwargs)
-
-
-def _refuse_collection_tables(directory: Path) -> None:
-    """Refuse a table beside sets, which states no set of its own."""
-    stray = sorted(x.name for x in directory.glob(f"*{TABLE_SUFFIX}"))
-    if stray:
-        msg = (
-            f"{quote_path(directory)} holds the table(s) {', '.join(stray)} beside "
-            "the sets it holds. A set is a directory here, so a table beside them "
-            f"names no set; a bare table is read on its own, as {TABLE_SUFFIX}."
+        if child_attrs.get("dims"):
+            _refuse_overrides(
+                f"{quote_path(child)}, which states its own dimensions", dims=dims
+            )
+        loaded[child.name] = _load_set(
+            child, child_attrs, None if child_attrs.get("dims") else default
         )
-        raise ParameterError(msg)
+    return _merge_sets(loaded, attrs, **kwargs)
 
 
 def _merge_sets(
@@ -416,11 +465,16 @@ def _merge_sets(
 ) -> AnnotationSet:
     """Build the one set the sets loaded together make."""
     stated = [str(x) for x in iterate(attrs.get("dims") or ())]
+    # The collection's own dimensions first, then each set's in the order
+    # the sets were read, which is their names' -- so the order is stable
+    # for one directory, though renaming a set can change it.
     dims = tuple(
         dict.fromkeys([*stated, *(x for one in loaded.values() for x in one.dims)])
     )
     frames = {name: _labeled(one, name) for name, one in loaded.items()}
+    _refuse_undeclared_dims(loaded, frames, dims)
     _refuse_mixed_spellings(frames, dims)
+    _refuse_mixed_kinds(frames, dims, "an annotation")
     frame = pd.concat(frames.values(), ignore_index=True, sort=False)
     _refuse_shared_ids(frame)
     vertices = {
@@ -429,6 +483,7 @@ def _merge_sets(
         if not (drawn := one.to_vertices()).empty
     }
     _refuse_mixed_vertices(vertices)
+    _refuse_mixed_kinds(vertices, dims, "a vertex")
     document = dict(attrs)
     document["dims"] = dims
     document["sets"] = {name: one.attrs for name, one in loaded.items()}
@@ -443,35 +498,63 @@ def _merge_sets(
 
 
 def _labeled(one: AnnotationSet, name: str) -> pd.DataFrame:
-    """Return one set's annotations, saying which set each row came from."""
+    """
+    Return one set's annotations, saying which set each row came from.
+
+    Only the label is added. What the set states for itself stays in its
+    attributes, where `attrs.sets` keeps it and a row reads it back through
+    the label -- writing any of it into every row would store one fact
+    twice, in two places which can then disagree.
+    """
     frame = one.to_dataframe()
     if "set" in frame.columns:
         msg = (
-            f"The set {name!r} states a set column, which names the set a row "
-            "was loaded from. Read it as a column of its own."
+            f"The set {name!r} states a set column, so it is already a "
+            "collection -- sets saved flat, most likely. A collection is not a "
+            "member of another one; read it on its own, or spread it back out."
         )
         raise ParameterError(msg)
     frame["set"] = name
-    if key := one.attrs.acquisition_key:
-        # Written into the rows, unlike the rest of a child's attributes: a
-        # merged row falls back to the collection's key, which is not the
-        # acquisition this set was picked on.
-        column = frame.get("acquisition_key")
-        frame["acquisition_key"] = (
-            key
-            if column is None
-            else column.where(column.notna() & (column != ""), key)
-        )
     return frame
+
+
+def _refuse_undeclared_dims(
+    loaded: Mapping[str, AnnotationSet], frames: Mapping[str, pd.DataFrame], dims
+) -> None:
+    """
+    Refuse a column which is a dimension in one set and something else in
+    another.
+
+    The collection's dimensions are the union of its sets', so a set which
+    holds a column another set declares as a dimension would have that
+    column read as a coordinate it never claimed: its extra would stop
+    being an extra and start bounding a region.
+    """
+    for name, frame in frames.items():
+        undeclared = set(dims) - set(loaded[name].dims)
+        for dim in sorted(undeclared):
+            spelled = [dim, f"{dim}{_START}", f"{dim}{_END}"]
+            held = sorted(x for x in spelled if x in frame.columns)
+            if not held:
+                continue
+            claims = sorted(k for k, v in loaded.items() if dim in v.dims)
+            msg = (
+                f"The set {name} holds {', '.join(held)} without declaring "
+                f"{dim!r} a dimension, and {', '.join(claims)} declares it one. "
+                "One column states one thing, so the sets cannot be read "
+                "together until they agree on what it is."
+            )
+            raise ParameterError(msg)
 
 
 def _refuse_mixed_spellings(frames: Mapping[str, pd.DataFrame], dims) -> None:
     """
     Refuse a dimension two sets spell differently.
 
-    One column states one thing, so a merged table cannot hold both a bare
-    ``time`` and a ``time_start``/``time_end`` pair. Neither spelling
-    stands in for the other either: a half-open range of no width holds
+    A set holds one spelling of a dimension, so a merged table cannot hold
+    both a bare ``time`` and a ``time_start``/``time_end`` pair; the
+    constructor refuses that too, but without naming the sets. Neither
+    spelling stands in for the other: a half-open range of no width holds
     nothing, so a point is not a range and cannot be rewritten as one.
     """
     for dim in dims:
@@ -510,17 +593,63 @@ def _refuse_mixed_vertices(vertices: Mapping[str, pd.DataFrame]) -> None:
     raise ParameterError(msg)
 
 
+def _refuse_mixed_kinds(frames: Mapping[str, pd.DataFrame], dims, what: str) -> None:
+    """
+    Refuse a dimension two sets state in different kinds of value.
+
+    Each set is read in its own dimensions, so one may state ``time`` as
+    seconds and another as dates; concatenating those gives a column of
+    both, which every later comparison -- a bound against a bound, a sort,
+    a select -- either refuses far from here or gets wrong quietly. The
+    kinds are compared rather than the dtypes: a column of whole numbers
+    and one of floats say the same kind of thing.
+    """
+    kinds: dict[str, dict[str, str]] = {}
+    for name, frame in frames.items():
+        for dim in dims:
+            for column in (dim, f"{dim}{_START}", f"{dim}{_END}"):
+                if column not in frame.columns:
+                    continue
+                kind = _kind(frame[column])
+                seen = kinds.setdefault(column, {})
+                if kind != "nothing" and seen and kind not in seen:
+                    stated, first = next(iter(seen.items()))
+                    msg = (
+                        f"The sets state {what}'s {column} in different kinds of "
+                        f"value: {kind} in {name}, {stated} in {first}. One column "
+                        "holds one kind, so the sets cannot be read together."
+                    )
+                    raise ParameterError(msg)
+                if kind != "nothing":
+                    seen.setdefault(kind, name)
+
+
+def _kind(series: pd.Series) -> str:
+    """Name the kind of value a column holds, as a reader would say it."""
+    kind = getattr(series.dtype, "kind", "O")
+    if series.isna().all():
+        # A column no row states says nothing about its kind, so it agrees
+        # with whatever the other sets state.
+        return "nothing"
+    return {"M": "times", "m": "durations", "O": "text", "T": "text", "U": "text"}.get(
+        kind, "numbers"
+    )
+
+
 def _refuse_shared_ids(frame: pd.DataFrame) -> None:
     """
     Refuse an id which names a row in more than one set.
 
     Each set was built before this, so its own ids are already unique;
     what is left is a collision between sets, which would make the id no
-    longer an address into the collection.
+    longer an address into the collection. The merged set would refuse it
+    anyway, but without saying which sets collided.
     """
     if "id" not in frame.columns:
         return
-    ids = frame["id"].where(frame["id"].notna(), "").astype(str)
+    # Blank spelled as the set spells it, so this cannot drift from what
+    # `_check_ids` counts as an unstated id.
+    ids = frame["id"].map(_text)
     shared = (ids != "") & ids.duplicated(keep=False)
     if not shared.any():
         return
@@ -540,9 +669,14 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     # build a set which is not the one stored here.
     if attrs.get("dims"):
         _refuse_overrides("a directory stating its own dimensions", dims=dims)
-    _refuse_stray_tables(directory)
-    table = directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}"
-    if not table.exists():
+    _refuse_stray_tables(
+        directory,
+        (ANNOTATION_STEM, VERTEX_STEM),
+        f"which name no part of a set. A set states {ANNOTATION_STEM}"
+        f"{TABLE_SUFFIX} and, where it has vertices, {VERTEX_STEM}{TABLE_SUFFIX}.",
+    )
+    table = _one_spelling(directory, ANNOTATION_STEM, (TABLE_SUFFIX,))
+    if table is None:
         msg = (
             f"{quote_path(directory)} holds no {ANNOTATION_STEM}{TABLE_SUFFIX}, "
             "so it states no annotations."
@@ -550,9 +684,12 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         raise ParameterError(msg)
     stated = _declared_dims(attrs, dims, directory)
     frame = _read_set_table(table, stated, "no annotations")
-    vertex_path = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
+    # Found as the annotations table is: a set spells each of its parts
+    # once, and a `vertices.CSV` beside a `vertices.csv` is two spellings of
+    # one part rather than a table nobody reads.
+    vertex_path = _one_spelling(directory, VERTEX_STEM, (TABLE_SUFFIX,))
     vertices = None
-    if vertex_path.exists():
+    if vertex_path is not None:
         vertices = _read_set_table(vertex_path, stated, "no vertices", ordered=True)
     # The read dimensions rather than the given ones: they are the same
     # names, already a tuple, so a file spelling one dimension as a bare
@@ -616,9 +753,8 @@ def annotations(
     Parameters
     ----------
     source
-        An `AnnotationSet`, a path to a set directory, a directory of set
-        directories, or a CSV table, or a dataframe of one row per
-        annotation.
+        An `AnnotationSet`, a dataframe of one row per annotation, or a path
+        to a CSV table, a set directory, or a directory of set directories.
     dims
         The patch dimensions the annotations are stated in. Required unless
         the source states them itself, and overriding it where it does.

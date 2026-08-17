@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,6 +20,40 @@ from dascore.core.annotations import Line, Moveout
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 
 DIMS = ("distance", "time")
+
+
+def _folds_case() -> bool:
+    """Return True if this filesystem holds two case variants as one file."""
+    with tempfile.TemporaryDirectory() as name:
+        directory = Path(name)
+        (directory / "CaseProbe").write_text("")
+        return (directory / "caseprobe").exists()
+
+
+# Asked once, at collection, as the inventory's tests ask it: Windows and
+# most macOS checkouts fold case, so a directory named for another with a
+# different case cannot exist there to be refused.
+FOLDS_CASE = _folds_case()
+
+
+def _denies_access() -> bool:
+    """Return True if a directory can be made unreadable by chmod."""
+    with tempfile.TemporaryDirectory() as name:
+        directory = Path(name) / "locked"
+        directory.mkdir()
+        directory.chmod(0o000)
+        try:
+            list(directory.iterdir())
+            return False
+        except OSError:
+            return True
+        finally:
+            directory.chmod(0o755)
+
+
+# Windows keeps a directory listable whatever its mode, and root reads
+# everything, so neither can be shown the failure this names.
+DENIES_ACCESS = _denies_access()
 
 
 @pytest.fixture
@@ -495,6 +531,22 @@ class TestTheTables:
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
+    def test_vertices_named_in_another_case(self, with_vertices, tmp_path):
+        """Every part of a set is found the same way, so none is skipped."""
+        directory = with_vertices.save(tmp_path / "picks")
+        table = directory / "vertices.csv"
+        table.rename(directory / "vertices.CSV")
+        assert dc.annotations(directory) == with_vertices
+
+    @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
+    def test_vertices_spelled_twice(self, with_vertices, tmp_path):
+        """A set spells each of its parts once, vertices included."""
+        directory = with_vertices.save(tmp_path / "picks")
+        text = (directory / "vertices.csv").read_text()
+        (directory / "vertices.CSV").write_text(text)
+        with pytest.raises(InvalidAnnotationError, match="states vertices more than"):
+            dc.annotations(directory)
+
     def test_a_stray_table(self, regions, tmp_path):
         """A near-miss on the convention raises rather than being skipped."""
         directory = regions.save(tmp_path / "picks")
@@ -701,7 +753,7 @@ class TestCollections:
         assert loaded.dims == ("distance", "time")
 
     def test_names_the_set_each_row_came_from(self, collection):
-        """The set column is the label; the directory name is what it holds."""
+        """The directory name is the label, in the set column and in attrs.sets."""
         loaded = dc.annotations(collection)
         assert {x.set for x in loaded} == {"hand", "phasenet"}
         assert sorted(loaded.attrs.sets) == ["hand", "phasenet"]
@@ -738,8 +790,21 @@ class TestCollections:
         half = collection / "empty"
         half.mkdir()
         (half / "attrs.json").write_text('{"dims": ["time"]}')
-        with pytest.raises(InvalidAnnotationError, match=r"no annotations\.csv"):
+        with pytest.raises(
+            InvalidAnnotationError, match="states the attributes of a set but no"
+        ):
             dc.annotations(collection)
+
+    def test_a_tree_which_holds_no_set_at_all(self, tmp_path):
+        """Nothing is refused until a directory turns out to be a collection."""
+        root = tmp_path / "data"
+        half = root / "notes"
+        half.mkdir(parents=True)
+        (half / "attrs.json").write_text('{"dims": ["time"]}')
+        # The half-set is not what is wrong here: this directory states no
+        # annotations of its own, and holds no set to make it a collection.
+        with pytest.raises(InvalidAnnotationError, match=r"holds no annotations\.csv"):
+            dc.annotations(root, dims=("time",))
 
     def test_a_tree_of_collections(self, regions, tmp_path):
         """Sets loaded together are one collection, not a tree of them."""
@@ -749,21 +814,27 @@ class TestCollections:
         with pytest.raises(InvalidAnnotationError, match="not a tree"):
             dc.annotations(root)
 
-    def test_a_set_which_also_holds_sets(self, regions, tmp_path):
-        """A directory is one set or a directory of them, never both."""
+    def test_a_set_which_also_holds_sets(self, regions, picks, tmp_path):
+        """A directory stating annotations is the set, whatever sits below it."""
         root = regions.save(tmp_path / "sets")
-        regions.save(root / "hand")
-        with pytest.raises(InvalidAnnotationError, match="not both"):
-            dc.annotations(root)
+        picks.save(root / "hand")
+        assert dc.annotations(root) == regions
+
+    def test_a_set_beside_a_folder_of_its_own(self, regions, tmp_path):
+        """A folder someone kept beside the tables is not this format's business."""
+        root = regions.save(tmp_path / "picks")
+        (root / "backup").mkdir()
+        (root / "backup" / "attrs.json").write_text('{"dims": ["time"]}')
+        assert dc.annotations(root) == regions
 
     def test_a_table_beside_the_sets(self, collection):
         """A table where every set is a directory names no set."""
         (collection / "notes.csv").write_text("group\nnoise\n")
-        with pytest.raises(InvalidAnnotationError, match="names no set"):
+        with pytest.raises(InvalidAnnotationError, match="name no set"):
             dc.annotations(collection)
 
     def test_dimensions_for_the_sets_which_state_none(self, regions, tmp_path):
-        """The caller's dimensions reach the children which declare none."""
+        """They reach the children which declare none, and without them none do."""
         root = tmp_path / "sets"
         for name in ("hand", "auto"):
             directory = root / name
@@ -776,14 +847,16 @@ class TestCollections:
             dc.annotations(root)
 
     def test_dimensions_stated_beside_the_sets(self, tmp_path):
-        """A collection may declare the dimensions its sets are read in."""
+        """A collection may declare them, and then refuses a caller restating them."""
         root = tmp_path / "sets"
         directory = root / "hand"
         directory.mkdir(parents=True)
         (directory / "annotations.csv").write_text("group,time_start,time_end\nq,1,2\n")
         (root / "attrs.json").write_text('{"dims": ["time"]}')
         assert dc.annotations(root).dims == ("time",)
-        with pytest.raises(InvalidAnnotationError, match="stating its own dimensions"):
+        with pytest.raises(
+            InvalidAnnotationError, match="a directory of sets stating its own"
+        ):
             dc.annotations(root, dims=("time",))
 
     def test_a_dimension_spelled_two_ways(self, picks, tmp_path):
@@ -792,8 +865,10 @@ class TestCollections:
         picks.save(root / "ranges")
         frame = pd.DataFrame({"group": ["a"], "time": [1.0]})
         dc.AnnotationSet(frame, dims=("time",)).save(root / "points")
-        with pytest.raises(InvalidAnnotationError, match="spelled as a point"):
+        with pytest.raises(InvalidAnnotationError, match="spelled as a point") as info:
             dc.annotations(root)
+        # The constructor refuses this too; naming the sets is what this adds.
+        assert "points" in str(info.value) and "ranges" in str(info.value)
 
     def test_a_set_which_states_a_set_column(self, tmp_path):
         """The set column names the set, so a set may not fill it in."""
@@ -822,6 +897,184 @@ class TestCollections:
         """A directory participating in no convention here is left alone."""
         (collection / "figures").mkdir()
         assert len(dc.annotations(collection)) == 4
+
+    def test_a_row_keeps_the_acquisition_it_names(self, regions, tmp_path):
+        """A row naming its own acquisition outranks its set's, merged or not."""
+        root = tmp_path / "sets"
+        regions.save(root / "hand")
+        frame = pd.DataFrame(
+            {
+                "id": ["m1", "m2"],
+                "acquisition_key": ["NET.OTHER.00.das", None],
+                "time_start": [
+                    np.datetime64("2020-01-01T00:00:31"),
+                    np.datetime64("2020-01-01T00:00:33"),
+                ],
+                "time_end": [
+                    np.datetime64("2020-01-01T00:00:32"),
+                    np.datetime64("2020-01-01T00:00:34"),
+                ],
+            }
+        )
+        other = dc.AnnotationSet(
+            frame, dims=("time",), acquisition_key="NET.SET.00.das"
+        )
+        other.save(root / "auto")
+        keys = {x.id: x.acquisition_key for x in dc.annotations(root)}
+        assert keys["m1"] == "NET.OTHER.00.das"
+        assert keys["m2"] == "NET.SET.00.das"
+        assert keys["r1"] == regions.attrs.acquisition_key
+
+    def test_what_the_collection_states_reaches_the_merged_set(self, tmp_path):
+        """A collection may state its own provenance beside its sets."""
+        root = tmp_path / "sets"
+        directory = root / "hand"
+        directory.mkdir(parents=True)
+        (directory / "annotations.csv").write_text("group,time\nq,1\n")
+        document = {
+            "dims": ["time"],
+            "acquisition_key": "NET.COLL.00.das",
+            "history": ["decimate"],
+        }
+        (root / "attrs.json").write_text(json.dumps(document))
+        loaded = dc.annotations(root)
+        assert loaded.attrs.history == ("decimate",)
+        # The row's own set states no key, so the collection's is its address.
+        assert loaded[0].acquisition_key == "NET.COLL.00.das"
+
+    def test_dimensions_given_for_a_set_which_states_its_own(self, collection):
+        """Dropping the argument silently is the worse failure, here as anywhere."""
+        with pytest.raises(InvalidAnnotationError, match="which states its own"):
+            dc.annotations(collection, dims=("distance", "time"))
+
+    def test_a_dimension_stated_in_two_kinds(self, tmp_path):
+        """One set stating a time in seconds and another in dates cannot merge."""
+        root = tmp_path / "sets"
+        for name, cell in (("clock", "2020-01-01T00:00:01"), ("numeric", "1.5")):
+            directory = root / name
+            directory.mkdir(parents=True)
+            (directory / "annotations.csv").write_text(f"group,time\nq,{cell}\n")
+            (directory / "attrs.json").write_text('{"dims": ["time"]}')
+        with pytest.raises(InvalidAnnotationError, match="different kinds of value"):
+            dc.annotations(root)
+
+    def test_a_dimension_no_row_of_one_set_states(self, picks, tmp_path):
+        """A column every row leaves empty states no kind, so it agrees."""
+        root = tmp_path / "sets"
+        picks.save(root / "phasenet")
+        blank = root / "quiet"
+        blank.mkdir(parents=True)
+        (blank / "annotations.csv").write_text("group,time_start,time_end\nq,,\n")
+        (blank / "attrs.json").write_text('{"dims": ["time"]}')
+        assert len(dc.annotations(root)) == len(picks) + 1
+
+    def test_a_column_which_is_a_dimension_in_one_set_only(self, tmp_path):
+        """A column another set dimensions must not silently become a bound."""
+        root = tmp_path / "sets"
+        notes = root / "notes"
+        notes.mkdir(parents=True)
+        (notes / "annotations.csv").write_text("group,time,distance\nq,1,shallow\n")
+        (notes / "attrs.json").write_text('{"dims": ["time"]}')
+        boxes = root / "boxes"
+        boxes.mkdir(parents=True)
+        (boxes / "annotations.csv").write_text("group,time,distance\nb,2,50\n")
+        (boxes / "attrs.json").write_text('{"dims": ["time", "distance"]}')
+        with pytest.raises(InvalidAnnotationError, match="without declaring"):
+            dc.annotations(root)
+
+    @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
+    def test_set_names_which_differ_only_in_case(self, regions, picks, tmp_path):
+        """A set name is a label, so it must name one set on any filesystem."""
+        root = tmp_path / "sets"
+        regions.save(root / "hand")
+        picks.save(root / "HAND")
+        with pytest.raises(InvalidAnnotationError, match="differ only in case"):
+            dc.annotations(root)
+
+    def test_a_hidden_table_beside_the_sets(self, collection):
+        """A half-copied file is a companion, not a table which names no set."""
+        (collection / ".annotations.csv").write_text("group\nnoise\n")
+        assert len(dc.annotations(collection)) == 4
+
+    def test_a_stray_table_whatever_its_case(self, collection):
+        """The suffix is matched as the loader matches every other one."""
+        (collection / "NOTES.CSV").write_text("group\nnoise\n")
+        with pytest.raises(InvalidAnnotationError, match=r"NOTES\.CSV"):
+            dc.annotations(collection)
+
+    def test_a_set_named_in_upper_case(self, tmp_path):
+        """A set states its table once, in whichever case it spells the suffix."""
+        directory = tmp_path / "sets" / "hand"
+        directory.mkdir(parents=True)
+        (directory / "annotations.CSV").write_text("group,time\nq,1\n")
+        assert len(dc.annotations(tmp_path / "sets", dims=("time",))) == 1
+
+    def test_a_directory_of_other_things(self, collection):
+        """A directory which states no annotations is left alone, empty or not."""
+        figures = collection / "figures"
+        figures.mkdir()
+        (figures / "map.png").write_bytes(b"not an image either")
+        (figures / "notes.txt").write_text("nothing to do with the format")
+        assert len(dc.annotations(collection)) == 4
+
+    def test_a_collection_saved_flat_is_not_a_member(self, collection, tmp_path):
+        """A directory this library wrote is named for what it is."""
+        root = tmp_path / "outer"
+        dc.annotations(collection).save(root / "merged")
+        with pytest.raises(InvalidAnnotationError, match="already a collection"):
+            dc.annotations(root)
+
+    @pytest.mark.skipif(not DENIES_ACCESS, reason="a mode cannot deny a read here")
+    def test_a_directory_which_cannot_be_read(self, collection):
+        """A tightened permission is named as an annotation error, not an OSError."""
+        locked = collection / "locked"
+        locked.mkdir()
+        locked.chmod(0o000)
+        try:
+            with pytest.raises(InvalidAnnotationError, match="Could not read"):
+                dc.annotations(collection)
+        finally:
+            locked.chmod(0o755)
+
+    def test_a_label_naming_no_set(self, collection, tmp_path):
+        """A label reaches back to what its set says, so it names one."""
+        flat = dc.annotations(collection).save(tmp_path / "flat")
+        table = flat / "annotations.csv"
+        table.write_text(table.read_text().replace(",hand", ",typo"))
+        with pytest.raises(InvalidAnnotationError, match="name no set stated here"):
+            dc.annotations(flat)
+
+    def test_a_row_with_no_label(self, collection, tmp_path):
+        """A row loaded with others says which of them it came from."""
+        flat = dc.annotations(collection).save(tmp_path / "flat")
+        table = flat / "annotations.csv"
+        text = table.read_text().replace(",hand", ",", 1)
+        table.write_text(text)
+        with pytest.raises(InvalidAnnotationError, match="state no set"):
+            dc.annotations(flat)
+
+    def test_a_table_with_no_label_column(self, collection, tmp_path):
+        """Sets stated with no column to name them leave every row adrift."""
+        flat = dc.annotations(collection).save(tmp_path / "flat")
+        table = flat / "annotations.csv"
+        frame = dc.annotations(flat).to_dataframe().drop(columns="set")
+        table.write_text(frame.to_csv(index=False))
+        with pytest.raises(InvalidAnnotationError, match="no set column"):
+            dc.annotations(flat)
+
+    def test_a_collection_of_empty_sets(self, tmp_path):
+        """A collection holding no rows at all labels none of them."""
+        root = tmp_path / "sets"
+        for name in ("hand", "auto"):
+            dc.AnnotationSet(None, dims=("time",)).save(root / name)
+        loaded = dc.annotations(root)
+        assert len(loaded) == 0
+        assert sorted(loaded.attrs.sets) == ["auto", "hand"]
+
+    def test_a_set_column_on_a_set_of_its_own(self):
+        """A set which states no sets is not a collection, so its labels are its own."""
+        frame = pd.DataFrame({"set": ["whatever"], "group": ["a"], "time": [1.0]})
+        assert dc.AnnotationSet(frame, dims=("time",))[0].set == "whatever"
 
     def test_a_set_with_no_annotations(self, picks, tmp_path):
         """A set which states nothing is still one of the sets loaded."""
@@ -869,5 +1122,8 @@ class TestCollections:
         dc.AnnotationSet(frame, dims=("distance",), vertices=vertices).save(
             root / "flat"
         )
-        with pytest.raises(InvalidAnnotationError, match="different dimensions"):
+        with pytest.raises(
+            InvalidAnnotationError, match="different dimensions"
+        ) as info:
             dc.annotations(root)
+        assert "hand" in str(info.value) and "flat" in str(info.value)
