@@ -130,7 +130,7 @@ Spool namespaces use the same pattern. The only changes are:
 
 ## Array backends
 
-Patch data can be backed by any array library which implements the [array API standard](https://data-apis.org/array-api/latest/), not just NumPy. A patch function declares which one its body was written for:
+Patch data can be backed by any array library which implements the [array API standard](https://data-apis.org/array-api/latest/), not just NumPy. A patch function receives the patch exactly as it was given, so its body decides which backends it supports. Getting the namespace from the data, rather than reaching for NumPy, is what makes a function work on all of them:
 
 ```{python}
 import dascore as dc
@@ -138,27 +138,15 @@ from dascore.constants import PatchType
 from dascore.utils.array_api import array_namespace
 
 
-@dc.patch_function(backend="array_api")
+@dc.patch_function()
 def double(patch: PatchType) -> PatchType:
     xp = array_namespace(patch.data)
     return patch.new(data=xp.multiply(patch.data, 2))
 ```
 
-The default, `"numpy"`, means the function needs NumPy arrays. Patches from another backend are then converted to NumPy, the function is applied, and the output is converted back, which issues a `NumpyFallbackWarning`. Use `"array_api"` when the body only uses functions from the standard, as above, in which case it runs on any backend without conversion.
+Most of DASCore's patch functions are still written against NumPy, and make no promise about data from another backend: depending on the body they may raise, or quietly return a NumPy-backed patch. Operators and NumPy functions applied to a patch (`patch * 2`, `np.sqrt(patch)`, `np.mean(patch)`) are the exception: they stay in the array's own namespace when the standard can express them, and otherwise convert to NumPy and back, which issues a `NumpyFallbackWarning`.
 
-An implementation for one specific backend is added with `register`, which also works on DASCore's own patch functions from your package:
-
-```{python}
-#| eval: false
-import jax.numpy as jnp
-
-
-@dc.proc.detrend.register(jnp)
-def _jax_detrend(patch, dim="time"):
-    ...
-```
-
-The registration key is the name of the array library's *namespace*, which is not always the name of the library: `torch` rather than `pytorch`, `jax` rather than `jaxlib`. Passing the namespace module, as above, or an example array is therefore recommended over passing the string; a misspelled string registers an implementation which is never called. Note that this only works for libraries which implement the standard. Array-likes which merely support `__array__` are handled by NumPy, and report `"numpy"` as their backend.
+Array-likes which merely support `__array__`, rather than implementing the standard, are handled by NumPy and report `"numpy"` as their backend.
 
 ## Related guides
 

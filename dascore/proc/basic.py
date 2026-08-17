@@ -327,7 +327,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function(data_type="", backend="array_api")
+@patch_function(data_type="")
 def normalize(
     self: PatchType,
     dim: str,
@@ -395,7 +395,7 @@ def normalize(
     return self.new(data=new_data)
 
 
-@patch_function(data_type="", backend="array_api")
+@patch_function(data_type="")
 def standardize(
     self: PatchType,
     dim: str,
@@ -903,7 +903,7 @@ def demedian(patch, dim: str = "time"):
     return patch.new(data=new_data)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def demean(patch, dim: str = "time"):
     """
     Remove the mean along a given dimension of a DASCore patch.

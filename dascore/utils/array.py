@@ -487,9 +487,13 @@ def _apply_reduction(func, data, axis):
         return func(data, axis=axis)
     if (name := NAN_REDUCTIONS.get(func)) is not None:
         return nan_reduce(name, data, axis=axis)
-    # Only the shortcuts get here with data from another backend, and they
-    # all name a reduction dascore knows; aggregate itself is numpy backed.
-    return getattr(array_namespace(data), REDUCTIONS[func])(data, axis=axis)
+    if (name := REDUCTIONS.get(func)) is not None:
+        return getattr(array_namespace(data), name)(data, axis=axis)
+    # An aggregation the standard has no name for, eg a median or a callable
+    # the caller passed to aggregate. Numpy applies it to whatever it can
+    # make of the array, which is what it did before dascore knew about
+    # other backends; the backend of the result is numpy's business.
+    return func(data, axis=axis)
 
 
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):

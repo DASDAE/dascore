@@ -43,9 +43,10 @@ def aggregate(
     Notes
     -----
     Whether an aggregation can be applied by the patch's own array backend
-    depends on the method, so this function always uses numpy. The
-    shortcuts, such as [`Patch.mean`](`dascore.proc.aggregate.mean`), do
-    not; use those to keep the data on their backend.
+    depends on the method, so this function makes no promise about the
+    backend of its output. The shortcuts, such as
+    [`Patch.mean`](`dascore.proc.aggregate.mean`), do keep the data on their
+    backend; use those where one fits.
 
     Parameters
     ----------
@@ -86,7 +87,7 @@ def aggregate(
     return _apply_aggregator(patch, dim, func, dim_reduce)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def min(
     patch: PatchType,
@@ -114,7 +115,7 @@ def min(
     return aggregate.func(patch, dim=dim, method=np.nanmin, dim_reduce=dim_reduce)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def max(
     patch: PatchType,
@@ -142,7 +143,7 @@ def max(
     return aggregate.func(patch, dim=dim, method=np.nanmax, dim_reduce=dim_reduce)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def mean(
     patch: PatchType,
@@ -189,7 +190,7 @@ def median(
     return aggregate.func(patch, dim=dim, method=np.nanmedian, dim_reduce=dim_reduce)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def std(
     patch: PatchType,
@@ -248,7 +249,7 @@ def last(
     return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def sum(
     patch: PatchType,
@@ -267,7 +268,7 @@ def sum(
     return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)
 
 
-@patch_function(data_type="", backend="array_api")
+@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def any(
     patch: PatchType,
@@ -286,7 +287,7 @@ def any(
     return aggregate.func(patch, dim=dim, method=np.any, dim_reduce=dim_reduce)
 
 
-@patch_function(data_type="", backend="array_api")
+@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def all(
     patch: PatchType,
