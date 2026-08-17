@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from dascore.constants import DATA_VERSION
+from dascore.utils.downloader import get_registry_df
+
 # Modules a tutorial may import because dascore requires them (or is them).
 _DASCORE_PROVIDED = {
     "dascore",
@@ -293,6 +296,66 @@ class TestExtraPackages:
             "distribution to EXTRA_PACKAGES in scripts/build_notebooks.py "
             f"(and to _EXTRA_IMPORTS here if it is new): {sorted(unaccounted)}"
         )
+
+
+class TestMirroredData:
+    """Example data ships with the site so tutorials do not hit GitHub."""
+
+    def test_mirrored_files_are_in_the_registry(self, build_notebooks):
+        """A name not in the registry cannot be fetched or mirrored."""
+        known = set(get_registry_df()["name"])
+        missing = set(build_notebooks.MIRRORED_DATA) - known
+        assert not missing, f"not registry entries: {sorted(missing)}"
+
+    def test_setup_cell_points_pooch_at_the_mirror(self, build_notebooks):
+        """Without the env var the reader downloads from GitHub instead."""
+        assert "DFS_DATA_DIR" in build_notebooks.SETUP_SOURCE
+        assert build_notebooks.BROWSER_DATA_DIR in build_notebooks.SETUP_SOURCE
+
+    def test_layout_matches_what_pooch_expects(
+        self, build_notebooks, tmp_path, monkeypatch
+    ):
+        """Pooch resolves DFS_DATA_DIR as `<dir>/<DATA_VERSION>/<name>`.
+
+        Mirroring to any other shape leaves the files unreachable and the
+        tutorials quietly downloading again, so the version subdirectory is
+        the part worth pinning.
+        """
+        stub = tmp_path / "stub"
+        stub.mkdir()
+        for name in build_notebooks.MIRRORED_DATA:
+            (stub / name).write_bytes(b"x")
+        monkeypatch.setattr(
+            "dascore.utils.downloader.fetch", lambda name, **kw: stub / name
+        )
+
+        contents = tmp_path / "contents"
+        build_notebooks.mirror_data(contents)
+
+        target = contents / build_notebooks.DATA_DIR_NAME / DATA_VERSION
+        assert sorted(p.name for p in target.iterdir()) == sorted(
+            build_notebooks.MIRRORED_DATA
+        )
+        # The browser path the setup cell exports must resolve to that dir.
+        assert build_notebooks.BROWSER_DATA_DIR.endswith(build_notebooks.DATA_DIR_NAME)
+
+    def test_rebuild_drops_stale_files(self, build_notebooks, tmp_path, monkeypatch):
+        """A file dropped from the list must not linger in the site."""
+        stub = tmp_path / "stub"
+        stub.mkdir()
+        for name in build_notebooks.MIRRORED_DATA:
+            (stub / name).write_bytes(b"x")
+        monkeypatch.setattr(
+            "dascore.utils.downloader.fetch", lambda name, **kw: stub / name
+        )
+        contents = tmp_path / "contents"
+        target = contents / build_notebooks.DATA_DIR_NAME / DATA_VERSION
+        target.mkdir(parents=True)
+        (target / "obsolete.h5").write_bytes(b"old")
+
+        build_notebooks.mirror_data(contents)
+
+        assert not (target / "obsolete.h5").exists()
 
 
 class TestSiteUrl:
