@@ -39,8 +39,10 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
         What a table with no columns fails to state, for that error message.
     skip
         Lines above the header, for a format which states something of its
-        own before its table. Row numbers in errors still count from the
-        top of the file, so they name the line a reader would look at.
+        own before its table. Read past before the table is parsed at all,
+        so nothing downstream has to agree about what those lines were. Row
+        numbers in errors still count from the top of the file, so they name
+        the line a reader would look at.
 
     Examples
     --------
@@ -59,11 +61,18 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
     # frame exists the second one is `coupling_type.1` and the clash cannot
     # be seen; and it raises its own error for a file with no columns,
     # which would arrive before this one could say what was expected.
+    #
+    # One open, which pandas then reads on from: `skiprows` would have it
+    # skip *rows*, and a quote in a skipped line can make one row span the
+    # rest of the file, leaving pandas a different header than was checked
+    # here. Both readers therefore also decode alike, which a locale-encoded
+    # read or a byte order mark reaching only one of them would break.
     try:
         with path.open(newline="", encoding="utf-8-sig") as stream:
-            reader = csv.reader(stream)
             for _ in range(skip):
-                next(reader, None)
+                stream.readline()
+            position = stream.tell()
+            reader = csv.reader(stream)
             header = next(reader, [])
             if header:
                 # Streamed rather than listed: a table is the part of this
@@ -71,12 +80,27 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
                 # object beside the frame pandas builds would cost several
                 # times what the frame itself does.
                 _check_widths(reader, header, path, start=skip + 2)
+            _check_header(header, path, what)
+            stream.seek(position)
+            # index_col=False so that no column is ever read as an index; the
+            # row widths above already agree, and this keeps them agreeing.
+            return pd.read_csv(
+                stream,
+                dtype=str,
+                keep_default_na=False,
+                na_values=[""],
+                index_col=False,
+            )
     # csv.Error too: a cell longer than csv.field_size_limit stops the
     # header scan, and without this it would leave this function as a bare
     # _csv.Error rather than as whatever the caller's format raises.
     except (OSError, UnicodeDecodeError, csv.Error) as read_error:
         msg = f"Could not read {quote_path(path)}: {read_error}."
         raise ParameterError(msg) from read_error
+
+
+def _check_header(header: list[str], path: Path, what: str) -> None:
+    """Refuse a table with no columns, or one which names a column twice."""
     if not header:
         msg = f"{quote_path(path)} has no columns, so it states {what}."
         raise ParameterError(msg)
@@ -87,20 +111,6 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
             "column states one field."
         )
         raise ParameterError(msg)
-    # index_col=False so that no column is ever read as an index; the row
-    # widths above already agree, and this keeps them agreeing.
-    return pd.read_csv(
-        path,
-        dtype=str,
-        keep_default_na=False,
-        na_values=[""],
-        index_col=False,
-        skiprows=skip,
-        # Both readers decode alike, or the header checked above is not
-        # the header parsed here: a locale-encoded read disagrees with
-        # pandas' UTF-8, and a byte order mark reaches only one of them.
-        encoding="utf-8-sig",
-    )
 
 
 def _check_widths(reader, header: list[str], path: Path, start: int = 2) -> None:

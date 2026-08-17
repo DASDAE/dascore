@@ -372,9 +372,9 @@ class TestTheDoor:
     def test_a_directory_refuses_what_it_states(self, regions, tmp_path):
         """A directory holds its own attributes and vertices."""
         directory = regions.save(tmp_path / "picks")
-        with pytest.raises(InvalidAnnotationError, match="a set directory"):
+        with pytest.raises(InvalidAnnotationError, match="which states them"):
             dc.annotations(directory, attrs={"dims": DIMS})
-        with pytest.raises(InvalidAnnotationError, match="a set directory"):
+        with pytest.raises(InvalidAnnotationError, match="which states them"):
             dc.annotations(directory, vertices=pd.DataFrame())
 
     def test_a_dataframe(self):
@@ -1140,19 +1140,26 @@ class TestDeclaringDimensionsInTheTable:
         path.write_text("# dims: distance, time\ngroup,time_start,time_end\nq,1,2\n")
         loaded = dc.annotations(path)
         assert loaded.dims == ("distance", "time")
+        # The header is the one below the pragma, not the pragma itself.
+        assert set(loaded.to_dataframe().columns) == {"group", "time_start", "time_end"}
+        assert loaded[0].group == "q"
         assert loaded[0].region.bounds["time"] == (1.0, 2.0)
 
     def test_other_comments_are_comments(self, tmp_path):
         """A line above the header which declares nothing says nothing."""
         path = tmp_path / "picks.csv"
         path.write_text("# picked by hand\n#dims:time\ngroup,time\nq,1\n")
-        assert dc.annotations(path).dims == ("time",)
+        loaded = dc.annotations(path)
+        assert loaded.dims == ("time",)
+        assert loaded[0].region.bounds["time"] == (1.0, 1.0)
 
     def test_restating_them_is_allowed(self, tmp_path):
         """Two spellings of one fact agree or they are not one fact."""
         path = tmp_path / "picks.csv"
         path.write_text("# dims: time\ngroup,time\nq,1\n")
-        assert dc.annotations(path, dims=("time",)).dims == ("time",)
+        loaded = dc.annotations(path, dims=("time",))
+        assert loaded.dims == ("time",)
+        assert loaded[0].region.bounds["time"] == (1.0, 1.0)
 
     def test_disagreeing_with_the_caller(self, tmp_path):
         """The table's dimensions and the caller's are not merged."""
@@ -1160,6 +1167,89 @@ class TestDeclaringDimensionsInTheTable:
         path.write_text("# dims: time\ngroup,time\nq,1\n")
         with pytest.raises(InvalidAnnotationError, match="where the two agree"):
             dc.annotations(path, dims=("distance",))
+
+    def test_a_header_which_starts_with_the_mark(self, tmp_path):
+        """A column may be named `#note`, and that line is the header."""
+        path = tmp_path / "picks.csv"
+        path.write_text("#note,group,time\nfirst,a,1\nsecond,b,2\n")
+        loaded = dc.annotations(path, dims=("time",))
+        assert len(loaded) == 2
+        assert loaded[0].extra["#note"] == "first"
+
+    def test_a_declaration_commented_out(self, tmp_path):
+        """A struck-out declaration declares nothing, so the line is a header."""
+        path = tmp_path / "picks.csv"
+        path.write_text("## dims: time\ngroup,time\nq,1\n")
+        with pytest.raises(InvalidAnnotationError, match="cells where its header"):
+            dc.annotations(path, dims=("time",))
+
+    def test_a_header_which_reads_as_a_comment(self, tmp_path):
+        """A column may be named `# note`, which this library writes unquoted."""
+        frame = pd.DataFrame(
+            {"# note": ["first", "second"], "group": ["a", "b"], "time": [1.0, 2.0]}
+        )
+        picks = dc.AnnotationSet(frame, dims=("time",))
+        path = tmp_path / "picks.csv"
+        picks.to_csv(path)
+        loaded = dc.annotations(path, dims=("time",))
+        assert len(loaded) == 2
+        assert loaded[0].extra["# note"] == "first"
+
+    def test_comments_beside_a_declaration(self, tmp_path):
+        """Where a table declares its dimensions, comments ride with it."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims: time\n# picked by hand\ngroup,time\nq,1\n")
+        loaded = dc.annotations(path)
+        assert loaded.dims == ("time",)
+        assert set(loaded.to_dataframe().columns) == {"group", "time"}
+
+    def test_the_keyword_is_read_in_any_case(self, tmp_path):
+        """A hand-authored line is read as written, whatever case it names."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# Dims:  time , distance\ngroup,time\nq,1\n")
+        assert dc.annotations(path).dims == ("time", "distance")
+
+    def test_a_blank_line_above_the_declaration(self, tmp_path):
+        """Blank lines above the header are skipped with the comments."""
+        path = tmp_path / "picks.csv"
+        path.write_text("\n# dims: time\n\ngroup,time\nq,1\n")
+        assert dc.annotations(path).dims == ("time",)
+
+    def test_a_table_which_cannot_be_decoded(self, tmp_path):
+        """A table which cannot be read has no dimensions to be found in it."""
+        path = tmp_path / "picks.csv"
+        path.write_bytes(b"# dims: time\ngroup,time\n\xff\xfe,1\n")
+        with pytest.raises(InvalidAnnotationError, match="Could not read"):
+            dc.annotations(path)
+
+    def test_a_comment_holding_a_quote(self, tmp_path):
+        """A comment is one line, whatever a csv reader makes of its quotes."""
+        path = tmp_path / "picks.csv"
+        path.write_text('# dims: time\n# it is ,"odd\ngroup,time\nq,1\n')
+        loaded = dc.annotations(path)
+        assert loaded.dims == ("time",)
+        assert set(loaded.to_dataframe().columns) == {"group", "time"}
+
+    def test_disagreeing_with_what_the_attrs_state(self, regions, tmp_path):
+        """The message says where the other spelling came from."""
+        directory = regions.save(tmp_path / "picks")
+        table = directory / "annotations.csv"
+        table.write_text("# dims: depth\n" + table.read_text())
+        with pytest.raises(InvalidAnnotationError, match="is stated in its attributes"):
+            dc.annotations(directory)
+
+    def test_a_child_declaring_its_own_above_its_table(self, tmp_path):
+        """A pragma is a set stating its dimensions, as its attrs would be."""
+        root = tmp_path / "sets"
+        for name, dim in (("hand", "time"), ("auto", "distance")):
+            directory = root / name
+            directory.mkdir(parents=True)
+            (directory / "annotations.csv").write_text(
+                f"# dims: {dim}\ngroup,{dim}\nq,1\n"
+            )
+        (root / "attrs.json").write_text('{"dims": ["time"]}')
+        with pytest.raises(InvalidAnnotationError, match="which states its own"):
+            dc.annotations(root)
 
     def test_disagreeing_with_the_attrs(self, regions, tmp_path):
         """A set directory states them once, wherever it states them."""
@@ -1174,7 +1264,9 @@ class TestDeclaringDimensionsInTheTable:
         directory = tmp_path / "picks"
         directory.mkdir()
         (directory / "annotations.csv").write_text("# dims: time\ngroup,time\nq,1\n")
-        assert dc.annotations(directory).dims == ("time",)
+        loaded = dc.annotations(directory)
+        assert loaded.dims == ("time",)
+        assert loaded[0].region.bounds["time"] == (1.0, 1.0)
 
     def test_sets_loaded_together_may_declare_them(self, tmp_path):
         """Each set in a collection may state its own, above its own table."""
@@ -1185,7 +1277,13 @@ class TestDeclaringDimensionsInTheTable:
             (directory / "annotations.csv").write_text(
                 f"# dims: {dim}\ngroup,{dim}\nq,1\n"
             )
-        assert dc.annotations(root).dims == ("distance", "time")
+        loaded = dc.annotations(root)
+        assert loaded.dims == ("distance", "time")
+        bounds = sorted(tuple(x.region.bounds.items()) for x in loaded)
+        assert bounds == [
+            (("distance", (1.0, 1.0)),),
+            (("time", (1.0, 1.0)),),
+        ]
 
     def test_declared_twice(self, tmp_path):
         """One table states its dimensions once."""
@@ -1209,13 +1307,13 @@ class TestDeclaringDimensionsInTheTable:
         with pytest.raises(InvalidAnnotationError, match="states them once"):
             dc.annotations(directory)
 
-    def test_vertices_may_be_commented(self, with_vertices, tmp_path):
-        """A comment above a table is a comment wherever the table is."""
+    def test_vertices_take_no_preamble(self, with_vertices, tmp_path):
+        """Vertices declare nothing, so they have nothing to comment beside."""
         directory = with_vertices.save(tmp_path / "picks")
-        for name in ("annotations.csv", "vertices.csv"):
-            table = directory / name
-            table.write_text("# drawn on a screen\n" + table.read_text())
-        assert dc.annotations(directory) == with_vertices
+        table = directory / "vertices.csv"
+        table.write_text("# drawn on a screen\n" + table.read_text())
+        with pytest.raises(InvalidAnnotationError, match="cells where its header"):
+            dc.annotations(directory)
 
 
 class TestCarriedAnnotations:
@@ -1244,6 +1342,19 @@ class TestCarriedAnnotations:
         """The bare table spelling is carried under the same name."""
         (data / ".annotations.csv").write_text("# dims: time\ngroup,time\nq,1\n")
         assert dc.annotations(data).dims == ("time",)
+
+    def test_a_carried_table_takes_what_it_does_not_state(self, data):
+        """A bare table states no attributes, so the caller may state them."""
+        (data / ".annotations.csv").write_text("group,time\nq,1\n")
+        loaded = dc.annotations(data, attrs={"dims": ("time",), "history": ("de",)})
+        assert loaded.dims == ("time",)
+        assert loaded.attrs.history == ("de",)
+
+    def test_a_carried_set_directory_states_its_own(self, data, regions):
+        """A carried directory holds its attributes, as any set directory does."""
+        regions.save(data / ".annotations")
+        with pytest.raises(InvalidAnnotationError, match="which states them"):
+            dc.annotations(data, attrs={"dims": DIMS})
 
     def test_carried_twice(self, data, regions):
         """A directory states what it carries once."""
@@ -1275,8 +1386,15 @@ class TestCarriedAnnotations:
         with pytest.raises(InvalidAnnotationError, match=r"\.annotations"):
             dc.annotations(data, dims=DIMS)
 
-    def test_find_annotations_judges_only_the_name(self, data, regions):
+    def test_find_annotations_judges_only_the_name(self, data):
         """The path comes back because of its name, not because it loads."""
         assert find_annotations(data) is None
-        (data / ".annotations").mkdir()
-        assert find_annotations(data) == data / ".annotations"
+        table = data / ".annotations.csv"
+        table.write_text("this is not a table at all")
+        assert find_annotations(data) == table
+
+    def test_the_data_directory_keeps_its_own_attrs(self, data, regions):
+        """A data directory's attrs file is about the data, so it is not read."""
+        (data / "attrs.json").write_text('{"object_type": "SomethingElse"}')
+        regions.save(data / ".annotations")
+        assert dc.annotations(data) == regions

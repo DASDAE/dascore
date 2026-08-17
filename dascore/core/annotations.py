@@ -755,10 +755,11 @@ class AnnotationSet:
         with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
         this is the spelling for a set of regions.
 
-        The dimensions are not written: they are not a column, and a table
-        every reader can open is worth more here than a self-describing one.
-        Reading such a table back states them again, either in the call or
-        in a ``# dims: distance, time`` line written above the header.
+        The dimensions are not written: they are not a column, and the only
+        place a CSV has for them is a comment line, which a reader not told
+        to expect one takes for the header. Reading such a table back states
+        them again, in the call or in a ``# dims: distance, time`` line
+        written above the header by hand.
 
         Parameters
         ----------
