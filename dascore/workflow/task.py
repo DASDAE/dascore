@@ -174,6 +174,19 @@ class Task(DascoreBaseModel):
         """Hash a task the way it compares."""
         return hash(self.fingerprint)
 
+    def __or__(self, other) -> Any:
+        """Return the pipe which runs this task and then what follows it."""
+        # pipe.py imports this module, so it is named where it is used.
+        from dascore.workflow.pipe import join  # noqa: PLC0415
+
+        return join(self, other)
+
+    def __ror__(self, other) -> Any:
+        """Return the pipe which runs what precedes this task and then it."""
+        from dascore.workflow.pipe import join  # noqa: PLC0415
+
+        return join(other, self)
+
     def __reduce__(self):
         """
         Pickle a task by its tag, and its parameters as themselves.
