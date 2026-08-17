@@ -134,6 +134,24 @@ If you need to change the structure of the site, like adding a new section/subse
 Do not modify docs/_quarto.yml because it will be overwritten.
 :::
 
+## Runnable tutorials
+
+Every tutorial page with runnable code carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
+
+The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute urls on whichever site is being built, and pointing it at the Pyodide kernel:
+
+```bash
+python -m build --wheel
+python scripts/build_notebooks.py
+jupyter lite build --contents docs/lite_contents --output-dir docs/lite --piplite-wheels dist/dascore-*.whl
+```
+
+CI runs these steps in `.github/actions/prep_doc_build`, before quarto renders the site, and quarto copies `docs/lite` into `_site` as a project resource. A tutorial page only gets the link when a notebook exists for it, so a page with no code cells simply does not show one, and rendering the docs without building the notebooks first drops the links rather than producing broken ones.
+
+The wheel passed to `--piplite-wheels` is bundled into the site and is what the notebooks' first cell installs. That deliberately pins the tutorials to the same DASCore the surrounding docs were built from, rather than whatever is currently on PyPI.
+
+Links from a notebook back to other doc pages are absolute, so they need to know which deployment they belong to. `DASCORE_DOC_SITE_URL` sets that base url, like `DASCORE_DOC_BRANCH` sets the "edit this page" branch; it defaults to the released site and the dev workflow points it at netlify. Without it, notebooks built from `dev` would link to pages that have not been released yet.
+
 # Cross references
 
 Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes, functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded by backticks like so:
