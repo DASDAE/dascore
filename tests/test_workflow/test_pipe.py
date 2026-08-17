@@ -9,6 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 from dascore.workflow import Pipe, Task
 
 
@@ -318,8 +320,21 @@ class TestDocuments:
         """A document whose fingerprint disagrees with it is refused."""
         document = chain.to_dict()
         document["fingerprint"] = "0" * 16
-        with pytest.raises(ParameterError, match="fingerprint"):
+        with pytest.raises(ParameterError, match="edited it"):
             Pipe.from_dict(document)
+
+    def test_document_written_by_another_version(self, chain):
+        """
+        A pipe written before a task changed version still loads.
+
+        The version is what makes a fingerprint differ on purpose, so a
+        stored pipe must not be read as an edited one for having one.
+        """
+        document = chain.to_dict()
+        for value in document["tasks"].values():
+            value["version"] = "0.5"
+        with suppress_warnings(DASCoreWarning, message="The document holds"):
+            assert Pipe.from_dict(document).run(1) == chain.run(1)
 
     def test_save_makes_the_directory(self, chain, tmp_path):
         """Saving into a directory which is not there makes it."""

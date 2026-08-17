@@ -250,10 +250,17 @@ class Pipe(DascoreBaseModel):
 
     @classmethod
     def from_dict(cls, document: Mapping) -> Pipe:
-        """Return the pipe a document describes."""
-        tasks = {
-            node: Task.from_dict(value) for node, value in document["tasks"].items()
-        }
+        """
+        Return the pipe a document describes.
+
+        The fingerprint a document carries is checked against the pipe read
+        out of it, unless a task has moved on to another version since it
+        was written -- which changes the fingerprint by design, and is why
+        the check is a guard against an edited file rather than the answer
+        to what the pipe is.
+        """
+        written_tasks = document["tasks"]
+        tasks = {node: Task.from_dict(value) for node, value in written_tasks.items()}
         dependencies = {
             node: tuple(value)
             for node, value in document.get("dependencies", {}).items()
@@ -264,12 +271,16 @@ class Pipe(DascoreBaseModel):
             inputs=tuple(document["inputs"]),
             output=document["output"],
         )
-        # A document says what it holds and what it hashed to; a mismatch
-        # means it was edited, and hiding that would defeat the fingerprint.
-        if (written := document.get("fingerprint")) and written != out.fingerprint:
+        written = document.get("fingerprint")
+        moved_on = any(
+            value.get("version") != type(tasks[node]).__version__
+            for node, value in written_tasks.items()
+        )
+        if written and not moved_on and written != out.fingerprint:
             msg = (
                 f"The document says its fingerprint is {written}, and the "
-                f"pipe it describes has {out.fingerprint}."
+                f"pipe it describes has {out.fingerprint}. Something edited "
+                "it after it was written."
             )
             raise ParameterError(msg)
         return out
