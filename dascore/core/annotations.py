@@ -753,8 +753,12 @@ class AnnotationSet:
 
         A bare table states one grain, so a set holding vertices is written
         with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
-        this is the spelling for a set of regions. The set's dimensions are
-        not part of the table, so reading one back states them again.
+        this is the spelling for a set of regions.
+
+        The dimensions are not written: they are not a column, and a table
+        every reader can open is worth more here than a self-describing one.
+        Reading such a table back states them again, either in the call or
+        in a ``# dims: distance, time`` line written above the header.
 
         Parameters
         ----------

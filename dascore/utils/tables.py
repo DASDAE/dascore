@@ -22,7 +22,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.paths import quote_path
 
 
-def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
+def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame:
     r"""
     Read one strict CSV table.
 
@@ -37,6 +37,10 @@ def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
         The CSV file to read.
     what
         What a table with no columns fails to state, for that error message.
+    skip
+        Lines above the header, for a format which states something of its
+        own before its table. Row numbers in errors still count from the
+        top of the file, so they name the line a reader would look at.
 
     Examples
     --------
@@ -58,13 +62,15 @@ def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
     try:
         with path.open(newline="", encoding="utf-8-sig") as stream:
             reader = csv.reader(stream)
+            for _ in range(skip):
+                next(reader, None)
             header = next(reader, [])
             if header:
                 # Streamed rather than listed: a table is the part of this
                 # format meant to grow, and holding every cell as a python
                 # object beside the frame pandas builds would cost several
                 # times what the frame itself does.
-                _check_widths(reader, header, path)
+                _check_widths(reader, header, path, start=skip + 2)
     # csv.Error too: a cell longer than csv.field_size_limit stops the
     # header scan, and without this it would leave this function as a bare
     # _csv.Error rather than as whatever the caller's format raises.
@@ -89,6 +95,7 @@ def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
         keep_default_na=False,
         na_values=[""],
         index_col=False,
+        skiprows=skip,
         # Both readers decode alike, or the header checked above is not
         # the header parsed here: a locale-encoded read disagrees with
         # pandas' UTF-8, and a byte order mark reaches only one of them.
@@ -96,7 +103,7 @@ def read_table(path: Path, what: str = "nothing") -> pd.DataFrame:
     )
 
 
-def _check_widths(reader, header: list[str], path: Path) -> None:
+def _check_widths(reader, header: list[str], path: Path, start: int = 2) -> None:
     """
     Refuse a row which is not its header wide.
 
@@ -105,7 +112,7 @@ def _check_widths(reader, header: list[str], path: Path) -> None:
     the row shifts one field left and lands in its neighbour's meaning. A
     row states one cell per column or it is not a row.
     """
-    for number, row in enumerate(reader, start=2):
+    for number, row in enumerate(reader, start=start):
         if row and len(row) != len(header):
             msg = (
                 f"{quote_path(path)} row {number} states {len(row)} cells where "

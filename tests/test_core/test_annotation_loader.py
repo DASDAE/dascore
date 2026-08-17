@@ -16,6 +16,7 @@ except ImportError:
     yaml = None
 
 import dascore as dc
+from dascore.core.annotation_loader import find_annotations
 from dascore.core.annotations import Line, Moveout
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 
@@ -125,6 +126,33 @@ def with_vertices(curve) -> dc.AnnotationSet:
         }
     )
     return dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
+
+@pytest.fixture
+def picks() -> dc.AnnotationSet:
+    """A set of time ranges made by a picker, on its own acquisition."""
+    frame = pd.DataFrame(
+        {
+            "id": ["m1", "m2"],
+            "group": ["arrival", "arrival"],
+            "value": ["p", "s"],
+            "time_start": [
+                np.datetime64("2020-01-01T00:00:01"),
+                np.datetime64("2020-01-01T00:00:03"),
+            ],
+            "time_end": [
+                np.datetime64("2020-01-01T00:00:02"),
+                np.datetime64("2020-01-01T00:00:04"),
+            ],
+            "score": [0.4, 0.6],
+        }
+    )
+    return dc.AnnotationSet(
+        frame,
+        dims=("time",),
+        acquisition_key="NET.ARR.00.fast",
+        creation_info={"author": "phasenet"},
+    )
 
 
 class TestRoundTrip:
@@ -713,32 +741,6 @@ class TestCollections:
     """Sets stored side by side read as one set which says where each row came from."""
 
     @pytest.fixture
-    def picks(self) -> dc.AnnotationSet:
-        """A set of time ranges made by a picker, on its own acquisition."""
-        frame = pd.DataFrame(
-            {
-                "id": ["m1", "m2"],
-                "group": ["arrival", "arrival"],
-                "value": ["p", "s"],
-                "time_start": [
-                    np.datetime64("2020-01-01T00:00:01"),
-                    np.datetime64("2020-01-01T00:00:03"),
-                ],
-                "time_end": [
-                    np.datetime64("2020-01-01T00:00:02"),
-                    np.datetime64("2020-01-01T00:00:04"),
-                ],
-                "score": [0.4, 0.6],
-            }
-        )
-        return dc.AnnotationSet(
-            frame,
-            dims=("time",),
-            acquisition_key="NET.ARR.00.fast",
-            creation_info={"author": "phasenet"},
-        )
-
-    @pytest.fixture
     def collection(self, regions, picks, tmp_path):
         """A directory holding two sets, each stating its own dimensions."""
         root = tmp_path / "sets"
@@ -1127,3 +1129,154 @@ class TestCollections:
         ) as info:
             dc.annotations(root)
         assert "hand" in str(info.value) and "flat" in str(info.value)
+
+
+class TestDeclaringDimensionsInTheTable:
+    """A bare table has no attrs file, so it may declare them above its header."""
+
+    def test_a_bare_table_declares_them(self, tmp_path):
+        """The dimensions travel with the file rather than with the call."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims: distance, time\ngroup,time_start,time_end\nq,1,2\n")
+        loaded = dc.annotations(path)
+        assert loaded.dims == ("distance", "time")
+        assert loaded[0].region.bounds["time"] == (1.0, 2.0)
+
+    def test_other_comments_are_comments(self, tmp_path):
+        """A line above the header which declares nothing says nothing."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# picked by hand\n#dims:time\ngroup,time\nq,1\n")
+        assert dc.annotations(path).dims == ("time",)
+
+    def test_restating_them_is_allowed(self, tmp_path):
+        """Two spellings of one fact agree or they are not one fact."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims: time\ngroup,time\nq,1\n")
+        assert dc.annotations(path, dims=("time",)).dims == ("time",)
+
+    def test_disagreeing_with_the_caller(self, tmp_path):
+        """The table's dimensions and the caller's are not merged."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims: time\ngroup,time\nq,1\n")
+        with pytest.raises(InvalidAnnotationError, match="where the two agree"):
+            dc.annotations(path, dims=("distance",))
+
+    def test_disagreeing_with_the_attrs(self, regions, tmp_path):
+        """A set directory states them once, wherever it states them."""
+        directory = regions.save(tmp_path / "picks")
+        table = directory / "annotations.csv"
+        table.write_text("# dims: depth\n" + table.read_text())
+        with pytest.raises(InvalidAnnotationError, match="where the two agree"):
+            dc.annotations(directory)
+
+    def test_a_set_directory_may_declare_them(self, tmp_path):
+        """A hand-made set directory need not carry an attrs file."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "annotations.csv").write_text("# dims: time\ngroup,time\nq,1\n")
+        assert dc.annotations(directory).dims == ("time",)
+
+    def test_sets_loaded_together_may_declare_them(self, tmp_path):
+        """Each set in a collection may state its own, above its own table."""
+        root = tmp_path / "sets"
+        for name, dim in (("hand", "time"), ("auto", "distance")):
+            directory = root / name
+            directory.mkdir(parents=True)
+            (directory / "annotations.csv").write_text(
+                f"# dims: {dim}\ngroup,{dim}\nq,1\n"
+            )
+        assert dc.annotations(root).dims == ("distance", "time")
+
+    def test_declared_twice(self, tmp_path):
+        """One table states its dimensions once."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims: time\n# dims: distance\ngroup,time\nq,1\n")
+        with pytest.raises(InvalidAnnotationError, match="more than once"):
+            dc.annotations(path)
+
+    def test_declared_but_named_none(self, tmp_path):
+        """A declaration which names nothing declares nothing."""
+        path = tmp_path / "picks.csv"
+        path.write_text("# dims:\ngroup,time\nq,1\n")
+        with pytest.raises(InvalidAnnotationError, match="names none"):
+            dc.annotations(path)
+
+    def test_vertices_declare_nothing(self, with_vertices, tmp_path):
+        """Vertices are read in the dimensions of the set they belong to."""
+        directory = with_vertices.save(tmp_path / "picks")
+        table = directory / "vertices.csv"
+        table.write_text("# dims: time\n" + table.read_text())
+        with pytest.raises(InvalidAnnotationError, match="states them once"):
+            dc.annotations(directory)
+
+    def test_vertices_may_be_commented(self, with_vertices, tmp_path):
+        """A comment above a table is a comment wherever the table is."""
+        directory = with_vertices.save(tmp_path / "picks")
+        for name in ("annotations.csv", "vertices.csv"):
+            table = directory / name
+            table.write_text("# drawn on a screen\n" + table.read_text())
+        assert dc.annotations(directory) == with_vertices
+
+
+class TestCarriedAnnotations:
+    """A directory of data carries what it was annotated with, hidden beside it."""
+
+    @pytest.fixture
+    def data(self, tmp_path):
+        """A directory of data, with nothing of this format visible in it."""
+        directory = tmp_path / "data"
+        directory.mkdir()
+        (directory / "das_1.h5").write_text("pretend this is data")
+        return directory
+
+    def test_a_carried_set(self, data, regions):
+        """Loading a directory of data loads the annotations it carries."""
+        regions.save(data / ".annotations")
+        assert dc.annotations(data) == regions
+
+    def test_a_carried_collection(self, data, regions, picks):
+        """What is carried may be many named sets, as anywhere else."""
+        regions.save(data / ".annotations" / "hand")
+        picks.save(data / ".annotations" / "phasenet")
+        assert sorted(dc.annotations(data).attrs.sets) == ["hand", "phasenet"]
+
+    def test_a_carried_table(self, data):
+        """The bare table spelling is carried under the same name."""
+        (data / ".annotations.csv").write_text("# dims: time\ngroup,time\nq,1\n")
+        assert dc.annotations(data).dims == ("time",)
+
+    def test_carried_twice(self, data, regions):
+        """A directory states what it carries once."""
+        regions.save(data / ".annotations")
+        (data / ".annotations.csv").write_text("group,time\nq,1\n")
+        with pytest.raises(InvalidAnnotationError, match="twice over"):
+            dc.annotations(data)
+
+    def test_the_wrong_kind_of_thing(self, data):
+        """Something under the blessed name in a form it does not take."""
+        (data / ".annotations").write_text("not a set")
+        with pytest.raises(InvalidAnnotationError, match="is a file"):
+            dc.annotations(data)
+
+    def test_a_table_name_holding_a_directory(self, data):
+        """The csv spelling is a table; a directory is the other one."""
+        (data / ".annotations.csv").mkdir()
+        with pytest.raises(InvalidAnnotationError, match="is a directory"):
+            dc.annotations(data)
+
+    def test_a_visible_set_is_the_set(self, data, regions, picks):
+        """A directory stating annotations is a set, not something carrying one."""
+        picks.save(data / ".annotations")
+        regions.save(data)
+        assert dc.annotations(data) == regions
+
+    def test_carrying_nothing(self, data):
+        """A directory with no annotations says so, and names the convention."""
+        with pytest.raises(InvalidAnnotationError, match=r"\.annotations"):
+            dc.annotations(data, dims=DIMS)
+
+    def test_find_annotations_judges_only_the_name(self, data, regions):
+        """The path comes back because of its name, not because it loads."""
+        assert find_annotations(data) is None
+        (data / ".annotations").mkdir()
+        assert find_annotations(data) == data / ".annotations"

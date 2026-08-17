@@ -89,6 +89,18 @@ class TestReadTable:
         with pytest.raises(ParameterError, match="field larger than field limit"):
             read_table(path)
 
+    def test_skipped_lines_are_not_the_header(self, tmp_path):
+        """A format may state something of its own above its table."""
+        path = _write(tmp_path, "# dims: time\na,b\n1,2\n")
+        frame = read_table(path, skip=1)
+        assert list(frame.columns) == ["a", "b"]
+
+    def test_skipped_lines_still_count(self, tmp_path):
+        """A row is named by the line a reader would look at."""
+        path = _write(tmp_path, "# dims: time\na,b\n1,2,3\n")
+        with pytest.raises(ParameterError, match="row 3"):
+            read_table(path, skip=1)
+
 
 class TestRowCells:
     """Only stated cells are reported."""

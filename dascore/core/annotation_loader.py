@@ -14,6 +14,11 @@ documented columns -- is kept under ``attrs.sets``, and a row's identity is
 still the ``id`` it already had, so an id two sets share is refused rather
 than qualified by the set it came from.
 
+A table which has no attrs file to be declared in may declare its own
+dimensions in a ``# dims: distance, time`` comment above its header, and a
+directory of data carries the annotations made on it under the hidden name
+``.annotations``, as it carries its inventory under ``.inventory``.
+
 CSV has no types, so this module decides what each column holds before the
 models see it: a dimension column is numbers or times, a ``basis`` cell is
 the JSON document its curve dumps, and every other cell is read the way it
@@ -69,6 +74,20 @@ _TEXT_COLUMNS = frozenset(RESERVED_COLUMNS) - {"value", "basis"}
 
 # The column a vertex states its place in the order by; a number.
 _ORDINAL = _VERTEX_COLUMNS[1]
+
+# What a table may carry above its header: comment lines, one of which may
+# declare the dimensions the table is stated in.
+_COMMENT = "#"
+_DIMS_PRAGMA = "dims"
+
+# The name a directory of data carries its annotations under, in either
+# form: the directory `.annotations/`, holding a set or a directory of
+# sets, or the bare table `.annotations.csv`. Hidden, like the `.inventory`
+# which may sit beside it -- a companion the directory keeps rather than
+# content it holds -- which is also what keeps the file scanner from
+# reading it as data. The visible spelling is deliberately not accepted: a
+# directory holding `annotations.csv` is a set, not something carrying one.
+BLESSED_NAME = ".annotations"
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -260,7 +279,11 @@ def _read_extra(cell):
 
 
 def _read_set_table(
-    path: Path, dims: Sequence[str], what: str, ordered: bool = False
+    path: Path,
+    dims: Sequence[str],
+    what: str,
+    ordered: bool = False,
+    skip: int = 0,
 ) -> pd.DataFrame | None:
     """
     Read one of a set's tables, with its cells typed.
@@ -270,7 +293,57 @@ def _read_set_table(
     """
     if _is_blank(path):
         return None
-    return _read_cells(read_table(path, what=what), dims, path, ordered=ordered)
+    frame = read_table(path, what=what, skip=skip)
+    return _read_cells(frame, dims, path, ordered=ordered)
+
+
+def _read_pragma(path: Path) -> tuple[tuple[str, ...] | None, int]:
+    """
+    Return the dimensions a table declares above its header, and the lines
+    to skip to reach that header.
+
+    A bare table has no attrs file to declare its dimensions in, so it may
+    declare them itself, in a comment above its header::
+
+        # dims: distance, time
+        group,time_start,time_end
+
+    Every other comment line is a comment. Written as a comment on purpose:
+    a reader which knows nothing of this convention still reads the table,
+    which a column-name markup or an extra header row would break.
+    """
+    stated: tuple[str, ...] | None = None
+    skip = 0
+    try:
+        with path.open(encoding="utf-8-sig") as stream:
+            for line in stream:
+                if not line.lstrip().startswith(_COMMENT):
+                    break
+                skip += 1
+                # One comment mark is consumed, not every one: `## dims: x`
+                # is a commented-out line rather than a declaration.
+                marked = line.lstrip().removeprefix(_COMMENT)
+                name, _, rest = marked.partition(":")
+                if name.strip().casefold() != _DIMS_PRAGMA:
+                    continue
+                if stated is not None:
+                    msg = (
+                        f"{quote_path(path)} declares {_DIMS_PRAGMA} more than "
+                        "once above its header; a table states its dimensions "
+                        "once."
+                    )
+                    raise ParameterError(msg)
+                stated = tuple(x.strip() for x in rest.split(",") if x.strip())
+                if not stated:
+                    msg = (
+                        f"{quote_path(path)} declares {_DIMS_PRAGMA} above its "
+                        "header but names none; write '# dims: distance, time'."
+                    )
+                    raise ParameterError(msg)
+    except (OSError, UnicodeDecodeError):
+        # Unreadable is the table reader's to name, with its own message.
+        return None, 0
+    return stated, skip
 
 
 def _is_blank(path: Path) -> bool:
@@ -332,17 +405,26 @@ def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
         attrs=kwargs.pop("attrs", None),
         vertices=kwargs.pop("vertices", None),
     )
-    attrs = _read_attrs(directory)
     # A directory which states annotations is a set, and nothing below it is
     # looked at: a folder someone kept beside its tables -- a backup of an
     # attrs file, an older copy of the set -- is no more this format's
     # business than a notes.txt is, and reading the directory as a
     # collection because of one would refuse a set which is complete.
     if _states_annotations(directory):
-        return _load_set(directory, attrs, dims, **kwargs)
+        return _load_set(directory, _read_attrs(directory), dims, **kwargs)
     if children := _child_sets(directory):
-        return _load_collection(directory, children, attrs, dims, **kwargs)
-    return _load_set(directory, attrs, dims, **kwargs)
+        return _load_collection(
+            directory, children, _read_attrs(directory), dims, **kwargs
+        )
+    # A directory which states nothing itself may still carry annotations,
+    # under the hidden name, as a directory of data carries its inventory.
+    # Its own attributes are never read on this path: a data directory's
+    # attrs.json is about the data, and is nothing this format has a claim on.
+    if (carried := find_annotations(directory)) is not None:
+        if carried.is_dir():
+            return _load_directory(carried, dims, **kwargs)
+        return _load_file(carried, dims, **kwargs)
+    return _load_set(directory, _read_attrs(directory), dims, **kwargs)
 
 
 def _states_annotations(path: Path) -> bool:
@@ -350,6 +432,58 @@ def _states_annotations(path: Path) -> bool:
     if not path.is_dir():
         return False
     return _one_spelling(path, ANNOTATION_STEM, (TABLE_SUFFIX,)) is not None
+
+
+def find_annotations(directory: str | os.PathLike) -> Path | None:
+    """
+    Return what a directory of data carries its annotations under, or None.
+
+    Only the name is judged, never the contents, as
+    [find_inventory](`dascore.core.inventory_loader.find_inventory`) judges
+    the inventory's: a hidden ``.annotations/`` holds the set, or the sets,
+    a directory of data was annotated with, and ``.annotations.csv`` is the
+    bare-table spelling of the same thing. Hidden, so the file scanner does
+    not read it as data, and so a directory which states a visible
+    ``annotations.csv`` is a set rather than something carrying one.
+
+    Raises rather than answering where a directory says two things at once
+    -- both spellings present -- or where what sits under the name is the
+    wrong kind of thing for it, which is a misspelling of the convention
+    rather than a file which owes it nothing.
+
+    Parameters
+    ----------
+    directory
+        The directory to look in.
+    """
+    root = Path(directory)
+    tree = root / BLESSED_NAME
+    table = tree.with_suffix(TABLE_SUFFIX)
+    found = [x for x in (tree, table) if x.exists()]
+    if not found:
+        return None
+    if len(found) > 1:
+        msg = (
+            f"{quote_path(root)} carries annotations twice over: "
+            f"{tree.name} and {table.name}. A directory states what it carries "
+            "once; keep the one it means."
+        )
+        raise ParameterError(msg)
+    (only,) = found
+    if only == tree and not only.is_dir():
+        msg = (
+            f"{quote_path(only)} is a file. The annotations a directory carries "
+            f"are the set directory {BLESSED_NAME}/, or the bare table "
+            f"{table.name}."
+        )
+        raise ParameterError(msg)
+    if only == table and only.is_dir():
+        msg = (
+            f"{quote_path(only)} is a directory. A set held as a directory is "
+            f"named {BLESSED_NAME}/; the {TABLE_SUFFIX} name spells a bare table."
+        )
+        raise ParameterError(msg)
+    return only
 
 
 def _child_sets(directory: Path) -> list[Path]:
@@ -679,18 +813,26 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     if table is None:
         msg = (
             f"{quote_path(directory)} holds no {ANNOTATION_STEM}{TABLE_SUFFIX}, "
-            "so it states no annotations."
+            f"so it states no annotations. A directory of data carries what it "
+            f"was annotated with under {BLESSED_NAME}, and holds none here either."
         )
         raise ParameterError(msg)
-    stated = _declared_dims(attrs, dims, directory)
-    frame = _read_set_table(table, stated, "no annotations")
+    declared, skip = _read_pragma(table)
+    stated = _declared_dims(attrs, dims, directory, declared, table)
+    frame = _read_set_table(table, stated, "no annotations", skip=skip)
     # Found as the annotations table is: a set spells each of its parts
     # once, and a `vertices.CSV` beside a `vertices.csv` is two spellings of
     # one part rather than a table nobody reads.
     vertex_path = _one_spelling(directory, VERTEX_STEM, (TABLE_SUFFIX,))
     vertices = None
     if vertex_path is not None:
-        vertices = _read_set_table(vertex_path, stated, "no vertices", ordered=True)
+        vertices = _read_set_table(
+            vertex_path,
+            stated,
+            "no vertices",
+            ordered=True,
+            skip=_vertex_comments(vertex_path),
+        )
     # The read dimensions rather than the given ones: they are the same
     # names, already a tuple, so a file spelling one dimension as a bare
     # string builds the set the same way the constructor would.
@@ -706,27 +848,66 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
             "directory."
         )
         raise ParameterError(msg)
-    stated = _declared_dims({}, dims, path)
+    declared, skip = _read_pragma(path)
+    stated = _declared_dims({}, dims, path, declared, path)
     return AnnotationSet(
-        _read_set_table(path, stated, "no annotations"), dims=stated, **kwargs
+        _read_set_table(path, stated, "no annotations", skip=skip),
+        dims=stated,
+        **kwargs,
     )
 
 
-def _declared_dims(attrs: Mapping, dims, source: Path) -> tuple[str, ...]:
+def _vertex_comments(path: Path) -> int:
+    """Return the comment lines above a vertices table, which declares nothing."""
+    declared, skip = _read_pragma(path)
+    if declared is not None:
+        msg = (
+            f"{quote_path(path)} declares {_DIMS_PRAGMA} above its header. "
+            "Vertices are read in the dimensions of the set they belong to, "
+            "which states them once."
+        )
+        raise ParameterError(msg)
+    return skip
+
+
+def _declared_dims(
+    attrs: Mapping,
+    dims,
+    source: Path,
+    declared: tuple[str, ...] | None = None,
+    table: Path | None = None,
+) -> tuple[str, ...]:
     """
     Return the dimensions to read a source in: the caller's, else its own.
 
     The cells cannot be read before this is known -- which columns hold
     times rather than text is exactly what a dimension decides -- so a
     source stating none fails here rather than as a puzzling column later.
+
+    A table may declare them itself, above its header. Restating them is
+    allowed where the two agree, as everywhere else a name is spelled
+    twice; there is no precedence rule between two spellings of one fact.
     """
     stated = dims if dims is not None else attrs.get("dims")
+    if declared is not None:
+        if stated is None:
+            stated = declared
+        elif tuple(str(x) for x in iterate(stated)) != declared:
+            spelled = "was given" if dims is not None else "is stated in its attributes"
+            msg = (
+                f"{quote_path(table or source)} declares the dimensions "
+                f"{', '.join(declared)} above its header, but "
+                f"{', '.join(str(x) for x in iterate(stated))} {spelled}. "
+                "Dimensions may be spelled twice where the two agree."
+            )
+            raise ParameterError(msg)
     if not stated:
         msg = (
             f"{quote_path(source)} states no dimensions, and none were given. "
             "Annotations are read in the dimensions they are stated in: write "
-            f"them in {ATTRS_STEM}{OBJECT_SUFFIXES[0]} or pass "
-            "dims=('distance', 'time')."
+            f"them in {ATTRS_STEM}{OBJECT_SUFFIXES[0]}, in a "
+            f"'{_COMMENT} {_DIMS_PRAGMA}: distance, time' line above the table, "
+            "or pass dims=('distance', 'time')."
         )
         raise ParameterError(msg)
     # Through `iterate`, as the set itself reads them: a lone string is one
@@ -754,10 +935,13 @@ def annotations(
     ----------
     source
         An `AnnotationSet`, a dataframe of one row per annotation, or a path
-        to a CSV table, a set directory, or a directory of set directories.
+        to a CSV table, a set directory, a directory of set directories, or a
+        directory of data carrying either under ``.annotations``.
     dims
         The patch dimensions the annotations are stated in. Required unless
-        the source states them itself, and overriding it where it does.
+        the source states them itself -- in its attributes, or in a
+        ``# dims: distance, time`` line above its table -- and overriding it
+        where it does.
     **kwargs
         Passed to [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`).
         A source already holding what one states -- a set, or a directory
@@ -791,6 +975,16 @@ def annotations(
     ...     together = dc.annotations(root)
     >>> len(together), together[0].set, sorted(together.attrs.sets)
     (2, 'hand', ['hand', 'phasenet'])
+
+    A directory of data is read as the annotations it carries, so a path
+    which is good enough for `dc.spool` is good enough here.
+
+    >>> with tempfile.TemporaryDirectory() as folder:
+    ...     data = Path(folder)
+    ...     _ = picks.save(data / ".annotations")
+    ...     carried = dc.annotations(data)
+    >>> carried == picks
+    True
     """
     if isinstance(source, AnnotationSet):
         # A built set states everything these would override, and building
