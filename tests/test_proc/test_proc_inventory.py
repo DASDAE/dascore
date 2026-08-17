@@ -846,7 +846,7 @@ class TestEnrichContracts:
         out = renamed.enrich(inv, attrs=False, coords=("distance",))
         assert out.get_coord("distance").values[10] == 110.0
 
-    def test_reserved_annotation_group_raises(self, inventory):
+    def test_reserved_label_group_raises(self, inventory):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
         label = OpticalPathLabel(

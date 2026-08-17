@@ -26,6 +26,16 @@ pytest.importorskip("yaml")
 
 
 # A minimal directory which loads: one acquisition names everything above it.
+PATH_DIRECTORY = {
+    "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ndata_category: DAS\n",
+    "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+    "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
+    # A path with length, so a track laid along it is inside the path.
+    "fiber_arrays/DAS.L001/path/optical_components.csv": (
+        "sequence,object_type,optical_length,name\n1,FiberSegment,1000.0,fiber 1\n"
+    ),
+}
+
 MINIMAL = {
     "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ndata_category: DAS\n",
 }
@@ -1343,44 +1353,82 @@ class TestTrackTables:
         """A spreadsheet which never said it was a track is left where it lies.
 
         An entity directory is somewhere a crew keeps its own working files,
-        and this format has no claim on one it does not recognise.
+        and this format has no claim on one it does not recognise. The
+        tables beside it are still read, so the directory is being loaded
+        rather than merely tolerated.
         """
         files = {
-            **MINIMAL,
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/geometrys.csv": "segment,distance\nS,0\n",
-            "fiber_arrays/DAS.L001/crew_notes.csv": "who,when\nderrick,tuesday\n",
-        }
-        inventory = make_inventory(files)
-        (array,) = inventory.networks[0].fiber_arrays
-        assert array.code == "L001"
-
-    def test_a_stem_nearly_naming_an_attribute(self, make_inventory):
-        """A near-miss did claim to be a track, so it is not quietly dropped."""
-        files = {
-            **MINIMAL,
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
-            "fiber_arrays/DAS.L001/path/geometrys.csv": "segment,distance\nS,0\n",
-        }
-        with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
-            make_inventory(files)
-
-    def test_the_superseded_annotations_table_is_left_alone(self, make_inventory):
-        """The table labels.csv replaced names nothing near it, so a directory
-        which still holds one loads rather than refusing.
-        """
-        files = {
-            **MINIMAL,
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
-                "start_distance,end_distance,group,value\n0,10,zone,north\n"
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/crew_notes.csv": "who,when\nderrick,tuesday\n",
+            "fiber_arrays/DAS.L001/path/components.csv": "a,b\n1,2\n",
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation\n"
+                "S,0,0,0,0\nS,100,1,1,0\n"
             ),
         }
         inventory = make_inventory(files)
         (path,) = inventory.networks[0].fiber_arrays[0].optical_paths
-        assert path.labels == ()
+        assert len(path.geometry) == 1
+
+    @pytest.mark.parametrize("name", ["geometrys", "couplings", "label"])
+    def test_a_stem_nearly_naming_an_attribute(self, make_inventory, name):
+        """A near-miss did claim to be a track, so it is not quietly dropped."""
+        files = {
+            **PATH_DIRECTORY,
+            f"fiber_arrays/DAS.L001/path/{name}.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="Did you mean"):
+            make_inventory(files)
+
+    def test_the_resemblance_cutoff_stays_high(self, make_inventory):
+        """A crew file is not read as a bad spelling of this format's.
+
+        `components` resembles `optical_components` more than most things
+        do and is still not it, so this pins the cutoff above that: a rule
+        loose enough to claim this file would refuse a crew's own work,
+        which is what the indifference exists to prevent.
+        """
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/components.csv": "a,b\n1,2\n",
+        }
+        assert make_inventory(files) is not None
+
+    def test_a_table_of_another_entity(self, make_inventory):
+        """The right file one directory too high still says it is a track."""
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/geometry.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="names the track geometry"):
+            make_inventory(files)
+
+    @pytest.mark.parametrize("name", ["GEOMETRY", "Geometry"])
+    def test_a_shouted_table_name(self, make_inventory, name):
+        """Case decides nothing here, as it decides nothing for a suffix."""
+        files = {
+            **PATH_DIRECTORY,
+            f"fiber_arrays/DAS.L001/path/{name}.CSV": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
+            make_inventory(files)
+
+    def test_the_retired_annotations_table_says_what_to_rename(self, make_inventory):
+        """A name this format used to read is told what reads it now.
+
+        The document doors already refuse the same fact, so shrugging at it
+        here would break one stored inventory two different ways -- loudly
+        as YAML, silently as a directory, and the silent one loses the
+        labels the author believes are in it.
+        """
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                "start_distance,end_distance,group,value\n0,10,zone,north\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="now reads as labels"):
+            make_inventory(files)
 
     def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
         """Only an attribute rows can build may be stated as a table."""
@@ -1669,7 +1717,7 @@ class TestUnreadableTables:
         # Unset, rather than a tuple of nothing, which the model would refuse.
         assert acquisition.distance_map.instrument_distance is None
 
-    def test_an_annotation_stating_no_value(self, make_inventory):
+    def test_a_label_stating_no_value(self, make_inventory):
         """A membership group's value is its default, not a parsed cell."""
         files = {
             **MINIMAL,

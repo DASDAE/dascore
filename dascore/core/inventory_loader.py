@@ -499,6 +499,19 @@ _TABLES: Mapping[str, _Table] = {
 
 # The one column of a point table which is not a field of the object it
 # builds; components order by it and drop it.
+# The one suffix a table takes, and the table stems folded once so the
+# near-miss check can match a shouted name without folding them per file.
+_CSV_SUFFIX = ".csv"
+_TABLES_BY_FOLD = {x.casefold(): x for x in _TABLES}
+
+# Names this format used to read, and what reads them now. A directory
+# written before a rename is not a crew's own file which owes this format
+# nothing -- it is this format's own former spelling, and a reader which
+# shrugged at it would drop data the author believes is in the inventory.
+# The document doors already refuse the same fact, so this is what keeps
+# one stored inventory from breaking two different ways.
+_RETIRED_TABLES = {"annotations": "labels"}
+
 _SEQUENCE = "sequence"
 
 
@@ -769,19 +782,58 @@ def _table_stem(path: Path) -> str:
 
 def _refuse_near_miss(stem: str, child: Path, model) -> None:
     """
-    Refuse a table stem which nearly names an attribute of its model.
+    Refuse a table stem which claims to be a track and is not one here.
 
-    The cutoff is deliberately high. A low one would start reading a
-    crew's own files as bad spellings of this format's, which is the
-    refusal this indifference exists to end; the cost of missing a
+    Three ways of claiming it. A stem this format used to read is the
+    plainest: it was written by this format, for this format, and only a
+    rename since made it unreadable, so it is told what to rename itself
+    to rather than ignored.
+
+    Two further ways. A stem which *is* one of this format's table
+    names, but not of this model, is the likeliest real mistake there is:
+    the right file one directory too high, a `geometry.csv` written before
+    the path directory was split out. It could not have said more plainly
+    that it is a track, so it is refused rather than dropped.
+
+    A stem which merely resembles one is refused too, and told which name
+    it nearly is. That comparison is against the attributes which are
+    actually tables, not every attribute: `names.csv` beside a fiber array
+    is a crew's own file, and suggesting `name.csv` would send them to a
+    second refusal saying this format does not read a name as a table.
+
+    Both tests fold case, as the suffix test above already does. A
+    `GEOMETRY.CSV` shares no characters with `geometry` as far as
+    `difflib` is concerned, so an unfolded comparison would let the one
+    spelling nobody picks for a personal file be the one which vanishes --
+    and would do it only on the platforms whose filesystems do not fold
+    case themselves.
+
+    The resemblance cutoff is deliberately high. A low one would start
+    reading a crew's own files as bad spellings of this format's, which is
+    the refusal this indifference exists to end; the cost of missing a
     stranger typo is the old behaviour, one message later.
     """
-    close = difflib.get_close_matches(stem, model.model_fields, n=1, cutoff=0.8)
+    folded = stem.casefold()
+    if (now := _RETIRED_TABLES.get(folded)) is not None:
+        msg = (
+            f"{_quote(child)} names {stem}, which this format now reads as "
+            f"{now}{_CSV_SUFFIX}. Rename it: what it holds are {now}."
+        )
+        raise InvalidInventoryError(msg)
+    tables = {x.casefold(): x for x in set(model.model_fields) & set(_TABLES)}
+    if (elsewhere := _TABLES_BY_FOLD.get(folded)) and folded not in tables:
+        msg = (
+            f"{_quote(child)} names the track {elsewhere}, which "
+            f"{model.__name__} does not have. A track belongs to the entity "
+            "which describes it; this one may be a directory too high."
+        )
+        raise InvalidInventoryError(msg)
+    close = difflib.get_close_matches(folded, tables, n=1, cutoff=0.8)
     if close:
         msg = (
             f"{_quote(child)} names no attribute of {model.__name__}. Did you "
-            f"mean {close[0]}.csv? A file this format does not "
-            "recognise at all is left where it lies."
+            f"mean {tables[close[0]]}{_CSV_SUFFIX}? A file this format does "
+            "not recognise at all is left where it lies."
         )
         raise InvalidInventoryError(msg)
 

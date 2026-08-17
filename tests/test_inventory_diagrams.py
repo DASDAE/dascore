@@ -76,7 +76,7 @@ def _accepted_models(model, field):
     A reference is a `str` in the same union as a model, which is how the
     inventory spells "this may be a resource_id instead of the object".
     """
-    label = get_type_hints(model)[field]
+    annotation = get_type_hints(model)[field]
     found, referenced = set(), False
 
     def _walk(node, in_reference_union):
@@ -94,7 +94,7 @@ def _accepted_models(model, field):
             found.add(node)
             referenced = referenced or in_reference_union
 
-    _walk(label, False)
+    _walk(annotation, False)
     return found, referenced
 
 

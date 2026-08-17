@@ -706,7 +706,7 @@ class OpticalPathLabel(_IntervalModel):
     start and end) cover nothing, so they are exempt from that rule.
     """
 
-    group: str = Field(default="", description="Name of the annotated variable.")
+    group: str = Field(default="", description="Name of the labelled variable.")
     value: LabelValue = Field(
         default=True, description="Value of the variable over this interval."
     )
@@ -2174,10 +2174,10 @@ class Inventory(InventoryModel):
         from the paths themselves: an inventory with no coupling track has
         no coupling to select on.
         """
-        labels = self.coordinate_reference_system.coordinate_labels
+        axes = self.coordinate_reference_system.coordinate_labels
         # Both spellings of the same axes: the canonical storage names and
         # whatever this CRS declares they mean.
-        out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
+        out = dict.fromkeys(["distance", *("x", "y", "z")[: len(axes)], *axes])
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
         shapes: dict[str, set[str]] = {}

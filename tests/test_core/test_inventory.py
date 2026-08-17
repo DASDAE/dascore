@@ -286,7 +286,7 @@ class TestGeometryColumns:
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             self._inventory(clash).check()
 
-    def test_a_column_which_is_also_an_annotation_group(self):
+    def test_a_column_which_is_also_a_label_group(self):
         """One name is one coordinate, whichever track would define it."""
         column = inv.Geometry(distance=(0.0, 10.0), coordinates={"zone": (0.0, 1.0)})
         label = inv.OpticalPathLabel(
@@ -539,7 +539,7 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
             path.check()
 
-    def test_boolean_annotations_overlap_freely(self):
+    def test_boolean_labels_overlap_freely(self):
         """Membership labels overlap, within and across groups."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
@@ -557,7 +557,7 @@ class TestPathTracks:
         )
         assert path.check() is path
 
-    def test_valued_annotation_groups_may_not_overlap(self):
+    def test_valued_label_groups_may_not_overlap(self):
         """A single-valued group cannot claim two values at one distance."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
@@ -579,7 +579,7 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="only boolean groups"):
             path.check()
 
-    def test_annotation_group_holds_one_kind_of_value(self):
+    def test_label_group_holds_one_kind_of_value(self):
         """Mixing value kinds in one group is a modeling error."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
@@ -595,7 +595,7 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="one kind of value"):
             path.check()
 
-    def test_numeric_annotation_group(self):
+    def test_numeric_label_group(self):
         """Numeric groups are single valued but otherwise ordinary."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
@@ -1866,7 +1866,7 @@ class TestPointMarkers:
         )
         assert path.check() is path
 
-    def test_point_annotation(self):
+    def test_point_label(self):
         """Point label."""
         label = inv.OpticalPathLabel(
             start_distance=350.0, end_distance=350.0, group="wellhead"
@@ -2464,7 +2464,7 @@ class TestSerializationIsLossless:
         inventory = SAMPLE_INVENTORIES[name]
         assert dc.inventory(inventory.to_yaml()) == inventory
 
-    def test_an_label_value_of_one_survives(self):
+    def test_a_label_value_of_one_survives(self):
         """`1 == True`, and the value's default is True, so it was dropped."""
         pytest.importorskip("yaml")
         path = inv.OpticalPath(
@@ -2488,7 +2488,7 @@ class TestSerializationIsLossless:
         # number and is refused as mixing two kinds.
         assert dc.inventory(text) == inventory
 
-    def test_an_annotation_still_names_its_class(self):
+    def test_a_label_still_names_its_class(self):
         """Restoring the value must not displace the document's tag."""
         label = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="hole", value=2
@@ -2504,7 +2504,7 @@ class TestSerializationIsLossless:
         assert "value" not in label.model_dump(mode="json", exclude={"value"})
         assert "value" not in label.model_dump(mode="json", include={"group"})
 
-    def test_a_flag_annotation_stays_terse(self):
+    def test_a_flag_label_stays_terse(self):
         """A value which really is the default is still left out."""
         pytest.importorskip("yaml")
         path = inv.OpticalPath(
