@@ -33,10 +33,10 @@ flowchart LR
   OpticalPath -->|optical_components| Components["FiberSegment · Splice · Connector · Terminator"]
   OpticalPath -->|geometry| Geometry
   OpticalPath -->|coupling| CouplingCondition
-  OpticalPath -->|annotations| OpticalPathAnnotation
+  OpticalPath -->|labels| OpticalPathLabel
 ```
 
-The components are the ordered physical pieces the light passes through, and they are what gives the path its length: each one tiles the interval after the last, so the path ends where the final component does. The other three describe intervals of that length — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the annotations name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
+The components are the ordered physical pieces the light passes through, and they are what gives the path its length: each one tiles the interval after the last, so the path ends where the final component does. The other three describe intervals of that length — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
 
 Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
 
@@ -112,7 +112,7 @@ files = {
         "past the coil,250,1340\n"
         "past the coil,400,1490\n"
     ),
-    "fiber_arrays/DAS.R2D1/path/annotations.csv": (
+    "fiber_arrays/DAS.R2D1/path/labels.csv": (
         "start_distance,end_distance,group,value\n"
         "100,250,zone,north\n"
         "250,400,zone,south\n"
@@ -136,7 +136,7 @@ A few rules make that directory readable without a schema in front of you:
 - **`path` is the one reserved *container* name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path". (`attrs` and `inventory` are reserved as file stems — an entity's own object file, and the envelope — and the top-level directory names above are fixed.)
 - **Files that participate in no convention are ignored.** Photos, field notes, and deployment logs can live in the inventory directory undisturbed.
 
-Two tracks can hold something that varies along the fiber, and which one to use is decided by what the values are. **Numbers go in `geometry.csv`**, one column per quantity, interpolated between the control points which state them; a column may name its units in its header, `chainage (m)`. **Text and vocabulary go in `annotations.csv`**, which is a set of intervals rather than a curve — a zone name has no meaning between two of them. A column of text in a geometry table is refused, and says so.
+Two tracks can hold something that varies along the fiber, and which one to use is decided by how a value behaves between the points which state it. **A quantity which interpolates goes in `geometry.csv`**, one column per quantity, read as a curve through its control points; a column may name its units in its header, `chainage (m)`. **A value which holds over a stretch and then stops goes in `labels.csv`**, a set of intervals rather than a curve — a zone name has no meaning between two of them, and neither does a borehole number. Labels are usually words, then, but a number which identifies rather than measures is a label too. A column of text in a geometry table is refused, and says so.
 
 Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The `segment` names themselves are for humans; what a channel gets is the columns.
 
@@ -171,12 +171,12 @@ names = inventory.get_names()
 print("attrs:", names.attrs[:4], "...")
 print("coords:", [x for x in names.coords if "." not in x])
 
-# The annotation groups and the geometry column named in the CSVs.
+# The label groups and the geometry column named in the CSVs.
 assert {"zone", "noisy", "chainage"} <= set(names.coords)
 assert "gauge_length" in names.attrs
 ```
 
-`zone` and `noisy` are there because the annotations CSV named them, and `chainage` because the geometry CSV did: a group and a column each become a coordinate under their own name. `coupling`, `geometry`, and `optical_components` are there for the same reason — a track contributes its name only where a path actually describes it. `distance` is where each channel sits on the optical path, and `x`/`y`/`z` and `longitude`/`latitude`/`elevation` are the two spellings of the axes the inventory's coordinate reference system declares.
+`zone` and `noisy` are there because the labels CSV named them, and `chainage` because the geometry CSV did: a group and a column each become a coordinate under their own name. `coupling`, `geometry`, and `optical_components` are there for the same reason — a track contributes its name only where a path actually describes it. `distance` is where each channel sits on the optical path, and `x`/`y`/`z` and `longitude`/`latitude`/`elevation` are the two spellings of the axes the inventory's coordinate reference system declares.
 
 Listing a name is not promising a value for it. This example's geometry states chainage and no position, so the spatial names resolve to nothing until some segment states them.
 

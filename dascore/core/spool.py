@@ -617,7 +617,7 @@ class Spool(NamespaceOwner):
 
         A name which is also an attr resolves to the attr, as bare names
         always do, so only one the caller put in `_coords` is read as the
-        coordinate — an annotation group may share an acquisition field's
+        coordinate — a label group may share an acquisition field's
         name, and selecting on the field must keep working. A name the
         index already uses for a coordinate keeps that meaning outright:
         `distance` is the patch's own axis whether or not an inventory
@@ -1011,7 +1011,7 @@ class Spool(NamespaceOwner):
         """
         Expand the spool into one patch per value of an inventory coordinate.
 
-        Most often an annotation group. Every kind of group expands: a
+        Most often a label group. Every kind of group expands: a
         categorical one by each of its strings, a membership group into
         the channels it includes and those it does not, and a numeric one
         by each distinct measurement. Intervals of one group may overlap,

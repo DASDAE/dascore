@@ -3,7 +3,7 @@ DASDAE Inventory: DASCore's metadata model for DFOS observing systems.
 
 The inventory extends the StationXML concept with first-class support for
 fiber-optic arrays. It describes the physical optical path (fiber, connectors,
-splices), the geometry, coupling, and annotation tracks along optical
+splices), the geometry, coupling, and label tracks along optical
 distance, and the interrogator configurations (acquisitions) that produced
 patches. Patches carry a ``acquisition_key``
 (``network.fiber_array.location.acquisition``) which, together with time,
@@ -114,15 +114,13 @@ ResourceIdStr = Annotated[
 ]
 
 
-def _annotation_value(value):
-    """Normalize an annotation value so its Python type survives validation."""
+def _label_value(value):
+    """Normalize a label value so its Python type survives validation."""
     return normalize_value(value, error=InvalidInventoryError)
 
 
-# The value kind decides an annotation group's shape, so it must be exact.
-AnnotationValue = Annotated[
-    str | bool | int | float, BeforeValidator(_annotation_value)
-]
+# The value kind decides a label group's shape, so it must be exact.
+LabelValue = Annotated[str | bool | int | float, BeforeValidator(_label_value)]
 
 
 def _object_type_tag(name: str):
@@ -697,9 +695,9 @@ def _wanted(field: str, info) -> bool:
     return not include or field in include
 
 
-class OpticalPathAnnotation(_IntervalModel):
+class OpticalPathLabel(_IntervalModel):
     """
-    Key/value annotation attached to an interval of an optical path.
+    Key/value label attached to an interval of an optical path.
 
     ``group`` names the variable and ``value`` is its state over the
     interval, so a bare flag is simply a boolean value. String and numeric
@@ -708,22 +706,22 @@ class OpticalPathAnnotation(_IntervalModel):
     start and end) cover nothing, so they are exempt from that rule.
     """
 
-    group: str = Field(default="", description="Name of the annotated variable.")
-    value: AnnotationValue = Field(
+    group: str = Field(default="", description="Name of the labelled variable.")
+    value: LabelValue = Field(
         default=True, description="Value of the variable over this interval."
     )
 
     @field_validator("value")
     @classmethod
     def _reject_empty_string(cls, value):
-        """An annotation whose value is empty states nothing.
+        """A label whose value is empty states nothing.
 
         It would also be indistinguishable from an uncovered channel, since
         a string coordinate spells absence as the empty string.
         """
         if isinstance(value, str) and not value:
             msg = (
-                "An annotation value may not be the empty string; it would "
+                "A label value may not be the empty string; it would "
                 "state nothing and would read as an uncovered channel."
             )
             raise ValueError(msg)
@@ -1148,11 +1146,11 @@ def _track_identity_fields() -> Mapping[str, str]:
     return MappingProxyType(out)
 
 
-# Names an annotation group may not take: a group becomes a patch coordinate
+# Names a label group may not take: a group becomes a patch coordinate
 # at enrichment, where it would shadow one of these.
 RESERVED_GROUP_NAMES = frozenset(
     {"time", "distance", "channel", "instrument_distance"}
-    | {"optical_components", "geometry", "coupling", "annotations"}
+    | {"optical_components", "geometry", "coupling", "labels"}
     | set(VALID_COORDINATE_LABELS)
 )
 
@@ -1177,7 +1175,7 @@ class OpticalPath(TimeRangedModel):
 
     Optical components tile ``[start_distance, start_distance + optical
     length)``. Geometry and coupling are function tracks (partial coverage,
-    no overlap); annotations overlap as their group's value kind allows. No
+    no overlap); labels overlap as their group's value kind allows. No
     more than one path per ``(FiberArray, location_code)`` is valid at a
     time.
     """
@@ -1208,8 +1206,8 @@ class OpticalPath(TimeRangedModel):
     coupling: tuple[CouplingCondition, ...] = Field(
         default=(), description="Coupling conditions on this path."
     )
-    annotations: tuple[OpticalPathAnnotation, ...] = Field(
-        default=(), description="Annotations on this path."
+    labels: tuple[OpticalPathLabel, ...] = Field(
+        default=(), description="Labels on this path."
     )
     measurements: tuple[OpticalMeasurement | str, ...] = Field(
         default=(),
@@ -1296,18 +1294,18 @@ class OpticalPath(TimeRangedModel):
         Check track rules for this path.
 
         Checks that geometry and coupling stay within path bounds and do not
-        overlap (partial coverage is legal), and that annotations stay within
+        overlap (partial coverage is legal), and that labels stay within
         bounds. Component tiling is inherent to the cumulative layout.
         """
         errors = []
         start, end = self.start_distance, self.end_distance
         geo_spans = [seg.interval for seg in self.geometry]
         coup_spans = [c.interval for c in self.coupling]
-        anno_spans = [a.interval for a in self.annotations]
+        label_spans = [a.interval for a in self.labels]
         for name, spans in (
             ("geometry", geo_spans),
             ("coupling", coup_spans),
-            ("annotations", anno_spans),
+            ("labels", label_spans),
         ):
             for lo, hi in spans:
                 if lo < start - tolerance or hi > end + tolerance:
@@ -1322,7 +1320,7 @@ class OpticalPath(TimeRangedModel):
                 f"{overlap[1]}; coupling is a function track."
             )
         errors.extend(self._check_geometry_columns())
-        errors.extend(self._check_annotation_groups())
+        errors.extend(self._check_label_groups())
         if errors:
             msg = "Optical path validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
@@ -1346,7 +1344,7 @@ class OpticalPath(TimeRangedModel):
                 spans.setdefault(name, []).append(segment.interval)
                 if name in segment.units:
                     units.setdefault(name, set()).add(segment.units[name])
-        groups = {x.group for x in self.annotations if x.group}
+        groups = {x.group for x in self.labels if x.group}
         errors = [
             f"Geometry column {name!r} is a reserved name; a column becomes "
             "a coordinate and cannot shadow a structural coordinate or a "
@@ -1360,7 +1358,7 @@ class OpticalPath(TimeRangedModel):
             for name in sorted(x for x in spans if "." in x)
         ]
         errors += [
-            f"{name!r} is both a geometry column and an annotation group; "
+            f"{name!r} is both a geometry column and a label group; "
             "one name is one coordinate."
             for name in sorted(set(spans) & groups)
         ]
@@ -1388,15 +1386,15 @@ class OpticalPath(TimeRangedModel):
                 )
         return errors
 
-    def _check_annotation_groups(self) -> list[str]:
-        """Check that each annotation group holds one kind of value."""
+    def _check_label_groups(self) -> list[str]:
+        """Check that each label group holds one kind of value."""
         groups: dict[str, list] = {}
-        for annotation in self.annotations:
-            groups.setdefault(annotation.group, []).append(annotation)
+        for label in self.labels:
+            groups.setdefault(label.group, []).append(label)
         errors = []
         for group in sorted(set(groups) & RESERVED_GROUP_NAMES):
             errors.append(
-                f"Annotation group {group!r} is a reserved name; a group "
+                f"Label group {group!r} is a reserved name; a group "
                 "becomes a coordinate and cannot shadow a structural "
                 "coordinate, a typed track, or a coordinate label."
             )
@@ -1404,7 +1402,7 @@ class OpticalPath(TimeRangedModel):
             kinds = {value_kind(x.value) for x in items}
             if len(kinds) > 1:
                 errors.append(
-                    f"Annotation group {group!r} mixes {sorted(kinds)} values; "
+                    f"Label group {group!r} mixes {sorted(kinds)} values; "
                     "a group holds one kind of value."
                 )
                 continue
@@ -1414,7 +1412,7 @@ class OpticalPath(TimeRangedModel):
             if overlap is not None:
                 errors.append(
                     f"Overlapping intervals {overlap[0]} and {overlap[1]} in "
-                    f"annotation group {group!r}; only boolean groups, which "
+                    f"label group {group!r}; only boolean groups, which "
                     "state membership, may overlap."
                 )
         return errors
@@ -1461,14 +1459,14 @@ class OpticalPath(TimeRangedModel):
             geometry.append(seg.new(distance=tuple(new_dist), coordinates=new_coords))
         outer = self.end_distance
         coupling = clip_intervals(self.coupling, lo, hi, outer)
-        annotations = clip_intervals(self.annotations, lo, hi, outer)
+        labels = clip_intervals(self.labels, lo, hi, outer)
         return self.model_copy(
             update={
                 "start_distance": lo,
                 "optical_components": tuple(components),
                 "geometry": tuple(geometry),
                 "coupling": tuple(coupling),
-                "annotations": tuple(annotations),
+                "labels": tuple(labels),
             }
         )
 
@@ -1519,8 +1517,8 @@ class OpticalPath(TimeRangedModel):
             (flip_item(c) for c in self.coupling),
             key=lambda c: c.start_distance,
         )
-        annotations = sorted(
-            (flip_item(a) for a in self.annotations),
+        labels = sorted(
+            (flip_item(a) for a in self.labels),
             key=lambda a: a.start_distance,
         )
         return self.model_copy(
@@ -1528,7 +1526,7 @@ class OpticalPath(TimeRangedModel):
                 "optical_components": tuple(reversed(self.optical_components)),
                 "geometry": tuple(geometry),
                 "coupling": tuple(coupling),
-                "annotations": tuple(annotations),
+                "labels": tuple(labels),
             }
         )
 
@@ -1572,7 +1570,7 @@ class OpticalPath(TimeRangedModel):
             return item.model_copy(update=update)
 
         coupling = tuple(shift_item(c) for c in other.coupling)
-        annotations = tuple(shift_item(a) for a in other.annotations)
+        labels = tuple(shift_item(a) for a in other.labels)
         return self.model_copy(
             update={
                 "optical_components": (
@@ -1581,7 +1579,7 @@ class OpticalPath(TimeRangedModel):
                 ),
                 "geometry": (*self.geometry, *geometry),
                 "coupling": (*self.coupling, *coupling),
-                "annotations": (*self.annotations, *annotations),
+                "labels": (*self.labels, *labels),
                 "measurements": (*self.measurements, *other.measurements),
             }
         )
@@ -2172,21 +2170,21 @@ class Inventory(InventoryModel):
         Return the per-channel names this inventory's paths could define.
 
         The CRS's axes and optical distance come from the model, while the
-        annotation groups and the tracks which are actually described come
+        label groups and the tracks which are actually described come
         from the paths themselves: an inventory with no coupling track has
         no coupling to select on.
         """
-        labels = self.coordinate_reference_system.coordinate_labels
+        axes = self.coordinate_reference_system.coordinate_labels
         # Both spellings of the same axes: the canonical storage names and
         # whatever this CRS declares they mean.
-        out = dict.fromkeys(["distance", *("x", "y", "z")[: len(labels)], *labels])
+        out = dict.fromkeys(["distance", *("x", "y", "z")[: len(axes)], *axes])
         groups: dict[str, None] = {}
         tracks: dict[str, dict[str, None]] = {}
         shapes: dict[str, set[str]] = {}
         crs = self.coordinate_reference_system
         columns: dict[str, None] = {}
         for path in self._optical_paths():
-            groups.update(dict.fromkeys(x.group for x in path.annotations if x.group))
+            groups.update(dict.fromkeys(x.group for x in path.labels if x.group))
             # The axes are listed above whatever any path states; what a
             # path adds is the columns which are not positions.
             for segment in path.geometry:
@@ -2367,7 +2365,7 @@ class Inventory(InventoryModel):
         retroactively. ``old`` is matched by equality at any addressable
         level: networks, stations, channels, fiber arrays, acquisitions,
         optical paths, and path track items (components, geometry, coupling,
-        annotations); pooled resources are addressed by their resource_id.
+        labels); pooled resources are addressed by their resource_id.
         An ``old`` matching more than one item is ambiguous and raises.
         Singletons such as the CRS or a distance map are corrected with
         ``new()`` on their parent. ``new`` must be the same type as ``old``.
@@ -2430,7 +2428,7 @@ class Inventory(InventoryModel):
                                 "optical_components": swap(path.optical_components),
                                 "geometry": swap(path.geometry),
                                 "coupling": swap(path.coupling),
-                                "annotations": swap(path.annotations),
+                                "labels": swap(path.labels),
                             }
                         )
                     )

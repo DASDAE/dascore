@@ -405,7 +405,7 @@ def check_stampable(name: str, rows: pd.DataFrame) -> None:
     """
     Refuse a stamp which would overwrite the plan's own bookkeeping.
 
-    An annotation group may be named anything the inventory does not
+    A label group may be named anything the inventory does not
     reserve, and the stamp is assigned onto the outputs — so a group
     called `output_id` would replace the column binding each output to
     its members, and one called `time_min` an envelope. Overwriting a
@@ -620,9 +620,9 @@ def _fill_from_intervals(distances, intervals, values, kind):
     return np.asarray(["" if x is None else x for x in out], dtype=str)
 
 
-def _get_annotation_coord(path, group, distances):
-    """Return the coordinate values of one annotation group."""
-    items = [x for x in path.annotations if x.group == group]
+def _get_label_coord(path, group, distances):
+    """Return the coordinate values of one label group."""
+    items = [x for x in path.labels if x.group == group]
     if not items:
         return None
     kind = value_kind(items[0].value)
@@ -661,7 +661,7 @@ def _get_geometry_coord(inventory, path, label, distances):
     crs = inventory.coordinate_reference_system
     # A label this CRS does not define is a name the inventory has no answer
     # for, which is on_missing's business rather than an error of its own --
-    # a named annotation group the inventory lacks already behaves that way.
+    # a named label group the inventory lacks already behaves that way.
     try:
         index = crs.axis_index(label)
     except InvalidInventoryError:
@@ -708,7 +708,7 @@ def get_coord_values(inventory, path, name, distances):
             return coord
     if (coord := _get_geometry_column_coord(path, name, distances)) is not None:
         return coord
-    return _get_annotation_coord(path, name, distances)
+    return _get_label_coord(path, name, distances)
 
 
 # --- epoch resolution over index rows ---------------------------------
