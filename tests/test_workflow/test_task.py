@@ -124,6 +124,17 @@ class TestFingerprint:
         """
         assert ScaleTask(factor=2).fingerprint == "761d418c84549e16"
 
+    def test_hard_coded_with_tagged_values(self):
+        """
+        A parameter the serializer tags is pinned as well.
+
+        The plain values above go through the encoding unchanged, so they
+        cannot see a change in how a tagged one -- an array, a time -- is
+        written; this pins that half.
+        """
+        task_ = TimedValueTask(when=np.datetime64("2020-01-01"), where=np.arange(3))
+        assert task_.fingerprint == "53791ea82cf3fe6d"
+
     def test_params_matter(self):
         """Two different calls are two different tasks."""
         assert ScaleTask(factor=2).fingerprint != ScaleTask(factor=3).fingerprint

@@ -95,10 +95,14 @@ class Task(DascoreBaseModel):
         within a package nor a faster kernel makes an operation a different
         operation.
         """
+        # The parameters go in as the objects they are: `digest` encodes
+        # what it is given, and encoding them here as well would put every
+        # tagged value -- an array, a time, a quantity -- through the
+        # escape which exists for a mapping that spells a tag itself.
         payload = {
             "task": _qualified_tag(type(self)),
             _VERSION_KEY: self.__version__,
-            _PARAMS_KEY: encode(self._params()),
+            _PARAMS_KEY: self._params(),
         }
         return digest(payload)
 
