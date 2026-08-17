@@ -17,7 +17,13 @@ bounding region so table operations work whatever its geometry is.
 from __future__ import annotations
 
 import datetime
+import json
+
+# Whole rather than by name: this module's own Path is a geometry.
+import pathlib
+import re
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from typing import Annotated, Any, ClassVar, Literal, NamedTuple
 
 import numpy as np
@@ -48,6 +54,7 @@ from dascore.models import (
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
+from dascore.utils.tables import parse_cell
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # Columns any set may carry, whatever dimensions it declares.
@@ -72,6 +79,15 @@ _VERTEX_KINDS = {"path": 2, "polygon": 3}
 
 # The vertices frame's own scaffolding; every other column is a dimension.
 _VERTEX_COLUMNS = ("id", "seq")
+
+# The three parts a stored set spells itself with, and the suffixes each
+# takes. The loader reads these names; `save` writes them, and clears the
+# spellings it supersedes, which is why both need the whole list.
+ATTRS_STEM = "attrs"
+ANNOTATION_STEM = "annotations"
+VERTEX_STEM = "vertices"
+TABLE_SUFFIX = ".csv"
+OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
 # What a range column is spelled with.
 _START, _END = "_start", "_end"
@@ -112,10 +128,11 @@ def _document(value):
 
 
 # A coordinate may be a time, which json has no type for. Written as the
-# string DASCore writes every datetime as; reading it back as a time again
-# is the loader's job, since it knows what each dimension holds. One
-# serializer rather than two stacked: a python-mode dump is what equality
-# compares and what `new` rebuilds from, so it keeps the values themselves.
+# string DASCore writes every datetime as; `_coordinate` reads that
+# spelling back, so a document holds the coordinates it was dumped from
+# without anything downstream having to know which dimension is a time.
+# One serializer rather than two stacked: a python-mode dump is what
+# equality compares and what `new` rebuilds from, so it keeps the values.
 def _serialize_coordinates(value, info):
     """Write a mapping of coordinates, as a document only in json mode."""
     if info.mode != "json":
@@ -123,12 +140,47 @@ def _serialize_coordinates(value, info):
     return {k: [_document(x) for x in values] for k, values in value.items()}
 
 
+# Every spelling `to_str` gives a datetime64 from a whole date down. Numpy
+# writes only the fields the value's unit carries, so a `datetime64[m]` is
+# '2020-01-01T12:30' with no seconds to match, and requiring them read an
+# ordinary pick time back as a string. A bare year or month is left out on
+# purpose: '2020' is as readily a label as a time, and nothing tells them
+# apart.
+_DATETIME_TEXT = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}(:\d{2}(:\d{2}(\.\d+)?)?)?)?$")
+
+
+def _coordinate(value):
+    """Read one coordinate, a datetime written as text becoming one again."""
+    if not (isinstance(value, str) and _DATETIME_TEXT.match(value)):
+        return value
+    # Shaped like a date without being one: a label reading '2020-13-45'
+    # is still the label it was written as.
+    with suppress(ValueError, TypeError):
+        return to_datetime64(value)
+    return value
+
+
+def _read_coordinates(value):
+    """Read a mapping of coordinate sequences."""
+    if not isinstance(value, Mapping):
+        return value
+    return {k: [_coordinate(x) for x in iterate(v)] for k, v in value.items()}
+
+
+def _read_place(value):
+    """Read a mapping of one coordinate per dimension."""
+    if not isinstance(value, Mapping):
+        return value
+    return {k: _coordinate(v) for k, v in value.items()}
+
+
 _freeze_map = AfterValidator(lambda x: FrozenDict(x))
 _write_map = PlainSerializer(_serialize_coordinates, return_type=dict)
+_read_map = BeforeValidator(_read_coordinates)
 
-Bounds = Annotated[Mapping[str, tuple[Any, Any]], _freeze_map, _write_map]
+Bounds = Annotated[Mapping[str, tuple[Any, Any]], _read_map, _freeze_map, _write_map]
 
-Vertices = Annotated[Mapping[str, tuple[Any, ...]], _freeze_map, _write_map]
+Vertices = Annotated[Mapping[str, tuple[Any, ...]], _read_map, _freeze_map, _write_map]
 
 
 def _serialize_place(value, info):
@@ -140,6 +192,7 @@ def _serialize_place(value, info):
 
 Point = Annotated[
     Mapping[str, Any],
+    BeforeValidator(_read_place),
     _freeze_map,
     PlainSerializer(_serialize_place, return_type=dict),
 ]
@@ -614,13 +667,16 @@ class AnnotationSet:
             attrs, dims, creation_info, acquisition_key, history, columns
         )
         frame = _coerce_frame(data, "annotations")
+        frame = _normalize_blanks(_normalize_times(frame, self._attrs.dims))
         spellings = _read_spellings(frame, self._attrs.dims)
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
         _check_values(frame)
         ids = _check_ids(frame)
-        _check_basis(frame, self._attrs.dims)
-        vertex_frame = _coerce_frame(vertices, "vertices")
+        frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
+        vertex_frame = _normalize_times(
+            _coerce_frame(vertices, "vertices"), self._attrs.dims
+        )
         self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
         self._df = _fill_vertex_bounds(frame, self._vertices, spellings)
         # Read again: filling a derived bounding region adds the range
@@ -646,6 +702,95 @@ class AnnotationSet:
     def to_vertices(self) -> pd.DataFrame:
         """Return the vertices of every path and polygon as a tidy dataframe."""
         return self._vertices.copy()
+
+    # --- writing the set out
+
+    def to_csv(self, path=None) -> str:
+        """
+        Return the annotations as CSV text, optionally writing it to a path.
+
+        A bare table states one grain, so a set holding vertices is written
+        with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
+        this is the spelling for a set of regions. The set's dimensions are
+        not part of the table, so reading one back states them again.
+
+        Parameters
+        ----------
+        path
+            Where to write the text, or None to only return it.
+        """
+        if not self._vertices.empty:
+            msg = (
+                "This set holds vertices, which a bare table has no row for. "
+                "Save it as a directory, which states its vertices beside its "
+                "annotations."
+            )
+            raise ParameterError(msg)
+        return _write_table(self._df, path)
+
+    def save(self, path) -> pathlib.Path:
+        """
+        Write the set to a directory, creating it if needed.
+
+        The directory states the set in three parts: what it is and which
+        dimensions it holds, its annotations, and -- where any path or
+        polygon needs them -- its vertices. It reads back through
+        [dascore.annotations](`dascore.annotations`).
+
+        The attributes are written as JSON rather than as YAML, so storing
+        a set needs nothing beyond the standard library; a set authored by
+        hand may spell them in YAML, which reads back the same.
+
+        Writing states the whole directory, so a part this set does not
+        have is removed rather than left behind. A stale vertices table, or
+        the YAML the attributes used to be spelled in, would otherwise sit
+        beside what was written and leave a directory which loaded before
+        the save refusing to load after it.
+
+        Parameters
+        ----------
+        path
+            The directory to write into.
+
+        Returns
+        -------
+        The directory written to, so a save reads straight back.
+        """
+        # Everything is spelled out before the directory is touched: a
+        # table which refuses to be written -- an ambiguous value does --
+        # would otherwise raise with the stale parts already deleted and
+        # the attributes already replaced, leaving half a set behind.
+        # Defaults are dropped from the document, so it says what the set
+        # says; dims has no default, so it is always written, and the
+        # attributes name their own model, which is what the file holds.
+        document = self._attrs.model_dump(mode="json", exclude_defaults=True)
+        annotation_text = _write_table(self._df)
+        vertex_text = None if self._vertices.empty else _write_table(self._vertices)
+        directory = pathlib.Path(path)
+        directory.mkdir(parents=True, exist_ok=True)
+        vertex_table = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
+        attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
+        # Only the spellings this format claims: a notes.txt or an
+        # attrs.bak beside them participates in no convention and is not
+        # this function's to delete. The suffix is matched without regard
+        # to case, as the loader matches it.
+        superseded = [
+            x
+            for x in directory.iterdir()
+            if x.stem == ATTRS_STEM
+            and x.suffix.casefold() in OBJECT_SUFFIXES
+            and x != attrs_file
+        ]
+        if vertex_text is None:
+            superseded.append(vertex_table)
+        for stale in superseded:
+            stale.unlink(missing_ok=True)
+        with open(attrs_file, "w") as stream:
+            json.dump(document, stream, indent=2)
+        _write_text(annotation_text, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
+        if vertex_text is not None:
+            _write_text(vertex_text, vertex_table)
+        return directory
 
     # --- what the set holds
 
@@ -824,9 +969,18 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
             raise ParameterError(msg) from error
         # Compared by name rather than by identity: a column documented as
         # `category` says it is categorical, not which categories it holds,
-        # and the two dtypes are otherwise unequal. Names still tell a
-        # datetime64[ns] from a datetime64[us].
+        # and the two dtypes are otherwise unequal.
         if declared.name != actual.name:
+            # A time is held at nanoseconds whatever it arrived as, so
+            # another unit is not a column this set could ever hold, and
+            # saying it "holds datetime64[ns]" reads as a mistake the
+            # caller could correct by supplying different data.
+            if declared.kind in "Mm":
+                msg = (
+                    f"The column {name!r} states dtype {column.dtype}, but a set "
+                    f"holds every time at nanoseconds: state {actual} instead."
+                )
+                raise ParameterError(msg)
             msg = f"The column {name!r} states dtype {column.dtype} but holds {actual}."
             raise ParameterError(msg)
 
@@ -1149,12 +1303,115 @@ def _freeze(value):
     return _scalar(value)
 
 
-def _check_basis(frame, dims) -> None:
-    """Read every stated curve at load, so a bad one is not found later."""
+def _normalize_basis(frame, dims) -> pd.DataFrame:
+    """
+    Replace every basis cell with the curve it states.
+
+    Reading them at load is what catches a bad one before a row is asked
+    for; keeping what was read is what makes a set hold one spelling of a
+    curve, so a set written out and read back is the set it was rather
+    than the same curves spelled as documents.
+    """
     if "basis" not in frame.columns:
-        return
-    for value in frame["basis"]:
-        _read_basis(value, dims)
+        return frame
+    read = [_read_basis(x, dims) for x in frame["basis"]]
+    return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
+
+
+def _states_times(series: pd.Series) -> bool:
+    """Whether every cell a column states is a datetime written as text."""
+    stated = [x for x in series if _stated(x)]
+    return bool(stated) and all(
+        isinstance(x, str) and _DATETIME_TEXT.match(x) for x in stated
+    )
+
+
+def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFrame:
+    """
+    Hold every time at nanoseconds, the resolution DASCore keeps them at.
+
+    A column arriving at another resolution states the same times, but
+    everything which reads one back -- a stored table, a coordinate, a
+    curve -- states them at DASCore's, so a set which kept both spellings
+    would differ from itself over nothing.
+
+    A dimension column holding times as *text* is read as times for the
+    same reason: the geometry a row builds reads that spelling back, so a
+    frame which kept the text would disagree with the region built from
+    it about what the row says.
+    """
+    spelled = {x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")}
+    changed = {}
+    for name in frame.columns:
+        series = frame[name]
+        kind = getattr(series.dtype, "kind", "")
+        if kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
+            changed[name] = to_datetime64(series)
+        elif kind == "m" and series.dtype != np.dtype("timedelta64[ns]"):
+            changed[name] = to_timedelta64(series)
+        elif str(name) in spelled and _states_times(series):
+            changed[name] = to_datetime64(series.astype(str)).where(series.notna())
+    if not changed:
+        return frame
+    # Assigned by item rather than by keyword: a column need not be named
+    # anything a keyword can spell.
+    out = frame.copy()
+    for name, series in changed.items():
+        out[name] = series
+    return out
+
+
+def _normalize_tags(frame) -> pd.DataFrame:
+    """
+    Replace every tags cell with the tags it states, one spelling.
+
+    A comma is what separates one tag from the next, so a tag holding one
+    is refused rather than quietly becoming two the next time the set is
+    read.
+    """
+    if "tags" not in frame.columns:
+        return frame
+    read = [_read_tags(x) or None for x in frame["tags"]]
+    split = sorted({x for tags in read if tags for x in tags if "," in x})
+    # Held as `_read_tags` will read them back: the writer joins with a
+    # comma and the reader strips and drops the empties, so a tag padded
+    # with spaces or a tag holding nothing would not survive being
+    # written down.
+    read = [
+        tuple(y.strip() for y in x if y.strip()) or None if x else None for x in read
+    ]
+    if split:
+        listed = ", ".join(repr(x) for x in split)
+        msg = (
+            f"The tag(s) {listed} hold a comma, which is what separates one "
+            "tag from the next; a tag is one label."
+        )
+        raise ParameterError(msg)
+    return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
+
+
+def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Read a cell holding the empty string as stating nothing.
+
+    A table writes an unset cell and a cell holding the empty string the
+    same way, and reads that back as unset, so a set says unset for both
+    rather than holding a value which cannot survive being written down.
+    """
+    changed = {}
+    for name in frame.columns:
+        series = frame[name]
+        if getattr(series.dtype, "kind", "") not in "OTU":
+            continue
+        blank = series.map(lambda x: isinstance(x, str) and not x)
+        if blank.any():
+            changed[name] = series.where(~blank, None)
+    if not changed:
+        return frame
+    out = frame.copy()
+    for name, series in changed.items():
+        out[name] = series
+    return out
 
 
 def _read_basis(value, dims):
@@ -1194,6 +1451,100 @@ def _read_tags(value) -> tuple[str, ...]:
     # A lone value is one tag; a cell holding a number is not a mistake,
     # it is a label which happens to be spelled as one.
     return (str(value),)
+
+
+def _refuse_ambiguous_values(frame: pd.DataFrame) -> None:
+    """
+    Refuse a value a table would read back as a different kind.
+
+    An extra losing its type is a documented cost of a format with none,
+    but `value` is a column the set models and checks -- a group holds one
+    kind of value -- so a string reading back as a boolean or a number can
+    make a group mix kinds, leaving a directory this library wrote and
+    then refuses to read. Better to refuse the write.
+    """
+    if "value" not in frame.columns:
+        return
+    ambiguous = sorted(
+        {x for x in frame["value"] if isinstance(x, str) and parse_cell(x) != x}
+    )
+    if ambiguous:
+        listed = ", ".join(repr(x) for x in ambiguous)
+        msg = (
+            f"The value(s) {listed} are text a table would read back as a "
+            "boolean or a number, and a group holds one kind of value. A "
+            "table has no way to mark a cell as text; spell the value as "
+            "something only text can be."
+        )
+        raise ParameterError(msg)
+
+
+def _write_table(frame: pd.DataFrame, path=None) -> str:
+    """Return a frame as CSV text, optionally writing it to a path."""
+    _refuse_ambiguous_values(frame)
+    spelled = pd.DataFrame({name: _writable(frame[name]) for name in frame.columns})
+    text = spelled.to_csv(index=False)
+    if path is not None:
+        _write_text(text, path)
+    return text
+
+
+def _write_text(text: str, path) -> None:
+    """Write table text exactly as it was spelled."""
+    # newline="" so the line terminators pandas wrote are the ones which
+    # land, rather than each one growing a carriage return on Windows.
+    with open(path, "w", newline="", encoding="utf-8") as stream:
+        stream.write(text)
+
+
+def _writable(series: pd.Series) -> pd.Series:
+    """Return one column as the text a table states it with."""
+    return series.map(_writable_cell)
+
+
+def _json_default(value):
+    """
+    Spell a nested value json has no type of its own for.
+
+    A hook which hands back what it was given is re-dispatched until json
+    reports a circular reference, so anything this cannot spell goes in as
+    its text: a bare `ValueError: Circular reference detected` names
+    neither the cell nor the file it was being written to.
+    """
+    spelled = _writable_cell(value)
+    return spelled if spelled is not value else str(value)
+
+
+def _writable_cell(value):
+    """
+    Spell one cell the way a table holds it.
+
+    A value a CSV has no column shape for is written as its own document:
+    a basis as the JSON its curve dumps, a sequence as the comma-separated
+    list `tags` is read from. An extra holding a nested object survives as
+    that text rather than as the object, which is what a table can say.
+
+    The same holds for an extra holding a time: only a declared dimension
+    is known to hold times, so only it is read back as one, and an extra
+    keeps the text it was written as.
+    """
+    if not _stated(value):
+        return value
+    # Through _scalar first: mapping a datetime column hands over pandas
+    # Timestamps, which str() spells with a space where numpy uses a T,
+    # and only the numpy spelling reads back as a time.
+    value = _scalar(value)
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return to_str(value)
+    if isinstance(value, AnnotationBasis):
+        return json.dumps(value.model_dump(mode="json"))
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return json.dumps(dict(value), default=_json_default)
+    if isinstance(value, Iterable):
+        return ", ".join(str(_writable_cell(x)) for x in value)
+    return value
 
 
 def _scalar(value):

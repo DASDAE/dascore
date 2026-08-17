@@ -283,13 +283,23 @@ class TestColumns:
             == 2
         )
 
-    def test_datetime_unit_still_distinguished(self):
-        """Comparing by name keeps a nanosecond column from passing as microsecond."""
-        frame = pd.DataFrame({"when": TIMES[:1]})
-        with pytest.raises(ParameterError, match="states dtype"):
+    def test_datetime_unit_is_always_nanoseconds(self):
+        """A set holds times at nanoseconds, so another unit names no column
+        it could hold, and the error says so rather than blaming the data.
+        """
+        frame = pd.DataFrame({"when": np.array(["2020-01-01"], dtype="datetime64[us]")})
+        with pytest.raises(ParameterError, match="every time at nanoseconds"):
             AnnotationSet(
                 frame, dims=DIMS, columns={"when": {"dtype": "datetime64[us]"}}
             )
+
+    def test_a_declared_nanosecond_column(self):
+        """The unit a set does hold is the one which may be declared."""
+        frame = pd.DataFrame({"when": np.array(["2020-01-01"], dtype="datetime64[us]")})
+        out = AnnotationSet(
+            frame, dims=DIMS, columns={"when": {"dtype": "datetime64[ns]"}}
+        )
+        assert out.to_dataframe()["when"].dtype == np.dtype("datetime64[ns]")
 
     def test_unreadable_dtype_refused(self):
         """A dtype naming nothing says so, rather than raising numpy's error."""
@@ -379,6 +389,22 @@ class TestTags:
     def test_absent(self):
         """No tags is an empty tuple, not None."""
         assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].tags == ()
+
+    def test_a_padded_tag_is_held_stripped(self):
+        """Tags are held as they read back, so padding does not survive."""
+        out = AnnotationSet(pd.DataFrame({"tags": [(" a", "b ")]}), dims=DIMS)
+        assert out.to_dataframe()["tags"][0] == ("a", "b")
+
+    def test_an_empty_tag_is_no_tag(self):
+        """A tag holding nothing cannot be written down, so it is not held."""
+        out = AnnotationSet(pd.DataFrame({"tags": [("", "b")]}), dims=DIMS)
+        assert out[0].tags == ("b",)
+
+    def test_a_tag_holding_a_comma(self):
+        """A comma separates tags, so a tag holding one would become two."""
+        frame = pd.DataFrame({"tags": [("a,b", "c")]})
+        with pytest.raises(ParameterError, match="hold a comma"):
+            AnnotationSet(frame, dims=DIMS)
 
 
 class TestIdentity:
@@ -1111,6 +1137,53 @@ class TestSerialization:
         path = Path(region=Region(bounds={}), vertices={"time": (TIMES[0], TIMES[1])})
         written = path.model_dump(mode="json")["vertices"]["time"]
         assert written == [str(TIMES[0]), str(TIMES[1])]
+
+    def test_datetime_bounds_read_back_as_times(self):
+        """A time written as text is a time again, not the text."""
+        region = Region(bounds={"time": (TIMES[0], TIMES[2])})
+        assert Region(**region.model_dump(mode="json")) == region
+
+    def test_datetime_vertices_read_back_as_times(self):
+        """The same holds for a path's vertices and a line's endpoints."""
+        line = Line(start={"time": TIMES[0]}, end={"time": TIMES[2]})
+        path = Path(
+            region=Region(bounds={}),
+            vertices={"time": (TIMES[0], TIMES[1])},
+            basis=line,
+        )
+        assert Path(**path.model_dump(mode="json")) == path
+
+    def test_a_label_is_not_a_time(self):
+        """Only the spelling DASCore writes a datetime with is read as one."""
+        region = Region(bounds={"stage": ("2020-13-45", "before")})
+        assert region.bounds["stage"] == ("2020-13-45", "before")
+
+    @pytest.mark.parametrize("model", [Region, Line])
+    def test_coordinates_which_are_not_a_mapping(self, model):
+        """A coordinate map which is not a map is pydantic's to refuse."""
+        with pytest.raises(ValidationError, match=r"valid dictionary|Extra inputs"):
+            model(bounds="everywhere", start="here", end="there")
+
+    @pytest.mark.parametrize(
+        "spelling",
+        ["2020-01-01", "2020-01-01T12", "2020-01-01T12:30", "2020-01-01T12:30:45"],
+    )
+    def test_every_resolution_reads_back_as_a_time(self, spelling):
+        """Numpy writes only the fields a unit carries, and all of them read
+        back: an hour- or minute-resolution pick is an ordinary one.
+        """
+        time = np.datetime64(spelling)
+        region = Region(bounds={"time": (time, time)})
+        assert Region(**region.model_dump(mode="json")) == region
+        assert isinstance(region.bounds["time"][0], np.datetime64)
+
+    @pytest.mark.parametrize("label", ["2020", "2020-01", "spring", "12:30"])
+    def test_a_partial_date_is_not_a_time(self, label):
+        """A label which is not a whole date stays the label it was; nothing
+        distinguishes a bare year from a string spelled like one.
+        """
+        region = Region(bounds={"stage": (label, label)})
+        assert region.bounds["stage"] == (label, label)
 
     def test_geometry_kinds_are_distinct(self):
         """A polygon is not a path which happens to close."""

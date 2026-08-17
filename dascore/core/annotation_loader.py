@@ -1,0 +1,436 @@
+"""
+Read annotation sets from storage.
+
+A set is stored either as a directory naming what it holds -- always
+``annotations.csv``, one row per annotation; ``attrs`` where it states its
+own dimensions and provenance; ``vertices.csv`` where any path or polygon
+needs one -- or as a bare table whose dimensions the caller states.
+
+CSV has no types, so this module decides what each column holds before the
+models see it: a dimension column is numbers or times, a ``basis`` cell is
+the JSON document its curve dumps, and every other cell is read the way it
+was written. Tables are read strictly, through
+[`read_table`](`dascore.utils.tables.read_table`), and the neutral errors
+that raises are named as annotation errors here, at the one boundary which
+knows the format.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from pydantic import ValidationError
+
+from dascore.core.annotations import (
+    _END,
+    _START,
+    _VERTEX_COLUMNS,
+    ANNOTATION_STEM,
+    ATTRS_STEM,
+    OBJECT_SUFFIXES,
+    RESERVED_COLUMNS,
+    TABLE_SUFFIX,
+    VERTEX_STEM,
+    AnnotationSet,
+)
+from dascore.exceptions import InvalidAnnotationError, ParameterError
+from dascore.models.registry import TAG_FIELD
+from dascore.utils.misc import iterate, optional_import
+from dascore.utils.paths import quote_path
+from dascore.utils.tables import parse_cell, read_table
+from dascore.utils.time import to_datetime64
+
+# What an attrs file declares itself to be; the model writes its own tag.
+_SET_TAG = "AnnotationSetAttrs"
+
+# Columns whose cells stay text however they are spelled: an id which
+# looks like a number is still the label the vertices name it by. Derived
+# rather than listed, so a column added to the reserved set is text by
+# default rather than silently falling through to `parse_cell`. `value`
+# holds whichever kind its group holds, and `basis` holds a document.
+_TEXT_COLUMNS = frozenset(RESERVED_COLUMNS) - {"value", "basis"}
+
+# The column a vertex states its place in the order by; a number.
+_ORDINAL = _VERTEX_COLUMNS[1]
+
+
+def _read_object(path: Path) -> dict[str, Any]:
+    """Parse one YAML or JSON object file into a mapping."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as error:
+        msg = f"Could not read {quote_path(path)}: {error}."
+        raise ParameterError(msg) from error
+    # The suffix is casefolded, as the inventory casefolds its own: an
+    # attrs.JSON is the file attrs.json would be, and reading it as YAML
+    # for its spelling would fail on a document which is not wrong. The
+    # stem is not: the part names are exact, as every other name a format
+    # reserves is.
+    if path.suffix.casefold() == OBJECT_SUFFIXES[0]:
+        try:
+            data = json.loads(text)
+        except ValueError as error:
+            msg = f"Could not parse JSON from {quote_path(path)}: {error}."
+            raise ParameterError(msg) from error
+    else:
+        yaml = optional_import("yaml", required_for="YAML annotation storage")
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            msg = f"Could not parse YAML from {quote_path(path)}: {error}."
+            raise ParameterError(msg) from error
+    if not isinstance(data, Mapping):
+        msg = f"{quote_path(path)} holds no mapping, so it states no attributes."
+        raise ParameterError(msg)
+    return dict(data)
+
+
+def _one_spelling(directory: Path, stem: str, suffixes: Sequence[str]) -> Path | None:
+    """Return the one file a stem names, or None; two spellings raise."""
+    found = [
+        x
+        for x in sorted(directory.iterdir())
+        if x.stem == stem and x.suffix.casefold() in suffixes
+    ]
+    if len(found) > 1:
+        listed = ", ".join(sorted(x.name for x in found))
+        msg = (
+            f"{quote_path(directory)} states {stem} more than once: {listed}. "
+            "A set spells each of its parts once."
+        )
+        raise ParameterError(msg)
+    return found[0] if found else None
+
+
+def _read_attrs(directory: Path) -> dict[str, Any]:
+    """Return the attributes a set directory states, which may be none."""
+    path = _one_spelling(directory, ATTRS_STEM, OBJECT_SUFFIXES)
+    if path is None:
+        return {}
+    data = _read_object(path)
+    declared = data.pop(TAG_FIELD, None)
+    if declared is not None and declared != _SET_TAG:
+        msg = (
+            f"{quote_path(path)} declares {declared!r}, but the attributes of "
+            f"an annotation set declare {_SET_TAG!r}."
+        )
+        raise ParameterError(msg)
+    return data
+
+
+def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
+    """
+    Read a dimension column as the numbers or times its cells state.
+
+    Numbers are tried first because every datetime spelling this writes is
+    an ISO string, which is not a number, while seconds from the epoch are
+    a number a distance column would lose to a date.
+    """
+    stated = series.notna()
+    if not stated.any():
+        return series
+    with suppress(TypeError, ValueError):
+        return pd.to_numeric(series)
+    try:
+        values = to_datetime64(series[stated].to_numpy(dtype=str))
+    except (TypeError, ValueError) as error:
+        msg = (
+            f"The column {series.name!r} of {quote_path(path)} states neither "
+            f"numbers nor times: {error}."
+        )
+        raise ParameterError(msg) from error
+    out = pd.Series(
+        np.datetime64("NaT", "ns"), index=series.index, dtype="datetime64[ns]"
+    )
+    out[stated] = values
+    return out
+
+
+def _read_ordinal(series: pd.Series, path: Path) -> pd.Series:
+    """Read the vertex order column as the numbers it states."""
+    try:
+        return pd.to_numeric(series)
+    except (TypeError, ValueError) as error:
+        msg = (
+            f"{quote_path(path)} has a non-numeric {_ORDINAL}: {error}. A vertex "
+            "states its place in the order as a number."
+        )
+        raise ParameterError(msg) from error
+
+
+def _read_basis(series: pd.Series, path: Path) -> pd.Series:
+    """Read a basis column as the documents its cells hold."""
+
+    def read(cell):
+        if not isinstance(cell, str):
+            return cell
+        try:
+            return json.loads(cell)
+        except ValueError as error:
+            msg = (
+                f"A basis in {quote_path(path)} is not a JSON document: {error}. "
+                "A stored basis is what its curve dumps."
+            )
+            raise ParameterError(msg) from error
+
+    return series.map(read)
+
+
+def _dimension_spellings(dims: Sequence[str]) -> frozenset[str]:
+    """Every column name a declared dimension may be spelled with."""
+    return frozenset(x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}"))
+
+
+def _read_cells(
+    frame: pd.DataFrame, dims: Sequence[str], path: Path, ordered: bool = False
+) -> pd.DataFrame:
+    """
+    Read a table's text cells as the values each column holds.
+
+    Only the vertices are ordered, so only they read ``seq`` as the number
+    it is: the annotations table does not reserve that name, and an
+    annotation carrying its own ``seq`` means whatever it says.
+    """
+    spellings = _dimension_spellings(dims)
+    out = {}
+    for name in frame.columns:
+        series = frame[name]
+        if str(name) in spellings:
+            out[name] = _read_dimension(series, path)
+        elif ordered and str(name) == _ORDINAL:
+            out[name] = _read_ordinal(series, path)
+        elif str(name) == "basis":
+            out[name] = _read_basis(series, path)
+        elif str(name) in _TEXT_COLUMNS or series.isna().all():
+            # A column no row states says nothing about what it holds, and
+            # reading its emptiness as a type would invent one.
+            out[name] = series
+        else:
+            out[name] = series.map(_read_extra)
+    return pd.DataFrame(out)
+
+
+def _read_extra(cell):
+    """
+    Read one cell of a column the set does not model.
+
+    A cell reading 'nan' or 'inf' parses as a float which every later
+    reader treats as unset, so the value would be deleted rather than
+    retyped; those stay the text the table plainly states.
+    """
+    if not isinstance(cell, str):
+        return cell
+    value = parse_cell(cell)
+    if isinstance(value, float) and not math.isfinite(value):
+        return cell
+    return value
+
+
+def _read_set_table(
+    path: Path, dims: Sequence[str], what: str, ordered: bool = False
+) -> pd.DataFrame | None:
+    """
+    Read one of a set's tables, with its cells typed.
+
+    A table stating nothing at all is what a set of no annotations writes,
+    so it reads back as none rather than as a table with no columns.
+    """
+    if _is_blank(path):
+        return None
+    return _read_cells(read_table(path, what=what), dims, path, ordered=ordered)
+
+
+def _is_blank(path: Path) -> bool:
+    """Whether a table holds nothing but whitespace."""
+    try:
+        return not path.read_text(encoding="utf-8-sig").strip()
+    except (OSError, UnicodeDecodeError):
+        # Unreadable is the table reader's to name, with its own message.
+        return False
+
+
+def _refuse_stray_tables(directory: Path) -> None:
+    """
+    Refuse a table whose name names no part of a set.
+
+    A ``vertexes.csv`` beside an ``annotations.csv`` claims to participate
+    in this convention and gets it wrong, which is worth more than being
+    quietly skipped.
+    """
+    known = {ANNOTATION_STEM, VERTEX_STEM}
+    stray = sorted(
+        x.name for x in directory.glob(f"*{TABLE_SUFFIX}") if x.stem not in known
+    )
+    if stray:
+        msg = (
+            f"{quote_path(directory)} holds the table(s) {', '.join(stray)}, which "
+            f"name no part of a set. A set states {ANNOTATION_STEM}{TABLE_SUFFIX} "
+            f"and, where it has vertices, {VERTEX_STEM}{TABLE_SUFFIX}."
+        )
+        raise ParameterError(msg)
+
+
+def _refuse_overrides(what: str, **stated) -> None:
+    """
+    Refuse an argument a source states for itself.
+
+    Silently dropping one is the worse failure: a caller passing
+    ``dims=patch.dims`` to whatever it was handed would get the source's
+    dimensions from one kind of source and its own from another, with
+    nothing said either way.
+    """
+    given = sorted(k for k, v in stated.items() if v is not None)
+    if given:
+        msg = (
+            f"{', '.join(given)} was given for {what}, which states it. "
+            "Read it and change it, rather than reading it as something else."
+        )
+        raise ParameterError(msg)
+
+
+def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
+    """Load the set a directory holds."""
+    # Both are the directory's to state, and passing them through would
+    # reach AnnotationSet twice as a bare TypeError.
+    _refuse_overrides(
+        "a set directory",
+        attrs=kwargs.pop("attrs", None),
+        vertices=kwargs.pop("vertices", None),
+    )
+    attrs = _read_attrs(directory)
+    # Dimensions too, once the directory has stated them: reading the
+    # cells against other dimensions would type them differently and
+    # build a set which is not the one stored here.
+    if attrs.get("dims"):
+        _refuse_overrides("a directory stating its own dimensions", dims=dims)
+    _refuse_stray_tables(directory)
+    table = directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}"
+    if not table.exists():
+        msg = (
+            f"{quote_path(directory)} holds no {ANNOTATION_STEM}{TABLE_SUFFIX}, "
+            "so it states no annotations."
+        )
+        raise ParameterError(msg)
+    stated = _declared_dims(attrs, dims, directory)
+    frame = _read_set_table(table, stated, "no annotations")
+    vertex_path = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
+    vertices = None
+    if vertex_path.exists():
+        vertices = _read_set_table(vertex_path, stated, "no vertices", ordered=True)
+    # The read dimensions rather than the given ones: they are the same
+    # names, already a tuple, so a file spelling one dimension as a bare
+    # string builds the set the same way the constructor would.
+    return AnnotationSet(frame, dims=stated, vertices=vertices, attrs=attrs, **kwargs)
+
+
+def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
+    """Load the set a bare table holds."""
+    if path.suffix.lower() != TABLE_SUFFIX:
+        msg = (
+            f"{quote_path(path)} is not a table an annotation set is read from. "
+            f"A bare set is a {TABLE_SUFFIX} file; a set with vertices is a "
+            "directory."
+        )
+        raise ParameterError(msg)
+    stated = _declared_dims({}, dims, path)
+    return AnnotationSet(
+        _read_set_table(path, stated, "no annotations"), dims=stated, **kwargs
+    )
+
+
+def _declared_dims(attrs: Mapping, dims, source: Path) -> tuple[str, ...]:
+    """
+    Return the dimensions to read a source in: the caller's, else its own.
+
+    The cells cannot be read before this is known -- which columns hold
+    times rather than text is exactly what a dimension decides -- so a
+    source stating none fails here rather than as a puzzling column later.
+    """
+    stated = dims if dims is not None else attrs.get("dims")
+    if not stated:
+        msg = (
+            f"{quote_path(source)} states no dimensions, and none were given. "
+            "Annotations are read in the dimensions they are stated in: write "
+            f"them in {ATTRS_STEM}{OBJECT_SUFFIXES[0]} or pass "
+            "dims=('distance', 'time')."
+        )
+        raise ParameterError(msg)
+    # Through `iterate`, as the set itself reads them: a lone string is one
+    # dimension rather than a sequence of its own letters, and typing the
+    # cells against eight one-character dimensions would fail somewhere far
+    # from here. Refusing it instead would leave the same input accepted
+    # in memory and rejected from a file.
+    return tuple(str(x) for x in iterate(stated))
+
+
+def annotations(
+    source: AnnotationSet | str | os.PathLike | Any = None,
+    dims: Sequence[str] | None = None,
+    **kwargs,
+) -> AnnotationSet:
+    """
+    Load annotations from whatever holds them.
+
+    The one door every source goes through, as
+    [`dascore.spool`](`dascore.spool`) is for patches: a set comes back
+    from a set, a directory, a table on disk, or anything a dataframe can
+    be built from.
+
+    Parameters
+    ----------
+    source
+        An `AnnotationSet`, a path to a set directory or a CSV table, or a
+        dataframe of one row per annotation.
+    dims
+        The patch dimensions the annotations are stated in. Required unless
+        the source states them itself, and overriding it where it does.
+    **kwargs
+        Passed to [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`).
+        A source already holding what one states -- a set, or a directory
+        holding its own attributes and vertices -- refuses it rather than
+        dropping it.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame({"group": ["event"], "distance": [10.0]})
+    >>> picks = dc.annotations(frame, dims=("distance",))
+    >>> len(picks)
+    1
+
+    A set is handed straight back, so a function taking either a set or a
+    path may simply call this on whatever it was given.
+
+    >>> dc.annotations(picks) is picks
+    True
+    """
+    if isinstance(source, AnnotationSet):
+        # A built set states everything these would override, and building
+        # it again from its frame would quietly drop whatever the overrides
+        # did not restate.
+        _refuse_overrides("a set which is already built", dims=dims, **kwargs)
+        return source
+    if isinstance(source, str | os.PathLike):
+        path = Path(source)
+        try:
+            if path.is_dir():
+                return _load_directory(path, dims, **kwargs)
+            if path.exists():
+                return _load_file(path, dims, **kwargs)
+        # ValidationError too: a stored document which does not build the
+        # models is a bad file, and it is named as one here rather than
+        # arriving as pydantic's report on a call the caller did not make.
+        except (ParameterError, ValidationError) as error:
+            raise InvalidAnnotationError(str(error)) from error
+        msg = f"{quote_path(path)} does not exist, so it holds no annotations."
+        raise InvalidAnnotationError(msg)
+    return AnnotationSet(source, dims=dims, **kwargs)
