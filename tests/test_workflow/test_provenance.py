@@ -29,11 +29,19 @@ class MergeTask(Task):
         return sum(numbers)
 
 
+class LaterTask(Task):
+    """A step which runs after another, and is named differently."""
+
+    def run(self, number):
+        """Double a number."""
+        return number * 2
+
+
 @pytest.fixture
 def source_node():
     """A node standing for a patch read from a file."""
     return ProvenanceNode(
-        source=SourceInfo(format="DASDAE", path="/data/first.h5"),
+        source=SourceInfo(format="DASDAE", path="/data/first.h5", key="patch_2"),
         patch_id="first",
     )
 
@@ -49,11 +57,12 @@ def chain(source_node):
         processing_id="one",
     )
     return ProvenanceNode(
-        task=StepTask(value=2),
+        task=LaterTask(),
         parents=(first,),
         input_pairs=(("first", "one"),),
         patch_id="first",
         processing_id="two",
+        backend="numpy",
     )
 
 
@@ -94,7 +103,10 @@ class TestWalk:
 
     def test_steps(self, chain):
         """The steps are the nodes which did something, oldest first."""
-        assert [x.task.value for x in chain.steps()] == [1, 2]
+        assert [type(x.task).__name__ for x in chain.steps()] == [
+            "StepTask",
+            "LaterTask",
+        ]
 
     def test_sources(self, merged):
         """The sources are where the data was read from."""
@@ -114,7 +126,7 @@ class TestDescribe:
 
     def test_lists_the_steps(self, chain):
         """Every step is named, oldest first."""
-        assert chain.describe().splitlines()[1:] == ["StepTask", "StepTask"]
+        assert chain.describe().splitlines()[1:] == ["StepTask", "LaterTask"]
 
     def test_names_the_source(self, chain):
         """The file the data came from is the first line."""
@@ -136,7 +148,7 @@ class TestToPipe:
         """A chain of steps becomes a pipe of the same tasks."""
         pipe = chain.to_pipe()
         assert len(pipe) == 2
-        assert pipe.run(0) == 3
+        assert pipe.run(0) == 2
 
     def test_sources_become_the_pipes_input(self, merged):
         """A step fed only by files takes its inputs from the caller."""
@@ -154,6 +166,15 @@ class TestToPipe:
         """A patch which was only read has no pipe."""
         with pytest.raises(ParameterError, match="no pipe"):
             source_node.to_pipe()
+
+    def test_two_wide_sources_refused(self, source_node):
+        """Two steps reading straight from files cannot both be fed."""
+        others = [ProvenanceNode(source=SourceInfo(path=f"/{x}.h5")) for x in "abc"]
+        first = ProvenanceNode(task=MergeTask(), parents=(source_node, others[0]))
+        second = ProvenanceNode(task=MergeTask(), parents=tuple(others[1:]))
+        both = ProvenanceNode(task=MergeTask(), parents=(first, second))
+        with pytest.raises(ParameterError, match="no way to describe"):
+            both.to_pipe()
 
     def test_mixed_inputs_refused(self, source_node):
         """A step fed by a step and a file at once cannot be described."""
@@ -197,15 +218,40 @@ class TestNodeDocuments:
         """A graph of one source, with no steps, still round trips."""
         rebuilt = ProvenanceNode.from_json(source_node.to_json())
         assert rebuilt.source == source_node.source
+        assert rebuilt.source.key == "patch_2"
+
+    def test_everything_a_node_holds_round_trips(self, chain):
+        """Every field a node holds survives the trip."""
+        rebuilt = ProvenanceNode.from_json(chain.to_json())
+        for name in type(chain).model_fields:
+            if name != "parents":
+                assert getattr(rebuilt, name) == getattr(chain, name)
 
     def test_pickle(self, chain):
         """A graph survives a pickle."""
         rebuilt = pickle.loads(pickle.dumps(chain))
         assert rebuilt.to_pipe() == chain.to_pipe()
 
-    def test_hashable(self, chain):
-        """A node can be put in a set."""
-        assert len({chain, chain}) == 1
+    def test_equal_after_a_round_trip(self, chain):
+        """A node read back is the step it was, and hashes as one."""
+        rebuilt = ProvenanceNode.from_json(chain.to_json())
+        assert rebuilt == chain
+        assert len({rebuilt, chain}) == 1
+
+    def test_different_steps_differ(self, chain, source_node):
+        """Two nodes standing for different steps are not each other."""
+        other = ProvenanceNode(
+            task=StepTask(value=99),
+            parents=(source_node,),
+            patch_id=chain.patch_id,
+            processing_id=chain.processing_id,
+        )
+        assert other != chain
+        assert len({other, chain}) == 2
+
+    def test_not_a_node(self, chain):
+        """Comparison with something else is left to the something else."""
+        assert chain.__eq__("a node") is NotImplemented
 
 
 class TestProvenance:
@@ -248,6 +294,17 @@ class TestProvenance:
         rebuilt = Provenance.from_dict(document)
         assert rebuilt.source_provenance[0].fingerprint == provenance.fingerprint
 
-    def test_hashable(self, provenance):
-        """A record can be put in a set."""
-        assert len({provenance, provenance}) == 1
+    def test_hashed_by_its_pipe(self, provenance, chain):
+        """Two records of one pipe land in the same place in a dict."""
+        again = Provenance.from_pipe(chain.to_pipe(), operator="someone else")
+        assert hash(again) == hash(provenance)
+
+    def test_metadata_cannot_be_edited(self, provenance):
+        """A durable record is durable: nothing about it can be changed."""
+        with pytest.raises(TypeError):
+            provenance.metadata["sneaked"] = 1
+
+    def test_new_fields_are_written(self, provenance):
+        """Every field the record holds reaches its document."""
+        written = set(provenance.to_dict())
+        assert set(type(provenance).model_fields) <= written

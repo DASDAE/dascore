@@ -6,6 +6,7 @@ import pickle
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from pydantic import ValidationError
 
 from dascore.exceptions import ParameterError
 from dascore.workflow import Pipe, Task
@@ -95,6 +96,11 @@ class TestBuilding:
         with pytest.raises(ParameterError, match="not str"):
             AddTask() | "not a task"
 
+    def test_joining_nothing(self):
+        """A pipe cannot be fed by an empty list of branches."""
+        with pytest.raises(ParameterError, match="joined to nothing"):
+            () | JoinTask()
+
 
 class TestRunning:
     """Tests for running a pipe."""
@@ -116,12 +122,37 @@ class TestRunning:
         with pytest.raises(ParameterError, match="one for each"):
             branched.run(1, 2, 3)
 
+    def test_runs_after_its_inputs(self):
+        """A task runs after whatever feeds it, however the pipe is held."""
+        pipe = (AddTask(value=1), TimesTask(value=5)) | JoinTask()
+        order = pipe.sorted_nodes()
+        for node, given in pipe.dependencies.items():
+            for upstream in given:
+                assert order.index(upstream) < order.index(node)
+
     def test_map(self, chain):
         """A pipe runs over an iterable."""
         assert chain.map([1, 2]) == [chain.run(1), chain.run(2)]
 
-    def test_map_with_a_client(self, chain):
-        """A pipe runs over an iterable with something else's workers."""
+    def test_map_uses_the_client(self, chain):
+        """A client, when given one, is what runs the pipe."""
+
+        class Recorder:
+            """Something with a map, which says it was the one used."""
+
+            used = False
+
+            def map(self, func, iterable):
+                """Run the pipe, and remember having done so."""
+                Recorder.used = True
+                return [func(x) for x in iterable]
+
+        assert chain.map([1, 2], client=Recorder()) == [chain.run(1), chain.run(2)]
+        assert Recorder.used
+
+    @pytest.mark.concurrency
+    def test_map_with_a_thread_pool(self, chain):
+        """A pipe runs over an iterable with another thread's workers."""
         with ThreadPoolExecutor(max_workers=2) as pool:
             assert chain.map([1, 2], client=pool) == [chain.run(1), chain.run(2)]
 
@@ -143,6 +174,25 @@ class TestFingerprint:
         second = TimesTask(value=3) | AddTask(value=2)
         assert first.fingerprint != second.fingerprint
 
+    def test_wiring_matters(self):
+        """The same tasks wired differently are different pipes."""
+        chained = AddTask(value=1) | TimesTask(value=5) | JoinTask()
+        branched = (AddTask(value=1), TimesTask(value=5)) | JoinTask()
+        assert set(chained.tasks.values()) == set(branched.tasks.values())
+        assert chained.output.split("#")[0] == branched.output.split("#")[0]
+        assert chained.fingerprint != branched.fingerprint
+
+    def test_input_order_matters(self, branched):
+        """Which branch is fed first is part of what a pipe is."""
+        swapped = Pipe(
+            tasks=branched.tasks,
+            dependencies=branched.dependencies,
+            inputs=branched.inputs[::-1],
+            output=branched.output,
+        )
+        assert swapped.fingerprint != branched.fingerprint
+        assert swapped.run(10, 20) != branched.run(10, 20)
+
     def test_equality(self, chain):
         """Two pipes are equal when they hold the same tasks, wired alike."""
         assert chain == AddTask(value=2) | TimesTask(value=3)
@@ -163,7 +213,7 @@ class TestValidation:
     def test_missing_task(self):
         """A pipe cannot wire a node it does not hold."""
         node = AddTask().fingerprint
-        with pytest.raises(ParameterError, match="not one of its tasks"):
+        with pytest.raises(ValidationError, match="not one of its tasks"):
             Pipe(
                 tasks={node: AddTask()},
                 dependencies={node: ("nowhere",)},
@@ -173,23 +223,40 @@ class TestValidation:
     def test_missing_output(self):
         """A pipe's output has to be one of its tasks."""
         node = AddTask().fingerprint
-        with pytest.raises(ParameterError, match="output"):
+        with pytest.raises(ValidationError, match="output"):
             Pipe(tasks={node: AddTask()}, output="nowhere")
 
     def test_cycle(self):
         """Tasks which feed each other in a circle are refused."""
         first, second = AddTask(value=1), AddTask(value=2)
         one, two = first.fingerprint, second.fingerprint
-        with pytest.raises(ParameterError, match="cycle"):
+        with pytest.raises(ValidationError, match="cycle"):
             Pipe(
                 tasks={one: first, two: second},
                 dependencies={one: (two,), two: (one,)},
                 output=one,
             )
 
-    def test_check_returns_the_pipe(self, chain):
-        """Checking a good pipe hands it back."""
-        assert chain.check() is chain
+    def test_stranded_task(self, chain):
+        """A task whose output reaches nothing is a pipe built wrong."""
+        stranded = AddTask(value=99)
+        with pytest.raises(ValidationError, match="every task has to feed"):
+            Pipe(
+                tasks=dict(chain.tasks) | {stranded.fingerprint: stranded},
+                dependencies=chain.dependencies,
+                inputs=(*chain.inputs, stranded.fingerprint),
+                output=chain.output,
+            )
+
+    def test_inputs_must_be_the_unfed_nodes(self, chain):
+        """A pipe's inputs are exactly the nodes nothing is wired into."""
+        with pytest.raises(ValidationError, match="nothing wired into them"):
+            Pipe(
+                tasks=chain.tasks,
+                dependencies=chain.dependencies,
+                inputs=(chain.output,),
+                output=chain.output,
+            )
 
 
 class TestDocuments:
@@ -206,10 +273,27 @@ class TestDocuments:
         assert rebuilt.run(10) == branched.run(10)
 
     @pytest.mark.parametrize("name", ["pipe.json", "pipe.yaml", "pipe.yml", "pipe"])
-    def test_save_and_load(self, chain, tmp_path, name):
-        """A pipe read back from a file is the same pipe."""
-        path = chain.save(tmp_path / name)
-        assert Pipe.load(path) == chain
+    def test_save_and_load(self, branched, tmp_path, name):
+        """A pipe read back from a file is the same pipe, and runs alike."""
+        path = branched.save(tmp_path / name)
+        loaded = Pipe.load(path)
+        assert loaded == branched
+        # Run as well as compared: a document is free to write the tasks in
+        # another order, and the answer must not depend on which order.
+        assert loaded.run(10, 20) == branched.run(10, 20)
+
+    def test_yaml_is_yaml(self, chain, tmp_path):
+        """A pipe saved as YAML is written as YAML, not as JSON."""
+        text = chain.save(tmp_path / "pipe.yaml").read_text()
+        assert not text.lstrip().startswith("{")
+        assert "tasks:" in text
+
+    def test_edited_document_refused(self, chain, tmp_path):
+        """A document whose fingerprint disagrees with it is refused."""
+        document = chain.to_dict()
+        document["fingerprint"] = "0" * 16
+        with pytest.raises(ParameterError, match="fingerprint"):
+            Pipe.from_dict(document)
 
     def test_save_makes_the_directory(self, chain, tmp_path):
         """Saving into a directory which is not there makes it."""

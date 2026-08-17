@@ -8,9 +8,9 @@ on, written next to the results and read back later.
 A [`ProvenanceNode`](`dascore.workflow.provenance.ProvenanceNode`) is the
 live one: one immutable node per step, holding the task which ran and the
 nodes which fed it. A patch carries the node it came out of, so its whole
-history is reachable from it without a store to look anything up in.
-Building the graph as patches are processed is PR 4a's work; this module
-is the graph itself.
+history is reachable from it without a store to look anything up in. This
+module is the graph; building one as patches are processed comes with the
+patch ids, in a later release.
 """
 
 from __future__ import annotations
@@ -27,14 +27,18 @@ from pydantic import ConfigDict, Field
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
-from dascore.workflow.pipe import COPY_SEP, Pipe, _dump, _parse
+from dascore.models.types import FrozenDictType
+from dascore.workflow.pipe import Pipe, unique_name
+from dascore.workflow.serialize import read_document, write_document
 from dascore.workflow.task import Task
 
 
 class SourceInfo(DascoreBaseModel):
     """Where a patch was read from."""
 
-    model_config = ConfigDict(frozen=True)
+    # A key which is not a field is a document written against another
+    # version of this class, which is worth an error rather than a shrug.
+    model_config = ConfigDict(extra="forbid")
 
     format: str = ""
     path: str = ""
@@ -52,7 +56,7 @@ class ProvenanceNode(DascoreBaseModel):
     by everything downstream of it rather than copied.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid")
 
     # None for a source: nothing was done to it, it was read.
     task: Task | None = None
@@ -67,9 +71,27 @@ class ProvenanceNode(DascoreBaseModel):
     backend: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    def __eq__(self, other) -> bool:
+        """
+        Two nodes are equal when they stand for the same step.
+
+        Compared on what the step was and what it produced rather than by
+        walking the graph behind it: the ids already answer for the whole
+        lineage, and a deep comparison would recurse as far as the data has
+        been processed.
+        """
+        if not isinstance(other, ProvenanceNode):
+            return NotImplemented
+        return self._identity() == other._identity()
+
     def __hash__(self) -> int:
-        """Hash a node by what it produced and what produced it."""
-        return hash((self.patch_id, self.processing_id, id(self.task)))
+        """Hash a node the way it compares."""
+        return hash(self._identity())
+
+    def _identity(self) -> tuple:
+        """Return what makes this node the step it is."""
+        task = self.task.fingerprint if self.task is not None else None
+        return (task, self.patch_id, self.processing_id, self.source)
 
     def walk(self) -> Iterator[ProvenanceNode]:
         """
@@ -104,8 +126,10 @@ class ProvenanceNode(DascoreBaseModel):
         """
         Return a readable listing of what was done, oldest first.
 
-        A step which took many inputs is written once, with how many, so a
-        patch chunked from sixty files reads as one line rather than sixty.
+        Data read from more than one file is one line saying how many
+        rather than a line per file, and a step which took several inputs
+        says how many, so a patch chunked from sixty files reads as two
+        lines rather than sixty-one.
         """
         lines = []
         for source in self.sources():
@@ -125,7 +149,10 @@ class ProvenanceNode(DascoreBaseModel):
         Return a pipe which would do again what this node records.
 
         The sources are left out: a pipe describes what to do, and is run
-        against whatever data it is given.
+        against whatever data it is given. Two shapes have no pipe and
+        raise `ParameterError` rather than returning a pipe which could not
+        run: a graph where nothing was done, and one where a step took its
+        inputs from more places than a pipe can name.
         """
         steps = self.steps()
         if not steps:
@@ -134,10 +161,13 @@ class ProvenanceNode(DascoreBaseModel):
         names: dict[int, str] = {}
         tasks: dict[str, Task] = {}
         dependencies: dict[str, tuple[str, ...]] = {}
+        # The steps which read straight from a source, and how many inputs
+        # each of them took.
+        fed: dict[str, int] = {}
         for node in steps:
             # steps() keeps only the nodes which hold a task.
             assert node.task is not None
-            name = _unique_name(node.task.fingerprint, tasks)
+            name = unique_name(node.task.fingerprint, tasks)
             names[id(node)] = name
             tasks[name] = node.task
             given = tuple(names[id(x)] for x in node.parents if x.task is not None)
@@ -154,7 +184,25 @@ class ProvenanceNode(DascoreBaseModel):
                 raise ParameterError(msg)
             if given:
                 dependencies[name] = given
-        return Pipe(tasks=tasks, dependencies=dependencies, output=names[id(steps[-1])])
+            else:
+                fed[name] = len(node.parents)
+        # A pipe hands one input to each of its sources, so it can describe
+        # one step which took several -- a chunk of many files -- but not two
+        # of them.
+        wide = [name for name, count in fed.items() if count > 1]
+        if len(fed) > 1 and wide:
+            msg = (
+                "This graph has more than one step reading straight from its "
+                "sources, and one of them took several inputs, which a pipe "
+                "has no way to describe."
+            )
+            raise ParameterError(msg)
+        return Pipe(
+            tasks=tasks,
+            dependencies=dependencies,
+            inputs=tuple(fed),
+            output=names[id(steps[-1])],
+        )
 
     def to_json(self, indent: int | None = 2) -> str:
         """Return the graph behind this node as JSON text."""
@@ -220,14 +268,14 @@ class Provenance(DascoreBaseModel):
     long gone.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid")
 
     pipe: Pipe
     dascore_version: str
     created_at: datetime
     python_version: str
-    system_info: Mapping[str, str] = Field(default_factory=dict)
-    metadata: Mapping[str, Any] = Field(default_factory=dict)
+    system_info: FrozenDictType[str, str] = Field(default_factory=dict)
+    metadata: FrozenDictType[str, Any] = Field(default_factory=dict)
     # The provenance of whatever this run was given, so a chain of runs
     # reads back as a chain.
     source_provenance: tuple[Provenance, ...] = ()
@@ -258,31 +306,31 @@ class Provenance(DascoreBaseModel):
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a document which describes this record."""
-        return {
-            "pipe": self.pipe.to_dict(),
-            "fingerprint": self.fingerprint,
-            "dascore_version": self.dascore_version,
-            "created_at": self.created_at.isoformat(),
-            "python_version": self.python_version,
-            "system_info": dict(self.system_info),
-            "metadata": dict(self.metadata),
-            "source_provenance": [x.to_dict() for x in self.source_provenance],
-        }
+        """
+        Return a document which describes this record.
+
+        Every field is dumped by pydantic, so a field added later is written
+        without this having to be edited; only the two which hold workflow
+        objects are spelled out, since those are named by tag rather than
+        dumped as fields.
+        """
+        out = self.model_dump(mode="json")
+        out["pipe"] = self.pipe.to_dict()
+        out["source_provenance"] = [x.to_dict() for x in self.source_provenance]
+        out["fingerprint"] = self.fingerprint
+        return out
 
     @classmethod
     def from_dict(cls, document: Mapping) -> Provenance:
         """Return the record a document describes."""
-        sources = document.get("source_provenance", ())
-        return cls(
-            pipe=Pipe.from_dict(document["pipe"]),
-            dascore_version=document["dascore_version"],
-            created_at=datetime.fromisoformat(document["created_at"]),
-            python_version=document["python_version"],
-            system_info=document.get("system_info", {}),
-            metadata=document.get("metadata", {}),
-            source_provenance=tuple(cls.from_dict(x) for x in sources),
-        )
+        fields = dict(document)
+        # Written for a reader, and derived from the pipe, so it is not one
+        # of the fields the record is rebuilt from.
+        fields.pop("fingerprint", None)
+        sources = fields.pop("source_provenance", ())
+        fields["pipe"] = Pipe.from_dict(fields["pipe"])
+        fields["source_provenance"] = tuple(cls.from_dict(x) for x in sources)
+        return cls(**fields)
 
     def save(self, path: str | Path) -> Path:
         """
@@ -291,25 +339,9 @@ class Provenance(DascoreBaseModel):
         The suffix picks the format, as it does for a pipe: ``.yaml`` or
         ``.yml`` write YAML, anything else writes JSON.
         """
-        path = Path(path)
-        path.parent.mkdir(exist_ok=True, parents=True)
-        path.write_text(_dump(self.to_dict(), path), encoding="utf-8")
-        return path
+        return write_document(self.to_dict(), Path(path))
 
     @classmethod
     def load(cls, path: str | Path) -> Provenance:
         """Return the record a file holds; see `save`."""
-        path = Path(path)
-        return cls.from_dict(_parse(path.read_text(encoding="utf-8"), path))
-
-
-def _unique_name(fingerprint: str, taken: Mapping[str, Any]) -> str:
-    """Return a node name which nothing in a pipe has claimed yet."""
-    # The same task twice in one chain is two steps, and two nodes; see
-    # `dascore.workflow.pipe`, which names repeats the same way.
-    name = fingerprint
-    copy = 0
-    while name in taken:
-        copy += 1
-        name = f"{fingerprint}{COPY_SEP}{copy}"
-    return name
+        return cls.from_dict(read_document(Path(path)))

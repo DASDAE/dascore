@@ -29,23 +29,18 @@ Examples
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
-from dascore.utils.misc import optional_import
-from dascore.workflow.serialize import digest
+from dascore.workflow.serialize import digest, read_document, write_document
 from dascore.workflow.task import Task
-
-# The suffixes `save` and `load` read as YAML; anything else is JSON.
-YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
 # What separates a node id from the number which makes it unique, when one
 # task appears in a pipe more than once.
@@ -69,12 +64,17 @@ class Pipe(DascoreBaseModel):
     tasks: FrozenDictType[str, Task]
     # Only a node with inputs appears here; a source has none.
     dependencies: FrozenDictType[str, tuple[str, ...]] = Field(default_factory=dict)
+    # The nodes the caller feeds, in the order they are fed. Written down
+    # rather than read off `tasks`, whose order a document is free to
+    # change: sorting the keys of a saved pipe would otherwise send the
+    # inputs to the wrong branches.
+    inputs: tuple[str, ...] = ()
     output: str
 
-    def __init__(self, **kwargs):
-        """Build a pipe, checking it describes a graph which can be run."""
-        super().__init__(**kwargs)
-        self.check()
+    @model_validator(mode="after")
+    def _check_after_building(self) -> Pipe:
+        """Check every pipe, however it was built."""
+        return self.check()
 
     @cached_property
     def fingerprint(self) -> str:
@@ -87,6 +87,7 @@ class Pipe(DascoreBaseModel):
         payload = {
             "tasks": {node: task.fingerprint for node, task in self.tasks.items()},
             "dependencies": {node: list(x) for node, x in self.dependencies.items()},
+            "inputs": list(self.inputs),
             "output": self.output,
         }
         return digest(payload)
@@ -154,8 +155,8 @@ class Pipe(DascoreBaseModel):
         return list(client.map(self.run, iterable))
 
     def sources(self) -> tuple[str, ...]:
-        """Return the nodes which take their input from the caller."""
-        return tuple(x for x in self.sorted_nodes() if not self.dependencies.get(x))
+        """Return the nodes which take their input from the caller, in order."""
+        return self.inputs
 
     def sorted_nodes(self) -> tuple[str, ...]:
         """
@@ -169,7 +170,10 @@ class Pipe(DascoreBaseModel):
         for node, given in self.dependencies.items():
             for upstream in given:
                 downstream[upstream].append(node)
-        ready = [node for node, count in remaining.items() if not count]
+        # Seeded with the inputs, in their order, so the run order depends
+        # on the pipe rather than on how a document happened to be written.
+        ready = [x for x in self.inputs if not remaining[x]]
+        ready += [x for x, count in remaining.items() if not count and x not in ready]
         out = []
         while ready:
             node = ready.pop(0)
@@ -198,7 +202,26 @@ class Pipe(DascoreBaseModel):
         if self.output not in self.tasks:
             msg = f"The pipe's output {self.output!r} is not one of its tasks."
             raise ParameterError(msg)
-        self.sorted_nodes()
+        fed = {x for x in self.tasks if not self.dependencies.get(x)}
+        if set(self.inputs) != fed:
+            msg = (
+                f"The pipe takes its inputs at {sorted(self.inputs)}, but the "
+                f"nodes with nothing wired into them are {sorted(fed)}."
+            )
+            raise ParameterError(msg)
+        order = self.sorted_nodes()
+        # A task whose output reaches nothing is work the pipe would do and
+        # throw away, which is a pipe built wrong rather than a slow one.
+        reaching = {self.output}
+        for node in reversed(order):
+            if node in reaching:
+                reaching.update(self.dependencies.get(node, ()))
+        if stranded := set(self.tasks) - reaching:
+            msg = (
+                f"Nothing the pipe returns is built from {sorted(stranded)}; "
+                "every task has to feed its output."
+            )
+            raise ParameterError(msg)
         return self
 
     def get_provenance(self, **metadata) -> Any:
@@ -220,6 +243,7 @@ class Pipe(DascoreBaseModel):
         return {
             "tasks": {node: task.to_dict() for node, task in self.tasks.items()},
             "dependencies": {node: list(x) for node, x in self.dependencies.items()},
+            "inputs": list(self.inputs),
             "output": self.output,
             "fingerprint": self.fingerprint,
         }
@@ -234,7 +258,21 @@ class Pipe(DascoreBaseModel):
             node: tuple(value)
             for node, value in document.get("dependencies", {}).items()
         }
-        return cls(tasks=tasks, dependencies=dependencies, output=document["output"])
+        out = cls(
+            tasks=tasks,
+            dependencies=dependencies,
+            inputs=tuple(document["inputs"]),
+            output=document["output"],
+        )
+        # A document says what it holds and what it hashed to; a mismatch
+        # means it was edited, and hiding that would defeat the fingerprint.
+        if (written := document.get("fingerprint")) and written != out.fingerprint:
+            msg = (
+                f"The document says its fingerprint is {written}, and the "
+                f"pipe it describes has {out.fingerprint}."
+            )
+            raise ParameterError(msg)
+        return out
 
     def save(self, path: str | Path) -> Path:
         """
@@ -243,23 +281,20 @@ class Pipe(DascoreBaseModel):
         The suffix picks the format: ``.yaml`` or ``.yml`` write YAML, and
         anything else writes JSON.
         """
-        path = Path(path)
-        path.parent.mkdir(exist_ok=True, parents=True)
-        path.write_text(_dump(self.to_dict(), path), encoding="utf-8")
-        return path
+        return write_document(self.to_dict(), Path(path))
 
     @classmethod
     def load(cls, path: str | Path) -> Pipe:
         """Return the pipe a file holds; see `save`."""
-        path = Path(path)
-        return cls.from_dict(_parse(path.read_text(encoding="utf-8"), path))
+        return cls.from_dict(read_document(Path(path)))
 
     def to_mermaid(self) -> str:
         """
-        Return the pipe as a mermaid flowchart.
+        Return the pipe as the text of a mermaid flowchart.
 
-        Markdown viewers, this project's docs among them, draw one from the
-        text; it is a readable listing on its own besides.
+        Somewhere which draws mermaid -- a markdown viewer, a notebook, a
+        quarto ``{mermaid}`` cell -- turns it into a diagram; on its own it
+        is a readable listing of the tasks and the wires between them.
         """
         lines = ["flowchart TD"]
         names = {node: f"n{index}" for index, node in enumerate(self.sorted_nodes())}
@@ -274,20 +309,31 @@ class Pipe(DascoreBaseModel):
 
 def join(left: Any, right: Any) -> Pipe:
     """Return the pipe which runs one side and then the other."""
-    inputs = [_as_pipe(x) for x in (left if isinstance(left, list | tuple) else [left])]
+    sides = list(left) if isinstance(left, list | tuple) else [left]
+    if not sides:
+        msg = "A pipe cannot be joined to nothing."
+        raise ParameterError(msg)
+    upstream = [_as_pipe(x) for x in sides]
     right = _as_pipe(right)
     tasks: dict[str, Task] = {}
     dependencies: dict[str, tuple[str, ...]] = {}
+    inputs: list[str] = []
     outputs = []
-    for pipe in inputs:
+    for pipe in upstream:
         renamed = _merge(pipe, tasks, dependencies)
+        inputs.extend(renamed[x] for x in pipe.inputs)
         outputs.append(renamed[pipe.output])
     renamed = _merge(right, tasks, dependencies)
-    # The first task of the right hand side takes the left hand sides'
-    # outputs; anything already wired inside it keeps what it had.
+    # Every task the right hand side took its input from now takes the left
+    # hand sides' outputs instead; anything wired inside it keeps what it had.
     for node in right.sources():
         dependencies[renamed[node]] = tuple(outputs)
-    return Pipe(tasks=tasks, dependencies=dependencies, output=renamed[right.output])
+    return Pipe(
+        tasks=tasks,
+        dependencies=dependencies,
+        inputs=tuple(inputs),
+        output=renamed[right.output],
+    )
 
 
 def _as_pipe(value: Any) -> Pipe:
@@ -296,7 +342,7 @@ def _as_pipe(value: Any) -> Pipe:
         return value
     if isinstance(value, Task):
         node = value.fingerprint
-        return Pipe(tasks={node: value}, output=node)
+        return Pipe(tasks={node: value}, inputs=(node,), output=node)
     msg = f"A pipe joins tasks and pipes, not {type(value).__name__}."
     raise ParameterError(msg)
 
@@ -309,22 +355,33 @@ def _merge(
     """
     Copy a pipe's nodes into a graph being built, and say what they became.
 
-    A node is named by its task's fingerprint, so the same task twice in one
-    chain -- ``detrend | detrend`` -- would be one node and would lose a
-    step. The second copy takes a ``#n`` suffix instead.
+    A node which would collide with one already there is renamed; see
+    `unique_name`.
     """
     renamed = {}
     for node in pipe.sorted_nodes():
-        name = node
-        copy = 0
-        while name in tasks:
-            copy += 1
-            name = f"{node}{COPY_SEP}{copy}"
+        name = unique_name(node, tasks)
         renamed[node] = name
         tasks[name] = pipe.tasks[node]
     for node, given in pipe.dependencies.items():
         dependencies[renamed[node]] = tuple(renamed[x] for x in given)
     return renamed
+
+
+def unique_name(fingerprint: str, taken: Mapping[str, Any]) -> str:
+    """
+    Return a node name nothing in a pipe has claimed yet.
+
+    A node is named by its task's fingerprint, so the same task twice in one
+    chain -- ``detrend | detrend`` -- would be one node and would lose a
+    step. The second copy takes a ``#n`` suffix instead.
+    """
+    name = fingerprint
+    copy = 0
+    while name in taken:
+        copy += 1
+        name = f"{fingerprint}{COPY_SEP}{copy}"
+    return name
 
 
 def _source_arguments(node: str, sources: tuple[str, ...], inputs: tuple) -> tuple:
@@ -342,19 +399,3 @@ def _source_arguments(node: str, sources: tuple[str, ...], inputs: tuple) -> tup
         )
         raise ParameterError(msg)
     return (inputs[sources.index(node)],)
-
-
-def _dump(document: Mapping, path: Path) -> str:
-    """Return the text a document is written as, per the path's suffix."""
-    if path.suffix.lower() in YAML_SUFFIXES:
-        yaml = optional_import("yaml", required_for="writing a pipe as YAML")
-        return yaml.safe_dump(document, sort_keys=False)
-    return json.dumps(document, indent=2, sort_keys=True)
-
-
-def _parse(text: str, path: Path) -> Any:
-    """Return the document some text holds, per the path's suffix."""
-    if path.suffix.lower() in YAML_SUFFIXES:
-        yaml = optional_import("yaml", required_for="reading a pipe from YAML")
-        return yaml.safe_load(text)
-    return json.loads(text)

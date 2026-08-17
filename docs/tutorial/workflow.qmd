@@ -46,7 +46,7 @@ Every task has a `fingerprint`: a short digest of which task it is, which versio
 Scale(factor=2).fingerprint
 ```
 
-The fingerprint names the class and its parameters, not the module the class lives in nor the source of its body. Moving `Scale` between modules does not change it; changing what the same parameters *mean* should, which is what `__version__` is for:
+The fingerprint names the package, the class and its parameters, not the module inside the package nor the source of the body. Moving `Scale` to another module of the same package does not change it; changing what the same parameters *mean* should, which is what `__version__` is for:
 
 ```{python}
 class Scale(Task):
@@ -72,12 +72,12 @@ from dascore.workflow import task
 
 
 @task
-def add(first, second=1):
+def add_numbers(first, second=1):
     """Add two numbers."""
     return first + second
 
 
-add(first=1, second=2).run()
+add_numbers(first=1, second=2).run()
 ```
 
 # Pipes
@@ -88,7 +88,7 @@ Tasks joined with `|` make a pipe, which runs them in order.
 from dascore.workflow import Task
 
 
-class Add(Task):
+class AddValue(Task):
     """Add a number."""
 
     value: int = 1
@@ -98,7 +98,7 @@ class Add(Task):
         return number + self.value
 
 
-class Times(Task):
+class TimesValue(Task):
     """Multiply by a number."""
 
     value: int = 2
@@ -108,14 +108,14 @@ class Times(Task):
         return number * self.value
 
 
-pipe = Add(value=2) | Times(value=3)
+pipe = AddValue(value=2) | TimesValue(value=3)
 pipe.run(1)
 ```
 
 A pipe is a graph rather than a list, so several branches can feed one task. Each branch gets the input, and the task which joins them is given their outputs in the order they were wired.
 
 ```{python}
-class Join(Task):
+class JoinValues(Task):
     """Add up everything it is given."""
 
     def run(self, *numbers):
@@ -123,7 +123,7 @@ class Join(Task):
         return sum(numbers)
 
 
-branched = (Add(value=1), Times(value=5)) | Join()
+branched = (AddValue(value=1), TimesValue(value=5)) | JoinValues()
 branched.run(10)
 ```
 
@@ -133,7 +133,7 @@ branched.run(10)
 pipe.map([1, 2, 3])
 ```
 
-A pipe has a fingerprint of its own, which covers both the tasks and how they are wired, and it draws itself:
+A pipe has a fingerprint of its own, covering the tasks, how they are wired, and the order its branches are fed. It also writes itself out as a mermaid flowchart, which anywhere that draws mermaid turns into a diagram:
 
 ```{python}
 print(branched.to_mermaid())
@@ -143,10 +143,16 @@ print(branched.to_mermaid())
 
 A pipe can be written to JSON or YAML — the suffix decides — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name.
 
-```python
-pipe.save("run.yaml")
-same = Pipe.load("run.yaml")
-assert same == pipe
+```{python}
+import tempfile
+from pathlib import Path
+
+from dascore.workflow import Pipe
+
+path = Path(tempfile.mkdtemp()) / "run.yaml"
+pipe.save(path)
+assert Pipe.load(path) == pipe
+print(path.read_text()[:120])
 ```
 
 # Provenance
@@ -164,8 +170,8 @@ Alongside it is a [ProvenanceNode](`dascore.workflow.provenance.ProvenanceNode`)
 from dascore.workflow import ProvenanceNode, SourceInfo
 
 source = ProvenanceNode(source=SourceInfo(format="DASDAE", path="/data/patch.h5"))
-first = ProvenanceNode(task=Add(value=2), parents=(source,))
-second = ProvenanceNode(task=Times(value=3), parents=(first,))
+first = ProvenanceNode(task=AddValue(value=2), parents=(source,))
+second = ProvenanceNode(task=TimesValue(value=3), parents=(first,))
 
 print(second.describe())
 ```

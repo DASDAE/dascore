@@ -31,7 +31,7 @@ import warnings
 from collections.abc import Callable, Iterable, Mapping, Set
 from enum import Enum
 from functools import partial
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any, Literal
 
 import numpy as np
@@ -42,6 +42,7 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array_api import is_foreign, to_numpy
+from dascore.utils.misc import _maybe_make_parent_directory, optional_import
 from dascore.warnings import DASCoreWarning
 
 # The two encoding modes; see the module docstring.
@@ -75,6 +76,10 @@ _TIMEDELTA = "$timedelta64"
 
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
 DIGEST_SIZE = 8
+
+# The suffixes a document is written and read as YAML for; anything else is
+# JSON, which is what a suffix-less path gets.
+YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -172,6 +177,33 @@ def decode(obj: Any) -> Any:
     if isinstance(obj, list):
         return [decode(x) for x in obj]
     return obj
+
+
+def write_document(document: Mapping, path: Path) -> Path:
+    """
+    Write a document to a file, in the format its suffix names.
+
+    ``.yaml`` and ``.yml`` write YAML; every other suffix writes JSON.
+    """
+    path = Path(path)
+    _maybe_make_parent_directory(path)
+    if path.suffix.lower() in YAML_SUFFIXES:
+        yaml = optional_import("yaml", required_for="writing a workflow as YAML")
+        text = yaml.safe_dump(dict(document), sort_keys=False)
+    else:
+        text = json.dumps(document, indent=2, sort_keys=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def read_document(path: Path) -> Any:
+    """Return the document a file holds; see `write_document`."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in YAML_SUFFIXES:
+        yaml = optional_import("yaml", required_for="reading a workflow from YAML")
+        return yaml.safe_load(text)
+    return json.loads(text)
 
 
 def _digest_bytes(data: bytes | memoryview) -> str:
