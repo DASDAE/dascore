@@ -13,6 +13,11 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.exceptions import TimeError, UnitError
+
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
 from dascore.utils.time import (
     is_datetime64,
     is_timedelta64,
@@ -238,6 +243,16 @@ class TestToDateTime64:
         )
         assert np.all(out == expected)
 
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_arrow_backed_string_array(self):
+        """Which backing pandas gives text is not the caller's choice."""
+        arr = pd.array(self.date_strs, dtype="string[pyarrow]")
+        out = to_datetime64(arr)
+        expected = np.array([dc.to_datetime64(x) for x in self.date_strs]).astype(
+            "datetime64[ns]"
+        )
+        assert np.all(out == expected)
+
 
 class TestToTimeDelta64:
     """Tests for creating timedeltas."""
@@ -363,6 +378,13 @@ class TestToTimeDelta64:
         ).astype("timedelta64[ns]")
         assert np.all(out[:2] == expected[:2])
         assert pd.isnull(out[2])
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_arrow_backed_string_array(self):
+        """A string column is arrow-backed wherever pyarrow is installed."""
+        arr = pd.array(["1s", "2s"], dtype="string[pyarrow]")
+        out = to_timedelta64(arr)
+        assert np.all(out == np.array([1, 2]).astype("timedelta64[s]"))
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""

@@ -164,8 +164,15 @@ def _float_to_datetime(ser: pd.Series) -> pd.Series:
 
 
 @to_datetime64.register(pd.arrays.StringArray)
+@to_datetime64.register(pd.arrays.ArrowStringArray)
 def _string_array_to_datetime64(arr: pd.arrays.StringArray):
-    """Convert pandas StringArray to datetime64."""
+    """
+    Convert a pandas string array to datetime64.
+
+    Both backings, since which one pandas gives text is not the caller's
+    choice: a `str` column is arrow-backed wherever pyarrow is installed
+    and numpy-backed where it is not, and the two are unrelated classes.
+    """
     out = pd.to_datetime(arr, errors="coerce", format="mixed")
     return out.to_numpy(dtype="datetime64[ns]")
 
@@ -313,8 +320,9 @@ def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
 
 
 @to_timedelta64.register(pd.arrays.StringArray)
+@to_timedelta64.register(pd.arrays.ArrowStringArray)
 def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
-    """Convert pandas StringArray to timedelta64."""
+    """Convert a pandas string array, of either backing, to timedelta64."""
     out = pd.to_timedelta(arr, errors="coerce")
     return out.to_numpy(dtype="timedelta64[ns]")
 
