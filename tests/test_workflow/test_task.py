@@ -260,12 +260,10 @@ class TestDocuments:
         document = ScaleTask(factor=2).to_dict()
         assert document["object_type"] == "tests:ScaleTask"
 
-    def test_code_path_is_a_hint(self):
-        """The import hint is written but does not change the fingerprint."""
+    def test_names_the_class_once(self):
+        """A document names the class by its tag and by nothing else."""
         document = ScaleTask(factor=2).to_dict()
-        assert "code_path" in document
-        document["code_path"] = "somewhere:else"
-        assert _fingerprint_of(document) == ScaleTask(factor=2).fingerprint
+        assert set(document) == {"object_type", "version", "params"}
 
     def test_local_class_refused(self):
         """A task class defined in a function cannot be written down."""

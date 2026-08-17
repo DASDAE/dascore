@@ -52,7 +52,6 @@ from dascore.workflow.serialize import DOCUMENT, decode, digest, encode, model_v
 
 # The keys a task's document holds beside its parameters.
 _VERSION_KEY = "version"
-_CODE_PATH_KEY = "code_path"
 _PARAMS_KEY = "params"
 
 
@@ -128,16 +127,16 @@ class Task(DascoreBaseModel):
         """
         Return a document which describes this task.
 
-        The document names the class by its registered tag, never by an
-        import path; `code_path` is written only so a human, or an error
-        message, can find the class the tag stands for.
+        The class is named by its registered tag and by nothing else. A
+        module path would be a second answer to the same question, and the
+        wrong one as soon as the class moved -- which a fingerprint
+        deliberately survives -- while the tag already names the package
+        the class came from.
         """
-        cls = type(self)
-        _check_nameable(cls, self.tag)
+        _check_nameable(type(self), self.tag)
         return {
             TAG_FIELD: self.tag,
             _VERSION_KEY: self.__version__,
-            _CODE_PATH_KEY: f"{cls.__module__}:{cls.__qualname__}",
             _PARAMS_KEY: encode(self._params(), mode=DOCUMENT),
         }
 
