@@ -30,6 +30,7 @@ deployment logs -- is ignored where it lies.
 
 from __future__ import annotations
 
+import difflib
 import itertools
 import json
 import os
@@ -766,6 +767,25 @@ def _table_stem(path: Path) -> str:
     return path.name[: -len(path.suffix)]
 
 
+def _refuse_near_miss(stem: str, child: Path, model) -> None:
+    """
+    Refuse a table stem which nearly names an attribute of its model.
+
+    The cutoff is deliberately high. A low one would start reading a
+    crew's own files as bad spellings of this format's, which is the
+    refusal this indifference exists to end; the cost of missing a
+    stranger typo is the old behaviour, one message later.
+    """
+    close = difflib.get_close_matches(stem, model.model_fields, n=1, cutoff=0.8)
+    if close:
+        msg = (
+            f"{_quote(child)} names no attribute of {model.__name__}. Did you "
+            f"mean {close[0]}.csv? A file this format does not "
+            "recognise at all is left where it lies."
+        )
+        raise InvalidInventoryError(msg)
+
+
 def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
     """
     Fill the attributes an entity directory's tables state.
@@ -773,12 +793,15 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
     A table is matched to the model purely by name, and an attribute stated
     both inline and as a table is one fact spelled twice.
 
-    A stem naming no attribute at all is left where it lies. An entity
+    A stem naming nothing recognisable is left where it lies. An entity
     directory is somewhere a crew keeps its own working files, and this
     format has no claim on a spreadsheet which never said it was one --
     the same indifference the loader shows a photo or a field note. A stem
-    which names a real attribute this format does not read as a table is a
-    different matter, and still raises: that one did say it was one.
+    which nearly names an attribute is a different matter, and still
+    raises: `geometrys.csv` said it was a track and got it wrong, and
+    loading its directory silently without it would lose the data it
+    holds. Near-misses are strict, clean misses are ignored, which is the
+    rule the rest of this loader follows.
     """
     for child in sorted(entity.iterdir()):
         if child.name.startswith(".") or child.is_dir():
@@ -787,6 +810,7 @@ def _merge_tables(data: dict, entity: Path, model, crs, attrs: Path) -> None:
             continue
         stem = _table_stem(child)
         if stem not in model.model_fields:
+            _refuse_near_miss(stem, child, model)
             continue
         if (table := _TABLES.get(stem)) is None:
             # Not "is not row-shaped": Station.channels is as row-shaped as

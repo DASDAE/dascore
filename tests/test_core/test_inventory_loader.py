@@ -1355,6 +1355,33 @@ class TestTrackTables:
         (array,) = inventory.networks[0].fiber_arrays
         assert array.code == "L001"
 
+    def test_a_stem_nearly_naming_an_attribute(self, make_inventory):
+        """A near-miss did claim to be a track, so it is not quietly dropped."""
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
+            "fiber_arrays/DAS.L001/path/geometrys.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
+            make_inventory(files)
+
+    def test_the_superseded_annotations_table_is_left_alone(self, make_inventory):
+        """The table labels.csv replaced names nothing near it, so a directory
+        which still holds one loads rather than refusing.
+        """
+        files = {
+            **MINIMAL,
+            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+            "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                "start_distance,end_distance,group,value\n0,10,zone,north\n"
+            ),
+        }
+        inventory = make_inventory(files)
+        (path,) = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert path.labels == ()
+
     def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
         """Only an attribute rows can build may be stated as a table."""
         files = {
