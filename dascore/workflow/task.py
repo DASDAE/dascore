@@ -30,13 +30,14 @@ from __future__ import annotations
 import inspect
 import warnings
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cached_property
 from typing import Any, ClassVar, Self
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic.fields import FieldInfo
 
+from dascore.compat import array, is_array_like
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import (
@@ -65,6 +66,12 @@ class Task(DascoreBaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _own_the_arrays(cls, data: Any) -> Any:
+        """Take ownership of any array a task was handed."""
+        return own_arrays(data) if isinstance(data, dict) else data
 
     # Bumped by a subclass whenever the same parameters should mean a
     # different answer, so that old fingerprints do not name the new
@@ -274,6 +281,36 @@ def intern(task: Task) -> Task:
     return task
 
 
+def own_arrays(values: Mapping) -> dict:
+    """
+    Return parameters with every array in them made read-only.
+
+    A task is immutable and its fingerprint is computed once, so an array a
+    caller keeps writing to would leave the task reporting an id for values
+    it no longer holds. Marking it read-only is what dascore does with a
+    patch's data, and costs no copy.
+    """
+    return {key: _own(value) for key, value in values.items()}
+
+
+def _own(value: Any) -> Any:
+    """Return one parameter value with the arrays inside it made read-only."""
+    # Only array-likes: `array` would turn anything else, a string or a
+    # tuple of bounds, into an array of its own.
+    if is_array_like(value):
+        return array(value)
+    # Arrays reach a task inside a sequence as well -- a pair of masks, a
+    # mapping of them -- and a container is walked rather than rebuilt when
+    # it holds none.
+    if isinstance(value, list | tuple):
+        owned = [_own(x) for x in value]
+        return type(value)(owned) if owned != list(value) else value
+    if isinstance(value, Mapping):
+        owned = {key: _own(x) for key, x in value.items()}
+        return owned if owned != dict(value) else value
+    return value
+
+
 def _qualified_tag(cls: type) -> str:
     """Return the tag naming a class, always with its namespace."""
     # DASCore's own models register bare, so that a hand written file says
@@ -326,7 +363,9 @@ class FunctionTask(Task):
         for name, parameter in cls._signature.parameters.items():
             if parameter.kind == inspect.Parameter.VAR_KEYWORD:
                 values |= values.pop(name, {})
-        return cls.model_construct(**values)
+        # model_construct skips validation, and with it the validator which
+        # takes ownership of an array, so it is done here instead.
+        return cls.model_construct(**own_arrays(values))
 
     def _call_args(self) -> tuple:
         """Return the arguments this task passes positionally."""

@@ -226,6 +226,52 @@ class TestEquality:
         assert hash(first) == hash(TimedValueTask(when=np.arange(3)))
 
 
+class TestOwnedParameters:
+    """Tests for a task taking ownership of the arrays it is given."""
+
+    def test_array_is_read_only(self):
+        """An array handed to a task cannot be written to afterwards."""
+        values = np.arange(3)
+        TimedValueTask(when=values)
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_fingerprint_cannot_go_stale(self):
+        """So the id a task reports still describes what it holds."""
+        values = np.arange(3)
+        task_ = TimedValueTask(when=values)
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+        assert task_.fingerprint == TimedValueTask(when=values).fingerprint
+
+    def test_array_inside_a_sequence(self):
+        """An array reaches a task inside a container too."""
+        values = np.arange(3)
+        TimedValueTask(when=[values, "something else"])
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_array_inside_a_mapping(self):
+        """A mapping of arrays is walked as well."""
+        values = np.arange(3)
+        TimedValueTask(when={"mask": values})
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_other_values_are_left_alone(self):
+        """Nothing which is not an array is touched on the way in."""
+        task_ = TimedValueTask(when=(1, 2), where="time")
+        assert task_.when == (1, 2)
+        assert task_.where == "time"
+
+    def test_from_call_owns_them_too(self):
+        """The call path skips validation, and takes ownership anyway."""
+        values = np.arange(3)
+        add_numbers._from_call((values,), {})
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+
 class TestUpdate:
     """Tests for making one task from another."""
 
