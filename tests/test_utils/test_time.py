@@ -448,6 +448,76 @@ class TestToTimeDelta64:
         assert to_timedelta64(np.array(value)) == expected
 
 
+class TestNanosecondBounds:
+    """Tests for times which the nanosecond representation cannot hold."""
+
+    out_of_range = ("2500-01-01", "1000-01-01")
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_string(self, iso):
+        """A string outside the range used to come back centuries away."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(iso)
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_array_of_strings(self, iso):
+        """The array path wrapped as silently as the scalar one."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([iso]))
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_object_array(self, iso):
+        """An object array converts element wise and must check each one."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([iso], dtype=object))
+
+    def test_only_one_bad_value_is_needed(self):
+        """A single unrepresentable element rejects the whole array."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array(["2020-01-01", "2500-01-01"]))
+
+    def test_seconds_from_epoch(self):
+        """Seconds from the epoch overflowed with an opaque OverflowError."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(2e10)
+
+    def test_array_of_seconds(self):
+        """The array of seconds saturated at the maximum instead of raising."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([2e10]))
+
+    def test_timedelta_seconds(self):
+        """Durations have the same bound as times."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(1e12)
+
+    def test_array_of_timedelta_seconds(self):
+        """The duration array saturated at the maximum instead of raising."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([1e12]))
+
+    @pytest.mark.parametrize("iso", ["2262-04-11", "1677-09-22"])
+    def test_outermost_days_still_convert(self, iso):
+        """The check must not refuse what the representation can hold."""
+        assert to_datetime64(iso) == np.datetime64(iso, "ns")
+
+    def test_null_values_are_untouched(self):
+        """Nulls are not out of range and still become NaT."""
+        out = to_datetime64(np.array([np.nan, 1.0]))
+        assert np.isnat(out[0])
+        assert out[1] == to_datetime64(1.0)
+
+    def test_empty_array(self):
+        """An empty array carries no value to check."""
+        assert len(to_datetime64(np.array([]))) == 0
+        assert len(to_timedelta64(np.array([]))) == 0
+
+    def test_message_names_the_value(self):
+        """The error has to say which time was refused."""
+        with pytest.raises(TimeError, match="2500"):
+            to_datetime64(np.array(["2020-01-01", "2500-01-01"]))
+
+
 class TestDegenerateArrays:
     """Tests for 0-D array inputs to the array converters."""
 
