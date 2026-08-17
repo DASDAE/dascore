@@ -655,3 +655,219 @@ class TestWriting:
         directory = regions.save(tmp_path / "picks")
         text = (directory / "attrs.json").read_text()
         assert '"object_type": "AnnotationSetAttrs"' in text
+
+
+class TestCollections:
+    """Sets stored side by side read as one set which says where each row came from."""
+
+    @pytest.fixture
+    def picks(self) -> dc.AnnotationSet:
+        """A set of time ranges made by a picker, on its own acquisition."""
+        frame = pd.DataFrame(
+            {
+                "id": ["m1", "m2"],
+                "group": ["arrival", "arrival"],
+                "value": ["p", "s"],
+                "time_start": [
+                    np.datetime64("2020-01-01T00:00:01"),
+                    np.datetime64("2020-01-01T00:00:03"),
+                ],
+                "time_end": [
+                    np.datetime64("2020-01-01T00:00:02"),
+                    np.datetime64("2020-01-01T00:00:04"),
+                ],
+                "score": [0.4, 0.6],
+            }
+        )
+        return dc.AnnotationSet(
+            frame,
+            dims=("time",),
+            acquisition_key="NET.ARR.00.fast",
+            creation_info={"author": "phasenet"},
+        )
+
+    @pytest.fixture
+    def collection(self, regions, picks, tmp_path):
+        """A directory holding two sets, each stating its own dimensions."""
+        root = tmp_path / "sets"
+        regions.save(root / "hand")
+        picks.save(root / "phasenet")
+        return root
+
+    def test_reads_as_one_set(self, collection, regions, picks):
+        """Every set is in the table, in the dimensions all of them state."""
+        loaded = dc.annotations(collection)
+        assert len(loaded) == len(regions) + len(picks)
+        assert loaded.dims == ("distance", "time")
+
+    def test_names_the_set_each_row_came_from(self, collection):
+        """The set column is the label; the directory name is what it holds."""
+        loaded = dc.annotations(collection)
+        assert {x.set for x in loaded} == {"hand", "phasenet"}
+        assert sorted(loaded.attrs.sets) == ["hand", "phasenet"]
+
+    def test_keeps_what_a_set_states_for_itself(self, collection, picks):
+        """A child's dimensions and provenance survive without filling rows."""
+        stated = dc.annotations(collection).attrs.sets["phasenet"]
+        assert stated.dims == ("time",)
+        assert stated.creation_info.author == "phasenet"
+        assert stated.acquisition_key == picks.attrs.acquisition_key
+
+    def test_a_row_keeps_its_own_acquisition(self, collection, regions, picks):
+        """The address a row was picked on is the address of its set."""
+        loaded = dc.annotations(collection)
+        keys = {x.set: x.acquisition_key for x in loaded}
+        assert keys["hand"] == regions.attrs.acquisition_key
+        assert keys["phasenet"] == picks.attrs.acquisition_key
+
+    def test_round_trips_through_one_directory(self, collection, tmp_path):
+        """A collection saves flat, and what it read is what it reads back."""
+        loaded = dc.annotations(collection)
+        assert dc.annotations(loaded.save(tmp_path / "flat")) == loaded
+
+    def test_an_id_in_two_sets(self, regions, tmp_path):
+        """An id is an address into the collection, so it names one row."""
+        root = tmp_path / "sets"
+        regions.save(root / "hand")
+        regions.save(root / "again")
+        with pytest.raises(InvalidAnnotationError, match="again and hand"):
+            dc.annotations(root)
+
+    def test_a_set_which_states_only_attributes(self, collection, tmp_path):
+        """A directory of attributes and nothing else is half a set."""
+        half = collection / "empty"
+        half.mkdir()
+        (half / "attrs.json").write_text('{"dims": ["time"]}')
+        with pytest.raises(InvalidAnnotationError, match=r"no annotations\.csv"):
+            dc.annotations(collection)
+
+    def test_a_tree_of_collections(self, regions, tmp_path):
+        """Sets loaded together are one collection, not a tree of them."""
+        root = tmp_path / "sets"
+        regions.save(root / "outer" / "inner")
+        regions.save(root / "hand")
+        with pytest.raises(InvalidAnnotationError, match="not a tree"):
+            dc.annotations(root)
+
+    def test_a_set_which_also_holds_sets(self, regions, tmp_path):
+        """A directory is one set or a directory of them, never both."""
+        root = regions.save(tmp_path / "sets")
+        regions.save(root / "hand")
+        with pytest.raises(InvalidAnnotationError, match="not both"):
+            dc.annotations(root)
+
+    def test_a_table_beside_the_sets(self, collection):
+        """A table where every set is a directory names no set."""
+        (collection / "notes.csv").write_text("group\nnoise\n")
+        with pytest.raises(InvalidAnnotationError, match="names no set"):
+            dc.annotations(collection)
+
+    def test_dimensions_for_the_sets_which_state_none(self, regions, tmp_path):
+        """The caller's dimensions reach the children which declare none."""
+        root = tmp_path / "sets"
+        for name in ("hand", "auto"):
+            directory = root / name
+            directory.mkdir(parents=True)
+            (directory / "annotations.csv").write_text(
+                f"id,group,time_start,time_end\n{name},noise,1.0,2.0\n"
+            )
+        assert len(dc.annotations(root, dims=("time",))) == 2
+        with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
+            dc.annotations(root)
+
+    def test_dimensions_stated_beside_the_sets(self, tmp_path):
+        """A collection may declare the dimensions its sets are read in."""
+        root = tmp_path / "sets"
+        directory = root / "hand"
+        directory.mkdir(parents=True)
+        (directory / "annotations.csv").write_text("group,time_start,time_end\nq,1,2\n")
+        (root / "attrs.json").write_text('{"dims": ["time"]}')
+        assert dc.annotations(root).dims == ("time",)
+        with pytest.raises(InvalidAnnotationError, match="stating its own dimensions"):
+            dc.annotations(root, dims=("time",))
+
+    def test_a_dimension_spelled_two_ways(self, picks, tmp_path):
+        """A point is not a range of no width, so neither stands in."""
+        root = tmp_path / "sets"
+        picks.save(root / "ranges")
+        frame = pd.DataFrame({"group": ["a"], "time": [1.0]})
+        dc.AnnotationSet(frame, dims=("time",)).save(root / "points")
+        with pytest.raises(InvalidAnnotationError, match="spelled as a point"):
+            dc.annotations(root)
+
+    def test_a_set_which_states_a_set_column(self, tmp_path):
+        """The set column names the set, so a set may not fill it in."""
+        root = tmp_path / "sets"
+        directory = root / "hand"
+        directory.mkdir(parents=True)
+        (directory / "annotations.csv").write_text("set,group,time\nother,noise,1.0\n")
+        with pytest.raises(InvalidAnnotationError, match="states a set column"):
+            dc.annotations(root, dims=("time",))
+
+    def test_sets_stated_twice(self, collection):
+        """A collection states each of its sets once."""
+        document = {"dims": ["time"], "sets": {"hand": {"dims": ["time"]}}}
+        (collection / "attrs.json").write_text(json.dumps(document))
+        with pytest.raises(
+            InvalidAnnotationError, match="states each of its sets once"
+        ):
+            dc.annotations(collection)
+
+    def test_hidden_directories_are_not_sets(self, collection, regions):
+        """A hidden name beside the sets describes the data, not them."""
+        regions.save(collection / ".annotations")
+        assert sorted(dc.annotations(collection).attrs.sets) == ["hand", "phasenet"]
+
+    def test_a_directory_which_is_no_set(self, collection):
+        """A directory participating in no convention here is left alone."""
+        (collection / "figures").mkdir()
+        assert len(dc.annotations(collection)) == 4
+
+    def test_a_set_with_no_annotations(self, picks, tmp_path):
+        """A set which states nothing is still one of the sets loaded."""
+        root = tmp_path / "sets"
+        picks.save(root / "phasenet")
+        dc.AnnotationSet(None, dims=("time",)).save(root / "empty")
+        loaded = dc.annotations(root)
+        assert len(loaded) == len(picks)
+        assert sorted(loaded.attrs.sets) == ["empty", "phasenet"]
+
+    def test_paths_from_two_sets(self, with_vertices, tmp_path):
+        """Vertices merge too, and each path still reads as the shape it was."""
+        root = tmp_path / "sets"
+        with_vertices.save(root / "hand")
+        frame = pd.DataFrame({"id": ["p9"], "group": ["auto"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {
+                "id": ["p9"] * 3,
+                "seq": [0, 1, 2],
+                "distance": [1000.0, 1100.0, 1200.0],
+                "time": np.array(
+                    [
+                        "2020-01-01T00:00:05",
+                        "2020-01-01T00:00:06",
+                        "2020-01-01T00:00:07",
+                    ],
+                    dtype="datetime64[ns]",
+                ),
+            }
+        )
+        dc.AnnotationSet(frame, dims=DIMS, vertices=vertices).save(root / "auto")
+        drawn = {x.id: x.geometry for x in dc.annotations(root) if x.id.startswith("p")}
+        assert drawn["p1"].vertices["distance"] == (10.0, 95.0, 185.0)
+        assert drawn["p9"].vertices["distance"] == (1000.0, 1100.0, 1200.0)
+        assert drawn["p9"].region.bounds["distance"] == (1000.0, 1200.0)
+
+    def test_vertices_in_different_dimensions(self, with_vertices, tmp_path):
+        """A vertex states every dimension its table names, so these cannot merge."""
+        root = tmp_path / "sets"
+        with_vertices.save(root / "hand")
+        frame = pd.DataFrame({"id": ["f1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["f1"] * 2, "seq": [0, 1], "distance": [1.0, 2.0]}
+        )
+        dc.AnnotationSet(frame, dims=("distance",), vertices=vertices).save(
+            root / "flat"
+        )
+        with pytest.raises(InvalidAnnotationError, match="different dimensions"):
+            dc.annotations(root)

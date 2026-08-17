@@ -67,6 +67,7 @@ RESERVED_COLUMNS = (
     "geometry",
     "basis",
     "acquisition_key",
+    "set",
 )
 
 # The geometries a row may declare. A region is the default: it is what
@@ -507,6 +508,14 @@ class Annotation(_AnnotationModel):
             "set's own where the row names none."
         ),
     )
+    set: str = Field(
+        default="",
+        description=(
+            "Name of the set this annotation was read from, where many were "
+            "loaded together. A label, not an identity: ids are unique across "
+            "a collection."
+        ),
+    )
     extra: FrozenDictType[str, Any] = Field(
         default_factory=dict, description="Columns the set does not model."
     )
@@ -570,6 +579,15 @@ class AnnotationSetAttrs(_AnnotationModel):
     columns: FrozenDictType[str, AnnotationColumn] = Field(
         default_factory=dict, description="Documentation for columns, keyed by name."
     )
+    sets: FrozenDictType[str, AnnotationSetAttrs] = Field(
+        default_factory=dict,
+        description=(
+            "The attributes of each set loaded together, keyed by the name the "
+            "`set` column holds. What a child set declares for itself -- its "
+            "own dimensions, provenance and columns -- is kept here rather "
+            "than written into every row of it."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_dims(self) -> Self:
@@ -595,6 +613,25 @@ class AnnotationSetAttrs(_AnnotationModel):
                 f"a set may not dimension {', '.join(RESERVED_COLUMNS)}."
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _check_sets(self) -> Self:
+        """Sets loaded together are one collection, in its dimensions."""
+        for name, child in self.sets.items():
+            if child.sets:
+                msg = (
+                    f"The set {name!r} states sets of its own. Sets loaded "
+                    "together are one collection, not a tree of them."
+                )
+                raise ValueError(msg)
+            if extra := sorted(set(child.dims) - set(self.dims)):
+                msg = (
+                    f"The set {name!r} states the dimension(s) "
+                    f"{', '.join(extra)}, which the sets loaded with it do not: "
+                    f"they hold {list(self.dims)}."
+                )
+                raise ValueError(msg)
         return self
 
 
@@ -741,6 +778,11 @@ class AnnotationSet:
         a set needs nothing beyond the standard library; a set authored by
         hand may spell them in YAML, which reads back the same.
 
+        Sets which were loaded together write one table rather than a
+        directory each: the ``set`` column already says which set every row
+        belongs to, and what each of them states for itself travels in the
+        attributes, so the flat spelling loses nothing.
+
         Writing states the whole directory, so a part this set does not
         have is removed rather than left behind. A stale vertices table, or
         the YAML the attributes used to be spelled in, would otherwise sit
@@ -817,6 +859,7 @@ class AnnotationSet:
             # the set-level address rather than sitting beside it.
             acquisition_key=_text(row.get("acquisition_key"))
             or self._attrs.acquisition_key,
+            set=_text(row.get("set")),
             extra=_read_extra(row, self._attrs.dims, self._spellings),
         )
 
