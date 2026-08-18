@@ -315,6 +315,20 @@ class TestParquet:
         assert to_timedelta64(held[0]) == np.timedelta64(5, "s")
         assert Line(**held[1]) == line
 
+    def test_a_duration_of_any_spelling(self, tmp_path):
+        """A duration is written alike however it arrived, as a time is."""
+        path = tmp_path / "table.parquet"
+        span = pd.Timedelta(seconds=5)
+        frame = pd.DataFrame(
+            {"span": [span, span.to_pytimedelta(), span.to_numpy(), "text"]}
+        )
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        written = list(out["span"])
+        assert written[3] == "text"
+        assert len(set(written[:3])) == 1
+        assert to_timedelta64(written[0]) == np.timedelta64(5, "s")
+
     def test_a_missing_value_inside_a_document(self, tmp_path):
         """Missing is missing, not the text of whichever spelling it arrived in."""
         path = tmp_path / "table.parquet"

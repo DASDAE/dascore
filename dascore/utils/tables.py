@@ -25,7 +25,7 @@ import pandas as pd
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import optional_import, to_str
 from dascore.utils.paths import quote_path
-from dascore.utils.time import to_datetime64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 # The metadata key a parquet file names its document columns in.
 DOCUMENT_KEY = "dascore:documents"
@@ -336,9 +336,9 @@ def _named(columns) -> list[str]:
     if len(set(named)) != len(named):
         repeated = sorted({x for x in named if named.count(x) > 1})
         msg = (
-            f"The column(s) {', '.join(repeated)} are named more than once once "
-            "their names are spelled as text, which is how parquet holds them; "
-            "one column states one thing."
+            f"The column(s) {', '.join(repeated)} are named more than once "
+            "when their names are spelled as text, which is how parquet holds "
+            "them; one column states one thing."
         )
         raise ParameterError(msg)
     return named
@@ -412,6 +412,9 @@ def _documented(value):
         return _documented(value.item())
     if isinstance(value, datetime.datetime | datetime.date | pd.Timestamp):
         return _documented(to_datetime64(value))
+    # `pd.Timedelta` is one of these, as `pd.Timestamp` is a datetime.
+    if isinstance(value, datetime.timedelta):
+        return _documented(to_timedelta64(value))
     if isinstance(value, Mapping):
         return {str(k): _documented(v) for k, v in value.items()}
     if isinstance(value, list | tuple | set | frozenset | np.ndarray):
