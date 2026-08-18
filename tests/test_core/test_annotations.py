@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1210,12 +1212,15 @@ class TestAnnotationNamespaces:
 
     def test_io_namespace(self, region_set):
         """The io namespace DASCore registers is reachable."""
-        assert region_set.io.to_dataframe().equals(region_set.io.to_dataframe())
-        assert len(region_set.io.to_dataframe()) == len(region_set)
+        frame = region_set.io.to_dataframe()
+        assert len(frame) == len(region_set)
+        assert list(frame["group"]) == [x.group for x in region_set]
 
-    def test_namespace_is_cached(self, region_set):
-        """Repeated access returns one namespace object."""
-        assert region_set.io is region_set.io
+    def test_copy_gets_its_own_binding(self, region_set):
+        """A copied set hands out a namespace bound to the copy."""
+        region_set.io  # a namespace kept on the host would ride along
+        other = copy.copy(region_set)
+        assert other.io._obj is other
 
     def test_local_namespace_attaches(self, region_set):
         """A namespace defined without an entry point still attaches."""

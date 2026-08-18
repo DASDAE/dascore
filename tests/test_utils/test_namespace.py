@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import ClassVar
 
 import pandas as pd
@@ -86,10 +87,12 @@ class TestNamespace:
         bob = inst.bob
         assert isinstance(bob, ParentClassNamespace)
 
-    def test_discoverable_is_cached(self):
-        """The same namespace instance should be returned on repeated access."""
+    def test_copy_gets_its_own_binding(self):
+        """A copy of a host hands out a namespace bound to the copy."""
         inst = ParentClass()
-        assert inst.bob is inst.bob
+        inst.bob  # a namespace kept on the host would ride along
+        other = copy.copy(inst)
+        assert other.bob.return_self() is other
 
     def test_parent_type_bound(self):
         """Ensure the parent type is bound the instances."""
@@ -217,6 +220,20 @@ class TestNamespace:
         out = CooperativeBase._registry["dascore.cooperative_test"]
         assert out["cooperative"] is CooperativeNamespace
 
+    def test_private_name_refused(self):
+        """A private namespace name a host could never hand out is refused."""
+        with pytest.raises(ValueError, match="must be public"):
+
+            class _Private(ParentClassNamespace):
+                name = "_hidden"
+
+    def test_non_identifier_name_refused(self):
+        """A name which is not an identifier is refused, as the docs say."""
+        with pytest.raises(ValueError, match="must be a Python identifier"):
+
+            class _Spaced(ParentClassNamespace):
+                name = "not an identifier"
+
     def test_custom_attr_error_message(self):
         """Ensure _namespace_attr_errors messages are raised verbatim."""
         inst = ParentClass()
@@ -242,15 +259,19 @@ class TestHostWithGetattr:
         inst = GetattrParent()
         assert inst._private == "host"
 
-    def test_underscore_namespace_does_not_shadow_host(self):
-        """A namespace named with a leading underscore is never reached."""
-
-        class _Shadow(ParentClassNamespace):
-            name = "_private"
-
+    def test_private_lookup_loads_no_plugin(self, monkeypatch):
+        """Resolving a private name must not import a plugin to find it."""
+        loaded = []
+        monkeypatch.setattr(
+            ns_module,
+            "maybe_load_entry_point",
+            lambda group, name: loaded.append(name),
+        )
         inst = GetattrParent()
         assert inst._private == "host"
-        assert _Shadow.name in ParentClass.get_registered_namespaces()
+        assert not loaded
+        assert inst.from_host == "host"
+        assert loaded == ["from_host"]
 
     def test_default_message_survives_host_getattr(self):
         """A name neither knows still raises this class's message."""
@@ -345,12 +366,11 @@ class TestNamespaceConcurrency:
     """Lazy namespace attachment must be safe under concurrent first use."""
 
     @pytest.mark.concurrency
-    def test_one_instance_per_host(self, run_in_threads):
-        """Concurrent first access on one object returns a single namespace."""
+    def test_one_host_per_instance(self, run_in_threads):
+        """Concurrent first access on one object binds every namespace to it."""
         inst = ParentClass()
         results = run_in_threads(lambda _: inst.bob)
-        assert len({id(x) for x in results}) == 1
-        assert results[0] is inst.bob
+        assert [x.return_self() for x in results] == [inst] * len(results)
 
     @pytest.mark.concurrency
     def test_distinct_hosts_get_own_namespace(self, run_in_threads):
@@ -378,16 +398,12 @@ class TestNamespaceConcurrency:
         assert set(registered) == {f"ns_{i}" for i in range(4)}
 
     def test_fork_handler_replaces_held_locks(self):
-        """Locks held at fork time are replaced so the child cannot deadlock."""
-        old_attachment = ns_module._ATTACHMENT_LOCK
+        """A lock held at fork time is replaced so the child cannot deadlock."""
         old_registry = _MethodNameSpace._registry_lock
         try:
-            with old_attachment, old_registry:
+            with old_registry:
                 ns_module._reinit_namespace_locks()
-                new_attachment = ns_module._ATTACHMENT_LOCK
                 new_registry = _MethodNameSpace._registry_lock
-            assert new_attachment is not old_attachment
             assert new_registry is not old_registry
         finally:
-            ns_module._ATTACHMENT_LOCK = old_attachment
             _MethodNameSpace._registry_lock = old_registry

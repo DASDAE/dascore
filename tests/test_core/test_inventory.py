@@ -2898,10 +2898,13 @@ class TestInventoryNamespaces:
         inventory = build_inventory()
         assert inventory.io.to_yaml() == inv.inventory_to_yaml(inventory)
 
-    def test_namespace_is_cached(self):
-        """Repeated access returns one namespace object."""
+    def test_copy_gets_its_own_binding(self):
+        """A copied inventory hands out a namespace bound to the copy."""
+        pytest.importorskip("yaml")
         inventory = build_inventory()
-        assert inventory.io is inventory.io
+        inventory.io  # a namespace kept on the host would ride along
+        other = inventory.model_copy(update={"schema_version": 7})
+        assert other.io.to_yaml().startswith("schema_version: 7")
 
     def test_local_namespace_attaches(self):
         """A namespace defined without an entry point still attaches."""

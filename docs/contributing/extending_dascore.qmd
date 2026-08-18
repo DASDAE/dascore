@@ -74,7 +74,7 @@ patch = dc.get_example_patch()
 value = patch.my_ext.peak_to_peak()
 ```
 
-The namespace `name` must be a valid Python identifier. If another namespace of the same type already uses that name, DASCore warns when the subclass is defined and the later class wins.
+The namespace `name` must be a public Python identifier -- a leading underscore is refused, since a host resolves its own private names before the namespaces are searched. If another namespace of the same type already uses that name, DASCore warns when the subclass is defined and the later class wins.
 
 ## Packaging an extension plugin
 
