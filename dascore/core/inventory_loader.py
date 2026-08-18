@@ -59,11 +59,7 @@ from dascore.core.inventory import (
     _overlapping_epochs,
     _times_equal,
 )
-from dascore.exceptions import (
-    InvalidInventoryError,
-    MissingOptionalDependencyError,
-    ParameterError,
-)
+from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
 from dascore.utils.misc import check_code
@@ -245,7 +241,7 @@ def _declared_type(path: Path) -> str | None:
     """
     try:
         data = _read_object(path)
-    except (InvalidInventoryError, MissingOptionalDependencyError):
+    except InvalidInventoryError:
         return None
     declared = data.get(TAG_FIELD)
     return declared if isinstance(declared, str) else None
