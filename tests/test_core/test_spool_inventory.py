@@ -44,7 +44,7 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.core.inventory_loader import BLESSED_NAME
 from dascore.examples import get_example_patch, inventory_patch_pair
@@ -200,7 +200,7 @@ def data_directory(tmp_path_factory, patch, inventory):
     """A directory of data which carries the inventory describing it."""
     path = tmp_path_factory.mktemp("blessed")
     dc.write(patch, path / "patch.h5", "dasdae")
-    inventory.to_yaml(path / f"{BLESSED_NAME}.yaml")
+    inventory.io.to_yaml(path / f"{BLESSED_NAME}.yaml")
     return path
 
 
@@ -246,7 +246,7 @@ class TestBlessedInventory:
     def test_a_visible_inventory_is_not_attached(self, tmp_path, patch, inventory):
         """`inventory.yaml` names the envelope, not a spool's inventory."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / "inventory.yaml")
+        inventory.io.to_yaml(tmp_path / "inventory.yaml")
         assert dc.spool(tmp_path).update()._inventory is None
 
     def test_in_memory_spools_carry_none(self, patch):
@@ -256,7 +256,7 @@ class TestBlessedInventory:
     def test_a_file_spool_carries_none(self, tmp_path, patch, inventory):
         """A file is not a directory, whatever lies beside it."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         assert dc.spool(tmp_path / "patch.h5")._inventory is None
 
 
@@ -362,10 +362,10 @@ class TestLazyInventory:
     ):
         """An inventory is an input, not a cache: it is read once."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         spool = dc.spool(tmp_path).update()
         assert spool.enrich()[0].attrs.gauge_length == 10.0
-        _replace_acquisition(inventory, gauge_length=2.0).to_yaml(
+        _replace_acquisition(inventory, gauge_length=2.0).io.to_yaml(
             tmp_path / f"{BLESSED_NAME}.yaml"
         )
         assert spool.enrich()[0].attrs.gauge_length == 10.0
@@ -407,7 +407,7 @@ class TestLazyInventory:
         spool = dc.spool(tmp_path).update()
         with pytest.raises(InvalidInventoryError):
             spool.enrich()[0]
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
     def test_a_lazily_attached_spool_pickles(self, data_directory):
@@ -440,7 +440,7 @@ class TestAttachInventoryPath:
     def test_a_file_path(self, tmp_path, patch, inventory):
         """The serialized artifact shipped beside an archive."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         spool = dc.spool(patch).attach_inventory(path)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
@@ -460,7 +460,7 @@ class TestAttachInventoryPath:
     def test_a_path_is_read_lazily(self, tmp_path, patch, inventory):
         """As the blessed name is, and for the same reason."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         spool = dc.spool(patch).attach_inventory(path)
         assert spool._inventory._inventory is None
 
@@ -480,7 +480,7 @@ class TestAttachInventoryPath:
     def test_a_named_file_of_any_suffix(self, tmp_path, patch, inventory):
         """A path is a path; only the blessed name insists on a spelling."""
         path = tmp_path / "inventory.txt"
-        path.write_text(inventory.to_yaml())
+        path.write_text(inventory.io.to_yaml())
         spool = dc.spool(patch).attach_inventory(path)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
@@ -494,7 +494,7 @@ class TestAttachInventoryPath:
 
     def test_a_path_is_anchored_when_it_is_attached(self, tmp_path, patch, inventory):
         """The read comes later, possibly from another directory entirely."""
-        inventory.to_yaml(tmp_path / "somewhere.yaml")
+        inventory.io.to_yaml(tmp_path / "somewhere.yaml")
         here = os.getcwd()
         os.chdir(tmp_path)
         try:
@@ -506,7 +506,7 @@ class TestAttachInventoryPath:
     def test_conform_uses_an_attached_path(self, tmp_path, patch, inventory):
         """A lazily attached path is read by the eager verb too."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         assert len(dc.spool(patch).attach_inventory(path).conform_to_inventory()) == 1
 
     @pytest.mark.parametrize("verb", ["enrich", "conform_to_inventory"])
@@ -551,7 +551,7 @@ class TestLazyInventoryEquality:
             root = tmp_path / name
             root.mkdir()
             dc.write(patch, root / "patch.h5", "dasdae")
-            inventory.to_yaml(root / f"{BLESSED_NAME}.yaml")
+            inventory.io.to_yaml(root / f"{BLESSED_NAME}.yaml")
             spools.append(dc.spool(root).update())
         assert spools[0] != spools[1]
         assert all(x._inventory._inventory is None for x in spools)
@@ -608,7 +608,7 @@ class TestLazyInventoryEquality:
             root.mkdir()
             dc.write(patch, root / "patch.h5", "dasdae")
         (broken / f"{BLESSED_NAME}.yaml").write_text("this: [is not: yaml\n")
-        inventory.to_yaml(whole / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(whole / f"{BLESSED_NAME}.yaml")
         assert dc.spool(broken).update() not in [dc.spool(whole).update()]
 
 
@@ -1497,7 +1497,7 @@ class TestSharedNames:
 
     def test_a_group_may_share_an_attrs_name(self, patch, inventory):
         """
-        An annotation group is free to be named after an acquisition field.
+        A label group is free to be named after an acquisition field.
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the
@@ -1507,9 +1507,9 @@ class TestSharedNames:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
                         start_distance=0.0,
                         end_distance=100.0,
                         group="gauge_length",
@@ -1866,12 +1866,12 @@ class TestConformSubdivision:
         """
         coord = patch.get_coord("time")
         when = coord.min() + (coord.max() - coord.min()) / 2
-        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].annotations[0]
+        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
         split = _split_epochs(
             inventory,
             when,
             second={
-                "annotations": (
+                "labels": (
                     moved.new(value="moved", start_distance=100.0, end_distance=400.0),
                 )
             },
@@ -2185,12 +2185,12 @@ def two_zones(inventory):
     return inventory.replace(
         path,
         path.new(
-            annotations=(
-                *path.annotations,
-                OpticalPathAnnotation(
+            labels=(
+                *path.labels,
+                OpticalPathLabel(
                     start_distance=110.0, end_distance=150.0, group="hole", value="a"
                 ),
-                OpticalPathAnnotation(
+                OpticalPathLabel(
                     start_distance=300.0, end_distance=340.0, group="hole", value="a"
                 ),
             )
@@ -2714,9 +2714,9 @@ class TestChannelSelectEdges:
         numeric = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
                         start_distance=100.0,
                         end_distance=200.0,
                         group="frost_depth",
@@ -2804,10 +2804,10 @@ def uneven_spool(patch, inventory):
     array = inventory.networks[0].fiber_arrays[0]
     acquisition, path = array.acquisitions[0], array.optical_paths[0]
     holes = (
-        OpticalPathAnnotation(
+        OpticalPathLabel(
             start_distance=110.0, end_distance=150.0, group="hole", value="a"
         ),
-        OpticalPathAnnotation(
+        OpticalPathLabel(
             start_distance=300.0, end_distance=340.0, group="hole", value="a"
         ),
     )
@@ -2816,8 +2816,8 @@ def uneven_spool(patch, inventory):
         array.new(
             acquisitions=(acquisition, acquisition.new(location_code="01")),
             optical_paths=(
-                path.new(annotations=(*path.annotations, *holes)),
-                path.new(location_code="01", annotations=(*path.annotations, holes[0])),
+                path.new(labels=(*path.labels, *holes)),
+                path.new(location_code="01", labels=(*path.labels, holes[0])),
             ),
         ),
     )
@@ -2914,8 +2914,8 @@ def _float_grid_pair(distance, span):
         name="main",
         location_code="",
         optical_components=(FiberSegment(name="c", optical_length=span + 10),),
-        annotations=(
-            OpticalPathAnnotation(
+        labels=(
+            OpticalPathLabel(
                 start_distance=span * 0.23,
                 end_distance=span * 0.61,
                 group="zone",
@@ -3075,8 +3075,8 @@ class TestChannelSelectContracts:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    OpticalPathAnnotation(
+                labels=(
+                    OpticalPathLabel(
                         start_distance=100.0,
                         end_distance=200.0,
                         group="output_id",

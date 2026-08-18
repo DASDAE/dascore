@@ -26,6 +26,16 @@ pytest.importorskip("yaml")
 
 
 # A minimal directory which loads: one acquisition names everything above it.
+PATH_DIRECTORY = {
+    "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ndata_category: DAS\n",
+    "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
+    "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
+    # A path with length, so a track laid along it is inside the path.
+    "fiber_arrays/DAS.L001/path/optical_components.csv": (
+        "sequence,object_type,optical_length,name\n1,FiberSegment,1000.0,fiber 1\n"
+    ),
+}
+
 MINIMAL = {
     "acquisitions/DAS.L001..RAW.yaml": "object_type: Acquisition\ndata_category: DAS\n",
 }
@@ -981,7 +991,7 @@ class TestFactory:
     def test_yaml_file_still_works(self, tmp_path):
         """A file keeps going to the single-file reader."""
         path = tmp_path / "inv.yaml"
-        dc.inventory().to_yaml(path)
+        dc.inventory().io.to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
     def test_directory_which_holds_no_inventory(self, tmp_path):
@@ -1075,7 +1085,7 @@ TRACKS = {
         "0,340,conduit,\n"
         "340,355,trench,backfilled\n"
     ),
-    "fiber_arrays/DAS.L001/path/annotations.csv": (
+    "fiber_arrays/DAS.L001/path/labels.csv": (
         "start_distance,end_distance,group,value\n"
         "0,340,rock_type,granite\n"
         "0,120,noisy,true\n"
@@ -1102,7 +1112,7 @@ class TestTrackTables:
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
         assert [x.name for x in path.optical_components] == ["fiber 1", "splice 1"]
         assert [x.coupling_type for x in path.coupling] == ["conduit", "trench"]
-        assert {x.group for x in path.annotations} == {
+        assert {x.group for x in path.labels} == {
             "rock_type",
             "noisy",
             "frost_depth",
@@ -1132,15 +1142,15 @@ class TestTrackTables:
         ],
     )
     def test_a_value_is_read_as_its_text_states(self, make_inventory, text, expected):
-        """A CSV has no types, so an annotation's value is read by content."""
+        """A CSV has no types, so a label's value is read by content."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n0,340,g,{text}\n"
             ),
         }
-        value = one_path(make_inventory(files)).annotations[0].value
+        value = one_path(make_inventory(files)).labels[0].value
         assert value == expected and isinstance(value, type(expected))
 
     def test_a_group_holding_two_kinds(self, make_inventory):
@@ -1148,7 +1158,7 @@ class TestTrackTables:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n"
                 "0,120,zone,north\n"
                 "120,340,zone,true\n"
@@ -1210,7 +1220,7 @@ class TestTrackTables:
             make_inventory(files)
 
     def test_a_column_of_text_is_refused(self, make_inventory):
-        """Text along distance is what annotations are for."""
+        """Text along distance is what labels are for."""
         files = {
             **MINIMAL,
             **TRACKS,
@@ -1218,7 +1228,7 @@ class TestTrackTables:
                 "segment,distance,zone\nS100,100.0,north\nS100,102.0,south\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match=r"annotations\.csv"):
+        with pytest.raises(InvalidInventoryError, match=r"labels\.csv"):
             make_inventory(files)
 
     def test_a_structural_column_restated_with_units(self, make_inventory):
@@ -1340,13 +1350,84 @@ class TestTrackTables:
         assert acquisition.channel_to_distance([512])[0] == 500.0
 
     def test_a_stem_naming_no_attribute(self, make_inventory):
-        """A table is matched to the model by name, so a typo is a typo."""
+        """A spreadsheet which never said it was a track is left where it lies.
+
+        An entity directory is somewhere a crew keeps its own working files,
+        and this format has no claim on one it does not recognise. The
+        tables beside it are still read, so the directory is being loaded
+        rather than merely tolerated.
+        """
         files = {
-            **MINIMAL,
-            "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\n",
-            "fiber_arrays/DAS.L001/geometrys.csv": "segment,distance\nS,0\n",
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/crew_notes.csv": "who,when\nderrick,tuesday\n",
+            "fiber_arrays/DAS.L001/path/components.csv": "a,b\n1,2\n",
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation\n"
+                "S,0,0,0,0\nS,100,1,1,0\n"
+            ),
         }
-        with pytest.raises(InvalidInventoryError, match="names no attribute"):
+        inventory = make_inventory(files)
+        (path,) = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert len(path.geometry) == 1
+
+    @pytest.mark.parametrize("name", ["geometrys", "couplings", "label"])
+    def test_a_stem_nearly_naming_an_attribute(self, make_inventory, name):
+        """A near-miss did claim to be a track, so it is not quietly dropped."""
+        files = {
+            **PATH_DIRECTORY,
+            f"fiber_arrays/DAS.L001/path/{name}.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="Did you mean"):
+            make_inventory(files)
+
+    def test_the_resemblance_cutoff_stays_high(self, make_inventory):
+        """A crew file is not read as a bad spelling of this format's.
+
+        `components` resembles `optical_components` more than most things
+        do and is still not it, so this pins the cutoff above that: a rule
+        loose enough to claim this file would refuse a crew's own work,
+        which is what the indifference exists to prevent.
+        """
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/components.csv": "a,b\n1,2\n",
+        }
+        assert make_inventory(files) is not None
+
+    def test_a_table_of_another_entity(self, make_inventory):
+        """The right file one directory too high still says it is a track."""
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/geometry.csv": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="names the track geometry"):
+            make_inventory(files)
+
+    @pytest.mark.parametrize("name", ["GEOMETRY", "Geometry"])
+    def test_a_shouted_table_name(self, make_inventory, name):
+        """Case decides nothing here, as it decides nothing for a suffix."""
+        files = {
+            **PATH_DIRECTORY,
+            f"fiber_arrays/DAS.L001/path/{name}.CSV": "segment,distance\nS,0\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
+            make_inventory(files)
+
+    def test_the_retired_annotations_table_says_what_to_rename(self, make_inventory):
+        """A name this format used to read is told what reads it now.
+
+        The document doors already refuse the same fact, so shrugging at it
+        here would break one stored inventory two different ways -- loudly
+        as YAML, silently as a directory, and the silent one loses the
+        labels the author believes are in it.
+        """
+        files = {
+            **PATH_DIRECTORY,
+            "fiber_arrays/DAS.L001/path/annotations.csv": (
+                "start_distance,end_distance,group,value\n0,10,zone,north\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="now reads as labels"):
             make_inventory(files)
 
     def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
@@ -1636,17 +1717,17 @@ class TestUnreadableTables:
         # Unset, rather than a tuple of nothing, which the model would refuse.
         assert acquisition.distance_map.instrument_distance is None
 
-    def test_an_annotation_stating_no_value(self, make_inventory):
+    def test_a_label_stating_no_value(self, make_inventory):
         """A membership group's value is its default, not a parsed cell."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n0,120,noisy,\n"
             ),
         }
-        annotation = one_path(make_inventory(files)).annotations[0]
-        assert annotation.value is True
+        label = one_path(make_inventory(files)).labels[0]
+        assert label.value is True
 
     def test_a_path_restating_a_start_which_disagrees(self, make_inventory):
         """A path directory's name is a restated address like any other."""
@@ -1730,7 +1811,7 @@ class TestUnreadableTables:
 DECLARED_BY = {
     "optical_components": inv.OpticalPath,
     "coupling": inv.OpticalPath,
-    "annotations": inv.OpticalPath,
+    "labels": inv.OpticalPath,
     "geometry": inv.OpticalPath,
     "distance_map": inv.Acquisition,
 }
@@ -1946,12 +2027,12 @@ class TestGapsMutationTestingFound:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n"
                 f"0,120,thickness,{first}\n120,340,thickness,{second}\n"
             ),
         }
-        values = [x.value for x in one_path(make_inventory(files)).annotations]
+        values = [x.value for x in one_path(make_inventory(files)).labels]
         assert sorted(values) == [1, 1.5]
 
     @pytest.mark.parametrize("text", ["TRUE", "True", " true "])
@@ -1960,22 +2041,22 @@ class TestGapsMutationTestingFound:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 f"start_distance,end_distance,group,value\n0,120,noisy,{text}\n"
             ),
         }
-        assert one_path(make_inventory(files)).annotations[0].value is True
+        assert one_path(make_inventory(files)).labels[0].value is True
 
     def test_a_decimal_point_keeps_a_value_a_float(self, make_inventory):
         """1.0 is written as a float and stays one, unlike 1."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
+            "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n0,120,thickness,1.0\n"
             ),
         }
-        value = one_path(make_inventory(files)).annotations[0].value
+        value = one_path(make_inventory(files)).labels[0].value
         assert isinstance(value, float) and value == 1.0
 
     def test_an_epoch_ending_exactly_where_the_next_begins(self, make_inventory):
@@ -2156,7 +2237,7 @@ class TestFindInventory:
     def test_the_file_form(self, tmp_path):
         """A serialized inventory beside the data it describes."""
         found = tmp_path / f"{loader.BLESSED_NAME}.yaml"
-        found.write_text(dc.inventory().to_yaml())
+        found.write_text(dc.inventory().io.to_yaml())
         assert loader.carries_inventory(tmp_path)
         assert loader.find_inventory(tmp_path) == found
         assert isinstance(dc.inventory(loader.find_inventory(tmp_path)), inv.Inventory)
@@ -2170,7 +2251,7 @@ class TestFindInventory:
 
     def test_the_visible_name_is_not_it(self, tmp_path):
         """`inventory.yaml` is the envelope of the authoring format."""
-        (tmp_path / "inventory.yaml").write_text(dc.inventory().to_yaml())
+        (tmp_path / "inventory.yaml").write_text(dc.inventory().io.to_yaml())
         assert not loader.carries_inventory(tmp_path)
         assert loader.find_inventory(tmp_path) is None
 
@@ -2293,7 +2374,7 @@ class TestLoadSerializedFile:
         """What `to_yaml` writes is what this reads."""
         original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
         path = tmp_path / "whole.yaml"
-        original.to_yaml(path)
+        original.io.to_yaml(path)
         assert dc.inventory(path) == original
 
 
@@ -2303,7 +2384,7 @@ class TestOneLoadingDoor:
     def test_text_and_file_agree(self, tmp_path):
         """The same document loads the same from either side of the door."""
         original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
-        text = original.to_yaml()
+        text = original.io.to_yaml()
         path = tmp_path / "whole.yaml"
         path.write_text(text)
         assert dc.inventory(text) == dc.inventory(path) == original
@@ -2311,7 +2392,7 @@ class TestOneLoadingDoor:
     def test_from_yaml_refuses_a_path(self, tmp_path):
         """The text reader says so rather than letting the parser fail."""
         path = tmp_path / "whole.yaml"
-        path.write_text(dc.inventory().to_yaml())
+        path.write_text(dc.inventory().io.to_yaml())
         with pytest.raises(InvalidInventoryError, match="reads YAML text"):
             inv.Inventory.from_yaml(path)
 

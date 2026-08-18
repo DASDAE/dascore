@@ -26,12 +26,21 @@ import sys
 import tempfile
 from pathlib import Path
 
+from dascore.constants import DATA_VERSION
+from dascore.utils.downloader import fetch
+
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 TUTORIAL_DIR = DOCS / "tutorial"
 # Not configurable: docs/filters/lite_button.lua looks for the notebooks here,
 # and prep_doc_build hands the same path to `jupyter lite build`.
-OUT_DIR = DOCS / "lite_contents" / "tutorial"
+CONTENTS_DIR = DOCS / "lite_contents"
+OUT_DIR = CONTENTS_DIR / "tutorial"
+# Where the mirrored example data lands inside the site. The browser kernel
+# mounts the site's contents at /drive, and pooch appends DATA_VERSION, so
+# DFS_DATA_DIR=/drive/data resolves to /drive/data/<DATA_VERSION>/<file>.
+DATA_DIR_NAME = "data"
+BROWSER_DATA_DIR = f"/drive/{DATA_DIR_NAME}"
 
 # Links in the notebooks point back at the rendered site, which differs by
 # deployment: dev publishes to netlify and releases publish to dascore.org.
@@ -52,10 +61,24 @@ KERNELSPEC = {
 # findiff -> velocity_to_strain_rate. IPython ships with the kernel.
 EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 
+# Example data shipped with the site so the tutorials read it locally instead
+# of downloading it from GitHub, which rate-limits per IP and would fail a
+# room full of people on one connection. Only the files the tutorial pages
+# reach for; a page needing something else still downloads it as before, so
+# this list going stale costs a download, not a broken notebook. To refresh
+# it, run the tutorial doc-code tests with dascore.utils.downloader.fetch
+# wrapped and record the names.
+MIRRORED_DATA = ("terra15_das_1_trimmed.hdf5", "example_dasdae_event_1.h5")
+
 SETUP_SOURCE = f"""\
 # This notebook runs DASCore in your browser through Pyodide; nothing is
 # installed on your computer. Run this cell first, it takes a moment.
 %pip install -q dascore {" ".join(EXTRA_PACKAGES)}
+import os
+
+# The example data ships with this site, so DASCore reads it from here rather
+# than downloading it.
+os.environ["DFS_DATA_DIR"] = "{BROWSER_DATA_DIR}"
 """
 
 SETUP_CELL_ID = "dascore-setup"
@@ -200,6 +223,30 @@ def find_unrewritten_links(notebook: dict) -> list[str]:
     return re.findall(r"\]\([^)]*\.qmd[^)]*\)", "\n".join(markdown))
 
 
+def mirror_data(contents_dir: Path) -> int:
+    """Copy the example data the tutorials read into the site's contents.
+
+    Returns the number of bytes mirrored. The layout has to match what pooch
+    expects under DFS_DATA_DIR, which is `<dir>/<DATA_VERSION>/<name>`.
+    """
+    target = contents_dir / DATA_DIR_NAME / DATA_VERSION
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    total = 0
+    for name in MIRRORED_DATA:
+        # fetch() reads the local cache when it is primed (as it is in CI) and
+        # downloads otherwise.
+        source = Path(fetch(name))
+        shutil.copy2(source, target / name)
+        total += source.stat().st_size
+    print(  # noqa: T201
+        f"Mirrored {len(MIRRORED_DATA)} data files "
+        f"({total / 1_000_000:.1f} MB) into {target}"
+    )
+    return total
+
+
 def build(out_dir: Path, site_url: str) -> int:
     """Render every tutorial page with code into out_dir."""
     if shutil.which("quarto") is None:
@@ -244,6 +291,7 @@ def build(out_dir: Path, site_url: str) -> int:
     if not written:
         sys.exit("No notebooks were built; the tutorial directory looks wrong.")
     print(f"Built {written} notebooks in {out_dir} linking to {site_url}")  # noqa: T201
+    mirror_data(out_dir.parent)
     return written
 
 

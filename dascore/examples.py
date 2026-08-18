@@ -25,7 +25,7 @@ from dascore.core.inventory import (
     Inventory,
     Network,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
@@ -773,7 +773,7 @@ def inventory_patch_pair():
     The patch is the random DAS example carrying the acquisition key of the
     inventory's one acquisition. That acquisition places its 300 channels on
     an optical path through a measured two-point distance map, so the path's
-    geometry, coupling, and annotations project onto the patch. Used by the
+    geometry, coupling, and labels project onto the patch. Used by the
     enrich documentation and tests.
     """
     patch = random_patch(acquisition_key="DAS.R2D1..RAW")
@@ -822,16 +822,14 @@ def inventory_patch_pair():
                 medium="soil",
             ),
         ),
-        annotations=(
-            OpticalPathAnnotation(
+        labels=(
+            OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="zone", value="north"
             ),
-            OpticalPathAnnotation(
+            OpticalPathLabel(
                 start_distance=200.0, end_distance=400.0, group="zone", value="south"
             ),
-            OpticalPathAnnotation(
-                start_distance=150.0, end_distance=300.0, group="noisy"
-            ),
+            OpticalPathLabel(start_distance=150.0, end_distance=300.0, group="noisy"),
         ),
     )
     inventory = Inventory(

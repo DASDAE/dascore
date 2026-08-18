@@ -167,39 +167,39 @@ class TestRoundTrip:
 
     def test_regions_through_a_directory(self, regions, tmp_path):
         """Bounds, extras and provenance all survive a directory."""
-        regions.save(tmp_path / "picks")
+        regions.io.save(tmp_path / "picks")
         assert dc.annotations(tmp_path / "picks") == regions
 
     def test_regions_through_a_bare_table(self, regions, tmp_path):
         """A set of regions is a table, and its dims are stated again."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         loaded = dc.annotations(path, dims=DIMS)
-        assert loaded.to_dataframe().equals(regions.to_dataframe())
+        assert loaded.io.to_dataframe().equals(regions.io.to_dataframe())
 
     def test_vertices_and_basis(self, with_vertices, curve, tmp_path):
         """Vertices and the curve they were drawn from both survive."""
-        with_vertices.save(tmp_path / "picks")
+        with_vertices.io.save(tmp_path / "picks")
         loaded = dc.annotations(tmp_path / "picks")
         assert loaded == with_vertices
         assert loaded[1].geometry.basis == curve
 
     def test_extras_keep_their_kind(self, regions, tmp_path):
         """A cell written as a number or a boolean reads back as one."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         assert loaded[0].extra["score"] == 0.9
         assert loaded[0].extra["checked"] is True
         assert loaded[1].extra["checked"] is False
 
     def test_tags_keep_their_shape(self, regions, tmp_path):
         """Tags are one spelling however they arrive."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         assert loaded[0].tags == ("road", "car")
         assert loaded[1].tags == ()
 
     def test_times_keep_their_type(self, regions, tmp_path):
         """A time endpoint reads back as a time, not as its text."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         start, _ = loaded[0].region.bounds["time"]
         assert isinstance(start, np.datetime64)
 
@@ -219,7 +219,7 @@ class TestRoundTrip:
         )
         frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"], "basis": [line]})
         annotations = dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].geometry.basis == line
 
     def test_an_unstated_bound(self, tmp_path):
@@ -232,7 +232,7 @@ class TestRoundTrip:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded == annotations
         assert "distance" not in loaded[1].region.bounds
 
@@ -246,14 +246,14 @@ class TestWhatATableCannotSay:
             {"group": ["a"], "distance": [1.0], "seq": ["third"]},
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["seq"] == "third"
 
     def test_an_empty_cell_is_unset(self, tmp_path):
         """A table cannot tell an empty cell from an empty string."""
         frame = pd.DataFrame({"group": ["", "b"], "distance": [1.0, 2.0]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+        assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
         assert annotations[0].group == ""
 
     def test_a_datetime_extra_reads_back_as_text(self, tmp_path):
@@ -268,7 +268,7 @@ class TestWhatATableCannotSay:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["when"] == "2020-01-01T00:00:00.000000000"
 
     def test_an_ambiguous_value_is_refused_at_the_write(self, tmp_path):
@@ -280,7 +280,7 @@ class TestWhatATableCannotSay:
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
         with pytest.raises(ParameterError, match="read back as a boolean"):
-            annotations.save(tmp_path / "picks")
+            annotations.io.save(tmp_path / "picks")
 
     def test_an_unambiguous_value_still_writes(self, tmp_path):
         """Only text a table would read as another kind is refused."""
@@ -288,13 +288,13 @@ class TestWhatATableCannotSay:
             {"group": ["phase"] * 2, "value": ["P", "S"], "distance": [1.0, 2.0]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+        assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
 
     def test_a_non_finite_looking_extra_stays_text(self, tmp_path):
         """A cell reading 'nan' is text, not a value which then vanishes."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "note": ["nan"]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["note"] == "nan"
 
     def test_an_extra_some_rows_leave_blank(self, tmp_path):
@@ -303,7 +303,7 @@ class TestWhatATableCannotSay:
             {"group": ["a", "b"], "distance": [1.0, 2.0], "note": ["seen", None]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["note"] == "seen"
         assert "note" not in loaded[1].extra
 
@@ -311,7 +311,7 @@ class TestWhatATableCannotSay:
         """A cell is read the way its own text states it, as every table is."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "zip": ["01234"]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["zip"] == 1234
 
 
@@ -321,8 +321,8 @@ class TestSavingOverASet:
     def test_a_stale_vertices_table_is_cleared(self, with_vertices, regions, tmp_path):
         """A set without vertices leaves none behind for the next read."""
         directory = tmp_path / "picks"
-        with_vertices.save(directory)
-        regions.save(directory)
+        with_vertices.io.save(directory)
+        regions.io.save(directory)
         assert not (directory / "vertices.csv").exists()
         assert dc.annotations(directory) == regions
 
@@ -334,24 +334,24 @@ class TestSavingOverASet:
         (directory / "attrs.yaml").write_text(yaml.safe_dump({"dims": list(DIMS)}))
         (directory / "annotations.csv").write_text("group,distance\nnoise,1.0\n")
         loaded = dc.annotations(directory)
-        loaded.save(directory)
+        loaded.io.save(directory)
         assert not (directory / "attrs.yaml").exists()
         assert dc.annotations(directory) == loaded
 
     def test_a_file_owing_this_format_nothing_is_left(self, regions, tmp_path):
         """Only the spellings a set claims are cleared."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.bak").write_text("mine")
-        regions.save(directory)
+        regions.io.save(directory)
         assert (directory / "attrs.bak").read_text() == "mine"
 
     def test_a_shouted_suffix_is_read_and_superseded(self, regions, tmp_path):
         """One data model stands behind a suffix however it is spelled."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").rename(directory / "attrs.JSON")
         loaded = dc.annotations(directory)
         assert loaded == regions
-        loaded.save(directory)
+        loaded.io.save(directory)
         # One attrs file, whatever it ends up called: a case-insensitive
         # filesystem holds the shouted name and the written one in the
         # same file, so the spelling on disk is the platform's to decide
@@ -378,7 +378,7 @@ class TestTheDoor:
 
     def test_a_directory_refuses_what_it_states(self, regions, tmp_path):
         """A directory holds its own attributes and vertices."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         with pytest.raises(InvalidAnnotationError, match="which states them"):
             dc.annotations(directory, attrs={"dims": DIMS})
         with pytest.raises(InvalidAnnotationError, match="which states them"):
@@ -416,7 +416,7 @@ class TestTheDoor:
     def test_a_set_of_none(self, tmp_path):
         """A set of no annotations writes an empty table and reads back."""
         empty = dc.annotations(dims=DIMS)
-        assert dc.annotations(empty.save(tmp_path / "picks")) == empty
+        assert dc.annotations(empty.io.save(tmp_path / "picks")) == empty
 
 
 class TestDeclaringDimensions:
@@ -424,18 +424,18 @@ class TestDeclaringDimensions:
 
     def test_stated_by_the_attrs(self, regions, tmp_path):
         """A directory states its own dimensions."""
-        assert dc.annotations(regions.save(tmp_path / "picks")).dims == DIMS
+        assert dc.annotations(regions.io.save(tmp_path / "picks")).dims == DIMS
 
     def test_stated_by_the_caller(self, regions, tmp_path):
         """A bare table has the caller state them."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         assert dc.annotations(path, dims=DIMS).dims == DIMS
 
     def test_stated_by_neither(self, regions, tmp_path):
         """A source stating none fails saying how to state them."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
             dc.annotations(path)
 
@@ -468,13 +468,13 @@ class TestDeclaringDimensions:
         """Reading the cells against other dimensions would type them
         differently and build a set which is not the one stored.
         """
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         with pytest.raises(InvalidAnnotationError, match="its own dimensions"):
             dc.annotations(directory, dims=("time", "distance"))
 
     def test_a_directory_which_states_none_takes_them(self, regions, tmp_path):
         """Where a directory states none, the caller's are the only ones."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=("time", "distance")).dims == (
             "time",
@@ -490,7 +490,7 @@ class TestTheAttrsFile:
         """One data model stands behind both spellings; a set may be authored
         in the more readable one.
         """
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         document = json.loads((directory / "attrs.json").read_text())
         (directory / "attrs.yaml").write_text(yaml.safe_dump(document))
         (directory / "attrs.json").unlink()
@@ -498,14 +498,14 @@ class TestTheAttrsFile:
 
     def test_two_spellings(self, regions, tmp_path):
         """A set spells each of its parts once."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.yml").write_text("{}")
         with pytest.raises(InvalidAnnotationError, match="more than once"):
             dc.annotations(directory)
 
     def test_the_wrong_object(self, regions, tmp_path):
         """A file declaring another model is a misfiled object."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text(
             '{"object_type": "Inventory", "dims": ["time"]}'
         )
@@ -514,7 +514,7 @@ class TestTheAttrsFile:
 
     def test_which_is_not_a_mapping(self, regions, tmp_path):
         """A document stating a list defines no attributes."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text('["distance", "time"]')
         with pytest.raises(InvalidAnnotationError, match="no mapping"):
             dc.annotations(directory)
@@ -522,7 +522,7 @@ class TestTheAttrsFile:
     @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_which_does_not_parse(self, regions, tmp_path):
         """Unparseable YAML names the file rather than the parser."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         (directory / "attrs.yaml").write_text("dims: [\n")
         with pytest.raises(InvalidAnnotationError, match="Could not parse YAML"):
@@ -530,21 +530,21 @@ class TestTheAttrsFile:
 
     def test_bad_json(self, regions, tmp_path):
         """Unparseable JSON names the file too."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text("{")
         with pytest.raises(InvalidAnnotationError, match="Could not parse JSON"):
             dc.annotations(directory)
 
     def test_which_cannot_be_read(self, regions, tmp_path):
         """A file which does not decode names itself, not the codec."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_bytes(b'{"dims": ["\xff\xfe"]}')
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
     def test_no_attrs_file(self, regions, tmp_path):
         """A directory without one is read on the caller's dimensions."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=DIMS).dims == DIMS
 
@@ -561,14 +561,14 @@ class TestTheTables:
 
     def test_a_table_which_cannot_be_read(self, regions, tmp_path):
         """A table which does not decode is the table reader's to name."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "annotations.csv").write_bytes(b"group\n\xff\xfe\n")
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
     def test_vertices_named_in_another_case(self, with_vertices, tmp_path):
         """Every part of a set is found the same way, so none is skipped."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "vertices.csv"
         table.rename(directory / "vertices.CSV")
         assert dc.annotations(directory) == with_vertices
@@ -576,7 +576,7 @@ class TestTheTables:
     @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
     def test_vertices_spelled_twice(self, with_vertices, tmp_path):
         """A set spells each of its parts once, vertices included."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         text = (directory / "vertices.csv").read_text()
         (directory / "vertices.CSV").write_text(text)
         with pytest.raises(InvalidAnnotationError, match="states vertices more than"):
@@ -584,14 +584,14 @@ class TestTheTables:
 
     def test_a_stray_table(self, regions, tmp_path):
         """A near-miss on the convention raises rather than being skipped."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "vertexes.csv").write_text("id,seq\n")
         with pytest.raises(InvalidAnnotationError, match=r"vertexes\.csv"):
             dc.annotations(directory)
 
     def test_a_basis_which_is_not_json(self, with_vertices, tmp_path):
         """A stored basis is what its curve dumps."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text(table.read_text().replace('"{""object_type', '"{oops'))
         with pytest.raises(InvalidAnnotationError, match="not a JSON document"):
@@ -599,7 +599,7 @@ class TestTheTables:
 
     def test_a_basis_which_is_not_a_curve(self, with_vertices, tmp_path):
         """A document which parses but names no curve is still refused."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         original = table.read_text()
         start = original.index('"{""object_type')
@@ -612,7 +612,7 @@ class TestTheTables:
 
     def test_a_non_numeric_seq(self, with_vertices, tmp_path):
         """A vertex states its place in the order as a number."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "vertices.csv"
         table.write_text(table.read_text().replace("p1,0,", "p1,first,"))
         with pytest.raises(InvalidAnnotationError, match="non-numeric seq"):
@@ -620,7 +620,7 @@ class TestTheTables:
 
     def test_a_dimension_which_is_neither(self, regions, tmp_path):
         """A dimension column holds numbers or times, and says so."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text(table.read_text().replace("120.0", "far"))
         with pytest.raises(InvalidAnnotationError, match="neither numbers nor times"):
@@ -643,7 +643,7 @@ class TestTheTables:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("time",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded == annotations
         assert isinstance(loaded[0].region.bounds["time"][0], np.datetime64)
 
@@ -664,7 +664,7 @@ class TestTheTables:
         """The frame and the geometry built from it say the same thing."""
         frame = pd.DataFrame({"time_start": ["2020-01-01"], "time_end": ["2020-01-02"]})
         out = dc.AnnotationSet(frame, dims=("time",))
-        held = out.to_dataframe()["time_start"][0]
+        held = out.io.to_dataframe()["time_start"][0]
         assert isinstance(held, pd.Timestamp | np.datetime64)
         assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01")
 
@@ -675,12 +675,12 @@ class TestTheTables:
             {"id": ["1", "1"], "seq": [0, 1], "distance": [1.0, 2.0]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",), vertices=vertices)
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].id == "1"
         # The frame too, not only the model: Annotation.id is typed str, so
         # it would coerce an int back and hide the damage.
-        assert loaded.to_dataframe()["id"][0] == "1"
-        assert loaded.to_vertices()["id"][0] == "1"
+        assert loaded.io.to_dataframe()["id"][0] == "1"
+        assert loaded.io.to_vertices()["id"][0] == "1"
         assert loaded == annotations
 
 
@@ -689,44 +689,44 @@ class TestWriting:
 
     def test_to_csv_returns_text(self, regions):
         """The text comes back whether or not it is written."""
-        text = regions.to_csv()
+        text = regions.io.to_csv()
         assert text.splitlines()[0].startswith("id,group,tags")
 
     def test_to_csv_refuses_vertices(self, with_vertices):
         """A bare table states one grain."""
         with pytest.raises(ParameterError, match="holds vertices"):
-            with_vertices.to_csv()
+            with_vertices.io.to_csv()
 
     def test_save_makes_the_directory(self, regions, tmp_path):
         """Saving into a directory which is not there makes it."""
-        directory = regions.save(tmp_path / "deep" / "picks")
+        directory = regions.io.save(tmp_path / "deep" / "picks")
         assert directory.is_dir()
 
     def test_save_writes_no_empty_vertices(self, regions, tmp_path):
         """A set without vertices states no vertices table."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         assert not (directory / "vertices.csv").exists()
 
     def test_save_writes_what_it_holds(self, with_vertices, tmp_path):
         """A set with vertices states all three parts."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         written = {x.name for x in directory.iterdir()}
         assert written == {"attrs.json", "annotations.csv", "vertices.csv"}
 
     def test_save_over_itself(self, regions, tmp_path):
         """Saving twice into one directory rewrites it."""
-        regions.save(tmp_path / "picks")
-        assert dc.annotations(regions.save(tmp_path / "picks")) == regions
+        regions.io.save(tmp_path / "picks")
+        assert dc.annotations(regions.io.save(tmp_path / "picks")) == regions
 
     def test_times_are_written_unambiguously(self, regions, tmp_path):
         """A time is written the way DASCore writes every datetime."""
-        text = regions.to_csv()
+        text = regions.io.to_csv()
         assert "2020-01-01T00:00:10.000000000" in text
 
     def test_a_nested_extra_is_written_as_its_document(self, tmp_path):
         """A cell a table has no column shape for is written as text."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"n": 1}]})
-        text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""n"": 1}' in text
 
     def test_an_extra_json_cannot_spell(self, tmp_path):
@@ -734,12 +734,12 @@ class TestWriting:
         than dying as a circular reference.
         """
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"s": {1}}]})
-        text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""s"": ""1""}' in text
 
     def test_the_attrs_name_their_model(self, regions, tmp_path):
         """The document says what it holds, as every stored object does."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         text = (directory / "attrs.json").read_text()
         assert '"object_type": "AnnotationSetAttrs"' in text
 
@@ -751,8 +751,8 @@ class TestCollections:
     def collection(self, regions, picks, tmp_path):
         """A directory holding two sets, each stating its own dimensions."""
         root = tmp_path / "sets"
-        regions.save(root / "hand")
-        picks.save(root / "phasenet")
+        regions.io.save(root / "hand")
+        picks.io.save(root / "phasenet")
         return root
 
     def test_reads_as_one_set(self, collection, regions, picks):
@@ -784,13 +784,13 @@ class TestCollections:
     def test_round_trips_through_one_directory(self, collection, tmp_path):
         """A collection saves flat, and what it read is what it reads back."""
         loaded = dc.annotations(collection)
-        assert dc.annotations(loaded.save(tmp_path / "flat")) == loaded
+        assert dc.annotations(loaded.io.save(tmp_path / "flat")) == loaded
 
     def test_an_id_in_two_sets(self, regions, tmp_path):
         """An id is an address into the collection, so it names one row."""
         root = tmp_path / "sets"
-        regions.save(root / "hand")
-        regions.save(root / "again")
+        regions.io.save(root / "hand")
+        regions.io.save(root / "again")
         with pytest.raises(InvalidAnnotationError, match="again and hand"):
             dc.annotations(root)
 
@@ -818,20 +818,20 @@ class TestCollections:
     def test_a_tree_of_collections(self, regions, tmp_path):
         """Sets loaded together are one collection, not a tree of them."""
         root = tmp_path / "sets"
-        regions.save(root / "outer" / "inner")
-        regions.save(root / "hand")
+        regions.io.save(root / "outer" / "inner")
+        regions.io.save(root / "hand")
         with pytest.raises(InvalidAnnotationError, match="not a tree"):
             dc.annotations(root)
 
     def test_a_set_which_also_holds_sets(self, regions, picks, tmp_path):
         """A directory stating annotations is the set, whatever sits below it."""
-        root = regions.save(tmp_path / "sets")
-        picks.save(root / "hand")
+        root = regions.io.save(tmp_path / "sets")
+        picks.io.save(root / "hand")
         assert dc.annotations(root) == regions
 
     def test_a_set_beside_a_folder_of_its_own(self, regions, tmp_path):
         """A folder someone kept beside the tables is not this format's business."""
-        root = regions.save(tmp_path / "picks")
+        root = regions.io.save(tmp_path / "picks")
         (root / "backup").mkdir()
         (root / "backup" / "attrs.json").write_text('{"dims": ["time"]}')
         assert dc.annotations(root) == regions
@@ -871,9 +871,9 @@ class TestCollections:
     def test_a_dimension_spelled_two_ways(self, picks, tmp_path):
         """A point is not a range of no width, so neither stands in."""
         root = tmp_path / "sets"
-        picks.save(root / "ranges")
+        picks.io.save(root / "ranges")
         frame = pd.DataFrame({"group": ["a"], "time": [1.0]})
-        dc.AnnotationSet(frame, dims=("time",)).save(root / "points")
+        dc.AnnotationSet(frame, dims=("time",)).io.save(root / "points")
         with pytest.raises(InvalidAnnotationError, match="spelled as a point") as info:
             dc.annotations(root)
         # The constructor refuses this too; naming the sets is what this adds.
@@ -899,7 +899,7 @@ class TestCollections:
 
     def test_hidden_directories_are_not_sets(self, collection, regions):
         """A hidden name beside the sets describes the data, not them."""
-        regions.save(collection / ".annotations")
+        regions.io.save(collection / ".annotations")
         assert sorted(dc.annotations(collection).attrs.sets) == ["hand", "phasenet"]
 
     def test_a_directory_which_is_no_set(self, collection):
@@ -910,7 +910,7 @@ class TestCollections:
     def test_a_row_keeps_the_acquisition_it_names(self, regions, tmp_path):
         """A row naming its own acquisition outranks its set's, merged or not."""
         root = tmp_path / "sets"
-        regions.save(root / "hand")
+        regions.io.save(root / "hand")
         frame = pd.DataFrame(
             {
                 "id": ["m1", "m2"],
@@ -928,7 +928,7 @@ class TestCollections:
         other = dc.AnnotationSet(
             frame, dims=("time",), acquisition_key="NET.SET.00.das"
         )
-        other.save(root / "auto")
+        other.io.save(root / "auto")
         keys = {x.id: x.acquisition_key for x in dc.annotations(root)}
         assert keys["m1"] == "NET.OTHER.00.das"
         assert keys["m2"] == "NET.SET.00.das"
@@ -970,7 +970,7 @@ class TestCollections:
     def test_a_dimension_no_row_of_one_set_states(self, picks, tmp_path):
         """A column every row leaves empty states no kind, so it agrees."""
         root = tmp_path / "sets"
-        picks.save(root / "phasenet")
+        picks.io.save(root / "phasenet")
         blank = root / "quiet"
         blank.mkdir(parents=True)
         (blank / "annotations.csv").write_text("group,time_start,time_end\nq,,\n")
@@ -995,8 +995,8 @@ class TestCollections:
     def test_set_names_which_differ_only_in_case(self, regions, picks, tmp_path):
         """A set name is a label, so it must name one set on any filesystem."""
         root = tmp_path / "sets"
-        regions.save(root / "hand")
-        picks.save(root / "HAND")
+        regions.io.save(root / "hand")
+        picks.io.save(root / "HAND")
         with pytest.raises(InvalidAnnotationError, match="differ only in case"):
             dc.annotations(root)
 
@@ -1029,7 +1029,7 @@ class TestCollections:
     def test_a_collection_saved_flat_is_not_a_member(self, collection, tmp_path):
         """A directory this library wrote is named for what it is."""
         root = tmp_path / "outer"
-        dc.annotations(collection).save(root / "merged")
+        dc.annotations(collection).io.save(root / "merged")
         with pytest.raises(InvalidAnnotationError, match="already a collection"):
             dc.annotations(root)
 
@@ -1047,7 +1047,7 @@ class TestCollections:
 
     def test_a_label_naming_no_set(self, collection, tmp_path):
         """A label reaches back to what its set says, so it names one."""
-        flat = dc.annotations(collection).save(tmp_path / "flat")
+        flat = dc.annotations(collection).io.save(tmp_path / "flat")
         table = flat / "annotations.csv"
         table.write_text(table.read_text().replace(",hand", ",typo"))
         with pytest.raises(InvalidAnnotationError, match="name no set stated here"):
@@ -1055,7 +1055,7 @@ class TestCollections:
 
     def test_a_row_with_no_label(self, collection, tmp_path):
         """A row loaded with others says which of them it came from."""
-        flat = dc.annotations(collection).save(tmp_path / "flat")
+        flat = dc.annotations(collection).io.save(tmp_path / "flat")
         table = flat / "annotations.csv"
         text = table.read_text().replace(",hand", ",", 1)
         table.write_text(text)
@@ -1064,9 +1064,9 @@ class TestCollections:
 
     def test_a_table_with_no_label_column(self, collection, tmp_path):
         """Sets stated with no column to name them leave every row adrift."""
-        flat = dc.annotations(collection).save(tmp_path / "flat")
+        flat = dc.annotations(collection).io.save(tmp_path / "flat")
         table = flat / "annotations.csv"
-        frame = dc.annotations(flat).to_dataframe().drop(columns="set")
+        frame = dc.annotations(flat).io.to_dataframe().drop(columns="set")
         table.write_text(frame.to_csv(index=False))
         with pytest.raises(InvalidAnnotationError, match="no set column"):
             dc.annotations(flat)
@@ -1075,7 +1075,7 @@ class TestCollections:
         """A collection holding no rows at all labels none of them."""
         root = tmp_path / "sets"
         for name in ("hand", "auto"):
-            dc.AnnotationSet(None, dims=("time",)).save(root / name)
+            dc.AnnotationSet(None, dims=("time",)).io.save(root / name)
         loaded = dc.annotations(root)
         assert len(loaded) == 0
         assert sorted(loaded.attrs.sets) == ["auto", "hand"]
@@ -1088,8 +1088,8 @@ class TestCollections:
     def test_a_set_with_no_annotations(self, picks, tmp_path):
         """A set which states nothing is still one of the sets loaded."""
         root = tmp_path / "sets"
-        picks.save(root / "phasenet")
-        dc.AnnotationSet(None, dims=("time",)).save(root / "empty")
+        picks.io.save(root / "phasenet")
+        dc.AnnotationSet(None, dims=("time",)).io.save(root / "empty")
         loaded = dc.annotations(root)
         assert len(loaded) == len(picks)
         assert sorted(loaded.attrs.sets) == ["empty", "phasenet"]
@@ -1097,7 +1097,7 @@ class TestCollections:
     def test_paths_from_two_sets(self, with_vertices, tmp_path):
         """Vertices merge too, and each path still reads as the shape it was."""
         root = tmp_path / "sets"
-        with_vertices.save(root / "hand")
+        with_vertices.io.save(root / "hand")
         frame = pd.DataFrame({"id": ["p9"], "group": ["auto"], "geometry": ["path"]})
         vertices = pd.DataFrame(
             {
@@ -1114,7 +1114,7 @@ class TestCollections:
                 ),
             }
         )
-        dc.AnnotationSet(frame, dims=DIMS, vertices=vertices).save(root / "auto")
+        dc.AnnotationSet(frame, dims=DIMS, vertices=vertices).io.save(root / "auto")
         drawn = {x.id: x.geometry for x in dc.annotations(root) if x.id.startswith("p")}
         assert drawn["p1"].vertices["distance"] == (10.0, 95.0, 185.0)
         assert drawn["p9"].vertices["distance"] == (1000.0, 1100.0, 1200.0)
@@ -1123,12 +1123,12 @@ class TestCollections:
     def test_vertices_in_different_dimensions(self, with_vertices, tmp_path):
         """A vertex states every dimension its table names, so these cannot merge."""
         root = tmp_path / "sets"
-        with_vertices.save(root / "hand")
+        with_vertices.io.save(root / "hand")
         frame = pd.DataFrame({"id": ["f1"], "geometry": ["path"]})
         vertices = pd.DataFrame(
             {"id": ["f1"] * 2, "seq": [0, 1], "distance": [1.0, 2.0]}
         )
-        dc.AnnotationSet(frame, dims=("distance",), vertices=vertices).save(
+        dc.AnnotationSet(frame, dims=("distance",), vertices=vertices).io.save(
             root / "flat"
         )
         with pytest.raises(
@@ -1148,7 +1148,11 @@ class TestDeclaringDimensionsInTheTable:
         loaded = dc.annotations(path)
         assert loaded.dims == ("distance", "time")
         # The header is the one below the pragma, not the pragma itself.
-        assert set(loaded.to_dataframe().columns) == {"group", "time_start", "time_end"}
+        assert set(loaded.io.to_dataframe().columns) == {
+            "group",
+            "time_start",
+            "time_end",
+        }
         assert loaded[0].group == "q"
         assert loaded[0].region.bounds["time"] == (1.0, 2.0)
 
@@ -1197,7 +1201,7 @@ class TestDeclaringDimensionsInTheTable:
         )
         picks = dc.AnnotationSet(frame, dims=("time",))
         path = tmp_path / "picks.csv"
-        picks.to_csv(path)
+        picks.io.to_csv(path)
         loaded = dc.annotations(path, dims=("time",))
         assert len(loaded) == 2
         assert loaded[0].extra["# note"] == "first"
@@ -1208,7 +1212,7 @@ class TestDeclaringDimensionsInTheTable:
         path.write_text("# dims: time\n# picked by hand\ngroup,time\nq,1\n")
         loaded = dc.annotations(path)
         assert loaded.dims == ("time",)
-        assert set(loaded.to_dataframe().columns) == {"group", "time"}
+        assert set(loaded.io.to_dataframe().columns) == {"group", "time"}
 
     def test_the_keyword_is_read_in_any_case(self, tmp_path):
         """A hand-authored line is read as written, whatever case it names."""
@@ -1235,11 +1239,11 @@ class TestDeclaringDimensionsInTheTable:
         path.write_text('# dims: time\n# it is ,"odd\ngroup,time\nq,1\n')
         loaded = dc.annotations(path)
         assert loaded.dims == ("time",)
-        assert set(loaded.to_dataframe().columns) == {"group", "time"}
+        assert set(loaded.io.to_dataframe().columns) == {"group", "time"}
 
     def test_disagreeing_with_what_the_attrs_state(self, regions, tmp_path):
         """The message says where the other spelling came from."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text("# dims: depth\n" + table.read_text())
         with pytest.raises(InvalidAnnotationError, match="is stated in its attributes"):
@@ -1260,7 +1264,7 @@ class TestDeclaringDimensionsInTheTable:
 
     def test_disagreeing_with_the_attrs(self, regions, tmp_path):
         """A set directory states them once, wherever it states them."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text("# dims: depth\n" + table.read_text())
         with pytest.raises(InvalidAnnotationError, match="where the two agree"):
@@ -1308,7 +1312,7 @@ class TestDeclaringDimensionsInTheTable:
 
     def test_vertices_declare_nothing(self, with_vertices, tmp_path):
         """Vertices are read in the dimensions of the set they belong to."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "vertices.csv"
         table.write_text("# dims: time\n" + table.read_text())
         with pytest.raises(InvalidAnnotationError, match="states them once"):
@@ -1316,7 +1320,7 @@ class TestDeclaringDimensionsInTheTable:
 
     def test_vertices_take_no_preamble(self, with_vertices, tmp_path):
         """Vertices declare nothing, so they have nothing to comment beside."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "vertices.csv"
         table.write_text("# drawn on a screen\n" + table.read_text())
         with pytest.raises(InvalidAnnotationError, match="cells where its header"):
@@ -1336,13 +1340,13 @@ class TestCarriedAnnotations:
 
     def test_a_carried_set(self, data, regions):
         """Loading a directory of data loads the annotations it carries."""
-        regions.save(data / ".annotations")
+        regions.io.save(data / ".annotations")
         assert dc.annotations(data) == regions
 
     def test_a_carried_collection(self, data, regions, picks):
         """What is carried may be many named sets, as anywhere else."""
-        regions.save(data / ".annotations" / "hand")
-        picks.save(data / ".annotations" / "phasenet")
+        regions.io.save(data / ".annotations" / "hand")
+        picks.io.save(data / ".annotations" / "phasenet")
         assert sorted(dc.annotations(data).attrs.sets) == ["hand", "phasenet"]
 
     def test_a_carried_table(self, data):
@@ -1359,13 +1363,13 @@ class TestCarriedAnnotations:
 
     def test_a_carried_set_directory_states_its_own(self, data, regions):
         """A carried directory holds its attributes, as any set directory does."""
-        regions.save(data / ".annotations")
+        regions.io.save(data / ".annotations")
         with pytest.raises(InvalidAnnotationError, match="which states them"):
             dc.annotations(data, attrs={"dims": DIMS})
 
     def test_carried_twice(self, data, regions):
         """A directory states what it carries once."""
-        regions.save(data / ".annotations")
+        regions.io.save(data / ".annotations")
         (data / ".annotations.csv").write_text("group,time\nq,1\n")
         with pytest.raises(InvalidAnnotationError, match="more than once"):
             dc.annotations(data)
@@ -1384,8 +1388,8 @@ class TestCarriedAnnotations:
 
     def test_a_visible_set_is_the_set(self, data, regions, picks):
         """A directory stating annotations is a set, not something carrying one."""
-        picks.save(data / ".annotations")
-        regions.save(data)
+        picks.io.save(data / ".annotations")
+        regions.io.save(data)
         assert dc.annotations(data) == regions
 
     def test_carrying_nothing(self, data):
@@ -1403,7 +1407,7 @@ class TestCarriedAnnotations:
     def test_the_data_directory_keeps_its_own_attrs(self, data, regions):
         """A data directory's attrs file is about the data, so it is not read."""
         (data / "attrs.json").write_text('{"object_type": "SomethingElse"}')
-        regions.save(data / ".annotations")
+        regions.io.save(data / ".annotations")
         assert dc.annotations(data) == regions
 
 
@@ -1444,25 +1448,25 @@ class TestParquet:
 
     def test_a_bare_table(self, mixed, tmp_path):
         """A set of regions is one file, and reads back as the set it was."""
-        loaded = dc.annotations(mixed.to_parquet(tmp_path / "picks.parquet"))
-        assert loaded.to_dataframe().equals(mixed.to_dataframe())
+        loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded.io.to_dataframe().equals(mixed.io.to_dataframe())
 
     def test_the_dimensions_travel_with_the_file(self, mixed, tmp_path):
         """A parquet file states its dimensions where it can: its footer."""
-        path = mixed.to_parquet(tmp_path / "picks.parquet")
+        path = mixed.io.to_parquet(tmp_path / "picks.parquet")
         assert dc.annotations(path).dims == DIMS
 
     def test_restating_the_dimensions(self, mixed, tmp_path):
         """Agreement is allowed, disagreement is not, as with every spelling."""
-        path = mixed.to_parquet(tmp_path / "picks.parquet")
+        path = mixed.io.to_parquet(tmp_path / "picks.parquet")
         assert dc.annotations(path, dims=DIMS).dims == DIMS
         with pytest.raises(InvalidAnnotationError, match="where the two agree"):
             dc.annotations(path, dims=("depth",))
 
     def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
         """A column with no one type is written as documents, not as text."""
-        loaded = dc.annotations(mixed.to_parquet(tmp_path / "picks.parquet"))
-        assert [type(x).__name__ for x in loaded.to_dataframe()["value"]] == [
+        loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
+        assert [type(x).__name__ for x in loaded.io.to_dataframe()["value"]] == [
             "str",
             "bool",
         ]
@@ -1473,7 +1477,7 @@ class TestParquet:
         """A typed format has a boolean, so a cell reading 'true' is the word."""
         frame = pd.DataFrame({"group": ["a"], "note": ["true"], "time": [1.0]})
         picks = dc.AnnotationSet(frame, dims=("time",))
-        loaded = dc.annotations(picks.to_parquet(tmp_path / "picks.parquet"))
+        loaded = dc.annotations(picks.io.to_parquet(tmp_path / "picks.parquet"))
         assert loaded[0].extra["note"] == "true"
 
     def test_a_value_a_csv_would_refuse(self, tmp_path):
@@ -1481,22 +1485,24 @@ class TestParquet:
         frame = pd.DataFrame({"group": ["a"], "value": ["true"], "time": [1.0]})
         picks = dc.AnnotationSet(frame, dims=("time",))
         with pytest.raises(ParameterError, match="a table would read back"):
-            picks.to_csv()
-        loaded = dc.annotations(picks.to_parquet(tmp_path / "picks.parquet"))
+            picks.io.to_csv()
+        loaded = dc.annotations(picks.io.to_parquet(tmp_path / "picks.parquet"))
         assert loaded[0].value == "true"
 
     def test_a_set_of_no_annotations(self, tmp_path):
         """A set which states nothing writes a table which states nothing."""
         empty = dc.AnnotationSet(None, dims=("time",))
-        assert dc.annotations(empty.save(tmp_path / "picks", format="parquet")) == empty
-        loaded = dc.annotations(empty.to_parquet(tmp_path / "picks.parquet"))
+        assert (
+            dc.annotations(empty.io.save(tmp_path / "picks", format="parquet")) == empty
+        )
+        loaded = dc.annotations(empty.io.to_parquet(tmp_path / "picks.parquet"))
         assert len(loaded) == 0
 
     def test_an_empty_set_beside_a_full_one(self, picks, tmp_path):
         """One set holding nothing does not take its collection down with it."""
         root = tmp_path / "sets"
-        picks.save(root / "phasenet", format="parquet")
-        dc.AnnotationSet(None, dims=("time",)).save(root / "empty", format="parquet")
+        picks.io.save(root / "phasenet", format="parquet")
+        dc.AnnotationSet(None, dims=("time",)).io.save(root / "empty", format="parquet")
         assert len(dc.annotations(root)) == len(picks)
 
     def test_numbers_numpy_made(self, tmp_path):
@@ -1509,7 +1515,7 @@ class TestParquet:
             }
         )
         picks = dc.AnnotationSet(frame, dims=("time",))
-        loaded = dc.annotations(picks.save(tmp_path / "picks", format="parquet"))
+        loaded = dc.annotations(picks.io.save(tmp_path / "picks", format="parquet"))
         assert [x.value for x in loaded] == [3, 5, "text"]
 
     def test_a_time_inside_a_document(self, tmp_path):
@@ -1522,7 +1528,7 @@ class TestParquet:
             }
         )
         picks = dc.AnnotationSet(frame, dims=("time",))
-        loaded = dc.annotations(picks.save(tmp_path / "picks", format="parquet"))
+        loaded = dc.annotations(picks.io.save(tmp_path / "picks", format="parquet"))
         assert loaded[0].extra["meta"] == {"when": "2020-01-01T00:00:01.000000000"}
 
     @pytest.mark.parametrize(
@@ -1538,7 +1544,7 @@ class TestParquet:
 
     def test_a_directory(self, with_vertices, curve, tmp_path):
         """Every part a set states is written under its own name."""
-        directory = with_vertices.save(tmp_path / "picks", format="parquet")
+        directory = with_vertices.io.save(tmp_path / "picks", format="parquet")
         assert sorted(x.name for x in directory.iterdir()) == [
             "annotations.parquet",
             "attrs.json",
@@ -1551,23 +1557,31 @@ class TestParquet:
     def test_a_collection(self, regions, picks, tmp_path):
         """A set is a set whichever encoding it is written in."""
         root = tmp_path / "sets"
-        regions.save(root / "hand", format="parquet")
-        picks.save(root / "phasenet")
+        regions.io.save(root / "hand", format="parquet")
+        picks.io.save(root / "phasenet")
         assert sorted(dc.annotations(root).attrs.sets) == ["hand", "phasenet"]
 
     def test_carried_beside_data(self, regions, tmp_path):
         """The hidden name takes the parquet spelling too."""
         directory = tmp_path / "data"
         directory.mkdir()
-        regions.to_parquet(directory / ".annotations.parquet")
-        assert dc.annotations(directory).to_dataframe().equals(regions.to_dataframe())
+        regions.io.to_parquet(directory / ".annotations.parquet")
+        assert (
+            dc.annotations(directory)
+            .io.to_dataframe()
+            .equals(regions.io.to_dataframe())
+        )
 
     def test_carried_whatever_case_it_names(self, regions, tmp_path):
         """The carried name is matched as every other table name is."""
         directory = tmp_path / "data"
         directory.mkdir()
-        regions.to_parquet(directory / ".annotations.PARQUET")
-        assert dc.annotations(directory).to_dataframe().equals(regions.to_dataframe())
+        regions.io.to_parquet(directory / ".annotations.PARQUET")
+        assert (
+            dc.annotations(directory)
+            .io.to_dataframe()
+            .equals(regions.io.to_dataframe())
+        )
 
     def test_a_typed_column_which_cannot_be_a_dimension(self, tmp_path):
         """Stating a type is not stating one a coordinate can be."""
@@ -1578,8 +1592,8 @@ class TestParquet:
 
     def test_a_typed_vertex_order_which_is_not_a_number(self, with_vertices, tmp_path):
         """A vertex states its place in the order as a number, typed or not."""
-        directory = with_vertices.save(tmp_path / "picks", format="parquet")
-        vertices = with_vertices.to_vertices()
+        directory = with_vertices.io.save(tmp_path / "picks", format="parquet")
+        vertices = with_vertices.io.to_vertices()
         stamps = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
         vertices["seq"] = list(stamps) * (len(vertices) // 2) + list(
             stamps[: len(vertices) % 2]
@@ -1590,35 +1604,35 @@ class TestParquet:
 
     def test_the_other_encoding_is_superseded(self, regions, tmp_path):
         """A set written twice states itself once, not once per encoding."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         assert (directory / "annotations.csv").exists()
-        regions.save(directory, format="parquet")
+        regions.io.save(directory, format="parquet")
         assert not (directory / "annotations.csv").exists()
         assert dc.annotations(directory) == regions
-        regions.save(directory)
+        regions.io.save(directory)
         assert not (directory / "annotations.parquet").exists()
 
     def test_both_encodings_at_once(self, regions, tmp_path):
         """A directory holding both says two things; neither is chosen."""
-        directory = regions.save(tmp_path / "picks")
-        regions.to_parquet(directory / "annotations.parquet")
+        directory = regions.io.save(tmp_path / "picks")
+        regions.io.to_parquet(directory / "annotations.parquet")
         with pytest.raises(InvalidAnnotationError, match="each of its parts once"):
             dc.annotations(directory)
 
     def test_a_bare_table_refuses_vertices(self, with_vertices, tmp_path):
         """One file states one grain, whatever its encoding."""
         with pytest.raises(ParameterError, match="a bare table has no row for"):
-            with_vertices.to_parquet(tmp_path / "picks.parquet")
+            with_vertices.io.to_parquet(tmp_path / "picks.parquet")
 
     def test_an_unknown_encoding(self, regions, tmp_path):
         """A set is written in an encoding it has, and says which it has."""
         with pytest.raises(ParameterError, match="not a table encoding"):
-            regions.save(tmp_path / "picks", format="feather")
+            regions.io.save(tmp_path / "picks", format="feather")
 
     def test_vertices_declare_nothing(self, with_vertices, tmp_path):
         """Vertices are read in the dimensions of the set they belong to."""
-        directory = with_vertices.save(tmp_path / "picks", format="parquet")
-        frame = with_vertices.to_vertices()
+        directory = with_vertices.io.save(tmp_path / "picks", format="parquet")
+        frame = with_vertices.io.to_vertices()
         write_parquet(frame, directory / "vertices.parquet", {DIMS_KEY: '["time"]'})
         with pytest.raises(InvalidAnnotationError, match="states them once"):
             dc.annotations(directory)
@@ -1626,21 +1640,21 @@ class TestParquet:
     def test_dimensions_which_are_not_a_document(self, regions, tmp_path):
         """What the footer states is read, and named where it is not readable."""
         path = tmp_path / "picks.parquet"
-        write_parquet(regions.to_dataframe(), path, {DIMS_KEY: "time, distance"})
+        write_parquet(regions.io.to_dataframe(), path, {DIMS_KEY: "time, distance"})
         with pytest.raises(InvalidAnnotationError, match="not a JSON document"):
             dc.annotations(path)
 
     def test_dimensions_which_name_none(self, regions, tmp_path):
         """A file which declares its dimensions names them."""
         path = tmp_path / "picks.parquet"
-        write_parquet(regions.to_dataframe(), path, {DIMS_KEY: "[]"})
+        write_parquet(regions.io.to_dataframe(), path, {DIMS_KEY: "[]"})
         with pytest.raises(InvalidAnnotationError, match="names none"):
             dc.annotations(path)
 
     def test_a_stray_parquet_table(self, regions, tmp_path):
         """A near-miss on the convention is a near-miss in either encoding."""
-        directory = regions.save(tmp_path / "picks")
-        regions.to_parquet(directory / "annotation.parquet")
+        directory = regions.io.save(tmp_path / "picks")
+        regions.io.to_parquet(directory / "annotation.parquet")
         with pytest.raises(InvalidAnnotationError, match=r"annotation\.parquet"):
             dc.annotations(directory)
 

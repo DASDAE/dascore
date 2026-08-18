@@ -183,6 +183,6 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     if isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, float) and not np.isfinite(value):
-        msg = f"Annotation value must be finite; got {value}."
+        msg = f"A value must be finite; got {value}."
         raise error(msg)
     return value

@@ -55,6 +55,8 @@ from dascore.core.annotations import (
     VERTEX_STEM,
     AnnotationSet,
     _text,
+    annotation_set_to_dataframe,
+    annotation_set_to_vertices,
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
@@ -795,7 +797,7 @@ def _merge_sets(
     vertices = {
         name: drawn
         for name, one in loaded.items()
-        if not (drawn := one.to_vertices()).empty
+        if not (drawn := annotation_set_to_vertices(one)).empty
     }
     _refuse_mixed_vertices(vertices)
     _refuse_mixed_kinds(vertices, dims, "a vertex")
@@ -821,7 +823,7 @@ def _labeled(one: AnnotationSet, name: str) -> pd.DataFrame:
     the label -- writing any of it into every row would store one fact
     twice, in two places which can then disagree.
     """
-    frame = one.to_dataframe()
+    frame = annotation_set_to_dataframe(one)
     if "set" in frame.columns:
         msg = (
             f"The set {name!r} states a set column, so it is already a "
@@ -1168,8 +1170,8 @@ def annotations(
     >>> from pathlib import Path
     >>> with tempfile.TemporaryDirectory() as folder:
     ...     root = Path(folder) / "sets"
-    ...     _ = picks.save(root / "hand")
-    ...     _ = picks.save(root / "phasenet")
+    ...     _ = picks.io.save(root / "hand")
+    ...     _ = picks.io.save(root / "phasenet")
     ...     together = dc.annotations(root)
     >>> len(together), together[0].set, sorted(together.attrs.sets)
     (2, 'hand', ['hand', 'phasenet'])
@@ -1179,7 +1181,7 @@ def annotations(
 
     >>> with tempfile.TemporaryDirectory() as folder:
     ...     data = Path(folder)
-    ...     _ = picks.save(data / ".annotations")
+    ...     _ = picks.io.save(data / ".annotations")
     ...     carried = dc.annotations(data)
     >>> carried == picks
     True

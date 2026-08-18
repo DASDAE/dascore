@@ -327,12 +327,12 @@ The coil is `coiled` rather than `trench`, which is the whole reason that value 
 
 # Everything else
 
-Annotations are for what the model has no field for. Each group becomes a coordinate on the patches, named after the group, so pick names you would want to select on later. Here `section` says what kind of installation a channel belongs to, and `borehole` numbers the holes.
+Labels are for what the model has no field for. Each group becomes a coordinate on the patches, named after the group, so pick names you would want to select on later. Here `section` says what kind of installation a channel belongs to, and `borehole` numbers the holes.
 
 ```{python}
 #| code-fold: true
-#| code-summary: "path.00/annotations.csv"
-def annotation_table(at, trench_parts):
+#| code-summary: "path.00/labels.csv"
+def label_table(at, trench_parts):
     """Which section a channel is in, and which borehole if it is in one."""
     rows = [(*at[name], "section", "trench") for name in trench_parts]
     rows.append((*at["cable coil at C"], "section", "coil"))
@@ -345,10 +345,10 @@ def annotation_table(at, trench_parts):
     )
 
 
-annotations = annotation_table(at, TRENCH_PARTS)
-annotations.to_csv(root / PATH / "annotations.csv", index=False)
+labels = label_table(at, TRENCH_PARTS)
+labels.to_csv(root / PATH / "labels.csv", index=False)
 
-annotations
+labels
 ```
 
 A group holds one kind of value: `section` is text in every row and `borehole` is a number in every row. Mixing them would be two tracks sharing a name, and is refused when the directory is read.
@@ -392,7 +392,7 @@ names = inventory.get_names()
 print("coords:", [x for x in names.coords if "." not in x])
 ```
 
-`section` and `borehole` are among the coordinates because the annotations table named them. `x`, `y`, and `z` are there because the CRS declares those axes and the geometry table resolves to them.
+`section` and `borehole` are among the coordinates because the labels table named them. `x`, `y`, and `z` are there because the CRS declares those axes and the geometry table resolves to them.
 
 # What the data gets out of it
 
@@ -514,8 +514,8 @@ geometry_table(repaired_at, repaired_runs).to_csv(
 coupling_table(repaired_at, repaired_trench).to_csv(
     root / EPOCH / "coupling.csv", index=False
 )
-annotation_table(repaired_at, repaired_trench).to_csv(
-    root / EPOCH / "annotations.csv", index=False
+label_table(repaired_at, repaired_trench).to_csv(
+    root / EPOCH / "labels.csv", index=False
 )
 
 repaired = dc.inventory(root)
@@ -561,16 +561,16 @@ Had the path been edited in place instead, that first assertion would now be fal
 
 # Shipping it
 
-The directory is the authoring format, and it is the right one while a deployment is still being surveyed, because the tracks are spreadsheets. [`Inventory.to_yaml`](`dascore.core.inventory.Inventory.to_yaml`) writes the single-file form to ship beside a data archive, and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads either back.
+The directory is the authoring format, and it is the right one while a deployment is still being surveyed, because the tracks are spreadsheets. [`Inventory.io.to_yaml`](`dascore.core.inventory.inventory_to_yaml`) writes the single-file form to ship beside a data archive, and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads either back.
 
 ```{python}
-text = repaired.to_yaml()
+text = repaired.io.to_yaml()
 
 print(f"{len(text.splitlines())} lines of yaml")
 assert dc.inventory(text) == repaired
 ```
 
-Dropping either into the data directory means every spool opened there finds it without being told: the authoring directory as `.inventory/`, or the single file as `.inventory.yaml` or `.inventory.yml`. The suffix states the format rather than decorating it, so a file called plainly `.inventory` is not one of the spellings, and the third one — `.inventory.json` — holds what `model_dump_json` writes rather than what `to_yaml` does.
+Dropping either into the data directory means every spool opened there finds it without being told: the authoring directory as `.inventory/`, or the single file as `.inventory.yaml` or `.inventory.yml`. The suffix states the format rather than decorating it, so a file called plainly `.inventory` is not one of the spellings, and the third one — `.inventory.json` — holds what `model_dump_json` writes rather than what `io.to_yaml` does.
 
 # Where the boundaries fell
 

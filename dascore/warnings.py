@@ -9,10 +9,9 @@ class DASCoreWarning(UserWarning):
 
 class NumpyFallbackWarning(DASCoreWarning):
     """
-    Raised when a patch function converts non-numpy data to numpy.
+    Issued when an operation converts non-numpy data to numpy.
 
-    Patch functions which have no implementation for the array backend of
-    the input patch fall back to their numpy implementation. The data are
-    converted to numpy, the function is applied, then the output data are
-    converted back to the original backend.
+    Some ufuncs, all numpy functions, and reductions of dtypes the standard
+    excludes are applied by numpy: the data are converted, the operation
+    applied, and the output converted back to the original backend.
     """

@@ -17,7 +17,7 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
@@ -441,12 +441,12 @@ class TestCoords:
 
     def test_numeric_group(self, patch, inventory):
         """A numeric group carries NaN where uncovered."""
-        annotations = (
-            OpticalPathAnnotation(
+        labels = (
+            OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="frost", value=1.5
             ),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("frost",))
         values = out.get_coord("frost").values
         assert values[0] == 1.5
@@ -525,13 +525,13 @@ class TestCoords:
         assert "zone" in set(out.coords.coord_map)
 
     def test_point_markers_cover_nothing(self, patch, inventory):
-        """An annotation marking a spot documents it without covering it."""
-        annotations = (
-            OpticalPathAnnotation(
+        """A label marking a spot documents it without covering it."""
+        labels = (
+            OpticalPathLabel(
                 start_distance=150.0, end_distance=150.0, group="zone", value="clamp"
             ),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("zone",))
         values = out.get_coord("zone").values
         # Nothing is covered, so every channel takes the empty marker.
@@ -701,7 +701,7 @@ class TestProjectionDetails:
     def test_blanket_needs_no_map_when_path_is_bare(self, patch, inventory):
         """A path with nothing to project asks nothing of the map either."""
         no_map = _replace_acquisition(inventory, distance_map=None)
-        bare = _replace_path(no_map, geometry=(), annotations=())
+        bare = _replace_path(no_map, geometry=(), labels=())
         out = patch.enrich(bare)
         assert set(out.coords.coord_map) == set(patch.coords.coord_map)
 
@@ -846,26 +846,26 @@ class TestEnrichContracts:
         out = renamed.enrich(inv, attrs=False, coords=("distance",))
         assert out.get_coord("distance").values[10] == 110.0
 
-    def test_reserved_annotation_group_raises(self, inventory):
+    def test_reserved_label_group_raises(self, inventory):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        annotation = OpticalPathAnnotation(
+        label = OpticalPathLabel(
             start_distance=100.0, end_distance=200.0, group="time", value=True
         )
         with pytest.raises(InvalidInventoryError, match="reserved name"):
-            path.new(annotations=(annotation,)).check()
+            path.new(labels=(label,)).check()
 
     def test_boolean_group_is_a_union(self, patch, inventory):
         """Membership groups overlap, so any covering true interval wins."""
-        annotations = (
-            OpticalPathAnnotation(
+        labels = (
+            OpticalPathLabel(
                 start_distance=100.0, end_distance=400.0, group="wet", value=True
             ),
-            OpticalPathAnnotation(
+            OpticalPathLabel(
                 start_distance=200.0, end_distance=300.0, group="wet", value=False
             ),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("wet",))
         assert out.get_coord("wet").values.all()
 
@@ -1018,10 +1018,10 @@ class TestPartialStringCoverage:
 class TestEmptyIsUnambiguous:
     """Absence has one spelling, so nothing legitimate can wear it."""
 
-    def test_empty_annotation_value_rejected(self):
+    def test_empty_label_value_rejected(self):
         """A group saying nothing would read as an uncovered channel."""
         with pytest.raises(ValidationError, match="may not be the empty string"):
-            OpticalPathAnnotation(
+            OpticalPathLabel(
                 start_distance=0.0, end_distance=10.0, group="zone", value=""
             )
 

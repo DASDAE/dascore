@@ -320,7 +320,7 @@ def drop_private_coords(self: PatchType) -> PatchType:
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def make_broadcastable_to(
     self: PatchType,
     shape: tuple[int, ...],
@@ -712,7 +712,7 @@ def order(
     return patch.new(data=data, coords=new_coords)
 
 
-@patch_function(history=None, backend="array_api")
+@patch_function(history=None)
 def transpose(self: PatchType, *dims: str) -> PatchType:
     """
     Transpose the data array to any dimension order desired.
@@ -825,7 +825,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     return patch.update(data=data, coords=coords)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def squeeze(self: PatchType, dim=None) -> PatchType:
     """
     Return a new object with len one dimensions flattened.

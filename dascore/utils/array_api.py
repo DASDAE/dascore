@@ -36,10 +36,7 @@ __all__ = [
     "warn_numpy_fallback",
 ]
 
-# The key used by patch functions written against the array API standard.
-ARRAY_API_BACKEND = "array_api"
-
-# The key used by patch functions which require numpy arrays.
+# The name reported for numpy arrays, and for array-likes numpy handles.
 NUMPY_BACKEND = "numpy"
 
 
