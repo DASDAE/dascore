@@ -409,7 +409,7 @@ class Pipe(DascoreBaseModel):
             )
             raise ParameterError(msg)
         written_tasks = document["tasks"]
-        tasks = {node: Task.from_dict(value) for node, value in written_tasks.items()}
+        tasks = {node: _read_task(node, value) for node, value in written_tasks.items()}
         dependencies = {
             node: tuple(value)
             for node, value in document.get("dependencies", {}).items()
@@ -587,6 +587,21 @@ def _merge(
     return renamed
 
 
+def _read_task(node: str, document: dict[str, Any]) -> Task:
+    """
+    Return the task a node's document describes, saying which node it is.
+
+    A task which names something this process does not have says what to
+    import; without the node it is said of, a pipe of thirty leaves the
+    reader to find which one.
+    """
+    try:
+        return Task.from_dict(document)
+    except ParameterError as error:
+        msg = f"The node {node!r} could not be read: {error}"
+        raise ParameterError(msg) from error
+
+
 def default_key(task: Task) -> str:
     """
     Return the name a task takes in a pipe which does not name it.
@@ -595,8 +610,13 @@ def default_key(task: Task) -> str:
     `decimate`. It says what the node is without saying what it was given,
     so changing a parameter leaves every reference to the node -- in
     `update`, in a mermaid diagram, in a provenance record -- where it was.
+
+    A task which stands for more than one operation says which it is with
+    `node_name`; without that every `PatchOp` in a pipe would be called
+    `patch_op`.
     """
-    return _WORD_BREAK.sub("_", type(task).__name__).lower()
+    name = getattr(task, "node_name", None) or type(task).__name__
+    return _WORD_BREAK.sub("_", name).lower()
 
 
 def unique_key(key: str, taken: Container[str]) -> str:

@@ -6,7 +6,7 @@ execute:
 A workflow is processing written down as an object rather than as a script. Its two pieces are a [Task](`dascore.workflow.task.Task`), which is one operation and the parameters it was given, and a [Pipe](`dascore.workflow.pipe.Pipe`), which is several tasks arranged into the shape of one. Both are immutable, both know their own fingerprint, and both can be written to a file and read back, so a processing chain can be compared, stored, shared, and run later against other data.
 
 ::: {.callout-note}
-The workflow module is new, and DASCore's own patch functions do not use it yet. Today you can write tasks of your own; a later release turns every patch function into one.
+The workflow module is new. Every patch function already builds one — see [Patch functions are tasks](#patch-functions-are-tasks) — but DASCore's own processing does not route through it yet.
 :::
 
 # Tasks
@@ -88,6 +88,62 @@ A task is callable, so it can stand anywhere a function of its inputs can:
 
 ```{python}
 scale_number(factor=3)(2)
+```
+
+## Patch functions are tasks
+
+Every function decorated with `dc.patch_function` — which is most, though not all, of DASCore's patch methods — builds the operation a call to it is, with `.op`. The arguments are bound against the function's signature and the defaults filled in, so what comes back says which call was made rather than how it was spelled.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+normalize = dc.proc.normalize.op("time")
+normalize
+```
+
+That is the operation `patch.normalize("time")` performs, reached the other way round — history and all:
+
+```{python}
+assert normalize(patch).equals(patch.normalize("time"))
+normalize.fingerprint
+```
+
+One class stands for every patch function, not one class each. An operation is a name and some arguments, and a name is a string:
+
+```{python}
+from dascore.workflow import PatchOp
+
+PatchOp(name="pass_filter", kwargs={"time": (10, 100)})
+```
+
+Because it is a task, it composes and it writes itself down:
+
+```{python}
+pipe = dc.proc.detrend.op("time") | normalize
+print(pipe.to_mermaid())
+```
+
+A call has a fingerprint whether or not anyone builds an operation for it. `fingerprint_call` answers for a call written as arguments, and `PatchOp.fingerprint` asks it for the operation built from the same call, so the two agree by construction rather than by test. Nothing is fingerprinted while an ordinary call runs — the decorator does not hash your arguments behind your back:
+
+```{python}
+from dascore.workflow import fingerprint_call
+
+fingerprint_call(dc.proc.normalize, (), {"dim": "time"}) == normalize.fingerprint
+```
+
+An operation is named by a registry tag, not by where a patch keeps it. DASCore's own are bare; anything else is named by the package which defines it, so a plugin's `normalize` can never be read back as DASCore's — and a function you have only just written, bound to nothing, is nameable too:
+
+```{python}
+import dascore.viz
+
+dc.viz.waterfall.op(show=False).name
+```
+
+The document also records which module the function came from. It is informational — what an error message uses to tell you what to import — and deliberately not part of the fingerprint, so moving a function between modules does not make it a different operation:
+
+```{python}
+normalize.to_dict()["params"]["module"]
 ```
 
 # Pipes
