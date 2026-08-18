@@ -18,6 +18,7 @@ from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, values_equal
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.namespace import InventoryNameSpace
 
 
 def build_inventory() -> inv.Inventory:
@@ -1047,7 +1048,7 @@ class TestInventory:
         pytest.importorskip("yaml")
         inventory = build_inventory()
         path = tmp_path / "inventory.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         loaded = dc.inventory(path)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
@@ -1079,7 +1080,7 @@ class TestInventory:
         pytest.importorskip("yaml")
         assert isinstance(dc.inventory(), inv.Inventory)
         path = tmp_path / "inv.yaml"
-        build_inventory().to_yaml(path)
+        build_inventory().io.to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
     def test_crs_vocabulary_enforced(self):
@@ -1287,7 +1288,7 @@ class TestResourcePool:
         cable = inv.Cable(resource_id="cable-01", name="c")
         seg = inv.FiberSegment(optical_length=100.0, container=cable)
         inventory = self._inventory_with(seg)
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert text.count("cable-01") >= 2
         loaded = inv.Inventory.from_yaml(text)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
@@ -1373,7 +1374,7 @@ class TestInternalReviewRegressions:
             resources={"cab-1": {"object_type": "Cable", "name": "mycable"}}
         )
         assert inventory.get_resource("cab-1").resource_id == "cab-1"
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
     def test_duplicate_array_codes_raise(self):
@@ -1666,7 +1667,7 @@ class TestUniformAttachments:
         """Empty strings, dicts, and tuples do not serialize."""
         pytest.importorskip("yaml")
         inventory = build_inventory()
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert "description:" not in text
         assert "extra_fields:" not in text
         loaded = inv.Inventory.from_yaml(text)
@@ -1680,7 +1681,7 @@ class TestUniformAttachments:
         inventory = inv.Inventory(
             networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
         )
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         got = loaded.networks[0].fiber_arrays[0].acquisitions[0]
         assert got.extra_fields == {"vendor_flag": ""}
 
@@ -1769,7 +1770,7 @@ class TestImmutability:
         """Serializing and reloading does not move an inventory's hash."""
         pytest.importorskip("yaml")
         inventory = self._stocked_inventory()
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         assert loaded == inventory
         assert hash(loaded) == hash(inventory)
 
@@ -2462,7 +2463,7 @@ class TestSerializationIsLossless:
         """Whatever was written comes back, in text and through a file."""
         pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES[name]
-        assert dc.inventory(inventory.to_yaml()) == inventory
+        assert dc.inventory(inventory.io.to_yaml()) == inventory
 
     def test_an_annotation_value_of_one_survives(self):
         """`1 == True`, and the value's default is True, so it was dropped."""
@@ -2482,7 +2483,7 @@ class TestSerializationIsLossless:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
         )
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert "value: 1" in text
         # Without the value, the group reloads holding a boolean beside a
         # number and is refused as mixing two kinds.
@@ -2519,7 +2520,7 @@ class TestSerializationIsLossless:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
         )
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert "value:" not in text
         assert dc.inventory(text) == inventory
 
@@ -2528,21 +2529,21 @@ class TestSerializationIsLossless:
         pytest.importorskip("yaml")
         inventory = build_full_inventory()
         path = tmp_path / "inventory.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         assert dc.inventory(path) == inventory
 
     def test_blank_crs_fields_survive(self):
         """A frame described by WKT alone must not reload as EPSG:4979."""
         pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_crs"]
-        crs = dc.inventory(inventory.to_yaml()).coordinate_reference_system
+        crs = dc.inventory(inventory.io.to_yaml()).coordinate_reference_system
         assert (crs.authority, crs.code, crs.name) == ("", "", "")
 
     def test_blank_instrument_type_survives(self):
         """A blanked field with a non-empty default is not a missing one."""
         pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_resources"]
-        loaded = dc.inventory(inventory.to_yaml())
+        loaded = dc.inventory(inventory.io.to_yaml())
         assert loaded.resources["int-1"].instrument_type == ""
 
     def test_every_blankable_field_survives(self):
@@ -2566,7 +2567,7 @@ class TestSerializationIsLossless:
                     continue  # a field a validator refuses to blank
                 # Outside the catch: an inventory valid here but not once it
                 # has been written is a document the pruning damaged.
-                loaded = dc.inventory(candidate.to_yaml())
+                loaded = dc.inventory(candidate.io.to_yaml())
                 assert loaded == candidate, f"{type(model).__name__}.{name} was lost"
                 checked.add((type(model).__name__, name))
         # The fields the reported bug was found in must be among those swept.
@@ -2577,7 +2578,7 @@ class TestSerializationIsLossless:
     def test_defaulted_fields_are_dropped(self):
         """A field still holding its default is left out of the document."""
         yaml = pytest.importorskip("yaml")
-        data = yaml.safe_load(build_inventory().to_yaml())
+        data = yaml.safe_load(build_inventory().io.to_yaml())
         assert not _empty_keys(data)
         assert "description" not in yaml.safe_dump(data)
 
@@ -2589,10 +2590,10 @@ class TestSerializationIsLossless:
         """
         yaml = pytest.importorskip("yaml")
         default = inv.Inventory().schema_version
-        data = yaml.safe_load(build_inventory().to_yaml())
+        data = yaml.safe_load(build_inventory().io.to_yaml())
         assert data["schema_version"] == default
         other = inv.Inventory(schema_version=default + 1)
-        assert dc.inventory(other.to_yaml()).schema_version == default + 1
+        assert dc.inventory(other.io.to_yaml()).schema_version == default + 1
 
     def test_empty_annotation_value_is_rejected(self):
         """An empty value would have to survive serialization to mean anything.
@@ -2618,7 +2619,7 @@ class TestLoadingValidates:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", stations=(station,)),)
         )
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         with pytest.raises(InvalidInventoryError, match="coordinate values"):
             inv.Inventory.from_yaml(text)
         with pytest.raises(InvalidInventoryError, match="coordinate values"):
@@ -2886,3 +2887,58 @@ class TestGetNamesRoundTrip:
             plain: float | None = None
 
         assert inv._value_field_names(_Probe) == ("plain",)
+
+
+class TestInventoryNamespaces:
+    """An inventory hosts method namespaces, as a patch and a spool do."""
+
+    def test_io_namespace(self):
+        """The io namespace DASCore registers is reachable."""
+        pytest.importorskip("yaml")
+        inventory = build_inventory()
+        assert inventory.io.to_yaml() == inv.inventory_to_yaml(inventory)
+
+    def test_namespace_is_cached(self):
+        """Repeated access returns one namespace object."""
+        inventory = build_inventory()
+        assert inventory.io is inventory.io
+
+    def test_local_namespace_attaches(self):
+        """A namespace defined without an entry point still attaches."""
+
+        class _Local(InventoryNameSpace):
+            name = "some_local_namespace"
+
+            def network_count(inventory) -> int:  # noqa: N805
+                """Return how many networks the inventory holds."""
+                return len(inventory.networks)
+
+        inventory = build_inventory()
+        assert inventory.some_local_namespace.network_count() == len(inventory.networks)
+
+    def test_unknown_attr_raises(self):
+        """A name no namespace claims raises DASCore's message."""
+        inventory = build_inventory()
+        with pytest.raises(AttributeError, match="Inventory has no attribute 'nope'"):
+            inventory.nope
+
+    def test_private_attrs_still_resolve(self):
+        """The namespace search does not stand in front of pydantic's own."""
+        # _cache is a private attribute pydantic resolves in __getattr__,
+        # which the namespace search would otherwise answer first.
+        assert build_inventory()._cache == {}
+
+    def test_unknown_private_attr_raises(self):
+        """A private name neither pydantic nor a namespace knows still fails."""
+        with pytest.raises(AttributeError, match="_not_a_field"):
+            build_inventory()._not_a_field
+
+    def test_cached_namespace_is_not_state(self):
+        """An attached namespace changes neither equality nor a dump."""
+        pytest.importorskip("yaml")
+        inventory = build_inventory()
+        other = inv.Inventory(**inventory.model_dump())
+        inventory.io.to_yaml()
+        assert inventory == other
+        assert hash(inventory) == hash(other)
+        assert inventory.model_dump(mode="json") == other.model_dump(mode="json")

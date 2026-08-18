@@ -20,6 +20,7 @@ from dascore.core.annotations import (
     Region,
 )
 from dascore.exceptions import ParameterError
+from dascore.utils.namespace import AnnotationNameSpace
 
 DIMS = ("time", "distance")
 
@@ -132,7 +133,7 @@ class TestConstruction:
 
     def test_equality(self, region_set):
         """Two sets built the same way are equal."""
-        same = AnnotationSet(region_set.to_dataframe(), attrs=region_set.attrs)
+        same = AnnotationSet(region_set.io.to_dataframe(), attrs=region_set.attrs)
         assert same == region_set
         assert region_set != AnnotationSet(None, dims=DIMS)
 
@@ -299,7 +300,7 @@ class TestColumns:
         out = AnnotationSet(
             frame, dims=DIMS, columns={"when": {"dtype": "datetime64[ns]"}}
         )
-        assert out.to_dataframe()["when"].dtype == np.dtype("datetime64[ns]")
+        assert out.io.to_dataframe()["when"].dtype == np.dtype("datetime64[ns]")
 
     def test_unreadable_dtype_refused(self):
         """A dtype naming nothing says so, rather than raising numpy's error."""
@@ -393,7 +394,7 @@ class TestTags:
     def test_a_padded_tag_is_held_stripped(self):
         """Tags are held as they read back, so padding does not survive."""
         out = AnnotationSet(pd.DataFrame({"tags": [(" a", "b ")]}), dims=DIMS)
-        assert out.to_dataframe()["tags"][0] == ("a", "b")
+        assert out.io.to_dataframe()["tags"][0] == ("a", "b")
 
     def test_an_empty_tag_is_no_tag(self):
         """A tag holding nothing cannot be written down, so it is not held."""
@@ -525,7 +526,7 @@ class TestVertices:
 
     def test_derived_bounds_reach_the_frame(self, path_set):
         """The derived box is a real column, so table operations see it."""
-        row = path_set.to_dataframe().iloc[0]
+        row = path_set.io.to_dataframe().iloc[0]
         assert (row["distance_start"], row["distance_end"]) == (1.0, 9.0)
 
     def test_stated_bounds_must_agree(self):
@@ -667,7 +668,7 @@ class TestVertices:
 
     def test_to_vertices_round_trips(self, path_set):
         """The vertices come back out whole: order, coordinates and types."""
-        out = path_set.to_vertices()
+        out = path_set.io.to_vertices()
         assert list(out["id"]) == ["p1"] * 3
         assert list(out["seq"]) == [0, 1, 2]
         assert list(out["distance"]) == [1.0, 5.0, 9.0]
@@ -676,7 +677,7 @@ class TestVertices:
 
     def test_empty_vertices_frame(self, region_set):
         """A set with no vertex geometry has an empty vertices frame."""
-        assert region_set.to_vertices().empty
+        assert region_set.io.to_vertices().empty
 
 
 class TestFrames:
@@ -684,13 +685,13 @@ class TestFrames:
 
     def test_to_dataframe_is_a_copy(self, region_set):
         """Mutating what a set handed out does not reach the set."""
-        frame = region_set.to_dataframe()
+        frame = region_set.io.to_dataframe()
         frame.loc[0, "group"] = "changed"
         assert region_set[0].group == "event"
 
     def test_to_vertices_is_a_copy(self, path_set):
         """The same holds for the vertices."""
-        vertices = path_set.to_vertices()
+        vertices = path_set.io.to_vertices()
         vertices.loc[0, "distance"] = 999.0
         assert path_set[0].geometry.vertices["distance"][0] == 1.0
 
@@ -709,7 +710,7 @@ class TestFrames:
 
     def test_round_trip(self, region_set):
         """A set rebuilt from its own frame holds the same annotations."""
-        rebuilt = AnnotationSet(region_set.to_dataframe(), attrs=region_set.attrs)
+        rebuilt = AnnotationSet(region_set.io.to_dataframe(), attrs=region_set.attrs)
         assert [x.group for x in rebuilt] == [x.group for x in region_set]
         assert rebuilt == region_set
 
@@ -1202,3 +1203,34 @@ class TestTopLevel:
     def test_dc_annotation_set(self):
         """`dc.AnnotationSet` is the in-memory door."""
         assert dc.AnnotationSet is AnnotationSet
+
+
+class TestAnnotationNamespaces:
+    """A set hosts method namespaces, as a patch and a spool do."""
+
+    def test_io_namespace(self, region_set):
+        """The io namespace DASCore registers is reachable."""
+        assert region_set.io.to_dataframe().equals(region_set.io.to_dataframe())
+        assert len(region_set.io.to_dataframe()) == len(region_set)
+
+    def test_namespace_is_cached(self, region_set):
+        """Repeated access returns one namespace object."""
+        assert region_set.io is region_set.io
+
+    def test_local_namespace_attaches(self, region_set):
+        """A namespace defined without an entry point still attaches."""
+
+        class _Local(AnnotationNameSpace):
+            name = "some_local_namespace"
+
+            def group_count(annotations) -> int:  # noqa: N805
+                """Return how many distinct groups the set holds."""
+                return annotations.io.to_dataframe()["group"].nunique()
+
+        assert region_set.some_local_namespace.group_count() == 2
+
+    def test_unknown_attr_raises(self, region_set):
+        """A name no namespace claims raises DASCore's message."""
+        msg = "AnnotationSet has no attribute 'nope'"
+        with pytest.raises(AttributeError, match=msg):
+            region_set.nope

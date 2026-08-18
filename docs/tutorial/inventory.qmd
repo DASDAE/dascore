@@ -259,7 +259,7 @@ patch.io.write(data_path / "patch.h5", "DASDAE")
 
 # Either form works: the directory .inventory/, or a serialized file
 # naming its format -- .inventory.yaml, .inventory.yml, or .inventory.json.
-example_inventory.to_yaml(data_path / ".inventory.yaml")
+example_inventory.io.to_yaml(data_path / ".inventory.yaml")
 
 carrying = dc.spool(data_path).update()
 assert carrying.enrich()[0].attrs.gauge_length == 10.0
@@ -279,7 +279,7 @@ old_acquisition = example_inventory.networks[0].fiber_arrays[0].acquisitions[0]
 corrected = example_inventory.replace(
     old_acquisition, old_acquisition.new(gauge_length=12.0)
 )
-corrected.to_yaml(data_path / ".inventory.yaml")
+corrected.io.to_yaml(data_path / ".inventory.yaml")
 
 # The spool which already read it still reports what it read.
 assert carrying.enrich()[0].attrs.gauge_length == 10.0
@@ -293,10 +293,10 @@ assert refreshed.enrich()[0].attrs.gauge_length == 12.0
 
 # Serializing
 
-[`Inventory.to_yaml`](`dascore.core.inventory.Inventory.to_yaml`) writes the single-file interchange form — the artifact to ship beside a data archive — and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads any of the forms back.
+[`Inventory.io.to_yaml`](`dascore.core.inventory.inventory_to_yaml`) writes the single-file interchange form — the artifact to ship beside a data archive — and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads any of the forms back.
 
 ```{python}
-text = inventory.to_yaml()
+text = inventory.io.to_yaml()
 assert dc.inventory(text) == inventory
 
 # JSON works everywhere YAML does, and needs no YAML library installed.

@@ -20,7 +20,7 @@ patch, inventory = inventory_patch_pair()
 archive = Path(tempfile.mkdtemp()) / "archive"
 archive.mkdir()
 patch.io.write(archive / "patch.h5", "DASDAE")
-inventory.to_yaml(archive / ".inventory.yaml")
+inventory.io.to_yaml(archive / ".inventory.yaml")
 ```
 
 ## Three moments, at three times
@@ -83,7 +83,7 @@ An inventory is read once and held. There is no modification-time check, and re-
 
 ```{python}
 # Change the file under the running program.
-inventory.new(schema_version=1).to_yaml(archive / ".inventory.yaml")
+inventory.new(schema_version=1).io.to_yaml(archive / ".inventory.yaml")
 
 held = reference._inventory
 _ = spool.select(zone="north")

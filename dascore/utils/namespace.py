@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import warnings
 from collections import defaultdict
+from contextlib import suppress
 from pathlib import Path
 from threading import RLock
 from typing import ClassVar
@@ -151,10 +152,24 @@ class SpoolNameSpace(_MethodNameSpace):
     entry_point_group: ClassVar[str] = "dascore.spool_namespace"
 
 
+class InventoryNameSpace(_MethodNameSpace):
+    """A namespace for Inventory methods."""
+
+    name: ClassVar[str | None] = None
+    entry_point_group: ClassVar[str] = "dascore.inventory_namespace"
+
+
+class AnnotationNameSpace(_MethodNameSpace):
+    """A namespace for AnnotationSet methods."""
+
+    name: ClassVar[str | None] = None
+    entry_point_group: ClassVar[str] = "dascore.annotation_namespace"
+
+
 class NamespaceOwner:
     """Mixin for classes with lazily-loadable method namespaces."""
 
-    _namespace_entry_point_group: str | None = None
+    _namespace_entry_point_group: ClassVar[str | None] = None
     _namespace_attr_errors: ClassVar[dict[str, str]] = {}
 
     @classmethod
@@ -168,30 +183,41 @@ class NamespaceOwner:
 
     def __getattr__(self, item):
         """Try loading a lazily registered namespace before failing."""
-        # Unknown attribute; try loading the namespaces. Plugin imports must
-        # not run while a lock is held.
-        group = self._namespace_entry_point_group
-        maybe_load_entry_point(group, item)
+        # A private name never names a namespace, and a host which is a
+        # pydantic model keeps its private attributes behind its own
+        # __getattr__, which the namespace search must not stand in front of.
+        if not item.startswith("_"):
+            # Unknown attribute; try loading the namespaces. Plugin imports
+            # must not run while a lock is held.
+            group = self._namespace_entry_point_group
+            maybe_load_entry_point(group, item)
 
-        # Once loaded the registry should be populated.
-        if namespace_type := _MethodNameSpace._get_namespace_type(group, item):
-            with _ATTACHMENT_LOCK:
-                # Another thread may have attached this namespace first; reuse
-                # its instance so all callers share one namespace object.
-                if (instance := self.__dict__.get(item)) is None:
-                    instance = self.__dict__[item] = namespace_type(self)
-            return instance
+            # Once loaded the registry should be populated.
+            if namespace_type := _MethodNameSpace._get_namespace_type(group, item):
+                with _ATTACHMENT_LOCK:
+                    # Another thread may have attached this namespace first;
+                    # reuse its instance so all callers share one object.
+                    if (instance := self.__dict__.get(item)) is None:
+                        instance = self.__dict__[item] = namespace_type(self)
+                return instance
 
-        # Check plugin registry for a known third-party package that provides this.
-        plugin_registry = _load_plugin_registry(self._namespace_entry_point_group)
-        if item in plugin_registry:
-            package_name, package_url = plugin_registry[item]
-            msg = (
-                f"{self.__class__.__name__} has a registered namespace of '{item}' "
-                f"provided by '{package_name}' but it is not installed. "
-                f"Install it from: {package_url}"
-            )
-            raise DASCorePluginError(msg)
+            # Check the registry for a known third-party package providing this.
+            plugin_registry = _load_plugin_registry(group)
+            if item in plugin_registry:
+                package_name, package_url = plugin_registry[item]
+                msg = (
+                    f"{self.__class__.__name__} has a registered namespace of "
+                    f"'{item}' provided by '{package_name}' but it is not "
+                    f"installed. Install it from: {package_url}"
+                )
+                raise DASCorePluginError(msg)
+
+        # The host may resolve names of its own; a pydantic one resolves its
+        # private attributes here. Its failure is not the final word: this
+        # class has a better message for a name neither of them knows.
+        if (parent := getattr(super(), "__getattr__", None)) is not None:
+            with suppress(AttributeError):
+                return parent(item)
 
         # If that fails, see if there is anything specific for this name to raise.
         if item in self._namespace_attr_errors:

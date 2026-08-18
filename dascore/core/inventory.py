@@ -66,6 +66,7 @@ from dascore.utils.misc import (
     optional_import,
     validate_acquisition_key,
 )
+from dascore.utils.namespace import NamespaceOwner
 
 CouplingType = Literal[
     "conduit",
@@ -1945,13 +1946,17 @@ def _yaml_label(text: str) -> str:
     return f"{text!r}" if short else "the given YAML text"
 
 
-class Inventory(InventoryModel):
+class Inventory(NamespaceOwner, InventoryModel):
     """
     Top-level DASDAE inventory manifest.
 
     Stores document metadata, shareable resources keyed by resource_id, the
     inventory-wide coordinate reference system, and network containers.
     """
+
+    # Annotated as a ClassVar so pydantic leaves it a plain class attribute;
+    # an unannotated underscore name becomes a private attribute instead.
+    _namespace_entry_point_group: ClassVar[str] = "dascore.inventory_namespace"
 
     schema_version: int = Field(
         default=1, description="Version of the inventory manifest envelope."
@@ -2471,26 +2476,6 @@ class Inventory(InventoryModel):
             raise InvalidInventoryError(msg)
         return self.new(networks=tuple(networks))
 
-    def to_yaml(self, path=None) -> str:
-        """
-        Serialize this inventory to YAML, optionally writing to a path.
-
-        A field still holding its default is left out, so the document
-        states what the inventory says rather than every field it has;
-        what is written reloads equal to this inventory.
-        """
-        yaml = optional_import("yaml", required_for="YAML inventory serialization")
-
-        # Everything defaulted is dropped, so the document records which
-        # envelope it was written against even when that is the default.
-        dumped = self.model_dump(mode="json", exclude_defaults=True)
-        data = {"schema_version": self.schema_version} | dumped
-        out = yaml.safe_dump(data, sort_keys=False)
-        if path is not None:
-            with open(path, "w") as fh:
-                fh.write(out)
-        return out
-
     @classmethod
     def from_yaml(cls, text: str) -> Self:
         """
@@ -2547,3 +2532,33 @@ class Inventory(InventoryModel):
             msg = f"{source} holds fields which are not named: {', '.join(named)}."
             raise InvalidInventoryError(msg)
         return cls(**data).check()
+
+
+def inventory_to_yaml(inventory: Inventory, path=None) -> str:
+    """
+    Serialize an inventory to YAML, optionally writing it to a path.
+
+    Reached as ``inventory.io.to_yaml``.
+
+    A field still holding its default is left out, so the document
+    states what the inventory says rather than every field it has;
+    what is written reloads equal to this inventory.
+
+    Parameters
+    ----------
+    inventory
+        The inventory to serialize.
+    path
+        Where to write the text, or None to only return it.
+    """
+    yaml = optional_import("yaml", required_for="YAML inventory serialization")
+
+    # Everything defaulted is dropped, so the document records which
+    # envelope it was written against even when that is the default.
+    dumped = inventory.model_dump(mode="json", exclude_defaults=True)
+    data = {"schema_version": inventory.schema_version} | dumped
+    out = yaml.safe_dump(data, sort_keys=False)
+    if path is not None:
+        with open(path, "w") as fh:
+            fh.write(out)
+    return out
