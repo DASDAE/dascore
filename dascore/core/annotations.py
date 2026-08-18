@@ -1487,16 +1487,58 @@ def _stated(value) -> bool:
 
 
 def annotation_set_to_dataframe(annotations: AnnotationSet) -> pd.DataFrame:
-    """Return the annotations as a dataframe."""
+    """
+    Return the annotations as a dataframe.
+
+    Reached as ``annotation_set.io.to_dataframe``.
+
+    Parameters
+    ----------
+    annotations
+        The set to read.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> list(annotations.io.to_dataframe()["group"])
+    ['event']
+    """
     return annotations._df.copy()
 
 
 def annotation_set_to_vertices(annotations: AnnotationSet) -> pd.DataFrame:
-    """Return the vertices of every path and polygon as a tidy dataframe."""
+    """
+    Return the vertices of every path and polygon as a tidy dataframe.
+
+    Reached as ``annotation_set.io.to_vertices``.
+
+    Parameters
+    ----------
+    annotations
+        The set to read.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> annotations.io.to_vertices().empty  # a region states no vertices
+    True
+    """
     return annotations._vertices.copy()
 
 
-def annotation_set_to_csv(annotations: AnnotationSet, path=None) -> str:
+def annotation_set_to_csv(
+    annotations: AnnotationSet, path: str | pathlib.Path | None = None
+) -> str:
     """
     Return the annotations as CSV text, optionally writing it to a path.
 
@@ -1513,6 +1555,17 @@ def annotation_set_to_csv(annotations: AnnotationSet, path=None) -> str:
         The set to write.
     path
         Where to write the text, or None to only return it.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> "group" in annotations.io.to_csv()
+    True
     """
     if not annotations._vertices.empty:
         msg = (
@@ -1524,7 +1577,9 @@ def annotation_set_to_csv(annotations: AnnotationSet, path=None) -> str:
     return _write_table(annotations._df, path)
 
 
-def save_annotation_set(annotations: AnnotationSet, path) -> pathlib.Path:
+def save_annotation_set(
+    annotations: AnnotationSet, path: str | pathlib.Path
+) -> pathlib.Path:
     """
     Write the set to a directory, creating it if needed.
 
@@ -1555,6 +1610,18 @@ def save_annotation_set(annotations: AnnotationSet, path) -> pathlib.Path:
     Returns
     -------
     The directory written to, so a save reads straight back.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> directory = annotations.io.save("picks")  # doctest: +SKIP
+    >>> dc.annotations(directory) == annotations  # doctest: +SKIP
+    True
     """
     # Everything is spelled out before the directory is touched: a
     # table which refuses to be written -- an ambiguous value does --

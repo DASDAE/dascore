@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import keyword
 import warnings
 from collections import defaultdict
 from contextlib import suppress
@@ -56,6 +57,11 @@ def _check_namespace_name(name) -> None:
     """Refuse a namespace name a host could not hand out."""
     if not isinstance(name, str) or not name.isidentifier():
         msg = f"A namespace name must be a Python identifier, got {name!r}."
+        raise ValueError(msg)
+    if keyword.iskeyword(name):
+        # `host.class` is a syntax error however the namespace registered.
+        # Soft keywords -- match, type -- are legal attribute names and pass.
+        msg = f"A namespace name must not be a Python keyword, got {name!r}."
         raise ValueError(msg)
     if name.startswith("_"):
         # A private name belongs to the host, which resolves its own before

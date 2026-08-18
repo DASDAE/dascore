@@ -227,6 +227,21 @@ class TestNamespace:
             class _Private(ParentClassNamespace):
                 name = "_hidden"
 
+    def test_keyword_name_refused(self):
+        """A keyword is an identifier, but `host.class` will not parse."""
+        with pytest.raises(ValueError, match="must not be a Python keyword"):
+
+            class _Keyword(ParentClassNamespace):
+                name = "class"
+
+    def test_soft_keyword_name_allowed(self):
+        """A soft keyword is a legal attribute name, so it is not refused."""
+
+        class _Soft(ParentClassNamespace):
+            name = "match"
+
+        assert ParentClass().match.__class__ is _Soft
+
     def test_non_identifier_name_refused(self):
         """A name which is not an identifier is refused, as the docs say."""
         with pytest.raises(ValueError, match="must be a Python identifier"):

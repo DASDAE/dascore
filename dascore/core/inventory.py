@@ -18,6 +18,7 @@ import itertools
 from collections.abc import Mapping, Sized
 from contextlib import suppress
 from functools import cache
+from pathlib import Path
 from types import MappingProxyType, UnionType
 from typing import (
     Annotated,
@@ -2534,7 +2535,7 @@ class Inventory(NamespaceOwner, InventoryModel):
         return cls(**data).check()
 
 
-def inventory_to_yaml(inventory: Inventory, path=None) -> str:
+def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> str:
     """
     Serialize an inventory to YAML, optionally writing it to a path.
 
@@ -2550,6 +2551,15 @@ def inventory_to_yaml(inventory: Inventory, path=None) -> str:
         The inventory to serialize.
     path
         Where to write the text, or None to only return it.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> _, inventory = dc.examples.inventory_patch_pair()
+    >>> # Writing YAML needs pyyaml, which is not a core dependency.
+    >>> text = inventory.io.to_yaml()  # doctest: +SKIP
+    >>> dc.inventory(text) == inventory  # doctest: +SKIP
+    True
     """
     yaml = optional_import("yaml", required_for="YAML inventory serialization")
 
