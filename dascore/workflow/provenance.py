@@ -28,7 +28,7 @@ import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
-from dascore.workflow.pipe import Pipe, unique_name
+from dascore.workflow.pipe import Pipe, default_key, unique_key
 from dascore.workflow.serialize import read_workflow, write_workflow
 from dascore.workflow.task import Task
 
@@ -167,7 +167,7 @@ class ProvenanceNode(DascoreBaseModel):
         for node in steps:
             # steps() keeps only the nodes which hold a task.
             assert node.task is not None
-            name = unique_name(node.task.fingerprint, tasks)
+            name = unique_key(default_key(node.task), tasks)
             names[id(node)] = name
             tasks[name] = node.task
             given = tuple(names[id(x)] for x in node.parents if x.task is not None)
@@ -201,7 +201,7 @@ class ProvenanceNode(DascoreBaseModel):
             tasks=tasks,
             dependencies=dependencies,
             inputs=tuple(fed),
-            output=names[id(steps[-1])],
+            outputs=(names[id(steps[-1])],),
         )
 
     def to_json(self, indent: int | None = 2) -> str:

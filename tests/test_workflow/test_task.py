@@ -59,16 +59,16 @@ class TimedValueTask(Task):
     where: object = None
 
 
-@task
+@task(inputs=0)
 def add_numbers(first, second=1):
     """Add two numbers."""
     return first + second
 
 
 @task(version="2.0")
-def multiply_numbers(first, second=2):
-    """Multiply two numbers."""
-    return first * second
+def multiply_numbers(number, factor=2):
+    """Multiply a number by a factor."""
+    return number * factor
 
 
 def every_kind(positional, /, normal=1, *rest, named=2, **extra):
@@ -87,7 +87,7 @@ def skips_first(given, /, normal=1, *rest, named=2, **extra):
 
 
 EveryKind = make_function_task_class(every_kind)
-SkipsFirst = make_function_task_class(skips_first, skip_first=True)
+SkipsFirst = make_function_task_class(skips_first, inputs=1)
 WithFieldDefault = make_function_task_class(with_field_default)
 
 
@@ -445,6 +445,14 @@ class TestRun:
         """A subclass runs what it implements."""
         assert ScaleTask(factor=2).run(3) == 6
 
+    def test_calling_runs(self):
+        """Calling a task runs it, so a task can stand for a function."""
+        assert ScaleTask(factor=2)(3) == 6
+
+    def test_calling_a_function_task(self):
+        """Calling reaches the subclass's own run, not the base class's."""
+        assert multiply_numbers(factor=3)(2) == 6
+
 
 class TestFunctionTasks:
     """Tests for the task a function makes."""
@@ -473,7 +481,7 @@ class TestFunctionTasks:
     def test_version(self):
         """The decorator's version reaches the class."""
         assert multiply_numbers.__version__ == "2.0"
-        assert multiply_numbers(first=2).run() == 4
+        assert multiply_numbers(factor=2).run(2) == 4
 
     def test_extra_input_passed_first(self):
         """Arguments given to run are passed before the stored ones."""
@@ -577,16 +585,74 @@ class TestTaskDecorator:
         """The decorator works without parentheses."""
 
         @task
-        def bare(value=1):
+        def bare(number, value=1):
             """A task made without parentheses."""
+            return number + value
+
+        assert bare(value=2).run(1) == 3
+
+    def test_one_input_by_default(self):
+        """The first parameter is what the task is given when it runs."""
+
+        @task
+        def scaled(number, factor=2):
+            """Scale a number."""
+            return number * factor
+
+        assert "number" not in scaled.model_fields
+        assert scaled(factor=3).run(2) == 6
+
+    def test_no_inputs(self):
+        """A task of no inputs takes everything as a parameter."""
+
+        @task(inputs=0)
+        def constant(value=1):
+            """Make a number out of nothing."""
             return value
 
-        assert bare(value=2).run() == 2
+        assert constant(value=2).run() == 2
+
+    def test_more_inputs_than_arguments(self):
+        """A count of inputs the function could not be given is refused."""
+        with pytest.raises(ParameterError, match="was asked for 2"):
+
+            @task(inputs=2)
+            def too_few(number):
+                """Take one argument, and be asked for two."""
+                return number
+
+    def test_inputs_cannot_be_negative(self):
+        """A negative count would make a parameter out of nothing."""
+        with pytest.raises(ParameterError, match="was asked for -1"):
+
+            @task(inputs=-1)
+            def negative(number):
+                """Take one argument, and be asked for less than none."""
+                return number
+
+    def test_keyword_only_is_not_an_input(self):
+        """An input is passed positionally, so a keyword only one is not."""
+        with pytest.raises(ParameterError, match="was asked for 2"):
+
+            @task(inputs=2)
+            def keyword_only(number, *, named=1):
+                """Take an argument which cannot be passed by position."""
+                return number + named
+
+    def test_several_inputs(self):
+        """A task can be given more than one input."""
+
+        @task(inputs=2)
+        def combined(first, second, factor=1):
+            """Combine two numbers."""
+            return (first + second) * factor
+
+        assert combined(factor=2).run(1, 2) == 6
 
     def test_with_version(self):
         """The decorator works with arguments."""
 
-        @task(version="3.0")
+        @task(version="3.0", inputs=0)
         def versioned(value=1):
             """A task made with a version."""
             return value

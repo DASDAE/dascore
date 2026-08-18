@@ -63,6 +63,12 @@ class Task(DascoreBaseModel):
     Subclasses declare their parameters as fields and implement `run`. Every
     instance is frozen, so a task can be shared, cached and reused; changing
     one means making another with `update`.
+
+    What `run` takes is what the task is given when it runs, positionally
+    and in the order its parameters are declared; everything the task was
+    *configured* with is a field. A pipe wires its edges by position for
+    the same reason: there is no name to bind them to, and the order the
+    inputs are given in is part of what the step did.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -116,6 +122,16 @@ class Task(DascoreBaseModel):
         """Execute the task. Subclasses must implement this."""
         msg = f"{type(self).__name__} does not implement run."
         raise NotImplementedError(msg)
+
+    def __call__(self, *args, **kwargs) -> Any:
+        """
+        Run the task; see `run`.
+
+        Defined rather than aliased so that a subclass's own `run` is the
+        one called, and so a task can stand anywhere a function of its
+        inputs can -- `spool.map(task)`, most of all.
+        """
+        return self.run(*args, **kwargs)
 
     def update(self, **kwargs) -> Self:
         """
@@ -233,6 +249,25 @@ def _check_nameable(task_class: type[Task], tag: str | None) -> None:
             "its package claims."
         )
         raise ParameterError(msg)
+
+
+def holds_another_version(document: Any) -> bool:
+    """
+    Return True when a document holds a task written at another version.
+
+    Looked for at any depth: a task's parameter can be another task, or a
+    whole pipe, and a version bump down there changes what the document
+    fingerprints to just as much as one at the top.
+    """
+    if isinstance(document, Mapping):
+        tag, version = document.get(TAG_FIELD), document.get(_VERSION_KEY)
+        model = resolve_model_tag(tag) if isinstance(tag, str) else None
+        if version is not None and getattr(model, "__version__", version) != version:
+            return True
+        return any(holds_another_version(x) for x in document.values())
+    if isinstance(document, list | tuple):
+        return any(holds_another_version(x) for x in document)
+    return False
 
 
 def _check_version(task_class: type[Task], version: object) -> None:
@@ -385,12 +420,12 @@ class FunctionTask(Task):
         return out
 
 
-def task(func: Callable | None = None, *, version: str = "1.0") -> Any:
+def task(func: Callable | None = None, *, version: str = "1.0", inputs: int = 1) -> Any:
     """
     Turn a function into a `Task` subclass.
 
-    The function's parameters become the task's fields, and calling `run`
-    calls the function with them.
+    The function's parameters become the task's fields, except the first
+    `inputs` of them, which are what the task is given when it runs.
 
     Parameters
     ----------
@@ -398,22 +433,35 @@ def task(func: Callable | None = None, *, version: str = "1.0") -> Any:
         The function to convert.
     version
         The version of the new task class.
+    inputs
+        How many of the function's leading positional parameters are run
+        time inputs rather than parameters. One by default, which is what a
+        step of a pipe takes; zero makes a task which is fed nothing and is
+        a source of its own.
 
     Examples
     --------
     >>> from dascore.workflow import task
     >>>
     >>> @task
-    ... def add_example(a, b=1):
-    ...     '''Add two numbers.'''
-    ...     return a + b
+    ... def scale_number_example(number, factor=1):
+    ...     '''Scale a number.'''
+    ...     return number * factor
     >>>
-    >>> assert add_example(a=1, b=2).run() == 3
-    >>> assert add_example(a=1).run() == 2
+    >>> assert scale_number_example(factor=2).run(3) == 6
+    >>> # A pipe step is a task of one input, so `|` works on them.
+    >>> assert (scale_number_example(factor=2) | scale_number_example(factor=3))(1) == 6
+    >>>
+    >>> @task(inputs=0)
+    ... def source_number_example(value=1):
+    ...     '''Make a number out of nothing.'''
+    ...     return value
+    >>>
+    >>> assert source_number_example(value=2).run() == 2
     """
 
     def decorator(function: Callable) -> type[Task]:
-        return make_function_task_class(function, version=version)
+        return make_function_task_class(function, version=version, inputs=inputs)
 
     return decorator if func is None else decorator(func)
 
@@ -422,7 +470,7 @@ def make_function_task_class(
     func: Callable,
     base: type[Task] = Task,
     version: str = "1.0",
-    skip_first: bool = False,
+    inputs: int = 0,
 ) -> type[Task]:
     """
     Return a `Task` subclass whose fields are a function's parameters.
@@ -436,8 +484,8 @@ def make_function_task_class(
         `PatchProcessor` rather than from `Task` itself.
     version
         The version of the new class.
-    skip_first
-        If True the first parameter is not made a field. It is the input the
+    inputs
+        How many leading parameters are not made fields. They are what the
         task is given when it runs, such as the patch a patch function
         operates on.
     """
@@ -445,7 +493,9 @@ def make_function_task_class(
     # A callable which is not a function -- a class, or an object with a
     # __call__ -- is named by its own class instead.
     qualname = getattr(func, "__qualname__", type(func).__qualname__)
-    parameters = list(signature.parameters.values())[1 if skip_first else 0 :]
+    declared = list(signature.parameters.values())
+    _check_inputs(func, declared, inputs)
+    parameters = declared[inputs:]
     namespace, annotations = _build_fields(parameters)
     positional, keyword = _call_plan(parameters)
     # Declared ClassVar so that pydantic leaves them as class attributes
@@ -481,6 +531,31 @@ def make_function_task_class(
     # the function, and the attribute it hides is not part of a task's API.
     with suppress_warnings(UserWarning, message="Field name .* shadows an attribute"):
         return type(name, (FunctionTask, base), namespace)
+
+
+def _check_inputs(
+    func: Callable, parameters: list[inspect.Parameter], inputs: int
+) -> None:
+    """
+    Refuse a count of run time inputs the function could not be given.
+
+    An input is passed positionally, so it has to be a parameter which can
+    be: a keyword only one, or a group, is a parameter the task holds. The
+    failure belongs where the count is written rather than in the call
+    which finds itself missing an argument.
+    """
+    positional = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    takeable = [x for x in parameters if x.kind in positional]
+    if not 0 <= inputs <= len(takeable):
+        name = getattr(func, "__name__", type(func).__name__)
+        msg = (
+            f"{name} takes {len(takeable)} arguments which could be an "
+            f"input, and was asked for {inputs}."
+        )
+        raise ParameterError(msg)
 
 
 def _call_plan(
