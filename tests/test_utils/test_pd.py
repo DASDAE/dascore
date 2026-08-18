@@ -22,6 +22,11 @@ from dascore.utils.pd import (
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
+
 
 @pytest.fixture()
 def random_df_from_patch(random_patch):
@@ -312,6 +317,13 @@ class TestFilterDfAdvanced:
         """
         out = filter_df(example_df_2, first_name=("Jason", ...))
         assert np.all(out == example_df_2["first_name"].isin(["Jason"]))
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_ellipsis_with_an_arrow_backed_column(self, example_df_2):
+        """An arrow-backed column refuses a value arrow has no type for."""
+        df = example_df_2.astype({"first_name": "string[pyarrow]"})
+        out = filter_df(df, first_name=("Jason", ...))
+        assert np.all(out == df["first_name"].isin(["Jason"]))
 
     def test_open_bound_ignored_for_unknown_column(self, example_df_2):
         """

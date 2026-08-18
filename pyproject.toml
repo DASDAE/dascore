@@ -66,6 +66,9 @@ dependencies = [
 
 extras = [
     "xarray",
+    # An annotation set may be stored as parquet rather than CSV; CSV is
+    # the floor which needs nothing.
+    "pyarrow",
     "netCDF4",
     "h5netcdf",
     "findiff",

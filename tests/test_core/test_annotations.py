@@ -245,6 +245,17 @@ class TestColumns:
         out = AnnotationSet(pd.DataFrame({"depth_start": [1]}), dims=DIMS)
         assert out[0].extra["depth_start"] == 1
 
+    def test_the_set_column_is_a_label(self):
+        """A row read with others says which set it came from."""
+        out = AnnotationSet(pd.DataFrame({"set": ["picks"]}), dims=DIMS)
+        assert out[0].set == "picks"
+        assert "set" not in out[0].extra
+
+    def test_no_set_column_is_no_label(self):
+        """A set read on its own is not in a collection, so it names none."""
+        out = AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)
+        assert out[0].set == ""
+
     def test_declared_column_documents_only(self):
         """Documenting a column does not gate any other one."""
         out = AnnotationSet(
@@ -781,6 +792,17 @@ class TestAttrs:
         """Attributes are immutable, like every DASCore model."""
         with pytest.raises(ValidationError):
             AnnotationSetAttrs(dims=DIMS).dims = ("other",)
+
+    def test_sets_are_one_level_deep(self):
+        """Sets loaded together are one collection, not a tree of them."""
+        child = AnnotationSetAttrs(dims=("time",), sets={"deeper": {"dims": ("time",)}})
+        with pytest.raises(ValidationError, match="not a tree"):
+            AnnotationSetAttrs(dims=DIMS, sets={"picks": child})
+
+    def test_a_child_dimension_nothing_holds(self):
+        """A set states the dimensions the sets loaded with it are read in."""
+        with pytest.raises(ValidationError, match="which the sets loaded with it"):
+            AnnotationSetAttrs(dims=("time",), sets={"picks": {"dims": ("depth",)}})
 
 
 class TestBasis:
