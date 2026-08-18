@@ -184,11 +184,15 @@ print(diamond.to_mermaid())
 
 A pipe can be written to JSON or YAML — `.yaml` and `.yml` write YAML, `.json` or a bare name write JSON, and any other suffix is refused rather than guessed at — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name. The other side of that is that a task class has to live at module level, under a name no other class in its package claims, and that whatever defines it has to be imported before the pipe is loaded.
 
+<!--
+`execute: false` keeps the chunk below out of the generated doc tests
+(scripts/generate_doc_code_tests.py), which run a page's chunks inside a
+function, where a task class is a local one and no document could name it.
+Quarto ignores the option and still runs the chunk at build time.
+-->
+
 ```{python}
 #| execute: false
-#  Not mirrored into the generated doc tests: those run a page's chunks
-#  inside a function, where a task class is a local one and no document
-#  could name it. Quarto still runs this at build time.
 import tempfile
 from pathlib import Path
 
