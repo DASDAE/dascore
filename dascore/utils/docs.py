@@ -131,19 +131,24 @@ def get_plugin_table() -> pd.DataFrame:
     """
     Return a DataFrame of registered third-party plugins.
 
-    Reads all CSV files in the plugin registry, deduplicates on namespace,
-    and sorts alphabetically. Columns are ``namespace``, ``package_name``,
-    and ``package_url``.
+    Reads all CSV files in the plugin registry and sorts alphabetically.
+    Columns are ``host``, ``namespace``, ``package_name`` and
+    ``package_url``. The host is the object the namespace attaches to,
+    taken from the file's name; one package often registers the same
+    namespace on several of them.
     """
     from dascore.utils.namespace import _PLUGIN_REGISTRY_DIR  # noqa: PLC0415
 
-    frames = [pd.read_csv(p) for p in sorted(_PLUGIN_REGISTRY_DIR.glob("*.csv"))]
+    columns = ["host", "namespace", "package_name", "package_url"]
+    frames = []
+    for path in sorted(_PLUGIN_REGISTRY_DIR.glob("*.csv")):
+        frames.append(pd.read_csv(path).assign(host=path.stem))
     if not frames:
-        return pd.DataFrame(columns=["namespace", "package_name", "package_url"])
+        return pd.DataFrame(columns=columns)
     return (
         pd.concat(frames, ignore_index=True)
-        .drop_duplicates(subset="namespace")
-        .sort_values("namespace")[["namespace", "package_name", "package_url"]]
+        .drop_duplicates(subset=["host", "namespace"])
+        .sort_values(["namespace", "host"])[columns]
         .reset_index(drop=True)
     )
 

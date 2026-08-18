@@ -96,39 +96,39 @@ class TestRoundTrip:
 
     def test_regions_through_a_directory(self, regions, tmp_path):
         """Bounds, extras and provenance all survive a directory."""
-        regions.save(tmp_path / "picks")
+        regions.io.save(tmp_path / "picks")
         assert dc.annotations(tmp_path / "picks") == regions
 
     def test_regions_through_a_bare_table(self, regions, tmp_path):
         """A set of regions is a table, and its dims are stated again."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         loaded = dc.annotations(path, dims=DIMS)
-        assert loaded.to_dataframe().equals(regions.to_dataframe())
+        assert loaded.io.to_dataframe().equals(regions.io.to_dataframe())
 
     def test_vertices_and_basis(self, with_vertices, curve, tmp_path):
         """Vertices and the curve they were drawn from both survive."""
-        with_vertices.save(tmp_path / "picks")
+        with_vertices.io.save(tmp_path / "picks")
         loaded = dc.annotations(tmp_path / "picks")
         assert loaded == with_vertices
         assert loaded[1].geometry.basis == curve
 
     def test_extras_keep_their_kind(self, regions, tmp_path):
         """A cell written as a number or a boolean reads back as one."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         assert loaded[0].extra["score"] == 0.9
         assert loaded[0].extra["checked"] is True
         assert loaded[1].extra["checked"] is False
 
     def test_tags_keep_their_shape(self, regions, tmp_path):
         """Tags are one spelling however they arrive."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         assert loaded[0].tags == ("road", "car")
         assert loaded[1].tags == ()
 
     def test_times_keep_their_type(self, regions, tmp_path):
         """A time endpoint reads back as a time, not as its text."""
-        loaded = dc.annotations(regions.save(tmp_path / "picks"))
+        loaded = dc.annotations(regions.io.save(tmp_path / "picks"))
         start, _ = loaded[0].region.bounds["time"]
         assert isinstance(start, np.datetime64)
 
@@ -148,7 +148,7 @@ class TestRoundTrip:
         )
         frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"], "basis": [line]})
         annotations = dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].geometry.basis == line
 
     def test_an_unstated_bound(self, tmp_path):
@@ -161,7 +161,7 @@ class TestRoundTrip:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded == annotations
         assert "distance" not in loaded[1].region.bounds
 
@@ -175,14 +175,14 @@ class TestWhatATableCannotSay:
             {"group": ["a"], "distance": [1.0], "seq": ["third"]},
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["seq"] == "third"
 
     def test_an_empty_cell_is_unset(self, tmp_path):
         """A table cannot tell an empty cell from an empty string."""
         frame = pd.DataFrame({"group": ["", "b"], "distance": [1.0, 2.0]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+        assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
         assert annotations[0].group == ""
 
     def test_a_datetime_extra_reads_back_as_text(self, tmp_path):
@@ -197,7 +197,7 @@ class TestWhatATableCannotSay:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["when"] == "2020-01-01T00:00:00.000000000"
 
     def test_an_ambiguous_value_is_refused_at_the_write(self, tmp_path):
@@ -209,7 +209,7 @@ class TestWhatATableCannotSay:
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
         with pytest.raises(ParameterError, match="read back as a boolean"):
-            annotations.save(tmp_path / "picks")
+            annotations.io.save(tmp_path / "picks")
 
     def test_an_unambiguous_value_still_writes(self, tmp_path):
         """Only text a table would read as another kind is refused."""
@@ -217,13 +217,13 @@ class TestWhatATableCannotSay:
             {"group": ["phase"] * 2, "value": ["P", "S"], "distance": [1.0, 2.0]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        assert dc.annotations(annotations.save(tmp_path / "picks")) == annotations
+        assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
 
     def test_a_non_finite_looking_extra_stays_text(self, tmp_path):
         """A cell reading 'nan' is text, not a value which then vanishes."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "note": ["nan"]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["note"] == "nan"
 
     def test_an_extra_some_rows_leave_blank(self, tmp_path):
@@ -232,7 +232,7 @@ class TestWhatATableCannotSay:
             {"group": ["a", "b"], "distance": [1.0, 2.0], "note": ["seen", None]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["note"] == "seen"
         assert "note" not in loaded[1].extra
 
@@ -240,7 +240,7 @@ class TestWhatATableCannotSay:
         """A cell is read the way its own text states it, as every table is."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "zip": ["01234"]})
         annotations = dc.AnnotationSet(frame, dims=("distance",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["zip"] == 1234
 
 
@@ -250,8 +250,8 @@ class TestSavingOverASet:
     def test_a_stale_vertices_table_is_cleared(self, with_vertices, regions, tmp_path):
         """A set without vertices leaves none behind for the next read."""
         directory = tmp_path / "picks"
-        with_vertices.save(directory)
-        regions.save(directory)
+        with_vertices.io.save(directory)
+        regions.io.save(directory)
         assert not (directory / "vertices.csv").exists()
         assert dc.annotations(directory) == regions
 
@@ -263,24 +263,24 @@ class TestSavingOverASet:
         (directory / "attrs.yaml").write_text(yaml.safe_dump({"dims": list(DIMS)}))
         (directory / "annotations.csv").write_text("group,distance\nnoise,1.0\n")
         loaded = dc.annotations(directory)
-        loaded.save(directory)
+        loaded.io.save(directory)
         assert not (directory / "attrs.yaml").exists()
         assert dc.annotations(directory) == loaded
 
     def test_a_file_owing_this_format_nothing_is_left(self, regions, tmp_path):
         """Only the spellings a set claims are cleared."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.bak").write_text("mine")
-        regions.save(directory)
+        regions.io.save(directory)
         assert (directory / "attrs.bak").read_text() == "mine"
 
     def test_a_shouted_suffix_is_read_and_superseded(self, regions, tmp_path):
         """One data model stands behind a suffix however it is spelled."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").rename(directory / "attrs.JSON")
         loaded = dc.annotations(directory)
         assert loaded == regions
-        loaded.save(directory)
+        loaded.io.save(directory)
         # One attrs file, whatever it ends up called: a case-insensitive
         # filesystem holds the shouted name and the written one in the
         # same file, so the spelling on disk is the platform's to decide
@@ -307,7 +307,7 @@ class TestTheDoor:
 
     def test_a_directory_refuses_what_it_states(self, regions, tmp_path):
         """A directory holds its own attributes and vertices."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         with pytest.raises(InvalidAnnotationError, match="a set directory"):
             dc.annotations(directory, attrs={"dims": DIMS})
         with pytest.raises(InvalidAnnotationError, match="a set directory"):
@@ -345,7 +345,7 @@ class TestTheDoor:
     def test_a_set_of_none(self, tmp_path):
         """A set of no annotations writes an empty table and reads back."""
         empty = dc.annotations(dims=DIMS)
-        assert dc.annotations(empty.save(tmp_path / "picks")) == empty
+        assert dc.annotations(empty.io.save(tmp_path / "picks")) == empty
 
 
 class TestDeclaringDimensions:
@@ -353,18 +353,18 @@ class TestDeclaringDimensions:
 
     def test_stated_by_the_attrs(self, regions, tmp_path):
         """A directory states its own dimensions."""
-        assert dc.annotations(regions.save(tmp_path / "picks")).dims == DIMS
+        assert dc.annotations(regions.io.save(tmp_path / "picks")).dims == DIMS
 
     def test_stated_by_the_caller(self, regions, tmp_path):
         """A bare table has the caller state them."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         assert dc.annotations(path, dims=DIMS).dims == DIMS
 
     def test_stated_by_neither(self, regions, tmp_path):
         """A source stating none fails saying how to state them."""
         path = tmp_path / "picks.csv"
-        regions.to_csv(path)
+        regions.io.to_csv(path)
         with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
             dc.annotations(path)
 
@@ -397,13 +397,13 @@ class TestDeclaringDimensions:
         """Reading the cells against other dimensions would type them
         differently and build a set which is not the one stored.
         """
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         with pytest.raises(InvalidAnnotationError, match="its own dimensions"):
             dc.annotations(directory, dims=("time", "distance"))
 
     def test_a_directory_which_states_none_takes_them(self, regions, tmp_path):
         """Where a directory states none, the caller's are the only ones."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=("time", "distance")).dims == (
             "time",
@@ -419,7 +419,7 @@ class TestTheAttrsFile:
         """One data model stands behind both spellings; a set may be authored
         in the more readable one.
         """
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         document = json.loads((directory / "attrs.json").read_text())
         (directory / "attrs.yaml").write_text(yaml.safe_dump(document))
         (directory / "attrs.json").unlink()
@@ -427,14 +427,14 @@ class TestTheAttrsFile:
 
     def test_two_spellings(self, regions, tmp_path):
         """A set spells each of its parts once."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.yml").write_text("{}")
         with pytest.raises(InvalidAnnotationError, match="more than once"):
             dc.annotations(directory)
 
     def test_the_wrong_object(self, regions, tmp_path):
         """A file declaring another model is a misfiled object."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text(
             '{"object_type": "Inventory", "dims": ["time"]}'
         )
@@ -443,7 +443,7 @@ class TestTheAttrsFile:
 
     def test_which_is_not_a_mapping(self, regions, tmp_path):
         """A document stating a list defines no attributes."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text('["distance", "time"]')
         with pytest.raises(InvalidAnnotationError, match="no mapping"):
             dc.annotations(directory)
@@ -451,7 +451,7 @@ class TestTheAttrsFile:
     @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_which_does_not_parse(self, regions, tmp_path):
         """Unparseable YAML names the file rather than the parser."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         (directory / "attrs.yaml").write_text("dims: [\n")
         with pytest.raises(InvalidAnnotationError, match="Could not parse YAML"):
@@ -459,21 +459,21 @@ class TestTheAttrsFile:
 
     def test_bad_json(self, regions, tmp_path):
         """Unparseable JSON names the file too."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_text("{")
         with pytest.raises(InvalidAnnotationError, match="Could not parse JSON"):
             dc.annotations(directory)
 
     def test_which_cannot_be_read(self, regions, tmp_path):
         """A file which does not decode names itself, not the codec."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").write_bytes(b'{"dims": ["\xff\xfe"]}')
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
     def test_no_attrs_file(self, regions, tmp_path):
         """A directory without one is read on the caller's dimensions."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "attrs.json").unlink()
         assert dc.annotations(directory, dims=DIMS).dims == DIMS
 
@@ -490,21 +490,21 @@ class TestTheTables:
 
     def test_a_table_which_cannot_be_read(self, regions, tmp_path):
         """A table which does not decode is the table reader's to name."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "annotations.csv").write_bytes(b"group\n\xff\xfe\n")
         with pytest.raises(InvalidAnnotationError, match="Could not read"):
             dc.annotations(directory)
 
     def test_a_stray_table(self, regions, tmp_path):
         """A near-miss on the convention raises rather than being skipped."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         (directory / "vertexes.csv").write_text("id,seq\n")
         with pytest.raises(InvalidAnnotationError, match=r"vertexes\.csv"):
             dc.annotations(directory)
 
     def test_a_basis_which_is_not_json(self, with_vertices, tmp_path):
         """A stored basis is what its curve dumps."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text(table.read_text().replace('"{""object_type', '"{oops'))
         with pytest.raises(InvalidAnnotationError, match="not a JSON document"):
@@ -512,7 +512,7 @@ class TestTheTables:
 
     def test_a_basis_which_is_not_a_curve(self, with_vertices, tmp_path):
         """A document which parses but names no curve is still refused."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         original = table.read_text()
         start = original.index('"{""object_type')
@@ -525,7 +525,7 @@ class TestTheTables:
 
     def test_a_non_numeric_seq(self, with_vertices, tmp_path):
         """A vertex states its place in the order as a number."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         table = directory / "vertices.csv"
         table.write_text(table.read_text().replace("p1,0,", "p1,first,"))
         with pytest.raises(InvalidAnnotationError, match="non-numeric seq"):
@@ -533,7 +533,7 @@ class TestTheTables:
 
     def test_a_dimension_which_is_neither(self, regions, tmp_path):
         """A dimension column holds numbers or times, and says so."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text(table.read_text().replace("120.0", "far"))
         with pytest.raises(InvalidAnnotationError, match="neither numbers nor times"):
@@ -556,7 +556,7 @@ class TestTheTables:
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("time",))
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded == annotations
         assert isinstance(loaded[0].region.bounds["time"][0], np.datetime64)
 
@@ -577,7 +577,7 @@ class TestTheTables:
         """The frame and the geometry built from it say the same thing."""
         frame = pd.DataFrame({"time_start": ["2020-01-01"], "time_end": ["2020-01-02"]})
         out = dc.AnnotationSet(frame, dims=("time",))
-        held = out.to_dataframe()["time_start"][0]
+        held = out.io.to_dataframe()["time_start"][0]
         assert isinstance(held, pd.Timestamp | np.datetime64)
         assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01")
 
@@ -588,12 +588,12 @@ class TestTheTables:
             {"id": ["1", "1"], "seq": [0, 1], "distance": [1.0, 2.0]}
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",), vertices=vertices)
-        loaded = dc.annotations(annotations.save(tmp_path / "picks"))
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].id == "1"
         # The frame too, not only the model: Annotation.id is typed str, so
         # it would coerce an int back and hide the damage.
-        assert loaded.to_dataframe()["id"][0] == "1"
-        assert loaded.to_vertices()["id"][0] == "1"
+        assert loaded.io.to_dataframe()["id"][0] == "1"
+        assert loaded.io.to_vertices()["id"][0] == "1"
         assert loaded == annotations
 
 
@@ -602,44 +602,44 @@ class TestWriting:
 
     def test_to_csv_returns_text(self, regions):
         """The text comes back whether or not it is written."""
-        text = regions.to_csv()
+        text = regions.io.to_csv()
         assert text.splitlines()[0].startswith("id,group,tags")
 
     def test_to_csv_refuses_vertices(self, with_vertices):
         """A bare table states one grain."""
         with pytest.raises(ParameterError, match="holds vertices"):
-            with_vertices.to_csv()
+            with_vertices.io.to_csv()
 
     def test_save_makes_the_directory(self, regions, tmp_path):
         """Saving into a directory which is not there makes it."""
-        directory = regions.save(tmp_path / "deep" / "picks")
+        directory = regions.io.save(tmp_path / "deep" / "picks")
         assert directory.is_dir()
 
     def test_save_writes_no_empty_vertices(self, regions, tmp_path):
         """A set without vertices states no vertices table."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         assert not (directory / "vertices.csv").exists()
 
     def test_save_writes_what_it_holds(self, with_vertices, tmp_path):
         """A set with vertices states all three parts."""
-        directory = with_vertices.save(tmp_path / "picks")
+        directory = with_vertices.io.save(tmp_path / "picks")
         written = {x.name for x in directory.iterdir()}
         assert written == {"attrs.json", "annotations.csv", "vertices.csv"}
 
     def test_save_over_itself(self, regions, tmp_path):
         """Saving twice into one directory rewrites it."""
-        regions.save(tmp_path / "picks")
-        assert dc.annotations(regions.save(tmp_path / "picks")) == regions
+        regions.io.save(tmp_path / "picks")
+        assert dc.annotations(regions.io.save(tmp_path / "picks")) == regions
 
     def test_times_are_written_unambiguously(self, regions, tmp_path):
         """A time is written the way DASCore writes every datetime."""
-        text = regions.to_csv()
+        text = regions.io.to_csv()
         assert "2020-01-01T00:00:10.000000000" in text
 
     def test_a_nested_extra_is_written_as_its_document(self, tmp_path):
         """A cell a table has no column shape for is written as text."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"n": 1}]})
-        text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""n"": 1}' in text
 
     def test_an_extra_json_cannot_spell(self, tmp_path):
@@ -647,11 +647,11 @@ class TestWriting:
         than dying as a circular reference.
         """
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "meta": [{"s": {1}}]})
-        text = dc.AnnotationSet(frame, dims=("distance",)).to_csv()
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""s"": ""1""}' in text
 
     def test_the_attrs_name_their_model(self, regions, tmp_path):
         """The document says what it holds, as every stored object does."""
-        directory = regions.save(tmp_path / "picks")
+        directory = regions.io.save(tmp_path / "picks")
         text = (directory / "attrs.json").read_text()
         assert '"object_type": "AnnotationSetAttrs"' in text

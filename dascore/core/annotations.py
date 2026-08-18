@@ -54,6 +54,7 @@ from dascore.models import (
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
+from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.tables import parse_cell
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -81,7 +82,7 @@ _VERTEX_KINDS = {"path": 2, "polygon": 3}
 _VERTEX_COLUMNS = ("id", "seq")
 
 # The three parts a stored set spells itself with, and the suffixes each
-# takes. The loader reads these names; `save` writes them, and clears the
+# takes. The loader reads these names; `io.save` writes them, and clears the
 # spellings it supersedes, which is why both need the whole list.
 ATTRS_STEM = "attrs"
 ANNOTATION_STEM = "annotations"
@@ -610,7 +611,7 @@ class _Spelling(NamedTuple):
     end: str | None
 
 
-class AnnotationSet:
+class AnnotationSet(NamespaceOwner):
     """
     An immutable, dataframe-backed set of annotations over patch dimensions.
 
@@ -651,6 +652,8 @@ class AnnotationSet:
     >>> picks[0].region.bounds["distance"]
     (10.0, 80.0)
     """
+
+    _namespace_entry_point_group: ClassVar[str] = "dascore.annotation_namespace"
 
     def __init__(
         self,
@@ -694,103 +697,6 @@ class AnnotationSet:
     def dims(self) -> tuple[str, ...]:
         """The dimensions the annotations are stated in."""
         return self._attrs.dims
-
-    def to_dataframe(self) -> pd.DataFrame:
-        """Return the annotations as a dataframe."""
-        return self._df.copy()
-
-    def to_vertices(self) -> pd.DataFrame:
-        """Return the vertices of every path and polygon as a tidy dataframe."""
-        return self._vertices.copy()
-
-    # --- writing the set out
-
-    def to_csv(self, path=None) -> str:
-        """
-        Return the annotations as CSV text, optionally writing it to a path.
-
-        A bare table states one grain, so a set holding vertices is written
-        with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
-        this is the spelling for a set of regions. The set's dimensions are
-        not part of the table, so reading one back states them again.
-
-        Parameters
-        ----------
-        path
-            Where to write the text, or None to only return it.
-        """
-        if not self._vertices.empty:
-            msg = (
-                "This set holds vertices, which a bare table has no row for. "
-                "Save it as a directory, which states its vertices beside its "
-                "annotations."
-            )
-            raise ParameterError(msg)
-        return _write_table(self._df, path)
-
-    def save(self, path) -> pathlib.Path:
-        """
-        Write the set to a directory, creating it if needed.
-
-        The directory states the set in three parts: what it is and which
-        dimensions it holds, its annotations, and -- where any path or
-        polygon needs them -- its vertices. It reads back through
-        [dascore.annotations](`dascore.annotations`).
-
-        The attributes are written as JSON rather than as YAML, so storing
-        a set needs nothing beyond the standard library; a set authored by
-        hand may spell them in YAML, which reads back the same.
-
-        Writing states the whole directory, so a part this set does not
-        have is removed rather than left behind. A stale vertices table, or
-        the YAML the attributes used to be spelled in, would otherwise sit
-        beside what was written and leave a directory which loaded before
-        the save refusing to load after it.
-
-        Parameters
-        ----------
-        path
-            The directory to write into.
-
-        Returns
-        -------
-        The directory written to, so a save reads straight back.
-        """
-        # Everything is spelled out before the directory is touched: a
-        # table which refuses to be written -- an ambiguous value does --
-        # would otherwise raise with the stale parts already deleted and
-        # the attributes already replaced, leaving half a set behind.
-        # Defaults are dropped from the document, so it says what the set
-        # says; dims has no default, so it is always written, and the
-        # attributes name their own model, which is what the file holds.
-        document = self._attrs.model_dump(mode="json", exclude_defaults=True)
-        annotation_text = _write_table(self._df)
-        vertex_text = None if self._vertices.empty else _write_table(self._vertices)
-        directory = pathlib.Path(path)
-        directory.mkdir(parents=True, exist_ok=True)
-        vertex_table = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
-        attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
-        # Only the spellings this format claims: a notes.txt or an
-        # attrs.bak beside them participates in no convention and is not
-        # this function's to delete. The suffix is matched without regard
-        # to case, as the loader matches it.
-        superseded = [
-            x
-            for x in directory.iterdir()
-            if x.stem == ATTRS_STEM
-            and x.suffix.casefold() in OBJECT_SUFFIXES
-            and x != attrs_file
-        ]
-        if vertex_text is None:
-            superseded.append(vertex_table)
-        for stale in superseded:
-            stale.unlink(missing_ok=True)
-        with open(attrs_file, "w") as stream:
-            json.dump(document, stream, indent=2)
-        _write_text(annotation_text, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
-        if vertex_text is not None:
-            _write_text(vertex_text, vertex_table)
-        return directory
 
     # --- what the set holds
 
@@ -1578,3 +1484,179 @@ def _stated(value) -> bool:
     except (TypeError, ValueError):
         # An array-like cell; it is stated by being there.
         return True
+
+
+def annotation_set_to_dataframe(annotations: AnnotationSet) -> pd.DataFrame:
+    """
+    Return the annotations as a dataframe.
+
+    Reached as ``annotation_set.io.to_dataframe``.
+
+    Parameters
+    ----------
+    annotations
+        The set to read.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> list(annotations.io.to_dataframe()["group"])
+    ['event']
+    """
+    return annotations._df.copy()
+
+
+def annotation_set_to_vertices(annotations: AnnotationSet) -> pd.DataFrame:
+    """
+    Return the vertices of every path and polygon as a tidy dataframe.
+
+    Reached as ``annotation_set.io.to_vertices``.
+
+    Parameters
+    ----------
+    annotations
+        The set to read.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> annotations.io.to_vertices().empty  # a region states no vertices
+    True
+    """
+    return annotations._vertices.copy()
+
+
+def annotation_set_to_csv(
+    annotations: AnnotationSet, path: str | pathlib.Path | None = None
+) -> str:
+    """
+    Return the annotations as CSV text, optionally writing it to a path.
+
+    Reached as ``annotation_set.io.to_csv``.
+
+    A bare table states one grain, so a set holding vertices is written
+    with [save](`dascore.core.annotations.save_annotation_set`) instead;
+    this is the spelling for a set of regions. The set's dimensions are
+    not part of the table, so reading one back states them again.
+
+    Parameters
+    ----------
+    annotations
+        The set to write.
+    path
+        Where to write the text, or None to only return it.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> "group" in annotations.io.to_csv()
+    True
+    """
+    if not annotations._vertices.empty:
+        msg = (
+            "This set holds vertices, which a bare table has no row for. "
+            "Save it as a directory, which states its vertices beside its "
+            "annotations."
+        )
+        raise ParameterError(msg)
+    return _write_table(annotations._df, path)
+
+
+def save_annotation_set(
+    annotations: AnnotationSet, path: str | pathlib.Path
+) -> pathlib.Path:
+    """
+    Write the set to a directory, creating it if needed.
+
+    Reached as ``annotation_set.io.save``.
+
+    The directory states the set in three parts: what it is and which
+    dimensions it holds, its annotations, and -- where any path or
+    polygon needs them -- its vertices. It reads back through
+    [dascore.annotations](`dascore.annotations`).
+
+    The attributes are written as JSON rather than as YAML, so storing
+    a set needs nothing beyond the standard library; a set authored by
+    hand may spell them in YAML, which reads back the same.
+
+    Writing states the whole directory, so a part this set does not
+    have is removed rather than left behind. A stale vertices table, or
+    the YAML the attributes used to be spelled in, would otherwise sit
+    beside what was written and leave a directory which loaded before
+    the save refusing to load after it.
+
+    Parameters
+    ----------
+    annotations
+        The set to write.
+    path
+        The directory to write into.
+
+    Returns
+    -------
+    The directory written to, so a save reads straight back.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import dascore as dc
+    >>> frame = pd.DataFrame(
+    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ... )
+    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
+    >>> directory = annotations.io.save("picks")  # doctest: +SKIP
+    >>> dc.annotations(directory) == annotations  # doctest: +SKIP
+    True
+    """
+    # Everything is spelled out before the directory is touched: a
+    # table which refuses to be written -- an ambiguous value does --
+    # would otherwise raise with the stale parts already deleted and
+    # the attributes already replaced, leaving half a set behind.
+    # Defaults are dropped from the document, so it says what the set
+    # says; dims has no default, so it is always written, and the
+    # attributes name their own model, which is what the file holds.
+    document = annotations._attrs.model_dump(mode="json", exclude_defaults=True)
+    annotation_text = _write_table(annotations._df)
+    vertex_text = (
+        None if annotations._vertices.empty else _write_table(annotations._vertices)
+    )
+    directory = pathlib.Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    vertex_table = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
+    attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
+    # Only the spellings this format claims: a notes.txt or an
+    # attrs.bak beside them participates in no convention and is not
+    # this function's to delete. The suffix is matched without regard
+    # to case, as the loader matches it.
+    superseded = [
+        x
+        for x in directory.iterdir()
+        if x.stem == ATTRS_STEM
+        and x.suffix.casefold() in OBJECT_SUFFIXES
+        and x != attrs_file
+    ]
+    if vertex_text is None:
+        superseded.append(vertex_table)
+    for stale in superseded:
+        stale.unlink(missing_ok=True)
+    with open(attrs_file, "w") as stream:
+        json.dump(document, stream, indent=2)
+    _write_text(annotation_text, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
+    if vertex_text is not None:
+        _write_text(vertex_text, vertex_table)
+    return directory

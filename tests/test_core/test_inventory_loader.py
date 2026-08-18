@@ -991,7 +991,7 @@ class TestFactory:
     def test_yaml_file_still_works(self, tmp_path):
         """A file keeps going to the single-file reader."""
         path = tmp_path / "inv.yaml"
-        dc.inventory().to_yaml(path)
+        dc.inventory().io.to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
     def test_directory_which_holds_no_inventory(self, tmp_path):
@@ -2237,7 +2237,7 @@ class TestFindInventory:
     def test_the_file_form(self, tmp_path):
         """A serialized inventory beside the data it describes."""
         found = tmp_path / f"{loader.BLESSED_NAME}.yaml"
-        found.write_text(dc.inventory().to_yaml())
+        found.write_text(dc.inventory().io.to_yaml())
         assert loader.carries_inventory(tmp_path)
         assert loader.find_inventory(tmp_path) == found
         assert isinstance(dc.inventory(loader.find_inventory(tmp_path)), inv.Inventory)
@@ -2251,7 +2251,7 @@ class TestFindInventory:
 
     def test_the_visible_name_is_not_it(self, tmp_path):
         """`inventory.yaml` is the envelope of the authoring format."""
-        (tmp_path / "inventory.yaml").write_text(dc.inventory().to_yaml())
+        (tmp_path / "inventory.yaml").write_text(dc.inventory().io.to_yaml())
         assert not loader.carries_inventory(tmp_path)
         assert loader.find_inventory(tmp_path) is None
 
@@ -2374,7 +2374,7 @@ class TestLoadSerializedFile:
         """What `to_yaml` writes is what this reads."""
         original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
         path = tmp_path / "whole.yaml"
-        original.to_yaml(path)
+        original.io.to_yaml(path)
         assert dc.inventory(path) == original
 
 
@@ -2384,7 +2384,7 @@ class TestOneLoadingDoor:
     def test_text_and_file_agree(self, tmp_path):
         """The same document loads the same from either side of the door."""
         original = dc.inventory(write_inventory(tmp_path / "authored", MINIMAL))
-        text = original.to_yaml()
+        text = original.io.to_yaml()
         path = tmp_path / "whole.yaml"
         path.write_text(text)
         assert dc.inventory(text) == dc.inventory(path) == original
@@ -2392,7 +2392,7 @@ class TestOneLoadingDoor:
     def test_from_yaml_refuses_a_path(self, tmp_path):
         """The text reader says so rather than letting the parser fail."""
         path = tmp_path / "whole.yaml"
-        path.write_text(dc.inventory().to_yaml())
+        path.write_text(dc.inventory().io.to_yaml())
         with pytest.raises(InvalidInventoryError, match="reads YAML text"):
             inv.Inventory.from_yaml(path)
 

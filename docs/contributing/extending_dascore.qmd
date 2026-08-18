@@ -2,11 +2,11 @@
 title: Extending DASCore
 ---
 
-This page explains how to extend DASCore with `Patch` and `Spool` namespaces. Use it when you want users to write code like `patch.my_plugin.some_method()` or `spool.my_plugin.some_method()` from a separate package.
+This page explains how to extend DASCore's objects with namespaces. Use it when you want users to write code like `patch.my_plugin.some_method()` or `spool.my_plugin.some_method()` from a separate package.
 
 ## When to use a namespace
 
-A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `Spool`. Good candidates include:
+A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to a DASCore object. Good candidates include:
 
 - Optional integrations that should live in a separate package.
 - Domain-specific processing that is useful to a subset of users.
@@ -14,11 +14,20 @@ A namespace is appropriate when you want to group related functionality under a 
 
 If you are adding support for a new file format, see [Adding a New Format](new_format.qmd). File formats use `FiberIO` plugins, not method namespaces.
 
-Namespaces and `FiberIO` plugins are the extension points; subclassing `Patch` or `Spool` is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so copying a subclass instance which never ran that `__init__` is refused rather than silently accepted.
+Namespaces and `FiberIO` plugins are the extension points; subclassing a DASCore object is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so copying a subclass instance which never ran that `__init__` is refused rather than silently accepted.
 
 ## The namespace model
 
-DASCore namespaces inherit from either `PatchNameSpace` or `SpoolNameSpace`. Namespace methods receive the parent object, so they look like normal `Patch` or `Spool` methods. Using `patch` or `spool` as the first argument name can make this explicit:
+Four objects host namespaces. Each has its own base class and entry point group, so a namespace named `zug` on a `Patch` and one on a `Spool` are different things:
+
+| Host | Base class | Entry point group | Plugin registry file |
+|---|---|---|---|
+| `Patch` | `PatchNameSpace` | `dascore.patch_namespace` | `patch.csv` |
+| `Spool` | `SpoolNameSpace` | `dascore.spool_namespace` | `spool.csv` |
+| `Inventory` | `InventoryNameSpace` | `dascore.inventory_namespace` | `inventory.csv` |
+| `AnnotationSet` | `AnnotationNameSpace` | `dascore.annotation_namespace` | `annotation.csv` |
+
+All four bases live in `dascore.utils.namespace`. Namespace methods receive the host object, so they look like normal methods on it. Naming the first argument after the host can make this explicit:
 
 ```{python}
 import dascore as dc
@@ -65,7 +74,7 @@ patch = dc.get_example_patch()
 value = patch.my_ext.peak_to_peak()
 ```
 
-The namespace `name` must be a valid Python identifier. If another namespace of the same type already uses that name, DASCore raises an error when the subclass is defined.
+The namespace `name` must be a public Python identifier -- a leading underscore is refused, since a host resolves its own private names before the namespaces are searched. If another namespace of the same type already uses that name, DASCore warns when the subclass is defined and the later class wins.
 
 ## Packaging an extension plugin
 
@@ -106,7 +115,7 @@ After installation, DASCore loads the namespace the first time `patch.my_ext` is
 
 Once your package is published, consider opening a pull request to [DASCore](https://github.com/DASDAE/dascore) to add it to the plugin registry. This lets users see a helpful message pointing to your package when they try to use your namespace without having it installed.
 
-Add a row to `dascore/plugin_registry/patch.csv` (or `spool.csv` for a spool namespace):
+Add a row to the plugin registry file for the host, from the table above -- `dascore/plugin_registry/patch.csv` for a patch namespace:
 
 ```
 package_name,package_url,namespace
@@ -121,12 +130,30 @@ DASCorePluginError: Patch has a registered namespace of 'my_ext' provided by
 https://github.com/yourorg/dascore-extra
 ```
 
-### Spool namespaces
+### The other hosts
 
-Spool namespaces use the same pattern. The only changes are:
+`Spool`, `Inventory` and `AnnotationSet` namespaces use the same pattern. The only changes are the base class and the entry point group, both from the table above. For example, a namespace on an `AnnotationSet`:
 
-- Inherit from `SpoolNameSpace` and write methods against a `Spool`.
-- Register the namespace in the `dascore.spool_namespace` entry point group instead of `dascore.patch_namespace`.
+```{python}
+from dascore.utils.namespace import AnnotationNameSpace
+
+
+class MyAnnotationNamespace(AnnotationNameSpace):
+    """AnnotationSet methods provided by dascore-extra."""
+
+    name = "my_ext"
+
+    def count_groups(annotations) -> int:
+        """Return how many distinct groups the set holds."""
+        return annotations.io.to_dataframe()["group"].nunique()
+```
+
+```default
+[project.entry-points."dascore.annotation_namespace"]
+my_ext = "dascore_extra.annotation_namespace:MyAnnotationNamespace"
+```
+
+DASCore uses this itself: `patch.io`, `inventory.io` and `annotation_set.io` are namespaces registered in exactly this way, defined in `dascore/io/__init__.py`.
 
 ## Array backends
 

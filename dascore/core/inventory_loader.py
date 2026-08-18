@@ -5,7 +5,7 @@ The authoring format splits an inventory along its natural grain: small
 heterogeneous objects (acquisitions, interrogators, cables) live in YAML or
 JSON files matching the models, while long row-shaped track data lives in
 CSV files a field crew can maintain as a spreadsheet. A directory of these
-files is itself a loadable inventory, and ``to_yaml`` exports the
+files is itself a loadable inventory, and ``io.to_yaml`` exports the
 single-file interchange artifact for shipping beside a data archive.
 
 A table is matched to the model by name: ``<name>.csv`` fills the
@@ -1493,7 +1493,7 @@ def _load_file(path: Path) -> Inventory:
     Load a whole inventory from one serialized document.
 
     The envelope of an authoring directory read on its own terms: same
-    parsers, same errors, so the single-file artifact ``to_yaml`` writes
+    parsers, same errors, so the single-file artifact ``io.to_yaml`` writes
     and the directory it came from fail the same way when they fail.
     """
     return Inventory._from_mapping(_read_object(path), _quote(path))
