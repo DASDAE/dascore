@@ -70,6 +70,22 @@ def read_document(
     return dict(document)
 
 
+def dump_document(
+    document: Mapping,
+    file_format: DocumentFormat,
+) -> str:
+    """
+    Return the text a mapping is written as, in the format named.
+
+    Either spelling keeps the order the document states rather than
+    sorting: a document says what it holds, its own order reads better, and
+    a set written twice reads the same both times.
+    """
+    if file_format == "yaml":
+        return yaml.safe_dump(dict(document), sort_keys=False)
+    return json.dumps(document, indent=2)
+
+
 def write_document(
     document: Mapping,
     path: Path,
@@ -81,14 +97,19 @@ def write_document(
     Parent directories are made as needed, so saving into a directory which
     is not there yet works.
     """
+    text = dump_document(document, file_format)
+    return write_text_document(text, path)
+
+
+def write_text_document(text: str, path: Path) -> Path:
+    """
+    Write a document's text to a file and return the path.
+
+    For a caller which already has the text -- because it hands the same
+    string back -- and would otherwise write it and read it again.
+    """
     path = Path(path)
     _maybe_make_parent_directory(path)
-    if file_format == "yaml":
-        # Written in the order the document states rather than sorted: a
-        # document says what it holds, and its own order reads better.
-        text = yaml.safe_dump(dict(document), sort_keys=False)
-    else:
-        text = json.dumps(document, indent=2, sort_keys=True)
     path.write_text(text, encoding="utf-8")
     return path
 

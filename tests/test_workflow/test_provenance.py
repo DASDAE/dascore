@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pickle
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -27,6 +28,16 @@ class MergeTask(Task):
     def run(self, *numbers):
         """Add up numbers."""
         return sum(numbers)
+
+
+class ArrayTask(Task):
+    """A step parametrized by an array, which a document has to carry."""
+
+    weights: object = None
+
+    def run(self, number):
+        """Hand back what it was given."""
+        return number
 
 
 class LaterTask(Task):
@@ -208,12 +219,6 @@ class TestNodeDocuments:
         rebuilt = ProvenanceNode.from_json(merged.to_json())
         assert len(list(rebuilt.walk())) == 4
 
-    def test_ids_kept(self, chain):
-        """The ids a step produced survive the trip."""
-        rebuilt = ProvenanceNode.from_json(chain.to_json())
-        assert rebuilt.patch_id == chain.patch_id
-        assert rebuilt.input_pairs == chain.input_pairs
-
     def test_source_node_round_trip(self, source_node):
         """A graph of one source, with no steps, still round trips."""
         rebuilt = ProvenanceNode.from_json(source_node.to_json())
@@ -252,6 +257,86 @@ class TestNodeDocuments:
     def test_not_a_node(self, chain):
         """Comparison with something else is left to the something else."""
         assert chain.__eq__("a node") is NotImplemented
+
+
+class TestToPipeRefusals:
+    """Tests for the graphs which have no pipe."""
+
+    def test_steps_which_never_meet(self):
+        """Two chains joined by a step which recorded no task have no pipe."""
+        source = ProvenanceNode()
+        left = ProvenanceNode(task=StepTask(value=2), parents=(source,))
+        right = ProvenanceNode(task=StepTask(value=3), parents=(source,))
+        joined = ProvenanceNode(parents=(left, right))
+        with pytest.raises(ParameterError, match="could run"):
+            joined.to_pipe()
+
+    def test_sources_read_by_steps_of_different_widths(self):
+        """A pipe hands each source one input, so it cannot say this."""
+        made = ProvenanceNode(task=StepTask(value=9))
+        chunked = ProvenanceNode(
+            task=StepTask(value=2), parents=(ProvenanceNode(), ProvenanceNode())
+        )
+        merged = ProvenanceNode(task=StepTask(value=3), parents=(made, chunked))
+        with pytest.raises(ParameterError, match="do not all take one input"):
+            merged.to_pipe()
+
+    def test_an_input_whose_node_was_not_kept(self):
+        """A step is fed from more places than the pipe can name."""
+        source = ProvenanceNode()
+        earlier = ProvenanceNode(task=StepTask(value=2), parents=(source,))
+        node = ProvenanceNode(
+            task=StepTask(value=3),
+            parents=(earlier,),
+            input_pairs=(("one", ""), ("two", "")),
+        )
+        with pytest.raises(ParameterError, match="straight from a source"):
+            node.to_pipe()
+
+
+class TestProvenanceDocuments:
+    """Tests for what a record of a run can be written with."""
+
+    def test_a_task_holding_an_array(self):
+        """
+        A record writes its pipe the way a pipe does.
+
+        Dumped by pydantic instead it would raise on an array parameter --
+        which the pipes most worth recording hold -- before reaching the
+        line that replaces what it produced.
+        """
+        pipe = ArrayTask(weights=np.arange(3.0)) | ArrayTask(weights=np.ones(2))
+        rebuilt = Provenance.from_dict(pipe.get_provenance().to_dict())
+        assert rebuilt.pipe == pipe
+
+    def test_metadata_a_document_has_no_shape_for(self):
+        """Metadata is whatever was worth recording, and comes back as it."""
+        when = np.datetime64("2020-01-01")
+        record = Provenance.from_pipe(
+            StepTask(value=1) | StepTask(value=2), when=when, run=3
+        )
+        rebuilt = Provenance.from_dict(record.to_dict())
+        assert rebuilt.metadata["when"] == when
+        assert rebuilt.metadata["run"] == 3
+
+    def test_document_of_something_else(self):
+        """A document which records no run says so."""
+        with pytest.raises(ParameterError, match="states the pipe it ran"):
+            Provenance.from_dict({"dascore_version": "1.0"})
+
+
+class TestProvenanceNodeDocuments:
+    """Tests for reading a graph back from text which may not hold one."""
+
+    def test_text_which_does_not_parse(self):
+        """Which says so as a workflow document does, naming what it read."""
+        with pytest.raises(ParameterError, match="Could not parse JSON"):
+            ProvenanceNode.from_json("{not json at all")
+
+    def test_text_holding_something_else(self):
+        """A document which is not a graph is refused, not indexed into."""
+        with pytest.raises(ParameterError, match="no record of what was done"):
+            ProvenanceNode.from_json('{"tasks": {}}')
 
 
 class TestProvenance:

@@ -22,14 +22,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, ValidationError
 
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
+from dascore.utils.documents import parse_document
 from dascore.workflow.pipe import Pipe, default_key, unique_key
-from dascore.workflow.serialize import read_workflow, write_workflow
+from dascore.workflow.serialize import (
+    DOCUMENT,
+    decode,
+    encode,
+    read_workflow,
+    write_workflow,
+)
 from dascore.workflow.task import Task
 
 
@@ -91,7 +98,10 @@ class ProvenanceNode(DascoreBaseModel):
     def _identity(self) -> tuple:
         """Return what makes this node the step it is."""
         task = self.task.fingerprint if self.task is not None else None
-        return (task, self.patch_id, self.processing_id, self.source)
+        # The pairs as well as the ids the step produced: two steps which
+        # ran the same task on different data are not one step, and until
+        # the ids are filled in they are all a node has to say so with.
+        return (task, self.patch_id, self.processing_id, self.source, self.input_pairs)
 
     def walk(self) -> Iterator[ProvenanceNode]:
         """
@@ -149,10 +159,12 @@ class ProvenanceNode(DascoreBaseModel):
         Return a pipe which would do again what this node records.
 
         The sources are left out: a pipe describes what to do, and is run
-        against whatever data it is given. Two shapes have no pipe and
-        raise `ParameterError` rather than returning a pipe which could not
-        run: a graph where nothing was done, and one where a step took its
-        inputs from more places than a pipe can name.
+        against whatever data it is given. A graph a pipe has no way to say
+        raises `ParameterError` rather than giving back a pipe which could
+        not run: one where nothing was done, one where a step was fed both
+        by an earlier step and straight from a source, one where the steps
+        reading from the sources do not each take exactly one input, and
+        any shape left which does not make a graph a pipe would accept.
         """
         steps = self.steps()
         if not steps:
@@ -171,7 +183,11 @@ class ProvenanceNode(DascoreBaseModel):
             names[id(node)] = name
             tasks[name] = node.task
             given = tuple(names[id(x)] for x in node.parents if x.task is not None)
-            if given and len(given) != len(node.parents):
+            # What the step was given, which is what it recorded when a
+            # parent was not tracked: a node holds a pair per input and a
+            # parent only for the ones whose own node is known.
+            taken = len(node.input_pairs) or len(node.parents)
+            if given and len(given) != taken:
                 # Every input has to come from somewhere the pipe can name.
                 # A step fed partly by an earlier step and partly by data
                 # read straight from a file is the one shape it cannot say;
@@ -185,33 +201,46 @@ class ProvenanceNode(DascoreBaseModel):
             if given:
                 dependencies[name] = given
             else:
-                fed[name] = len(node.parents)
-        # A pipe hands one input to each of its sources, so it can describe
-        # one step which took several -- a chunk of many files -- but not two
-        # of them.
-        wide = [name for name, count in fed.items() if count > 1]
-        if len(fed) > 1 and wide:
+                fed[name] = taken
+        # A pipe hands each of its sources one input, so it can describe one
+        # step which took several -- a chunk of many files -- but only when
+        # that step is the only one reading from the sources.
+        if len(fed) > 1 and set(fed.values()) != {1}:
             msg = (
                 "This graph has more than one step reading straight from its "
-                "sources, and one of them took several inputs, which a pipe "
+                "sources, and they do not all take one input, which a pipe "
                 "has no way to describe."
             )
             raise ParameterError(msg)
-        return Pipe(
-            tasks=tasks,
-            dependencies=dependencies,
-            inputs=tuple(fed),
-            outputs=(names[id(steps[-1])],),
-        )
+        # Anything left which does not make a runnable graph -- steps which
+        # never meet, for one -- is this graph having no pipe rather than a
+        # pipe refusing to be built.
+        try:
+            return Pipe(
+                tasks=tasks,
+                dependencies=dependencies,
+                inputs=tuple(fed),
+                outputs=(names[id(steps[-1])],),
+            )
+        except ValidationError as problem:
+            msg = f"This graph does not describe a pipe which could run: {problem}"
+            raise ParameterError(msg) from problem
 
     def to_json(self, indent: int | None = 2) -> str:
         """Return the graph behind this node as JSON text."""
-        return json.dumps(self._to_document(), indent=indent, sort_keys=True)
+        return json.dumps(self._to_document(), indent=indent)
 
     @classmethod
     def from_json(cls, text: str) -> ProvenanceNode:
         """Return the graph some JSON text holds."""
-        return cls._from_document(json.loads(text))
+        # Through the shared parser, so text which does not parse says so
+        # the way every other document in DASCore does rather than raising
+        # whatever the json module happened to raise.
+        document = parse_document(text, "json", label="the provenance text")
+        if not isinstance(document, Mapping) or "nodes" not in document:
+            msg = "This text holds no record of what was done to any data."
+            raise ParameterError(msg)
+        return cls._from_document(document)
 
     def _to_document(self) -> dict[str, Any]:
         """Return a document holding this node and everything behind it."""
@@ -310,13 +339,20 @@ class Provenance(DascoreBaseModel):
         Return a document which describes this record.
 
         Every field is dumped by pydantic, so a field added later is written
-        without this having to be edited; only the two which hold workflow
-        objects are spelled out, since those are named by tag rather than
-        dumped as fields.
+        without this having to be edited. The three which pydantic has no
+        document form for are excluded from that dump rather than written
+        and overwritten: it would raise on a task holding an array, or on a
+        time recorded alongside the run, before reaching the line which
+        replaces what it produced.
         """
-        out = self.model_dump(mode="json")
+        written = {"pipe", "source_provenance", "metadata"}
+        out = self.model_dump(mode="json", exclude=written)
         out["pipe"] = self.pipe.to_dict()
         out["source_provenance"] = [x.to_dict() for x in self.source_provenance]
+        # Through the workflow encoding rather than pydantic's: metadata is
+        # whatever the caller thought worth recording, which is the same
+        # range of values a task's parameters cover.
+        out["metadata"] = encode(dict(self.metadata), mode=DOCUMENT)
         out["fingerprint"] = self.fingerprint
         return out
 
@@ -327,9 +363,13 @@ class Provenance(DascoreBaseModel):
         # Written for a reader, and derived from the pipe, so it is not one
         # of the fields the record is rebuilt from.
         fields.pop("fingerprint", None)
+        if "pipe" not in fields:
+            msg = "A record of a run states the pipe it ran; this document has none."
+            raise ParameterError(msg)
         sources = fields.pop("source_provenance", ())
         fields["pipe"] = Pipe.from_dict(fields["pipe"])
         fields["source_provenance"] = tuple(cls.from_dict(x) for x in sources)
+        fields["metadata"] = decode(fields.get("metadata", {}))
         return cls(**fields)
 
     def save(self, path: str | Path) -> Path:

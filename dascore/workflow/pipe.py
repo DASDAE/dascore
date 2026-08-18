@@ -39,7 +39,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
@@ -186,6 +186,22 @@ class Pipe(DascoreBaseModel):
         """Return the nodes which take their input from the caller, in order."""
         return self.inputs
 
+    def new(self, **kwargs) -> Pipe:
+        """
+        Return a pipe with some of its fields replaced.
+
+        Not the base model's, which rebuilds from a dump: a dump flattens
+        each task to the fields it holds, losing which class it was, and
+        the pipe it builds back refuses them.
+        """
+        fields: dict[str, Any] = {
+            "tasks": self.tasks,
+            "dependencies": self.dependencies,
+            "inputs": self.inputs,
+            "outputs": self.outputs,
+        }
+        return Pipe(**(fields | kwargs))
+
     def get(self, key: str) -> Task:
         """
         Return the task a node holds.
@@ -223,12 +239,7 @@ class Pipe(DascoreBaseModel):
         """
         tasks = dict(self.tasks)
         tasks[key] = self.get(key).update(**kwargs)
-        return Pipe(
-            tasks=tasks,
-            dependencies=self.dependencies,
-            inputs=self.inputs,
-            outputs=self.outputs,
-        )
+        return self.new(tasks=tasks)
 
     def relabel(self, **names: str) -> Pipe:
         """
@@ -251,7 +262,7 @@ class Pipe(DascoreBaseModel):
             msg = f"Two nodes cannot both be called {sorted(names.values())}."
             raise ParameterError(msg)
         renamed = {node: names.get(node, node) for node in self.tasks}
-        return Pipe(
+        return self.new(
             tasks={renamed[node]: task for node, task in self.tasks.items()},
             dependencies={
                 renamed[node]: tuple(renamed[x] for x in given)
@@ -296,8 +307,12 @@ class Pipe(DascoreBaseModel):
         """
         Check that the pipe describes a graph which can be run.
 
-        Raises `ParameterError` naming what is wrong: an edge from a node
-        which is not there, an output which is not there, or a cycle.
+        Raises `ParameterError` naming what is wrong: an edge or an output
+        which is not one of the tasks, no outputs at all, a set of inputs
+        which is not the set of nodes nothing feeds, a task whose result
+        reaches no output, or a cycle. Building a pipe runs this through a
+        validator, which is pydantic's to wrap: what a caller sees there is
+        a `ValidationError` holding the sentence.
         """
         for node, given in self.dependencies.items():
             for name in (node, *given):
@@ -370,20 +385,34 @@ class Pipe(DascoreBaseModel):
         the check is a guard against an edited file rather than the answer
         to what the pipe is.
         """
+        missing = sorted({"tasks", "inputs", "outputs"} - set(document))
+        if missing:
+            msg = (
+                f"A pipe states its {', '.join(missing)}, and this document "
+                "does not. It describes something else."
+            )
+            raise ParameterError(msg)
         written_tasks = document["tasks"]
         tasks = {node: Task.from_dict(value) for node, value in written_tasks.items()}
         dependencies = {
             node: tuple(value)
             for node, value in document.get("dependencies", {}).items()
         }
-        out = cls(
-            tasks=tasks,
-            dependencies=dependencies,
-            inputs=tuple(document["inputs"]),
-            outputs=tuple(document["outputs"]),
-        )
+        # A graph which cannot be run is a document which does not describe a
+        # pipe, and says so the way every other unreadable document does:
+        # pydantic wraps what `check` raises, which is not a DASCore error.
+        try:
+            out = cls(
+                tasks=tasks,
+                dependencies=dependencies,
+                inputs=tuple(document["inputs"]),
+                outputs=tuple(document["outputs"]),
+            )
+        except ValidationError as problem:
+            msg = f"This document describes a pipe which could not be built: {problem}"
+            raise ParameterError(msg) from problem
         written = document.get("fingerprint")
-        moved_on = holds_another_version(written_tasks)
+        moved_on = holds_another_version(document)
         if written and not moved_on and written != out.fingerprint:
             msg = (
                 f"The document says its fingerprint is {written}, and the "
@@ -447,6 +476,17 @@ def join(left: Any, right: Any) -> Pipe:
         renamed = _merge(pipe, tasks, dependencies)
         inputs.extend(renamed[x] for x in pipe.inputs)
         given.extend(renamed[x] for x in pipe.outputs)
+    waiting = sum(len(pipe.sources()) for pipe in downstream)
+    if len(given) > 1 and waiting > 1:
+        # Every place on the right is given everything from the left, which
+        # is what a fan in means and is not what someone joining two fans
+        # means. There is no one way to pair them, so it is refused where it
+        # is written rather than run as a cross product.
+        msg = (
+            f"A join of {len(given)} results into {waiting} places has no one "
+            "way to pair them. Join them a step at a time."
+        )
+        raise ParameterError(msg)
     outputs: list[str] = []
     for pipe in downstream:
         renamed = _merge(pipe, tasks, dependencies)

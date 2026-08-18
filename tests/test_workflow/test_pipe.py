@@ -6,7 +6,7 @@ import pickle
 from typing import ClassVar
 
 import pytest
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import suppress_warnings
@@ -42,6 +42,14 @@ class JoinTask(Task):
         return sum(numbers)
 
 
+class SubtractTask(Task):
+    """Subtract what it is given second from what it is given first."""
+
+    def run(self, first, second):
+        """Subtract one number from another."""
+        return first - second
+
+
 class PortedTask(Task):
     """
     A task from another package, carrying declarations of its own.
@@ -69,6 +77,16 @@ class VersionedTask(Task):
     def run(self, number):
         """Add to a number."""
         return number + self.value
+
+
+class CarryingTask(Task):
+    """A task holding a mapping which looks like a document of its own."""
+
+    meta: dict = Field(default_factory=dict)
+
+    def run(self, number):
+        """Hand back what it was given."""
+        return number
 
 
 class ConstantTask(Task):
@@ -112,6 +130,18 @@ def chain():
 def branched():
     """A pipe whose two branches feed one task."""
     return (AddTask(value=1), TimesTask(value=5)) | JoinTask()
+
+
+@pytest.fixture
+def crossed():
+    """
+    A pipe fed by two branches, in an order nothing else would pick.
+
+    Its nodes are named so that sorting them gives the other order, and the
+    task joining them tells its inputs apart, so the pipe answers
+    differently if either the wiring or the source order is lost.
+    """
+    return (TimesTask(value=5), AddTask(value=1)) | SubtractTask()
 
 
 @pytest.fixture
@@ -168,6 +198,13 @@ class TestBuilding:
         """A pipe cannot be fed by an empty list of branches."""
         with pytest.raises(ParameterError, match="joined to nothing"):
             () | JoinTask()
+
+    def test_joining_two_fans(self):
+        """Several results into several places have no one pairing."""
+        with pytest.raises(ParameterError, match="one way to pair them"):
+            (AddTask(value=1) | (TimesTask(value=2), TimesTask(value=3))) | (
+                (AddTask(value=1), AddTask(value=2)) | JoinTask()
+            )
 
     def test_joining_to_nothing(self):
         """A pipe cannot fan out into an empty list of branches."""
@@ -239,13 +276,14 @@ class TestNodeKeys:
         with pytest.raises(ParameterError, match="cannot both be called"):
             chain.relabel(add_task="same", times_task="same")
 
-    def test_relabel_tied_nodes(self):
+    def test_relabel_nodes_holding_one_task(self):
         """
-        Two nodes nothing tells apart but their downstream still relabel.
+        Two nodes holding the same task, fed alike, still relabel freely.
 
-        `p` and `q` hold the same task and are fed by the same source, so
-        only what they feed sets them apart. Naming them the other way
-        round must leave the pipe the pipe it was.
+        This is the shape an order-based fingerprint has to break a tie in,
+        and where it would reach for the node's name to do it. Marking a
+        node by what feeds it has no tie to break, so renaming these two --
+        in an order which sorts the other way -- leaves the pipe alone.
         """
         base = Pipe(
             tasks={
@@ -306,6 +344,12 @@ class TestGetAndUpdate:
         assert updated.inputs == diamond.inputs
         assert updated.outputs == diamond.outputs
 
+    def test_new(self, chain, fanned):
+        """A field can be replaced without going through a dump."""
+        swapped = fanned.new(outputs=fanned.outputs[::-1])
+        assert swapped.outputs == fanned.outputs[::-1]
+        assert swapped.run(1) == fanned.run(1)[::-1]
+
     def test_update_unknown(self, chain):
         """Changing a node which is not there says so."""
         with pytest.raises(ParameterError, match="no node called"):
@@ -330,6 +374,12 @@ class TestRunning:
     def test_branches_take_one_input_each(self, branched):
         """A pipe which branches takes an input per branch."""
         assert branched.run(10, 20) == (10 + 1) + (20 * 5)
+
+    def test_fan_in_order(self, crossed):
+        """A task is given its inputs the way they were wired."""
+        # Wired (times, add): 10 * 5 - (20 + 1). The other way round it is
+        # 21 - 50, so a pipe which loses the order cannot answer this.
+        assert crossed.run(10, 20) == 29
 
     def test_wrong_number_of_inputs(self, branched):
         """A pipe says when it was given inputs it cannot place."""
@@ -359,10 +409,6 @@ class TestSources:
 
 class TestOutputs:
     """Tests for a pipe which returns more than one thing."""
-
-    def test_one_output_is_not_a_tuple(self, chain):
-        """A pipe with a single output hands back the value itself."""
-        assert chain.run(1) == 9
 
     def test_fan_out_returns_a_tuple(self, fanned):
         """A fan out with nothing merging it returns one result per output."""
@@ -516,9 +562,16 @@ class TestValidation:
                 outputs=chain.outputs,
             )
 
-    def test_a_second_output_is_not_stranded(self, fanned):
-        """A task reaching any output is a task which feeds the pipe."""
-        assert set(fanned.tasks) == {"add_task", "times_task", "times_task_2"}
+    def test_a_task_reaching_a_later_output(self):
+        """A task is fed when it reaches any output, not only the first."""
+        # `times_task_2` reaches only the second result, so a check which
+        # looked at one output would call it stranded and refuse to build.
+        pipe = AddTask(value=1) | (
+            TimesTask(value=2),
+            TimesTask(value=3) | AddTask(value=5),
+        )
+        assert "times_task_2" in pipe.tasks
+        assert pipe.run(1) == ((1 + 1) * 2, (1 + 1) * 3 + 5)
 
     def test_repeated_input(self, chain):
         """A node cannot be fed twice; it would hide one of the sources."""
@@ -567,12 +620,25 @@ class TestDocuments:
         assert loaded.run(10, 20) == branched.run(10, 20)
 
     @pytest.mark.parametrize("yaml_path", ["pipe.json", "pipe.yaml"], indirect=True)
-    def test_source_order_survives_a_round_trip(self, branched, yaml_path):
+    def test_source_order_survives_a_round_trip(self, crossed, yaml_path):
         """The branch fed first is still the one fed first after loading."""
-        loaded = Pipe.load(branched.save(yaml_path))
-        assert loaded.sources() == branched.sources()
-        # Which is what makes the first input reach the first branch.
-        assert loaded.run(10, 20) == branched.run(10, 20)
+        loaded = Pipe.load(crossed.save(yaml_path))
+        assert loaded.sources() == crossed.sources()
+        assert loaded.run(10, 20) == 29
+
+    def test_source_order_survives_a_reordered_document(self, crossed):
+        """
+        A document is free to list the tasks in any order it likes.
+
+        Which is why the sources are a field of their own: read off the
+        tasks instead, this document would hand each branch the other
+        branch's input and answer 89.
+        """
+        document = crossed.to_dict()
+        document["tasks"] = dict(reversed(list(document["tasks"].items())))
+        loaded = Pipe.from_dict(document)
+        assert loaded.sources() == crossed.sources()
+        assert loaded.run(10, 20) == 29
 
     @pytest.mark.parametrize("yaml_path", ["pipe.json", "pipe.yaml"], indirect=True)
     def test_output_order_survives_a_round_trip(self, fanned, yaml_path):
@@ -653,6 +719,32 @@ class TestDocuments:
         path.write_text("[1, 2, 3]")
         with pytest.raises(ParameterError, match="describes no workflow"):
             Pipe.load(path)
+
+    def test_document_of_something_else(self):
+        """A document which is not a pipe says so rather than raising a KeyError."""
+        with pytest.raises(ParameterError, match="describes something else"):
+            Pipe.from_dict({"object_type": "Inventory"})
+
+    def test_document_holding_a_graph_which_cannot_run(self, chain):
+        """A wire a document lost is an unreadable document, not a bad model."""
+        document = chain.to_dict()
+        document["dependencies"] = {"times_task": ["nowhere"]}
+        with pytest.raises(ParameterError, match="could not be built"):
+            Pipe.from_dict(document)
+
+    def test_a_parameter_cannot_fake_a_version(self):
+        """
+        A parameter which spells a tag and a version is still a parameter.
+
+        Read as a version bump it would switch off the check that the
+        document has not been edited, for every task in the pipe.
+        """
+        faked = {"object_type": VersionedTask(value=1).tag, "version": "0.5"}
+        pipe = CarryingTask(meta=faked) | AddTask(value=1)
+        document = pipe.to_dict()
+        document["tasks"]["add_task"]["params"]["value"] = 99
+        with pytest.raises(ParameterError, match="edited it"):
+            Pipe.from_dict(document)
 
     def test_edited_document_refused(self, chain, tmp_path):
         """A document whose fingerprint disagrees with it is refused."""

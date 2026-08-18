@@ -234,19 +234,29 @@ class TestOwnedParameters:
     """Tests for a task taking ownership of the arrays it is given."""
 
     def test_array_is_read_only(self):
-        """An array handed to a task cannot be written to afterwards."""
+        """
+        An array handed to a task cannot be written to afterwards.
+
+        Which is what keeps the fingerprint from going stale: it is cached
+        on first use, so an array a caller kept writing to would leave the
+        task naming values it no longer holds.
+        """
         values = np.arange(3)
         TimedValueTask(when=values)
         with pytest.raises(ValueError, match="read-only"):
             values[0] = 99
 
-    def test_fingerprint_cannot_go_stale(self):
-        """So the id a task reports still describes what it holds."""
+    def test_the_callers_array_is_the_one_frozen(self):
+        """
+        Nothing is copied, so the caller's own array is what is marked.
+
+        Stated as a test because it is the cost of the policy rather than a
+        detail of it: a caller who keeps writing to a buffer it passed as a
+        parameter finds out at the write, not at the call.
+        """
         values = np.arange(3)
-        task_ = TimedValueTask(when=values)
-        with pytest.raises(ValueError, match="read-only"):
-            values[0] = 99
-        assert task_.fingerprint == TimedValueTask(when=values).fingerprint
+        TimedValueTask(when=values)
+        assert values.flags.writeable is False
 
     def test_array_inside_a_sequence(self):
         """An array reaches a task inside a container too."""
@@ -642,6 +652,19 @@ class TestTaskDecorator:
             def keyword_only(number, *, named=1):
                 """Take an argument which cannot be passed by position."""
                 return number + named
+
+    def test_a_group_takes_any_number_of_inputs(self):
+        """A function which packs its arguments can be asked for any count."""
+
+        @task(inputs=2)
+        def merged(*numbers):
+            """Add up whatever it is given."""
+            return sum(numbers)
+
+        assert merged().run(1, 2) == 3
+        # Which is what lets a decorated function join two branches: the
+        # two sources are handed one input each, and the join both results.
+        assert ((merged(), merged()) | merged()).run(1, 2) == 3
 
     def test_several_inputs(self):
         """A task can be given more than one input."""

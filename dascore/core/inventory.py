@@ -34,7 +34,6 @@ from typing import (
 from uuid import uuid4
 
 import numpy as np
-import yaml
 from pydantic import (
     AfterValidator,
     BeforeValidator,
@@ -54,7 +53,11 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
-from dascore.utils.documents import parse_document, write_document
+from dascore.utils.documents import (
+    dump_document,
+    parse_document,
+    write_text_document,
+)
 from dascore.utils.intervals import (
     clip_intervals,
     interval_masks,
@@ -2542,7 +2545,9 @@ def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> s
 
     A field still holding its default is left out, so the document
     states what the inventory says rather than every field it has;
-    what is written reloads equal to this inventory.
+    what is written reloads equal to this inventory. A path whose
+    directory is not there yet is made, as it is for every document
+    DASCore writes.
 
     Parameters
     ----------
@@ -2563,6 +2568,7 @@ def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> s
     # envelope it was written against even when that is the default.
     dumped = inventory.model_dump(mode="json", exclude_defaults=True)
     data = {"schema_version": inventory.schema_version} | dumped
+    text = dump_document(data, "yaml")
     if path is not None:
-        return write_document(data, path, "yaml").read_text(encoding="utf-8")
-    return yaml.safe_dump(data, sort_keys=False)
+        write_text_document(text, path)
+    return text

@@ -49,7 +49,15 @@ from dascore.models.registry import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
-from dascore.workflow.serialize import DOCUMENT, decode, digest, encode, model_values
+from dascore.workflow.serialize import (
+    DOCUMENT,
+    PIPE_TAG,
+    TASK_TAG,
+    decode,
+    digest,
+    encode,
+    model_values,
+)
 
 # The keys a task's document holds beside its parameters.
 _VERSION_KEY = "version"
@@ -69,6 +77,11 @@ class Task(DascoreBaseModel):
     *configured* with is a field. A pipe wires its edges by position for
     the same reason: there is no name to bind them to, and the order the
     inputs are given in is part of what the step did.
+
+    An array given as a parameter is marked read-only in place, as a
+    patch's data is, so that the fingerprint cannot come to describe values
+    the task no longer holds. Nothing is copied, so the array marked is the
+    caller's own: pass a copy of a buffer which is still being written to.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -150,11 +163,9 @@ class Task(DascoreBaseModel):
         """
         Return a document which describes this task.
 
-        The class is named by its registered tag and by nothing else. A
-        module path would be a second answer to the same question, and the
-        wrong one as soon as the class moved -- which a fingerprint
-        deliberately survives -- while the tag already names the package
-        the class came from.
+        The class is named by its registered tag and by nothing else: the
+        tag already names the package, and a module path would go stale as
+        soon as the class moved, which a fingerprint deliberately survives.
         """
         _check_nameable(type(self), self.tag)
         return {
@@ -251,23 +262,45 @@ def _check_nameable(task_class: type[Task], tag: str | None) -> None:
         raise ParameterError(msg)
 
 
-def holds_another_version(document: Any) -> bool:
+def holds_another_version(document: Mapping) -> bool:
     """
     Return True when a document holds a task written at another version.
 
-    Looked for at any depth: a task's parameter can be another task, or a
-    whole pipe, and a version bump down there changes what the document
-    fingerprints to just as much as one at the top.
+    Looked for at any depth a task can nest at: a task's parameter can be
+    another task, or a whole pipe, and a version bump down there changes
+    what the document fingerprints to just as much as one at the top. Only
+    those two nestings are followed, and never a parameter's own contents:
+    a task may legitimately hold a mapping which spells a tag and a version
+    -- a stored attrs document does -- and reading that as a version bump
+    would let a parameter switch off the check for everything around it.
     """
-    if isinstance(document, Mapping):
-        tag, version = document.get(TAG_FIELD), document.get(_VERSION_KEY)
-        model = resolve_model_tag(tag) if isinstance(tag, str) else None
-        if version is not None and getattr(model, "__version__", version) != version:
-            return True
-        return any(holds_another_version(x) for x in document.values())
-    if isinstance(document, list | tuple):
-        return any(holds_another_version(x) for x in document)
-    return False
+    return _task_moved_on(document) or any(
+        holds_another_version(x) for x in _nested_documents(document)
+    )
+
+
+def _task_moved_on(document: Mapping) -> bool:
+    """Return True when a task document names a version its class does not."""
+    tag, version = document.get(TAG_FIELD), document.get(_VERSION_KEY)
+    if version is None or not isinstance(tag, str):
+        return False
+    model = resolve_model_tag(tag)
+    return getattr(model, "__version__", version) != version
+
+
+def _nested_documents(document: Mapping) -> list:
+    """Return the task and pipe documents one document holds directly."""
+    # A pipe writes its nodes under `tasks`; a task writes a nested task or
+    # pipe as the one tagged value the encoding gives it.
+    out = list(document.get("tasks", {}).values())
+    for value in document.get(_PARAMS_KEY, {}).values():
+        if isinstance(value, Mapping) and len(value) == 1:
+            nested = value.get(TASK_TAG, value.get(PIPE_TAG))
+            # A mapping, so a nested value written for a fingerprint -- a
+            # digest rather than a document -- is nothing to walk into.
+            if isinstance(nested, Mapping):
+                out.append(nested)
+    return out
 
 
 def _check_version(task_class: type[Task], version: object) -> None:
@@ -320,10 +353,11 @@ def own_arrays(values: Mapping) -> dict:
     """
     Return parameters with every array in them made read-only.
 
-    A task is immutable and its fingerprint is computed once, so an array a
-    caller keeps writing to would leave the task reporting an id for values
-    it no longer holds. Marking it read-only is what dascore does with a
-    patch's data, and costs no copy.
+    A task is immutable and its fingerprint is cached on first use, so an
+    array a caller kept writing to would leave the task reporting a
+    fingerprint of values it no longer holds. Marking it read-only is what
+    dascore does with a patch's data, and costs no copy -- which means the
+    array marked is the caller's own, not a copy of it.
     """
     return {key: _own(value) for key, value in values.items()}
 
@@ -487,7 +521,8 @@ def make_function_task_class(
     inputs
         How many leading parameters are not made fields. They are what the
         task is given when it runs, such as the patch a patch function
-        operates on.
+        operates on. None by default here, unlike the `task` decorator,
+        which takes one.
     """
     signature = inspect.signature(func)
     # A callable which is not a function -- a class, or an object with a
@@ -539,21 +574,25 @@ def _check_inputs(
     """
     Refuse a count of run time inputs the function could not be given.
 
-    An input is passed positionally, so it has to be a parameter which can
-    be: a keyword only one, or a group, is a parameter the task holds. The
-    failure belongs where the count is written rather than in the call
-    which finds itself missing an argument.
+    An input is passed positionally, so only a positional parameter can be
+    one; a keyword only parameter, or a ``**kwargs`` group, stays with the
+    task. A ``*args`` group takes as many as it is given, so a function
+    which has one can be asked for any number. Refusing here puts the
+    failure where the count is written rather than in the call which finds
+    itself missing an argument.
     """
     positional = (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
     )
     takeable = [x for x in parameters if x.kind in positional]
-    if not 0 <= inputs <= len(takeable):
+    packs_args = any(x.kind == inspect.Parameter.VAR_POSITIONAL for x in parameters)
+    if inputs < 0 or (inputs > len(takeable) and not packs_args):
         name = getattr(func, "__name__", type(func).__name__)
         msg = (
             f"{name} takes {len(takeable)} arguments which could be an "
-            f"input, and was asked for {inputs}."
+            f"input, and was asked for {inputs}. Spell the count it takes, "
+            "such as inputs=0 for a task which is handed nothing."
         )
         raise ParameterError(msg)
 

@@ -31,6 +31,8 @@ task = Scale(factor=2)
 task
 ```
 
+Because the parameters are the object, a task holds its parameters for good: an array given to one is marked read-only in place, so a task cannot come to report a fingerprint of values it no longer holds. Nothing is copied, so pass a copy of a buffer you are still writing to.
+
 Because the parameters are the object, two tasks which would do the same thing are the same task:
 
 ```{python}
@@ -40,7 +42,7 @@ assert Scale(factor=2) != Scale(factor=3)
 
 ## Fingerprints
 
-Every task has a `fingerprint`: a short digest of which task it is, which version of it, and what it was given. The same call gives the same fingerprint in another process, on another machine, and in a later release.
+Every task has a `fingerprint`: a short digest of which task it is, which version of it, and what it was given. The same call gives the same fingerprint in another process, on another machine, and in a later release, barring a change in how pandas or pint hash their own objects.
 
 ```{python}
 Scale(factor=2).fingerprint
@@ -65,7 +67,7 @@ Scale(factor=2).fingerprint
 
 ## Tasks from functions
 
-A function can become a task class without being rewritten. The decorator reads its signature and makes its parameters fields.
+A function can become a task class without being rewritten. The decorator reads its signature: the first parameter is what the task is given when it runs, and the rest become its fields.
 
 ```{python}
 from dascore.workflow import task
@@ -80,7 +82,7 @@ def scale_number(number, factor=1):
 scale_number(factor=3).run(2)
 ```
 
-The first parameter is what the task is *given* when it runs; the rest are its parameters. `inputs=` says how many leading parameters are inputs — `inputs=0` makes a task which is handed nothing and produces a value of its own, and `inputs=2` one which takes a pair.
+`inputs=` says how many leading parameters are inputs — `inputs=0` makes a task which is handed nothing and produces a value of its own, and `inputs=2` one which takes a pair. A function which packs its arguments (`def merge(*patches)`) can be asked for any number, which is what a task joining two branches needs.
 
 A task is callable, so it can stand anywhere a function of its inputs can:
 

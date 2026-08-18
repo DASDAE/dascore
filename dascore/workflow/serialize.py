@@ -1,5 +1,6 @@
 """
-Canonical encoding, decoding and hashing for workflow objects.
+Canonical encoding, decoding and hashing for workflow objects, and the files
+those documents are written to.
 
 A [`Task`](`dascore.workflow.task.Task`) is identified by a fingerprint: a
 digest of what it is and what it was given. That only works if the same
@@ -13,7 +14,8 @@ becomes a digest of its bytes and a value left at ``None`` is dropped.
 nothing is dropped, so most values read back. A function, a partial, or a
 value with no encoding of its own is named rather than reproduced in either
 mode, and a dataframe has no document form at all; decoding any of them
-raises.
+raises. `write_workflow` and `read_workflow` put a document on disk in the
+format its suffix names, refusing a suffix which names none.
 
 Stability rests on `json`, `repr` of a float, numpy's byte layout and blake2b,
 none of which change between python versions, and -- for frames and quantities
@@ -70,10 +72,12 @@ _FLOAT = "$float"
 _MODEL = "$model"
 _OPAQUE = "$opaque"
 _PARTIAL = "$partial"
-_PIPE = "$pipe"
+PIPE_TAG = "$pipe"
+_PIPE = PIPE_TAG
 _QUANTITY = "$quantity"
 _SLICE = "$slice"
-_TASK = "$task"
+TASK_TAG = "$task"
+_TASK = TASK_TAG
 _TIMEDELTA = "$timedelta64"
 
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
@@ -85,9 +89,6 @@ DIGEST_SIZE = 8
 # suffix at all is JSON.
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 JSON_SUFFIXES = frozenset({".json", ""})
-
-# Named when pyyaml is missing, which it may be: it is an optional install.
-_REQUIRED_FOR = "reading and writing a workflow as YAML"
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -194,9 +195,7 @@ def write_workflow(document: Mapping, path: Path) -> Path:
     ``.yaml`` and ``.yml`` write YAML, ``.json`` and a bare name write
     JSON, and anything else is refused.
     """
-    return write_document(
-        document, path, _file_format(path), required_for=_REQUIRED_FOR
-    )
+    return write_document(document, path, _file_format(path))
 
 
 def read_workflow(path: Path) -> Any:
@@ -206,7 +205,6 @@ def read_workflow(path: Path) -> Any:
         _file_format(path),
         error=ParameterError,
         holds="describes no workflow",
-        required_for=_REQUIRED_FOR,
     )
 
 
