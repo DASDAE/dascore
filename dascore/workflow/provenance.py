@@ -215,14 +215,15 @@ class ProvenanceNode(DascoreBaseModel):
                 dependencies[name] = given
             else:
                 fed[name] = taken
-        # A pipe hands each of its sources one input, so it can describe one
-        # step which took several -- a chunk of many files -- but only when
-        # that step is the only one reading from the sources.
-        if len(fed) > 1 and set(fed.values()) != {1}:
+        # A pipe hands each of its sources the same thing: one input each,
+        # or nothing at all when they make their own values. So it can
+        # describe one step which took several -- a chunk of many files --
+        # only when that step is the only one reading from the sources.
+        if len(fed) > 1 and set(fed.values()) not in ({0}, {1}):
             msg = (
                 "This graph has more than one step reading straight from its "
-                "sources, and they do not all take one input, which a pipe "
-                "has no way to describe."
+                "sources, and they do not all take the same one input, which "
+                "a pipe has no way to describe."
             )
             raise ParameterError(msg)
         # Anything left which does not make a runnable graph -- steps which
@@ -283,22 +284,29 @@ class ProvenanceNode(DascoreBaseModel):
     def _from_document(cls, document: Mapping) -> ProvenanceNode:
         """Return the graph a document describes."""
         built: list[ProvenanceNode] = []
-        for entry in document["nodes"]:
-            source = entry.get("source")
-            task = entry.get("task")
-            built.append(
-                cls(
-                    task=Task.from_dict(task) if task is not None else None,
-                    parents=tuple(built[x] for x in entry["parents"]),
-                    input_pairs=tuple(tuple(x) for x in entry["input_pairs"]),
-                    patch_id=entry["patch_id"],
-                    processing_id=entry["processing_id"],
-                    source=SourceInfo(**source) if source is not None else None,
-                    backend=entry["backend"],
-                    created_at=datetime.fromisoformat(entry["created_at"]),
+        # A node names its parents by where they were written, so a field
+        # which is not there, or a place which is not, is a document
+        # describing no graph rather than an error naming a key.
+        try:
+            for entry in document["nodes"]:
+                source = entry.get("source")
+                task = entry.get("task")
+                built.append(
+                    cls(
+                        task=Task.from_dict(task) if task is not None else None,
+                        parents=tuple(built[x] for x in entry["parents"]),
+                        input_pairs=tuple(tuple(x) for x in entry["input_pairs"]),
+                        patch_id=entry["patch_id"],
+                        processing_id=entry["processing_id"],
+                        source=SourceInfo(**source) if source is not None else None,
+                        backend=entry["backend"],
+                        created_at=datetime.fromisoformat(entry["created_at"]),
+                    )
                 )
-            )
-        return built[document["output"]]
+            return built[document["output"]]
+        except (KeyError, IndexError, TypeError, ValueError) as problem:
+            msg = f"This document describes no graph of what was done: {problem}"
+            raise ParameterError(msg) from problem
 
 
 class Provenance(DascoreBaseModel):

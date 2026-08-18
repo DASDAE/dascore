@@ -563,7 +563,7 @@ def make_function_task_class(
     qualname = getattr(func, "__qualname__", type(func).__qualname__)
     declared = list(signature.parameters.values())
     _check_inputs(func, declared, inputs)
-    parameters = declared[inputs:]
+    parameters = _remaining_parameters(declared, inputs)
     namespace, annotations = _build_fields(parameters)
     positional, keyword = _call_plan(parameters)
     # Declared ClassVar so that pydantic leaves them as class attributes
@@ -628,6 +628,33 @@ def _check_inputs(
             "such as inputs=0 for a task which is handed nothing."
         )
         raise ParameterError(msg)
+
+
+def _remaining_parameters(
+    declared: list[inspect.Parameter], inputs: int
+) -> list[inspect.Parameter]:
+    """
+    Return the parameters left once the run time inputs are taken out.
+
+    Taken off the front one at a time rather than sliced by count: a
+    ``*args`` group absorbs every input which is left, and whatever is
+    declared after it -- a keyword only parameter, a ``**kwargs`` group --
+    is still the task's, which slicing by count would drop.
+    """
+    positional = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    out: list[inspect.Parameter] = []
+    taken = 0
+    for parameter in declared:
+        if taken < inputs and parameter.kind in positional:
+            taken += 1
+        elif taken < inputs and parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+            taken = inputs
+        else:
+            out.append(parameter)
+    return out
 
 
 def _call_plan(

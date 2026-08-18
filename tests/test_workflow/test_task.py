@@ -666,6 +666,33 @@ class TestTaskDecorator:
         # two sources are handed one input each, and the join both results.
         assert ((merged(), merged()) | merged()).run(1, 2) == 3
 
+    def test_a_parameter_after_a_group(self):
+        """
+        What is declared after a `*args` group is still the task's.
+
+        The group absorbs the inputs; taking the inputs off by counting
+        parameters would walk past it and drop everything behind.
+        """
+
+        @task(inputs=2)
+        def scaled_sum(*numbers, scale=1):
+            """Add numbers and scale the total."""
+            return sum(numbers) * scale
+
+        assert "scale" in scaled_sum.model_fields
+        assert scaled_sum(scale=10).run(1, 2) == 30
+        assert scaled_sum().run(1, 2) == 3
+
+    def test_a_kwargs_group_after_a_group(self):
+        """A `**kwargs` group behind a `*args` group still takes extras."""
+
+        @task(inputs=1)
+        def collected(*numbers, **extra):
+            """Take numbers and whatever else."""
+            return (sum(numbers), extra)
+
+        assert collected(other=1).run(2) == (2, {"other": 1})
+
     def test_several_inputs(self):
         """A task can be given more than one input."""
 

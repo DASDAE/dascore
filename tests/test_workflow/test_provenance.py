@@ -30,6 +30,16 @@ class MergeTask(Task):
         return sum(numbers)
 
 
+class SourceTask(Task):
+    """A step which made a number out of nothing."""
+
+    value: int = 1
+
+    def run(self):
+        """Return the number."""
+        return self.value
+
+
 class ArrayTask(Task):
     """A step parametrized by an array, which a document has to carry."""
 
@@ -308,8 +318,20 @@ class TestToPipeRefusals:
             task=StepTask(value=2), parents=(ProvenanceNode(), ProvenanceNode())
         )
         merged = ProvenanceNode(task=StepTask(value=3), parents=(made, chunked))
-        with pytest.raises(ParameterError, match="do not all take one input"):
+        with pytest.raises(ParameterError, match="the same one input"):
             merged.to_pipe()
+
+    def test_sources_which_make_their_own_values(self):
+        """
+        Steps which took nothing have a pipe, which is run with nothing.
+
+        A pipe hands each of its sources the same thing, and nothing is as
+        good as one input each -- which is the shape `Pipe` already runs.
+        """
+        first = ProvenanceNode(task=SourceTask(value=1))
+        second = ProvenanceNode(task=SourceTask(value=2))
+        merged = ProvenanceNode(task=MergeTask(), parents=(first, second))
+        assert merged.to_pipe().run() == 3
 
     def test_an_input_whose_node_was_not_kept(self):
         """A step is fed from more places than the pipe can name."""
@@ -362,6 +384,16 @@ class TestProvenanceNodeDocuments:
         """Which says so as a workflow document does, naming what it read."""
         with pytest.raises(ParameterError, match="Could not parse JSON"):
             ProvenanceNode.from_json("{not json at all")
+
+    def test_a_node_missing_a_field(self):
+        """A document which parses but is not a graph says so."""
+        with pytest.raises(ParameterError, match="no graph of what was done"):
+            ProvenanceNode.from_json('{"nodes": [{}], "output": 0}')
+
+    def test_an_output_which_is_not_there(self):
+        """Nor is one whose result names a node it did not write."""
+        with pytest.raises(ParameterError, match="no graph of what was done"):
+            ProvenanceNode.from_json('{"nodes": [], "output": 3}')
 
     def test_text_holding_something_else(self):
         """A document which is not a graph is refused, not indexed into."""
