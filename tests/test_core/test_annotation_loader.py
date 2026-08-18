@@ -23,7 +23,7 @@ except ImportError:
 
 import dascore as dc
 from dascore.core.annotation_loader import find_annotations
-from dascore.core.annotations import DIMS_KEY, Line, Moveout
+from dascore.core.annotations import DIMS_KEY, Line, Moveout, _one_file
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.utils.tables import DOCUMENT_KEY, write_parquet
 
@@ -360,6 +360,15 @@ class TestSavingOverASet:
             len([x for x in directory.iterdir() if x.stem.casefold() == "attrs"]) == 1
         )
         assert dc.annotations(directory) == regions
+
+    def test_two_names_which_reach_one_file(self, tmp_path):
+        """What the shouted suffix does where case folds, said portably."""
+        path = tmp_path / "attrs.json"
+        path.write_text("{}")
+        assert _one_file(path, tmp_path / "." / "attrs.json")
+        # A name nothing is written under reaches no file, so it is not
+        # the one just written and stays stale.
+        assert not _one_file(path, tmp_path / "attrs.yaml")
 
 
 class TestTheDoor:

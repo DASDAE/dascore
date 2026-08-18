@@ -1884,5 +1884,20 @@ def save_annotation_set(
     for stem, payload in spelled.items():
         _write_spelled(payload, directory / f"{stem}{suffix}")
     for stale in superseded:
+        # A part just written is not stale under another name: a
+        # case-insensitive filesystem holds `attrs.JSON` and the
+        # `attrs.json` written over it in one file, and unlinking the
+        # older spelling there would take the set with it.
+        if any(_one_file(stale, x) for x in writing):
+            continue
         stale.unlink(missing_ok=True)
     return directory
+
+
+def _one_file(one: pathlib.Path, other: pathlib.Path) -> bool:
+    """Whether two names reach one file, as a case-insensitive store lets them."""
+    try:
+        return one.samefile(other)
+    except OSError:
+        # One of them is gone, so they are not the same file.
+        return False
