@@ -361,8 +361,8 @@ class TestSavingOverASet:
         )
         assert dc.annotations(directory) == regions
 
-    def test_two_names_which_reach_one_file(self, tmp_path):
-        """What the shouted suffix does where case folds, said portably."""
+    def test_one_file_under_two_names(self, tmp_path):
+        """The question the supersede pass asks; the test above is where it bites."""
         path = tmp_path / "attrs.json"
         path.write_text("{}")
         assert _one_file(path, tmp_path / "." / "attrs.json")
