@@ -45,7 +45,7 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.types import FrozenDictType
 from dascore.workflow.serialize import digest, read_workflow, write_workflow
-from dascore.workflow.task import Task, holds_another_version
+from dascore.workflow.task import Task, holds_a_nested_version
 
 # Where a camel cased class name breaks into words: before a capital which
 # follows a lower case letter or digit, and before the last capital of a run
@@ -96,14 +96,34 @@ class Pipe(DascoreBaseModel):
         outputs folds the whole graph; and no node's name is anywhere in
         it, so naming a node for the reader leaves the pipe the pipe it was.
         """
-        marks = self._node_marks()
+        return self.structure(
+            {node: task.fingerprint for node, task in self.tasks.items()}
+        )
+
+    def structure(self, fingerprints: Mapping[str, str]) -> str:
+        """
+        Return the digest this pipe's shape makes of the tasks it is given.
+
+        Parameters
+        ----------
+        fingerprints
+            What to call each node's task, keyed by node. `fingerprint`
+            passes what the tasks say they are; reading a document back
+            passes what they were when it was written.
+        """
+        marks = self._node_marks(fingerprints)
         payload = {
+            # Every node, so that a task run twice is not the same shape as
+            # one run once and used twice: both hand a join the same pair of
+            # marks, and only the count of nodes tells them apart. Sorted,
+            # because it is a tally rather than an order.
+            "nodes": sorted(marks[node] for node in self.tasks),
             "inputs": [marks[x] for x in self.inputs],
             "outputs": [marks[x] for x in self.outputs],
         }
         return digest(payload)
 
-    def _node_marks(self) -> dict[str, str]:
+    def _node_marks(self, fingerprints: Mapping[str, str]) -> dict[str, str]:
         """
         Return a digest for each node of how its value is arrived at.
 
@@ -118,11 +138,7 @@ class Pipe(DascoreBaseModel):
         for node in self.sorted_nodes():
             given = self.dependencies.get(node, ())
             marks[node] = digest(
-                [
-                    self.tasks[node].fingerprint,
-                    [marks[x] for x in given],
-                    seeds.get(node),
-                ]
+                [fingerprints[node], [marks[x] for x in given], seeds.get(node)]
             )
         return marks
 
@@ -412,8 +428,11 @@ class Pipe(DascoreBaseModel):
             msg = f"This document describes a pipe which could not be built: {problem}"
             raise ParameterError(msg) from problem
         written = document.get("fingerprint")
-        moved_on = holds_another_version(document)
-        if written and not moved_on and written != out.fingerprint:
+        # A task holding another task folded it in at the version its class
+        # had then, which cannot be worked out backwards, so that one
+        # version difference is tolerated rather than read as an edit.
+        unknowable = holds_a_nested_version(document)
+        if written and not unknowable and written != out._as_written(written_tasks):
             msg = (
                 f"The document says its fingerprint is {written}, and the "
                 f"pipe it describes has {out.fingerprint}. Something edited "
@@ -421,6 +440,24 @@ class Pipe(DascoreBaseModel):
             )
             raise ParameterError(msg)
         return out
+
+    def _as_written(self, written_tasks: Mapping) -> str:
+        """
+        Return the fingerprint this pipe had when a document recorded it.
+
+        Each task at the version the document names, so a class which has
+        since moved on does not read as a file which was edited -- and an
+        edit is still caught, which it was not while any version difference
+        switched the comparison off.
+        """
+        return self.structure(
+            {
+                node: task.fingerprint_at(
+                    written_tasks[node].get("version", type(task).__version__)
+                )
+                for node, task in self.tasks.items()
+            }
+        )
 
     def save(self, path: str | Path) -> Path:
         """

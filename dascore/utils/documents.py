@@ -101,7 +101,7 @@ def write_document(
     return write_text_document(text, path)
 
 
-def write_text_document(text: str, path: Path) -> Path:
+def write_text_document(text: str, path: str | Path) -> Path:
     """
     Write a document's text to a file and return the path.
 

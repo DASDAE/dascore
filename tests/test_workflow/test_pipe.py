@@ -492,6 +492,30 @@ class TestFingerprint:
         assert swapped.fingerprint != branched.fingerprint
         assert swapped.run(10, 20) != branched.run(10, 20)
 
+    def test_a_task_run_twice(self, chain):
+        """
+        Running a task twice is not the same shape as running it once.
+
+        Both hand what follows the same pair of results, so only how many
+        nodes there are tells them apart -- and a task run twice is two
+        steps whatever its results look like.
+        """
+        add, times, join = AddTask(value=1), TimesTask(value=2), JoinTask()
+        twice = Pipe(
+            tasks={"a": add, "t": times, "t2": times, "j": join},
+            dependencies={"t": ("a",), "t2": ("a",), "j": ("t", "t2")},
+            inputs=("a",),
+            outputs=("j",),
+        )
+        once = Pipe(
+            tasks={"a": add, "t": times, "j": join},
+            dependencies={"t": ("a",), "j": ("t", "t")},
+            inputs=("a",),
+            outputs=("j",),
+        )
+        assert twice.run(1) == once.run(1)
+        assert twice.fingerprint != once.fingerprint
+
     def test_node_names_do_not_matter(self, branched):
         """A pipe whose nodes are named differently is the same pipe."""
         names = {node: f"node_{index}" for index, node in enumerate(branched.tasks)}
@@ -769,6 +793,22 @@ class TestDocuments:
         assert document["fingerprint"] != moved.fingerprint
         with suppress_warnings(DASCoreWarning, message="The document holds"):
             assert Pipe.from_dict(document).run(1) == 6
+
+    def test_an_edit_is_caught_after_a_version_moved_on(self, monkeypatch):
+        """
+        A version bump does not switch the check on edits off.
+
+        The fingerprint is recomputed at the version the document names,
+        which says what it was; a task whose parameters were changed since
+        then still does not add up.
+        """
+        pipe = VersionedTask(value=2) | AddTask(value=3)
+        document = pipe.to_dict()
+        monkeypatch.setattr(VersionedTask, "__version__", "2.0")
+        document["tasks"]["add_task"]["params"]["value"] = 99
+        with suppress_warnings(DASCoreWarning, message="The document holds"):
+            with pytest.raises(ParameterError, match="edited it"):
+                Pipe.from_dict(document)
 
     def test_nested_version_moved_on(self, monkeypatch):
         """A version bump inside a nested pipe is a version bump."""

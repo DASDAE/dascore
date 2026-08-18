@@ -19,6 +19,7 @@ import json
 import platform
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from dascore.workflow.pipe import Pipe, default_key, unique_key
 from dascore.workflow.serialize import (
     DOCUMENT,
     decode,
+    digest,
     encode,
     read_workflow,
     write_workflow,
@@ -79,29 +81,40 @@ class ProvenanceNode(DascoreBaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __eq__(self, other) -> bool:
-        """
-        Two nodes are equal when they stand for the same step.
-
-        Compared on what the step was and what it produced rather than by
-        walking the graph behind it: the ids already answer for the whole
-        lineage, and a deep comparison would recurse as far as the data has
-        been processed.
-        """
+        """Two nodes are equal when they stand for the same step."""
         if not isinstance(other, ProvenanceNode):
             return NotImplemented
-        return self._identity() == other._identity()
+        return self.mark == other.mark
 
     def __hash__(self) -> int:
         """Hash a node the way it compares."""
-        return hash(self._identity())
+        return hash(self.mark)
 
-    def _identity(self) -> tuple:
-        """Return what makes this node the step it is."""
-        task = self.task.fingerprint if self.task is not None else None
-        # The pairs as well as the ids the step produced: two steps which
-        # ran the same task on different data are not one step, and until
-        # the ids are filled in they are all a node has to say so with.
-        return (task, self.patch_id, self.processing_id, self.source, self.input_pairs)
+    @cached_property
+    def mark(self) -> str:
+        """
+        Return a digest of this step and everything behind it.
+
+        The ids answer for the lineage once something fills them in, and
+        until then they are empty on every node -- so the lineage is folded
+        in as well, and two steps which ran the same task on different data
+        are two steps rather than one which a set would keep only once.
+        Folded rather than compared: it is computed by walking, so a long
+        chain of steps costs one pass and not a recursion per comparison.
+        """
+        marks: dict[int, str] = {}
+        for node in self.walk():
+            marks[id(node)] = digest(
+                [
+                    node.task.fingerprint if node.task is not None else None,
+                    [marks[id(x)] for x in node.parents],
+                    [list(x) for x in node.input_pairs],
+                    node.patch_id,
+                    node.processing_id,
+                    node.source.model_dump() if node.source is not None else None,
+                ]
+            )
+        return marks[id(self)]
 
     def walk(self) -> Iterator[ProvenanceNode]:
         """

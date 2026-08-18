@@ -259,6 +259,36 @@ class TestNodeDocuments:
         assert chain.__eq__("a node") is NotImplemented
 
 
+class TestNodeIdentity:
+    """Tests for when two nodes stand for the same step."""
+
+    def test_the_same_step_on_different_data(self):
+        """Two nodes reading different files are two steps, not one."""
+        first = ProvenanceNode(source=SourceInfo(path="/first.h5"))
+        second = ProvenanceNode(source=SourceInfo(path="/second.h5"))
+        left = ProvenanceNode(task=StepTask(value=1), parents=(first,))
+        right = ProvenanceNode(task=StepTask(value=1), parents=(second,))
+        assert left != right
+        assert len({left, right}) == 2
+
+    def test_the_same_step_on_the_same_data(self):
+        """A graph rebuilt from the same lineage holds the same steps."""
+        source = ProvenanceNode(source=SourceInfo(path="/first.h5"))
+        left = ProvenanceNode(task=StepTask(value=1), parents=(source,))
+        right = ProvenanceNode(task=StepTask(value=1), parents=(source,))
+        assert left == right
+        assert len({left, right}) == 1
+
+    def test_a_step_further_back(self):
+        """Two nodes differ when anything behind them does."""
+        source = ProvenanceNode(source=SourceInfo(path="/first.h5"))
+        left = ProvenanceNode(task=StepTask(value=1), parents=(source,))
+        right = ProvenanceNode(task=StepTask(value=2), parents=(source,))
+        after_left = ProvenanceNode(task=LaterTask(), parents=(left,))
+        after_right = ProvenanceNode(task=LaterTask(), parents=(right,))
+        assert after_left != after_right
+
+
 class TestToPipeRefusals:
     """Tests for the graphs which have no pipe."""
 

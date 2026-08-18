@@ -120,13 +120,30 @@ class Task(DascoreBaseModel):
         within a package nor a faster kernel makes an operation a different
         operation.
         """
+        return self.fingerprint_at(self.__version__)
+
+    def fingerprint_at(self, version: str) -> str:
+        """
+        Return the fingerprint this task has at a stated version.
+
+        For reading a document back: the version is part of what a task is,
+        so a document written before its class moved on records a
+        fingerprint this task no longer has. Asking for it at the version
+        the document names says what it was, which is how an edited file
+        can still be told from an old one.
+
+        Parameters
+        ----------
+        version
+            The version to compute it at, as `__version__` spells one.
+        """
         # The parameters go in as the objects they are: `digest` encodes
         # what it is given, and encoding them here as well would put every
         # tagged value -- an array, a time, a quantity -- through the
         # escape which exists for a mapping that spells a tag itself.
         payload = {
             "task": _qualified_tag(type(self)),
-            _VERSION_KEY: self.__version__,
+            _VERSION_KEY: version,
             _PARAMS_KEY: self._params(),
         }
         return digest(payload)
@@ -262,20 +279,36 @@ def _check_nameable(task_class: type[Task], tag: str | None) -> None:
         raise ParameterError(msg)
 
 
-def holds_another_version(document: Mapping) -> bool:
+def holds_a_nested_version(document: Mapping) -> bool:
     """
-    Return True when a document holds a task written at another version.
+    Return True when a task or pipe a document holds as a *parameter* was
+    written at another version.
 
-    Looked for at any depth a task can nest at: a task's parameter can be
-    another task, or a whole pipe, and a version bump down there changes
-    what the document fingerprints to just as much as one at the top. Only
-    those two nestings are followed, and never a parameter's own contents:
-    a task may legitimately hold a mapping which spells a tag and a version
-    -- a stored attrs document does -- and reading that as a version bump
-    would let a parameter switch off the check for everything around it.
+    The tasks a pipe is made of are not looked at: their fingerprints can
+    be recomputed at the version the document records, which says exactly
+    what they were. A nested one cannot, because the task holding it
+    fingerprints it at the version its class has now -- so a bump down
+    there is the one version difference which still cannot be told from an
+    edit, and is tolerated rather than reported as one.
+    """
+    return any(
+        _holds_another_version(nested)
+        for task in document.get("tasks", {}).values()
+        for nested in _nested_documents(task)
+    )
+
+
+def _holds_another_version(document: Mapping) -> bool:
+    """
+    Return True when a task document, or one it holds, moved on.
+
+    Only a nested task or pipe is followed, never a parameter's own
+    contents: a task may legitimately hold a mapping which spells a tag and
+    a version -- a stored attrs document does -- and reading that as a
+    version bump would let a parameter speak for the tasks around it.
     """
     return _task_moved_on(document) or any(
-        holds_another_version(x) for x in _nested_documents(document)
+        _holds_another_version(x) for x in _nested_documents(document)
     )
 
 
