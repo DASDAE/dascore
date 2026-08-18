@@ -55,6 +55,8 @@ dependencies = [
      "pandas>=2.0",
      "pooch>=1.3",  # retry_if_failed was added in 1.3
      "pydantic>2.1",
+     # An inventory is authored as YAML, so reading one is not optional.
+     "pyyaml",
      "rich",
       "typing_extensions>=4.12",
      "universal-pathlib",
@@ -91,8 +93,6 @@ docs = [
     "jupyter-client",
     "nbclient",
     "nbformat",
-    # quarto's own notebook driver does `from yaml import safe_load`.
-    "pyyaml",
     # The JupyterLite site the tutorial pages link to. jupyter-server is not
     # used at runtime, but jupyterlite-core requires it to add custom content.
     "jupyterlite-core",

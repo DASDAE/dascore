@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pandas as pd
+import yaml
 
 from dascore.core.inventory import (
     Acquisition,
@@ -65,7 +66,7 @@ from dascore.exceptions import (
 )
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
-from dascore.utils.misc import check_code, optional_import
+from dascore.utils.misc import check_code
 from dascore.utils.paths import quote_path as _quote
 from dascore.utils.tables import (
     ordered_rows,
@@ -221,7 +222,6 @@ def _read_object(path: Path) -> dict[str, Any]:
             msg = f"Could not parse JSON from {_quote(path)}: {error}."
             raise InvalidInventoryError(msg) from error
     else:
-        yaml = optional_import("yaml", required_for="YAML inventory serialization")
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as error:

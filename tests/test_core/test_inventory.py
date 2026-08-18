@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 from pydantic import ValidationError
 
 import dascore as dc
@@ -1045,7 +1046,6 @@ class TestInventory:
 
     def test_yaml_roundtrip(self, tmp_path):
         """Yaml roundtrip."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         path = tmp_path / "inventory.yaml"
         inventory.io.to_yaml(path)
@@ -1077,7 +1077,6 @@ class TestInventory:
 
     def test_dc_namespace(self, tmp_path):
         """Dc namespace."""
-        pytest.importorskip("yaml")
         assert isinstance(dc.inventory(), inv.Inventory)
         path = tmp_path / "inv.yaml"
         build_inventory().io.to_yaml(path)
@@ -1284,7 +1283,6 @@ class TestResourcePool:
 
     def test_yaml_roundtrip_stays_flat(self, tmp_path):
         """Serialized form holds ids, not inline copies, and round-trips."""
-        pytest.importorskip("yaml")
         cable = inv.Cable(resource_id="cable-01", name="c")
         seg = inv.FiberSegment(optical_length=100.0, container=cable)
         inventory = self._inventory_with(seg)
@@ -1369,7 +1367,6 @@ class TestInternalReviewRegressions:
 
     def test_keyless_dict_resource_adopts_key(self):
         """A dict resource without resource_id adopts its pool key."""
-        pytest.importorskip("yaml")
         inventory = inv.Inventory(
             resources={"cab-1": {"object_type": "Cable", "name": "mycable"}}
         )
@@ -1599,7 +1596,6 @@ class TestCoverageCompleteness:
 
     def test_from_yaml_non_mapping_raises(self):
         """From yaml non mapping raises."""
-        pytest.importorskip("yaml")
         with pytest.raises(InvalidInventoryError, match="mapping"):
             inv.Inventory.from_yaml("- 1\n- 2\n")
 
@@ -1665,7 +1661,6 @@ class TestUniformAttachments:
 
     def test_yaml_omits_empty_fields(self):
         """Empty strings, dicts, and tuples do not serialize."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         text = inventory.io.to_yaml()
         assert "description:" not in text
@@ -1675,7 +1670,6 @@ class TestUniformAttachments:
 
     def test_extra_fields_contents_survive(self):
         """User values inside extra_fields are kept verbatim, even empty."""
-        pytest.importorskip("yaml")
         acq = inv.Acquisition(code="RAW", extra_fields={"vendor_flag": ""})
         array = inv.FiberArray(code="L001", acquisitions=(acq,))
         inventory = inv.Inventory(
@@ -1768,7 +1762,6 @@ class TestImmutability:
 
     def test_hash_survives_a_yaml_round_trip(self):
         """Serializing and reloading does not move an inventory's hash."""
-        pytest.importorskip("yaml")
         inventory = self._stocked_inventory()
         loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         assert loaded == inventory
@@ -2461,13 +2454,11 @@ class TestSerializationIsLossless:
     @pytest.mark.parametrize("name", sorted(SAMPLE_INVENTORIES))
     def test_round_trip_equals(self, name):
         """Whatever was written comes back, in text and through a file."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES[name]
         assert dc.inventory(inventory.io.to_yaml()) == inventory
 
     def test_a_label_value_of_one_survives(self):
         """`1 == True`, and the value's default is True, so it was dropped."""
-        pytest.importorskip("yaml")
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
@@ -2507,7 +2498,6 @@ class TestSerializationIsLossless:
 
     def test_a_flag_label_stays_terse(self):
         """A value which really is the default is still left out."""
-        pytest.importorskip("yaml")
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
@@ -2526,7 +2516,6 @@ class TestSerializationIsLossless:
 
     def test_round_trip_through_file(self, tmp_path):
         """The writer taking a path writes what the text form holds."""
-        pytest.importorskip("yaml")
         inventory = build_full_inventory()
         path = tmp_path / "inventory.yaml"
         inventory.io.to_yaml(path)
@@ -2534,14 +2523,12 @@ class TestSerializationIsLossless:
 
     def test_blank_crs_fields_survive(self):
         """A frame described by WKT alone must not reload as EPSG:4979."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_crs"]
         crs = dc.inventory(inventory.io.to_yaml()).coordinate_reference_system
         assert (crs.authority, crs.code, crs.name) == ("", "", "")
 
     def test_blank_instrument_type_survives(self):
         """A blanked field with a non-empty default is not a missing one."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_resources"]
         loaded = dc.inventory(inventory.io.to_yaml())
         assert loaded.resources["int-1"].instrument_type == ""
@@ -2552,7 +2539,6 @@ class TestSerializationIsLossless:
         Sweeping the model tree, rather than listing the fields at risk,
         is what catches the next field added with a non-empty default.
         """
-        pytest.importorskip("yaml")
         inventory = build_full_inventory()
         checked = set()
         for model in _walk_models(inventory):
@@ -2577,7 +2563,6 @@ class TestSerializationIsLossless:
 
     def test_defaulted_fields_are_dropped(self):
         """A field still holding its default is left out of the document."""
-        yaml = pytest.importorskip("yaml")
         data = yaml.safe_load(build_inventory().io.to_yaml())
         assert not _empty_keys(data)
         assert "description" not in yaml.safe_dump(data)
@@ -2588,7 +2573,6 @@ class TestSerializationIsLossless:
         Every other defaulted field is dropped, so this is what says which
         envelope a document was written against.
         """
-        yaml = pytest.importorskip("yaml")
         default = inv.Inventory().schema_version
         data = yaml.safe_load(build_inventory().io.to_yaml())
         assert data["schema_version"] == default
@@ -2614,7 +2598,6 @@ class TestLoadingValidates:
 
     def test_invalid_document_raises_on_load(self):
         """A document violating a whole-tree rule fails at its source."""
-        pytest.importorskip("yaml")
         station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", stations=(station,)),)
@@ -2894,13 +2877,11 @@ class TestInventoryNamespaces:
 
     def test_io_namespace(self):
         """The io namespace DASCore registers is reachable."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         assert inventory.io.to_yaml() == inv.inventory_to_yaml(inventory)
 
     def test_copy_gets_its_own_binding(self):
         """A copied inventory hands out a namespace bound to the copy."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         inventory.io  # a namespace kept on the host would ride along
         other = inventory.model_copy(update={"schema_version": 7})
@@ -2938,7 +2919,6 @@ class TestInventoryNamespaces:
 
     def test_cached_namespace_is_not_state(self):
         """An attached namespace changes neither equality nor a dump."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         other = inv.Inventory(**inventory.model_dump())
         inventory.io.to_yaml()

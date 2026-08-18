@@ -40,6 +40,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
 from pydantic import ValidationError
 
 from dascore.core.annotations import (
@@ -60,7 +61,7 @@ from dascore.core.annotations import (
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
-from dascore.utils.misc import iterate, optional_import
+from dascore.utils.misc import iterate
 from dascore.utils.paths import quote_path
 from dascore.utils.tables import (
     parse_cell,
@@ -119,7 +120,6 @@ def _read_object(path: Path) -> dict[str, Any]:
             msg = f"Could not parse JSON from {quote_path(path)}: {error}."
             raise ParameterError(msg) from error
     else:
-        yaml = optional_import("yaml", required_for="YAML annotation storage")
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as error:

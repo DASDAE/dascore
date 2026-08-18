@@ -15,15 +15,9 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.core import inventory as inv
 from dascore.core import inventory_loader as loader
-from dascore.exceptions import (
-    InvalidInventoryError,
-    MissingOptionalDependencyError,
-)
+from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
-
-pytest.importorskip("yaml")
-
 
 # A minimal directory which loads: one acquisition names everything above it.
 PATH_DIRECTORY = {
@@ -598,18 +592,12 @@ class TestOverlookedInput:
         )
         assert not dc.inventory(root).networks
 
-    def test_json_inventory_without_pyyaml(self, tmp_path, monkeypatch):
+    def test_json_inventory_beside_unrelated_yaml(self, tmp_path):
         """A JSON inventory loads past whatever YAML lies beside it.
 
-        PyYAML is optional, and the tests which need it skip without it, so
-        this pins the JSON-only path here rather than leaving it to a
-        minimal install nothing in this file would exercise.
+        The stray file is read, since deciding it declares no object is
+        what reading it is for, and it is then stepped over.
         """
-
-        def no_yaml(name, **kwargs):
-            raise MissingOptionalDependencyError(f"no {name}")
-
-        monkeypatch.setattr(loader, "optional_import", no_yaml)
         root = write_inventory(
             tmp_path / "json_only",
             {
@@ -2296,19 +2284,18 @@ class TestFindInventory:
 class TestLoadSerializedFile:
     """A whole inventory read from one document, not a directory."""
 
-    def test_json_needs_no_yaml(self, tmp_path, monkeypatch):
+    def test_json_is_not_yamls_to_read(self, tmp_path, monkeypatch):
         """The suffix picks the parser, so JSON is not YAML's to read."""
         path = tmp_path / "whole.json"
         path.write_text('{"description": "a JSON inventory"}')
 
-        def _refuse(name, **kwargs):
-            raise MissingOptionalDependencyError(name)
+        def refuse(*args, **kwargs):
+            raise AssertionError("the JSON route parsed YAML")
 
-        # Both bindings, because JSON is legal YAML: a fallback to the
-        # YAML route would parse this file and pass a test which only
-        # watched the loader's own import.
-        monkeypatch.setattr(loader, "optional_import", _refuse)
-        monkeypatch.setattr(inv, "optional_import", _refuse)
+        # JSON is legal YAML, so a fallback to the YAML route would parse
+        # this file and pass a test which only checked the result.
+        monkeypatch.setattr(loader.yaml, "safe_load", refuse)
+        monkeypatch.setattr(inv.yaml, "safe_load", refuse)
         assert dc.inventory(path).description == "a JSON inventory"
 
     def test_a_document_which_does_not_parse(self, tmp_path):

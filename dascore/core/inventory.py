@@ -34,6 +34,7 @@ from typing import (
 from uuid import uuid4
 
 import numpy as np
+import yaml
 from pydantic import (
     AfterValidator,
     BeforeValidator,
@@ -64,7 +65,6 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     check_code,
     is_strictly_monotonic,
-    optional_import,
     validate_acquisition_key,
 )
 from dascore.utils.namespace import NamespaceOwner
@@ -2501,7 +2501,6 @@ class Inventory(NamespaceOwner, InventoryModel):
                 "Load a path with dascore.inventory."
             )
             raise InvalidInventoryError(msg)
-        yaml = optional_import("yaml", required_for="YAML inventory parsing")
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as error:
@@ -2554,13 +2553,10 @@ def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> s
     --------
     >>> import dascore as dc
     >>> _, inventory = dc.examples.inventory_patch_pair()
-    >>> # Writing YAML needs pyyaml, which is not a core dependency.
-    >>> text = inventory.io.to_yaml()  # doctest: +SKIP
-    >>> dc.inventory(text) == inventory  # doctest: +SKIP
+    >>> text = inventory.io.to_yaml()
+    >>> dc.inventory(text) == inventory
     True
     """
-    yaml = optional_import("yaml", required_for="YAML inventory serialization")
-
     # Everything defaulted is dropped, so the document records which
     # envelope it was written against even when that is the default.
     dumped = inventory.model_dump(mode="json", exclude_defaults=True)
