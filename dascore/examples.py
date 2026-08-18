@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 from collections.abc import Sequence
 from contextlib import suppress
@@ -16,7 +17,6 @@ from dascore.compat import random_state
 from dascore.config import config_context
 from dascore.core.inventory import (
     Acquisition,
-    CoordinateReferenceSystem,
     CouplingCondition,
     DistanceMap,
     FiberArray,
@@ -27,7 +27,6 @@ from dascore.core.inventory import (
     Network,
     OpticalPath,
     OpticalPathLabel,
-    Splice,
 )
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
@@ -856,245 +855,6 @@ def random_das_inventory() -> Inventory:
     return inventory_patch_pair()[1]
 
 
-def _tunnel_path(start_time=None, end_time=None, break_length=0.0) -> OpticalPath:
-    """
-    Build the tunnel optical path, optionally after a repair.
-
-    A repair splices ``break_length`` meters of new fiber in behind the
-    wellhead, so everything past it slides that far down the optical axis
-    while the surveyed positions stay where they are. That is the whole
-    reason an epoch exists rather than an edit.
-    """
-    shift = break_length
-    components = [FiberSegment(name="lead-in", optical_length=100.0)]
-    if break_length:
-        components.append(Splice(name="repair splice", optical_length=0.0))
-        components.append(FiberSegment(name="patch cord", optical_length=break_length))
-    components.extend(
-        [
-            Splice(name="wellhead splice", optical_length=0.0),
-            FiberSegment(name="trench", optical_length=200.0),
-            FiberSegment(name="slack coil", optical_length=50.0),
-            FiberSegment(name="borehole", optical_length=50.0),
-            FiberSegment(name="tail", optical_length=100.0),
-        ]
-    )
-    geometry = (
-        # A bent run along the tunnel floor, surveyed at three points.
-        Geometry(
-            name="trench",
-            distance=(100.0 + shift, 175.0 + shift, 300.0 + shift),
-            coordinates={
-                "x": (0.0, 75.0, 75.0),
-                "y": (0.0, 0.0, 125.0),
-                "z": (-1.0, -1.0, -1.0),
-            },
-        ),
-        # 300 -> 350 is the slack coil, which states no position at all:
-        # fifty meters of fiber wound into a tray has none worth stating.
-        Geometry(
-            name="borehole",
-            distance=(350.0 + shift, 400.0 + shift),
-            coordinates={"x": (75.0, 75.0), "y": (125.0, 125.0), "z": (-1.0, -50.0)},
-        ),
-        # A column which is not a position at all. Two segments covering
-        # one stretch of fiber share its name, being two measurements of
-        # it: these state the tunnel's own chainage where the ones above
-        # state where the fiber is.
-        Geometry(
-            name="trench",
-            distance=(100.0 + shift, 300.0 + shift),
-            coordinates={"chainage": (1200.0, 1400.0)},
-            units={"chainage": "m"},
-        ),
-        Geometry(
-            name="borehole",
-            distance=(350.0 + shift, 400.0 + shift),
-            coordinates={"chainage": (1450.0, 1500.0)},
-            units={"chainage": "m"},
-        ),
-    )
-    coupling = (
-        CouplingCondition(
-            start_distance=100.0 + shift,
-            end_distance=300.0 + shift,
-            coupling_type="trench",
-            medium="soil",
-        ),
-        CouplingCondition(
-            start_distance=300.0 + shift,
-            end_distance=350.0 + shift,
-            coupling_type="coiled",
-            medium="air",
-        ),
-        CouplingCondition(
-            start_distance=350.0 + shift,
-            end_distance=400.0 + shift,
-            coupling_type="outside_borehole_casing",
-            medium="rock",
-        ),
-    )
-    labels = (
-        # A string group: single valued, so its intervals may not overlap.
-        OpticalPathLabel(
-            start_distance=100.0 + shift,
-            end_distance=300.0 + shift,
-            group="zone",
-            value="north",
-        ),
-        OpticalPathLabel(
-            start_distance=300.0 + shift,
-            end_distance=400.0 + shift,
-            group="zone",
-            value="south",
-        ),
-        # A boolean group: membership, so these two may overlap the above
-        # and each other.
-        OpticalPathLabel(
-            start_distance=150.0 + shift, end_distance=320.0 + shift, group="noisy"
-        ),
-        OpticalPathLabel(
-            start_distance=380.0 + shift, end_distance=420.0 + shift, group="noisy"
-        ),
-        # A numeric group, which is single valued like a string one.
-        OpticalPathLabel(
-            start_distance=350.0 + shift,
-            end_distance=400.0 + shift,
-            group="borehole",
-            value=1,
-        ),
-    )
-    return OpticalPath(
-        name="tunnel",
-        location_code="00",
-        start_time=start_time,
-        end_time=end_time,
-        optical_components=tuple(components),
-        geometry=geometry,
-        coupling=coupling,
-        labels=labels,
-    )
-
-
-@register_func(EXAMPLE_INVENTORIES, key="diverse_das")
-def diverse_das_inventory() -> Inventory:
-    """Two networks, two arrays, a repaired path, and every label kind."""
-    repair = dc.to_datetime64("2024-09-01")
-    interrogator = Interrogator(
-        manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
-    )
-    other_interrogator = Interrogator(
-        manufacturer="Fake Interrogators", model="FI-2", serial_number="sn-2"
-    )
-    tunnel = FiberArray(
-        code="TUN1",
-        name="the tunnel array",
-        acquisitions=(
-            # Ongoing: an unset end time is what "still recording" looks like.
-            Acquisition(
-                code="DAS",
-                location_code="00",
-                data_type="strain_rate",
-                data_category="DAS",
-                gauge_length=10.0,
-                spatial_interval=1.0,
-                sample_rate=250.0,
-                interrogator=interrogator,
-                start_time=dc.to_datetime64("2024-06-01"),
-                distance_map=DistanceMap(
-                    instrument_distance=(0.0, 400.0), distance=(100.0, 500.0)
-                ),
-            ),
-            # A closed epoch, on the same path lineage under another code.
-            Acquisition(
-                code="RAW",
-                location_code="00",
-                data_type="velocity",
-                data_category="DAS",
-                gauge_length=5.0,
-                spatial_interval=2.0,
-                sample_rate=500.0,
-                interrogator=other_interrogator,
-                start_time=dc.to_datetime64("2024-06-01"),
-                end_time=dc.to_datetime64("2024-08-01"),
-                distance_map=DistanceMap(
-                    instrument_distance=(0.0, 400.0), distance=(100.0, 500.0)
-                ),
-            ),
-        ),
-        # One location code, two epochs: the fiber was repaired.
-        optical_paths=(
-            _tunnel_path(end_time=repair),
-            _tunnel_path(start_time=repair, break_length=2.0),
-        ),
-    )
-    borehole = FiberArray(
-        code="BH1",
-        name="the borehole array",
-        acquisitions=(
-            # Every time unset, which is legal and says the setup is the
-            # only one there has ever been.
-            Acquisition(
-                code="DTS",
-                data_type="temperature",
-                data_category="DTS",
-                spatial_interval=1.0,
-                interrogator=interrogator,
-                distance_map=DistanceMap(
-                    instrument_distance=(0.0, 200.0), distance=(0.0, 200.0)
-                ),
-            ),
-        ),
-        optical_paths=(
-            OpticalPath(
-                name="hole",
-                optical_components=(FiberSegment(name="cable", optical_length=200.0),),
-                geometry=(
-                    Geometry(
-                        name="hole",
-                        distance=(0.0, 200.0),
-                        coordinates={
-                            "x": (500.0, 500.0),
-                            "y": (500.0, 500.0),
-                            "z": (0.0, -200.0),
-                        },
-                    ),
-                ),
-                coupling=(
-                    CouplingCondition(
-                        start_distance=0.0,
-                        end_distance=200.0,
-                        coupling_type="wireline",
-                        medium="water",
-                    ),
-                ),
-                labels=(
-                    OpticalPathLabel(
-                        start_distance=0.0,
-                        end_distance=200.0,
-                        group="zone",
-                        value="hole",
-                    ),
-                ),
-            ),
-        ),
-    )
-    return Inventory(
-        # A local grid in meters, so the axes are the canonical x, y, z.
-        coordinate_reference_system=CoordinateReferenceSystem(
-            authority="",
-            code="",
-            name="tunnel grid",
-            coordinate_labels=("x", "y", "z"),
-            units=("meter", "meter", "meter"),
-        ),
-        networks=(
-            Network(code="XT", fiber_arrays=(tunnel,)),
-            Network(code="XB", fiber_arrays=(borehole,)),
-        ),
-    ).check()
-
-
 def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
     """
     Load an example Inventory.
@@ -1126,9 +886,9 @@ def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
     Examples
     --------
     >>> import dascore as dc
-    >>> inventory = dc.get_example_inventory("diverse_das")
+    >>> inventory = dc.get_example_inventory("tunnel")
     >>> len(inventory.networks)
-    2
+    1
     """
     if example_name not in EXAMPLE_INVENTORIES:
         msg = (
@@ -1137,3 +897,361 @@ def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
         )
         raise UnknownExampleError(msg)
     return EXAMPLE_INVENTORIES[example_name](**kwargs)
+
+
+# --- The tunnel inventory -------------------------------------------------
+#
+# This builds the deployment the tunnel recipe walks through, and is the
+# single definition of it: the recipe displays these very files rather
+# than composing its own, so the page and the example cannot drift apart.
+
+_TUNNEL_RESOURCES = {
+    "telemetry-cable": (
+        "object_type: Cable\n"
+        "name: tunnel telemetry cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The run in from the instrument room.\n"
+    ),
+    "connecting-cable": (
+        "object_type: Cable\n"
+        "name: tunnel connecting cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The links between boxes, couplers, and borehole heads.\n"
+    ),
+    "borehole-cable": (
+        "object_type: Cable\n"
+        "name: borehole sensing cable\n"
+        "manufacturer: Nerve Sensors\n"
+        "model: Epsilon\n"
+        "fiber_count: 4\n"
+        "description: Rock-coupled downhole cable with an armored pigtail.\n"
+    ),
+    "trench-cable": (
+        "object_type: Cable\n"
+        "name: helically wound trench cable\n"
+        "manufacturer: Silixa\n"
+        "model: HWC\n"
+        "fiber_count: 1\n"
+    ),
+    "das-interrogator": (
+        "object_type: Interrogator\n"
+        "name: tunnel DAS interrogator\n"
+        "manufacturer: Sintela\n"
+        "model: Onyxia\n"
+        "instrument_type: DAS interrogator\n"
+    ),
+    "repair-cord": (
+        "object_type: Cable\nname: trench repair patch cord\nfiber_count: 1\n"
+    ),
+    "repair-box": (
+        "object_type: Enclosure\nname: trench repair box\nenclosure_type: box\n"
+    ),
+}
+
+# One enclosure per housing, because a resource_id names an asset rather than
+# a kind: box A and box E are two boxes, and each borehole has its own
+# turnaround down the hole.
+for _label, _name in [
+    ("splice-box-a", "splice box at A"),
+    ("splice-box-e", "splice box at E"),
+    ("turnaround-1", "borehole 1 turnaround housing"),
+    ("turnaround-2", "borehole 2 turnaround housing"),
+    ("turnaround-3", "borehole 3 turnaround housing"),
+]:
+    _kind = "box" if "splice" in _label else "housing"
+    _TUNNEL_RESOURCES[_label] = (
+        f"object_type: Enclosure\nname: tunnel {_name}\nenclosure_type: {_kind}\n"
+    )
+
+_TUNNEL_COMPONENTS = """\
+sequence,object_type,optical_length,name,container
+1,FiberSegment,1500.0,telemetry lead-in,telemetry-cable
+2,Splice,0.0,splice at box A,splice-box-a
+3,FiberSegment,2.5,drop into the trench,trench-cable
+4,FiberSegment,25.0,trench B to the coil,trench-cable
+5,FiberSegment,10.0,cable coil at C,trench-cable
+6,FiberSegment,25.0,trench from the coil to D,trench-cable
+7,FiberSegment,2.5,rise out of the trench,trench-cable
+8,Splice,0.0,splice at box E,splice-box-e
+9,FiberSegment,15.0,link E to borehole 3,connecting-cable
+10,FiberSegment,20.0,borehole 3 down,borehole-cable
+11,Splice,0.0,borehole 3 turnaround,turnaround-3
+12,FiberSegment,20.0,borehole 3 up,borehole-cable
+13,FiberSegment,15.0,link borehole 3 to coupler G,connecting-cable
+14,Connector,0.0,coupler G,
+15,FiberSegment,15.0,link coupler G to borehole 2,connecting-cable
+16,FiberSegment,20.0,borehole 2 down,borehole-cable
+17,Splice,0.0,borehole 2 turnaround,turnaround-2
+18,FiberSegment,20.0,borehole 2 up,borehole-cable
+19,FiberSegment,15.0,link borehole 2 to coupler H,connecting-cable
+20,Connector,0.0,coupler H,
+21,FiberSegment,15.0,link coupler H to borehole 1,connecting-cable
+22,FiberSegment,20.0,borehole 1 down,borehole-cable
+23,Splice,0.0,borehole 1 turnaround,turnaround-1
+24,FiberSegment,20.0,borehole 1 up,borehole-cable
+25,FiberSegment,15.0,link borehole 1 back to box A,connecting-cable
+26,Terminator,0.0,path end,
+"""
+
+# The surveyed waypoints, lettered as the recipe's drawing letters them.
+_TUNNEL_A = (100.00, 100.00, 0.0)
+_TUNNEL_B = (100.00, 97.79, -0.5)
+_TUNNEL_C = (122.15, 97.79, -0.5)
+_TUNNEL_D = (144.30, 97.79, -0.5)
+_TUNNEL_E = (144.30, 100.00, 0.0)
+_TUNNEL_HEADS = {
+    1: (108.00, 100.00, 0.0),
+    2: (126.00, 100.00, 0.0),
+    3: (142.00, 100.00, 0.0),
+}
+_TUNNEL_DEPTH = 20.0
+# The trench cable is wound helically, so a meter of fiber covers cos(phi)
+# of a meter of tunnel.
+_TUNNEL_WIND = 0.886
+_TUNNEL_TRENCH = (
+    "drop into the trench",
+    "trench B to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+_TUNNEL_REPAIRED_TRENCH = (
+    "drop into the trench",
+    "trench B to the break",
+    "trench from the break to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+
+
+def _tunnel_spans(components_csv):
+    """Map each component's name to the optical interval it covers."""
+    frame = pd.read_csv(io.StringIO(components_csv))
+    end = frame["optical_length"].cumsum()
+    return dict(zip(frame["name"], zip(end - frame["optical_length"], end)))
+
+
+def _tunnel_bottom(number):
+    """The bottom of a borehole is its head, straight down."""
+    x, y, _ = _TUNNEL_HEADS[number]
+    return (x, y, -_TUNNEL_DEPTH)
+
+
+def _tunnel_runs(repaired=False):
+    """Which component runs between which two surveyed waypoints."""
+    if repaired:
+        # The patch cord is coiled in a splice box, so the trench is
+        # surveyed up to the break and again from it, and the two meters
+        # between get no position at all.
+        brk = (100.00 + 15.0 * _TUNNEL_WIND, 97.79, -0.5)
+        runs = [
+            ("drop into the trench", _TUNNEL_A, _TUNNEL_B),
+            ("trench B to the break", _TUNNEL_B, brk),
+            ("trench from the break to the coil", brk, _TUNNEL_C),
+            ("trench from the coil to D", _TUNNEL_C, _TUNNEL_D),
+            ("rise out of the trench", _TUNNEL_D, _TUNNEL_E),
+        ]
+    else:
+        runs = [
+            ("drop into the trench", _TUNNEL_A, _TUNNEL_B),
+            ("trench B to the coil", _TUNNEL_B, _TUNNEL_C),
+            ("trench from the coil to D", _TUNNEL_C, _TUNNEL_D),
+            ("rise out of the trench", _TUNNEL_D, _TUNNEL_E),
+        ]
+    for number in (3, 2, 1):
+        runs.append(
+            (f"borehole {number} down", _TUNNEL_HEADS[number], _tunnel_bottom(number))
+        )
+        runs.append(
+            (f"borehole {number} up", _tunnel_bottom(number), _TUNNEL_HEADS[number])
+        )
+    return runs
+
+
+def _tunnel_geometry(at, runs):
+    """Turn each straight run into the two control points which place it."""
+    rows = []
+    for name, start, end in runs:
+        first, last = at[name]
+        rows.append((name, first, *start))
+        rows.append((name, last, *end))
+    frame = pd.DataFrame(rows, columns=["segment", "distance", "x", "y", "z"])
+    return frame.to_csv(index=False)
+
+
+def _tunnel_coupling(at, trench_parts):
+    """Buried in the trench, coiled at C, cemented in the boreholes."""
+    rows: list[tuple] = [
+        (*at[name], "trench", "soil", "direct_burial", 0.5) for name in trench_parts
+    ]
+    rows.append((*at["cable coil at C"], "coiled", "soil", "", 0.5))
+    rows.extend(
+        (
+            at[f"borehole {number} down"][0],
+            at[f"borehole {number} up"][1],
+            "outside_borehole_casing",
+            "rock",
+            "cemented",
+            "",
+        )
+        for number in (3, 2, 1)
+    )
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "start_distance",
+            "end_distance",
+            "coupling_type",
+            "medium",
+            "attachment",
+            "depth",
+        ],
+    )
+    return frame.to_csv(index=False)
+
+
+def _tunnel_labels(at, trench_parts):
+    """Which section a channel is in, and which borehole if it is in one."""
+    rows: list[tuple] = [(*at[name], "section", "trench") for name in trench_parts]
+    rows.append((*at["cable coil at C"], "section", "coil"))
+    for number in (3, 2, 1):
+        span = (at[f"borehole {number} down"][0], at[f"borehole {number} up"][1])
+        rows.append((*span, "section", "borehole"))
+        rows.append((*span, "borehole", number))
+    frame = pd.DataFrame(
+        rows, columns=["start_distance", "end_distance", "group", "value"]
+    )
+    return frame.to_csv(index=False)
+
+
+def _tunnel_repaired_components():
+    """One row becomes five where the contractor cut the trench cable."""
+    rows = pd.read_csv(io.StringIO(_TUNNEL_COMPONENTS)).to_dict("records")
+    index = next(
+        i for i, row in enumerate(rows) if row["name"] == "trench B to the coil"
+    )
+    rows[index : index + 1] = [
+        dict(
+            object_type="FiberSegment",
+            optical_length=15.0,
+            name="trench B to the break",
+            container="trench-cable",
+        ),
+        dict(
+            object_type="Splice",
+            optical_length=0.0,
+            name="repair splice near side",
+            container="repair-box",
+        ),
+        dict(
+            object_type="FiberSegment",
+            optical_length=2.0,
+            name="repair patch cord",
+            container="repair-cord",
+        ),
+        dict(
+            object_type="Splice",
+            optical_length=0.0,
+            name="repair splice far side",
+            container="repair-box",
+        ),
+        dict(
+            object_type="FiberSegment",
+            optical_length=10.0,
+            name="trench from the break to the coil",
+            container="trench-cable",
+        ),
+    ]
+    frame = pd.DataFrame(rows)
+    frame["sequence"] = range(1, len(frame) + 1)
+    return frame.to_csv(index=False)
+
+
+def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
+    """
+    Return the tunnel inventory as a mapping of file name to file text.
+
+    This is the authoring directory the tunnel recipe writes, as data. It
+    is exposed so the recipe can display the same files the example
+    loads, rather than composing a second copy which could drift.
+
+    Parameters
+    ----------
+    repaired
+        Whether to include the epoch added when the trench cable was
+        repaired. False is the deployment as first installed, which is
+        what the recipe shows before it gets to the repair.
+    """
+    array = "fiber_arrays/XT.TUN1"
+    path, epoch = f"{array}/path.00", f"{array}/path.00@2024-09-01"
+    at = _tunnel_spans(_TUNNEL_COMPONENTS)
+    repaired_csv = _tunnel_repaired_components()
+    repaired_at = _tunnel_spans(repaired_csv)
+    files = {
+        "inventory.yaml": (
+            "object_type: Inventory\n"
+            "coordinate_reference_system:\n"
+            "  authority: local\n"
+            "  code: tunnel\n"
+            "  name: tunnel engineering grid\n"
+            "  coordinate_labels: [x, y, z]\n"
+            "  units: [meter, meter, meter]\n"
+        ),
+        f"{array}/attrs.yaml": ("object_type: FiberArray\nname: tunnel fiber array\n"),
+        "acquisitions/XT.TUN1.00.DAS.yaml": (
+            "object_type: Acquisition\n"
+            "data_category: DAS\n"
+            "data_type: strain_rate\n"
+            "data_units: 1/s\n"
+            "interrogator: das-interrogator\n"
+            "gauge_length: 10.0\n"
+            "spatial_interval: 1.0\n"
+            "sample_rate: 250.0\n"
+            "distance_map:\n"
+            "  instrument_distance: [0.0, 2000.0]\n"
+            "  distance: [0.0, 2000.0]\n"
+        ),
+        f"{path}/attrs.yaml": "object_type: OpticalPath\n",
+        f"{path}/optical_components.csv": _TUNNEL_COMPONENTS,
+        f"{path}/geometry.csv": _tunnel_geometry(at, _tunnel_runs()),
+        f"{path}/coupling.csv": _tunnel_coupling(at, _TUNNEL_TRENCH),
+        f"{path}/labels.csv": _tunnel_labels(at, _TUNNEL_TRENCH),
+        f"{epoch}/attrs.yaml": "object_type: OpticalPath\n",
+        f"{epoch}/optical_components.csv": repaired_csv,
+        f"{epoch}/geometry.csv": _tunnel_geometry(
+            repaired_at, _tunnel_runs(repaired=True)
+        ),
+        f"{epoch}/coupling.csv": _tunnel_coupling(repaired_at, _TUNNEL_REPAIRED_TRENCH),
+        f"{epoch}/labels.csv": _tunnel_labels(repaired_at, _TUNNEL_REPAIRED_TRENCH),
+    }
+    for name, text in _TUNNEL_RESOURCES.items():
+        files[f"resources/{name}.yaml"] = text
+    if not repaired:
+        # The repair is later hardware, so before it happens neither its
+        # epoch nor the resources it introduced exist yet.
+        files = {
+            name: text
+            for name, text in files.items()
+            if epoch not in name and "repair-" not in name
+        }
+    return files
+
+
+def write_tunnel_inventory(path, repaired: bool = True) -> Path:
+    """Write the tunnel inventory's authoring directory and return it."""
+    path = Path(path)
+    for name, text in tunnel_inventory_files(repaired=repaired).items():
+        file_path = path / name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(text)
+    return path
+
+
+@register_func(EXAMPLE_INVENTORIES, key="tunnel")
+def tunnel_inventory() -> Inventory:
+    """The tunnel deployment the tunnel recipe builds, read from its files."""
+    directory = Path(tempfile.mkdtemp()) / "tunnel_inventory"
+    return dc.inventory(write_tunnel_inventory(directory))

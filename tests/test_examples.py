@@ -125,79 +125,90 @@ class TestGetExampleInventory:
         assert inventory.check() == inventory
 
 
-class TestDiverseInventory:
-    """The diverse example exists to exercise the things plots need."""
+class TestTunnelInventory:
+    """The tunnel example is the deployment the tunnel recipe builds."""
 
     @pytest.fixture(scope="class")
     def inventory(self):
-        """The diverse example inventory."""
-        return dc.get_example_inventory("diverse_das")
+        """The tunnel example inventory."""
+        return dc.get_example_inventory("tunnel")
 
     @pytest.fixture(scope="class")
-    def tunnel_path(self, inventory):
-        """The tunnel path as it was before the repair."""
+    def original(self, inventory):
+        """The optical path as it was before the repair."""
         return inventory.networks[0].fiber_arrays[0].optical_paths[0]
-
-    def test_two_networks_and_arrays(self, inventory):
-        """Both spellings of breadth are present."""
-        assert len(inventory.networks) == 2
-        assert {x.code for x in inventory.networks} == {"XT", "XB"}
-        assert len(list(inventory._optical_paths())) == 3
 
     def test_repair_is_two_epochs_of_one_location(self, inventory):
         """One location code carries two paths which do not overlap."""
         paths = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert len(paths) == 2
         assert len({x.location_code for x in paths}) == 1
         assert not paths[0].overlaps(paths[1])
-        # The repair spliced fiber in, so the later path is longer.
-        assert paths[1].optical_length > paths[0].optical_length
+        # The repair spliced two meters of patch cord in.
+        assert paths[1].optical_length == paths[0].optical_length + 2.0
 
-    def test_epochs_span_the_open_and_closed_cases(self, inventory):
-        """A timeline needs an ongoing epoch, a closed one, and an unset one."""
-        acquisitions = inventory.networks[0].fiber_arrays[0].acquisitions
-        ongoing, closed = acquisitions
-        assert pd.isnull(ongoing.end_time) and not pd.isnull(ongoing.start_time)
-        assert not pd.isnull(closed.end_time)
-        unset = inventory.networks[1].fiber_arrays[0].acquisitions[0]
-        assert pd.isnull(unset.start_time) and pd.isnull(unset.end_time)
+    def test_epochs_are_open_at_the_ends(self, inventory):
+        """The first path runs from the beginning, the second is ongoing."""
+        first, second = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert pd.isnull(first.start_time)
+        assert first.end_time == second.start_time
+        assert pd.isnull(second.end_time)
 
-    def test_geometry_gap_is_a_real_gap(self, inventory, tunnel_path):
-        """The slack coil states no position, so its channels get NaN."""
+    def test_geometry_gap_is_a_real_gap(self, inventory, original):
+        """Fiber nobody surveyed gets no position rather than a guess."""
         crs = inventory.coordinate_reference_system
-        coords = tunnel_path.coordinates_at(np.array([250.0, 320.0, 375.0]), crs)
-        assert not np.isnan(coords[0]).any()
-        assert np.isnan(coords[1]).all()
-        assert not np.isnan(coords[2]).any()
+        # 1000 m along is slack cable in a tray; 1590 m is down borehole 3.
+        coords = original.coordinates_at(np.array([1000.0, 1590.0]), crs)
+        assert np.isnan(coords[0]).all()
+        assert coords[1][2] == -10.0
 
-    def test_states_a_column_which_is_not_a_position(self, tunnel_path):
-        """A non-axis geometry column gives the line panels something to draw."""
-        assert "chainage" in tunnel_path.geometry_columns()
-        values = tunnel_path.column_at("chainage", np.array([150.0, 320.0]))
-        assert values[0] == 1250.0
-        assert np.isnan(values[1])
-
-    def test_every_label_kind_appears(self, tunnel_path):
-        """One group of each kind, which is what decides a color treatment."""
+    def test_every_label_group_appears(self, original):
+        """A string group and a numeric one, which color differently."""
         kinds = {}
-        for label in tunnel_path.labels:
-            value = normalize_value(label.value)
-            kinds.setdefault(label.group, set()).add(value_kind(value))
-        assert kinds == {
-            "zone": {"string"},
-            "noisy": {"boolean"},
-            "borehole": {"numeric"},
-        }
+        for label in original.labels:
+            kinds.setdefault(label.group, set()).add(
+                value_kind(normalize_value(label.value))
+            )
+        assert kinds == {"section": {"string"}, "borehole": {"numeric"}}
 
-    def test_holds_a_point_marker(self, tunnel_path):
-        """A zero length component is a point, which a plot must still show."""
-        intervals = tunnel_path.component_intervals()
-        assert any(start == end for start, end in intervals)
+    def test_holds_point_markers(self, original):
+        """Splices and connectors have no length, so they are points."""
+        intervals = original.component_intervals()
+        assert sum(1 for start, end in intervals if start == end) > 1
 
-    def test_coupling_covers_only_part_of_the_path(self, tunnel_path):
+    def test_coupling_covers_only_part_of_the_path(self, original):
         """Partial coverage is legal and is what a coverage plot must show."""
-        assert len({x.coupling_type for x in tunnel_path.coupling}) > 1
-        covered = sum(x.optical_length for x in tunnel_path.coupling)
-        assert covered < tunnel_path.optical_length
+        assert len({x.coupling_type for x in original.coupling}) == 3
+        covered = sum(x.optical_length for x in original.coupling)
+        assert covered < original.optical_length
+
+    def test_files_are_the_recipe_directory(self):
+        """The example is its authoring files, which the recipe displays."""
+        original = dc_examples.tunnel_inventory_files(repaired=False)
+        repaired = dc_examples.tunnel_inventory_files(repaired=True)
+        assert set(original) < set(repaired)
+        # Before the repair neither its epoch nor its hardware exists.
+        assert not any("@" in x for x in original)
+        assert any("@2024-09-01" in x for x in repaired)
+
+    def test_written_directory_reads_back(self, tmp_path, inventory):
+        """Writing the files and reading them describes the same system."""
+        path = dc_examples.write_tunnel_inventory(tmp_path / "tunnel")
+        loaded = dc.inventory(path)
+        # Not == : an Inventory carries its own resource_id, which is a
+        # fresh uuid on each read, so two reads of one directory differ
+        # in their document identity and in nothing else.
+        assert loaded.networks == inventory.networks
+        assert loaded.resources == inventory.resources
+        assert (
+            loaded.coordinate_reference_system == inventory.coordinate_reference_system
+        )
+
+    def test_unrepaired_directory_holds_one_epoch(self, tmp_path):
+        """The deployment as installed is one path, not two."""
+        path = dc_examples.write_tunnel_inventory(tmp_path / "first", repaired=False)
+        loaded = dc.inventory(path)
+        assert len(loaded.networks[0].fiber_arrays[0].optical_paths) == 1
 
 
 class TestRickerMoveout:

@@ -161,7 +161,7 @@ from dascore.examples import inventory_patch_pair
 patch, example_inventory = inventory_patch_pair()
 ```
 
-Where a patch is not needed, [`dc.get_example_inventory`](`dascore.examples.get_example_inventory`) returns a registered inventory on its own, the same way `dc.get_example_patch` returns a patch. `dc.get_example_inventory("diverse_das")` is the larger one the tests use: two networks, a path repaired part way through its life, and a label group of every kind.
+Where a patch is not needed, [`dc.get_example_inventory`](`dascore.examples.get_example_inventory`) returns a registered inventory on its own, the same way `dc.get_example_patch` returns a patch. `dc.get_example_inventory("tunnel")` is the whole deployment the [tunnel recipe](../recipes/tunnel_inventory.qmd) builds, read from the same files that page shows.
 
 # What an inventory can contribute
 
