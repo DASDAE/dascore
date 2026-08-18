@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 import dascore.examples as dc_examples
-from dascore.examples import EXAMPLE_PATCHES
+from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
 from dascore.exceptions import UnknownExampleError
+from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.time import to_float
 
 
@@ -99,6 +101,103 @@ class TestGetExampleSpool:
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+
+class TestGetExampleInventory:
+    """Test suite for `get_example_inventory`."""
+
+    def test_default(self):
+        """Ensure calling get_example_inventory with no args returns one."""
+        inventory = dc.get_example_inventory()
+        assert isinstance(inventory, dc.Inventory)
+
+    def test_raises_on_bad_key(self):
+        """Ensure a bad key raises expected error."""
+        with pytest.raises(UnknownExampleError, match="No example inventory"):
+            dc.get_example_inventory("NotAnExampleRight????")
+
+    @pytest.mark.parametrize("name", EXAMPLE_INVENTORIES)
+    def test_load_example_inventory(self, name):
+        """Each registered inventory loads and passes its own checks."""
+        inventory = dc.get_example_inventory(name)
+        assert isinstance(inventory, dc.Inventory)
+        # check returns self, so this both validates and pins that.
+        assert inventory.check() == inventory
+
+
+class TestDiverseInventory:
+    """The diverse example exists to exercise the things plots need."""
+
+    @pytest.fixture(scope="class")
+    def inventory(self):
+        """The diverse example inventory."""
+        return dc.get_example_inventory("diverse_das")
+
+    @pytest.fixture(scope="class")
+    def tunnel_path(self, inventory):
+        """The tunnel path as it was before the repair."""
+        return inventory.networks[0].fiber_arrays[0].optical_paths[0]
+
+    def test_two_networks_and_arrays(self, inventory):
+        """Both spellings of breadth are present."""
+        assert len(inventory.networks) == 2
+        assert {x.code for x in inventory.networks} == {"XT", "XB"}
+        assert len(list(inventory._optical_paths())) == 3
+
+    def test_repair_is_two_epochs_of_one_location(self, inventory):
+        """One location code carries two paths which do not overlap."""
+        paths = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert len({x.location_code for x in paths}) == 1
+        assert not paths[0].overlaps(paths[1])
+        # The repair spliced fiber in, so the later path is longer.
+        assert paths[1].optical_length > paths[0].optical_length
+
+    def test_epochs_span_the_open_and_closed_cases(self, inventory):
+        """A timeline needs an ongoing epoch, a closed one, and an unset one."""
+        acquisitions = inventory.networks[0].fiber_arrays[0].acquisitions
+        ongoing, closed = acquisitions
+        assert pd.isnull(ongoing.end_time) and not pd.isnull(ongoing.start_time)
+        assert not pd.isnull(closed.end_time)
+        unset = inventory.networks[1].fiber_arrays[0].acquisitions[0]
+        assert pd.isnull(unset.start_time) and pd.isnull(unset.end_time)
+
+    def test_geometry_gap_is_a_real_gap(self, inventory, tunnel_path):
+        """The slack coil states no position, so its channels get NaN."""
+        crs = inventory.coordinate_reference_system
+        coords = tunnel_path.coordinates_at(np.array([250.0, 320.0, 375.0]), crs)
+        assert not np.isnan(coords[0]).any()
+        assert np.isnan(coords[1]).all()
+        assert not np.isnan(coords[2]).any()
+
+    def test_states_a_column_which_is_not_a_position(self, tunnel_path):
+        """A non-axis geometry column gives the line panels something to draw."""
+        assert "chainage" in tunnel_path.geometry_columns()
+        values = tunnel_path.column_at("chainage", np.array([150.0, 320.0]))
+        assert values[0] == 1250.0
+        assert np.isnan(values[1])
+
+    def test_every_label_kind_appears(self, tunnel_path):
+        """One group of each kind, which is what decides a color treatment."""
+        kinds = {}
+        for label in tunnel_path.labels:
+            value = normalize_value(label.value)
+            kinds.setdefault(label.group, set()).add(value_kind(value))
+        assert kinds == {
+            "zone": {"string"},
+            "noisy": {"boolean"},
+            "borehole": {"numeric"},
+        }
+
+    def test_holds_a_point_marker(self, tunnel_path):
+        """A zero length component is a point, which a plot must still show."""
+        intervals = tunnel_path.component_intervals()
+        assert any(start == end for start, end in intervals)
+
+    def test_coupling_covers_only_part_of_the_path(self, tunnel_path):
+        """Partial coverage is legal and is what a coverage plot must show."""
+        assert len({x.coupling_type for x in tunnel_path.coupling}) > 1
+        covered = sum(x.optical_length for x in tunnel_path.coupling)
+        assert covered < tunnel_path.optical_length
 
 
 class TestRickerMoveout:

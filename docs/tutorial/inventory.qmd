@@ -161,6 +161,8 @@ from dascore.examples import inventory_patch_pair
 patch, example_inventory = inventory_patch_pair()
 ```
 
+Where a patch is not needed, [`dc.get_example_inventory`](`dascore.examples.get_example_inventory`) returns a registered inventory on its own, the same way `dc.get_example_patch` returns a patch. `dc.get_example_inventory("diverse_das")` is the larger one the tests use: two networks, a path repaired part way through its life, and a label group of every kind.
+
 # What an inventory can contribute
 
 [`Inventory.get_names`](`dascore.core.inventory.Inventory.get_names`) lists the names an inventory could put on a patch, split by where each one lands. `attrs` are the observing-system facts, which are one value per patch; `coords` take a value per channel, because they describe somewhere along the fiber.

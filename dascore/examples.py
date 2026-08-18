@@ -16,6 +16,7 @@ from dascore.compat import random_state
 from dascore.config import config_context
 from dascore.core.inventory import (
     Acquisition,
+    CoordinateReferenceSystem,
     CouplingCondition,
     DistanceMap,
     FiberArray,
@@ -26,6 +27,7 @@ from dascore.core.inventory import (
     Network,
     OpticalPath,
     OpticalPathLabel,
+    Splice,
 )
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import fetch
@@ -38,6 +40,7 @@ spy_chirp = lazy_import("scipy.signal", "chirp")
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
+EXAMPLE_INVENTORIES = {}
 
 
 def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
@@ -845,3 +848,292 @@ def inventory_patch_pair():
         )
     ).check()
     return patch, inventory
+
+
+@register_func(EXAMPLE_INVENTORIES, key="random_das")
+def random_das_inventory() -> Inventory:
+    """A single-path inventory which resolves the random_das example patch."""
+    return inventory_patch_pair()[1]
+
+
+def _tunnel_path(start_time=None, end_time=None, break_length=0.0) -> OpticalPath:
+    """
+    Build the tunnel optical path, optionally after a repair.
+
+    A repair splices ``break_length`` meters of new fiber in behind the
+    wellhead, so everything past it slides that far down the optical axis
+    while the surveyed positions stay where they are. That is the whole
+    reason an epoch exists rather than an edit.
+    """
+    shift = break_length
+    components = [FiberSegment(name="lead-in", optical_length=100.0)]
+    if break_length:
+        components.append(Splice(name="repair splice", optical_length=0.0))
+        components.append(FiberSegment(name="patch cord", optical_length=break_length))
+    components.extend(
+        [
+            Splice(name="wellhead splice", optical_length=0.0),
+            FiberSegment(name="trench", optical_length=200.0),
+            FiberSegment(name="slack coil", optical_length=50.0),
+            FiberSegment(name="borehole", optical_length=50.0),
+            FiberSegment(name="tail", optical_length=100.0),
+        ]
+    )
+    geometry = (
+        # A bent run along the tunnel floor, surveyed at three points.
+        Geometry(
+            name="trench",
+            distance=(100.0 + shift, 175.0 + shift, 300.0 + shift),
+            coordinates={
+                "x": (0.0, 75.0, 75.0),
+                "y": (0.0, 0.0, 125.0),
+                "z": (-1.0, -1.0, -1.0),
+            },
+        ),
+        # 300 -> 350 is the slack coil, which states no position at all:
+        # fifty meters of fiber wound into a tray has none worth stating.
+        Geometry(
+            name="borehole",
+            distance=(350.0 + shift, 400.0 + shift),
+            coordinates={"x": (75.0, 75.0), "y": (125.0, 125.0), "z": (-1.0, -50.0)},
+        ),
+        # A column which is not a position at all. Two segments covering
+        # one stretch of fiber share its name, being two measurements of
+        # it: these state the tunnel's own chainage where the ones above
+        # state where the fiber is.
+        Geometry(
+            name="trench",
+            distance=(100.0 + shift, 300.0 + shift),
+            coordinates={"chainage": (1200.0, 1400.0)},
+            units={"chainage": "m"},
+        ),
+        Geometry(
+            name="borehole",
+            distance=(350.0 + shift, 400.0 + shift),
+            coordinates={"chainage": (1450.0, 1500.0)},
+            units={"chainage": "m"},
+        ),
+    )
+    coupling = (
+        CouplingCondition(
+            start_distance=100.0 + shift,
+            end_distance=300.0 + shift,
+            coupling_type="trench",
+            medium="soil",
+        ),
+        CouplingCondition(
+            start_distance=300.0 + shift,
+            end_distance=350.0 + shift,
+            coupling_type="coiled",
+            medium="air",
+        ),
+        CouplingCondition(
+            start_distance=350.0 + shift,
+            end_distance=400.0 + shift,
+            coupling_type="outside_borehole_casing",
+            medium="rock",
+        ),
+    )
+    labels = (
+        # A string group: single valued, so its intervals may not overlap.
+        OpticalPathLabel(
+            start_distance=100.0 + shift,
+            end_distance=300.0 + shift,
+            group="zone",
+            value="north",
+        ),
+        OpticalPathLabel(
+            start_distance=300.0 + shift,
+            end_distance=400.0 + shift,
+            group="zone",
+            value="south",
+        ),
+        # A boolean group: membership, so these two may overlap the above
+        # and each other.
+        OpticalPathLabel(
+            start_distance=150.0 + shift, end_distance=320.0 + shift, group="noisy"
+        ),
+        OpticalPathLabel(
+            start_distance=380.0 + shift, end_distance=420.0 + shift, group="noisy"
+        ),
+        # A numeric group, which is single valued like a string one.
+        OpticalPathLabel(
+            start_distance=350.0 + shift,
+            end_distance=400.0 + shift,
+            group="borehole",
+            value=1,
+        ),
+    )
+    return OpticalPath(
+        name="tunnel",
+        location_code="00",
+        start_time=start_time,
+        end_time=end_time,
+        optical_components=tuple(components),
+        geometry=geometry,
+        coupling=coupling,
+        labels=labels,
+    )
+
+
+@register_func(EXAMPLE_INVENTORIES, key="diverse_das")
+def diverse_das_inventory() -> Inventory:
+    """Two networks, two arrays, a repaired path, and every label kind."""
+    repair = dc.to_datetime64("2024-09-01")
+    interrogator = Interrogator(
+        manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
+    )
+    other_interrogator = Interrogator(
+        manufacturer="Fake Interrogators", model="FI-2", serial_number="sn-2"
+    )
+    tunnel = FiberArray(
+        code="TUN1",
+        name="the tunnel array",
+        acquisitions=(
+            # Ongoing: an unset end time is what "still recording" looks like.
+            Acquisition(
+                code="DAS",
+                location_code="00",
+                data_type="strain_rate",
+                data_category="DAS",
+                gauge_length=10.0,
+                spatial_interval=1.0,
+                sample_rate=250.0,
+                interrogator=interrogator,
+                start_time=dc.to_datetime64("2024-06-01"),
+                distance_map=DistanceMap(
+                    instrument_distance=(0.0, 400.0), distance=(100.0, 500.0)
+                ),
+            ),
+            # A closed epoch, on the same path lineage under another code.
+            Acquisition(
+                code="RAW",
+                location_code="00",
+                data_type="velocity",
+                data_category="DAS",
+                gauge_length=5.0,
+                spatial_interval=2.0,
+                sample_rate=500.0,
+                interrogator=other_interrogator,
+                start_time=dc.to_datetime64("2024-06-01"),
+                end_time=dc.to_datetime64("2024-08-01"),
+                distance_map=DistanceMap(
+                    instrument_distance=(0.0, 400.0), distance=(100.0, 500.0)
+                ),
+            ),
+        ),
+        # One location code, two epochs: the fiber was repaired.
+        optical_paths=(
+            _tunnel_path(end_time=repair),
+            _tunnel_path(start_time=repair, break_length=2.0),
+        ),
+    )
+    borehole = FiberArray(
+        code="BH1",
+        name="the borehole array",
+        acquisitions=(
+            # Every time unset, which is legal and says the setup is the
+            # only one there has ever been.
+            Acquisition(
+                code="DTS",
+                data_type="temperature",
+                data_category="DTS",
+                spatial_interval=1.0,
+                interrogator=interrogator,
+                distance_map=DistanceMap(
+                    instrument_distance=(0.0, 200.0), distance=(0.0, 200.0)
+                ),
+            ),
+        ),
+        optical_paths=(
+            OpticalPath(
+                name="hole",
+                optical_components=(FiberSegment(name="cable", optical_length=200.0),),
+                geometry=(
+                    Geometry(
+                        name="hole",
+                        distance=(0.0, 200.0),
+                        coordinates={
+                            "x": (500.0, 500.0),
+                            "y": (500.0, 500.0),
+                            "z": (0.0, -200.0),
+                        },
+                    ),
+                ),
+                coupling=(
+                    CouplingCondition(
+                        start_distance=0.0,
+                        end_distance=200.0,
+                        coupling_type="wireline",
+                        medium="water",
+                    ),
+                ),
+                labels=(
+                    OpticalPathLabel(
+                        start_distance=0.0,
+                        end_distance=200.0,
+                        group="zone",
+                        value="hole",
+                    ),
+                ),
+            ),
+        ),
+    )
+    return Inventory(
+        # A local grid in meters, so the axes are the canonical x, y, z.
+        coordinate_reference_system=CoordinateReferenceSystem(
+            authority="",
+            code="",
+            name="tunnel grid",
+            coordinate_labels=("x", "y", "z"),
+            units=("meter", "meter", "meter"),
+        ),
+        networks=(
+            Network(code="XT", fiber_arrays=(tunnel,)),
+            Network(code="XB", fiber_arrays=(borehole,)),
+        ),
+    ).check()
+
+
+def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
+    """
+    Load an example Inventory.
+
+    Supported example inventories are:
+    ```{python}
+    #| echo: false
+    #| output: asis
+    from dascore.examples import EXAMPLE_INVENTORIES
+
+    from dascore.utils.docs import objs_to_doc_df
+
+    df = objs_to_doc_df(EXAMPLE_INVENTORIES)
+    print(df.to_markdown(index=False, stralign="center"))
+    ```
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are listed above.
+    **kwargs
+        Passed to the corresponding functions to generate the inventory.
+
+    Raises
+    ------
+    (`UnknownExampleError`)['dascore.examples.UnknownExampleError`] if an
+        unregistered inventory is requested.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> inventory = dc.get_example_inventory("diverse_das")
+    >>> len(inventory.networks)
+    2
+    """
+    if example_name not in EXAMPLE_INVENTORIES:
+        msg = (
+            f"No example inventory registered with name {example_name} "
+            f"Registered example inventories are {list(EXAMPLE_INVENTORIES)}"
+        )
+        raise UnknownExampleError(msg)
+    return EXAMPLE_INVENTORIES[example_name](**kwargs)
