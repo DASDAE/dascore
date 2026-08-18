@@ -132,7 +132,11 @@ class TestFingerprint:
         cannot see a change in how a tagged one -- an array, a time -- is
         written; this pins that half.
         """
-        task_ = TimedValueTask(when=np.datetime64("2020-01-01"), where=np.arange(3))
+        # The dtype is spelled out: `arange` gives int32 where a C long is
+        # 32 bits -- WebAssembly, for one -- and the digest names the dtype.
+        task_ = TimedValueTask(
+            when=np.datetime64("2020-01-01"), where=np.arange(3, dtype="int64")
+        )
         assert task_.fingerprint == "53791ea82cf3fe6d"
 
     def test_params_matter(self):

@@ -92,6 +92,17 @@ class NestedPipeTask(Task):
 
 
 @pytest.fixture
+def yaml_path(request, tmp_path):
+    """A path to save to, skipped when its format needs a missing pyyaml."""
+    name = request.param
+    if name.endswith((".yaml", ".yml")):
+        # pyyaml is an optional install, and the free-threaded build is one
+        # place it is not there.
+        pytest.importorskip("yaml")
+    return tmp_path / name
+
+
+@pytest.fixture
 def chain():
     """A pipe of two tasks, one after the other."""
     return AddTask(value=2) | TimesTask(value=3)
@@ -543,28 +554,30 @@ class TestDocuments:
         assert rebuilt == branched
         assert rebuilt.run(10) == branched.run(10)
 
-    @pytest.mark.parametrize("name", ["pipe.json", "pipe.yaml", "pipe.yml", "pipe"])
-    def test_save_and_load(self, branched, tmp_path, name):
+    @pytest.mark.parametrize(
+        "yaml_path", ["pipe.json", "pipe.yaml", "pipe.yml", "pipe"], indirect=True
+    )
+    def test_save_and_load(self, branched, yaml_path):
         """A pipe read back from a file is the same pipe, and runs alike."""
-        path = branched.save(tmp_path / name)
+        path = branched.save(yaml_path)
         loaded = Pipe.load(path)
         assert loaded == branched
         # Run as well as compared: a document is free to write the tasks in
         # another order, and the answer must not depend on which order.
         assert loaded.run(10, 20) == branched.run(10, 20)
 
-    @pytest.mark.parametrize("name", ["pipe.json", "pipe.yaml"])
-    def test_source_order_survives_a_round_trip(self, branched, tmp_path, name):
+    @pytest.mark.parametrize("yaml_path", ["pipe.json", "pipe.yaml"], indirect=True)
+    def test_source_order_survives_a_round_trip(self, branched, yaml_path):
         """The branch fed first is still the one fed first after loading."""
-        loaded = Pipe.load(branched.save(tmp_path / name))
+        loaded = Pipe.load(branched.save(yaml_path))
         assert loaded.sources() == branched.sources()
         # Which is what makes the first input reach the first branch.
         assert loaded.run(10, 20) == branched.run(10, 20)
 
-    @pytest.mark.parametrize("name", ["pipe.json", "pipe.yaml"])
-    def test_output_order_survives_a_round_trip(self, fanned, tmp_path, name):
+    @pytest.mark.parametrize("yaml_path", ["pipe.json", "pipe.yaml"], indirect=True)
+    def test_output_order_survives_a_round_trip(self, fanned, yaml_path):
         """A pipe of two results returns them in the order it was written."""
-        loaded = Pipe.load(fanned.save(tmp_path / name))
+        loaded = Pipe.load(fanned.save(yaml_path))
         assert loaded.outputs == fanned.outputs
         assert loaded.run(1) == fanned.run(1)
 
@@ -609,6 +622,7 @@ class TestDocuments:
 
     def test_yaml_is_yaml(self, chain, tmp_path):
         """A pipe saved as YAML is written as YAML, not as JSON."""
+        pytest.importorskip("yaml")
         text = chain.save(tmp_path / "pipe.yaml").read_text()
         assert not text.lstrip().startswith("{")
         assert "tasks:" in text
@@ -627,6 +641,7 @@ class TestDocuments:
 
     def test_unparsable_yaml(self, chain, tmp_path):
         """A YAML file which does not parse says so as YAML."""
+        pytest.importorskip("yaml")
         path = tmp_path / "pipe.yaml"
         path.write_text("tasks: [unclosed")
         with pytest.raises(ParameterError, match="Could not parse YAML"):

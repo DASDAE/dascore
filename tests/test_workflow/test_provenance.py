@@ -283,6 +283,9 @@ class TestProvenance:
     @pytest.mark.parametrize("name", ["run.json", "run.yaml"])
     def test_save_and_load(self, provenance, tmp_path, name):
         """A record read back from a file describes the same run."""
+        if name.endswith(".yaml"):
+            # pyyaml is an optional install.
+            pytest.importorskip("yaml")
         rebuilt = Provenance.load(provenance.save(tmp_path / name))
         assert rebuilt.pipe == provenance.pipe
         assert rebuilt.created_at == provenance.created_at
