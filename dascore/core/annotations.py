@@ -54,7 +54,12 @@ from dascore.models import (
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
-from dascore.utils.tables import parse_cell
+from dascore.utils.tables import (
+    parquet_table,
+    parse_cell,
+    write_parquet,
+    write_parquet_table,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # Columns any set may carry, whatever dimensions it declares.
@@ -87,8 +92,19 @@ _VERTEX_COLUMNS = ("id", "seq")
 ATTRS_STEM = "attrs"
 ANNOTATION_STEM = "annotations"
 VERTEX_STEM = "vertices"
-TABLE_SUFFIX = ".csv"
+# The encodings a table takes, the suffix naming which one a file holds.
+# CSV is the floor: it needs nothing beyond the standard library, so a set
+# can always be written. Parquet is the same tables with their types kept,
+# for a set too big to want text; it needs pyarrow.
+TABLE_SUFFIXES = (".csv", ".parquet")
+TABLE_SUFFIX = TABLE_SUFFIXES[0]
 OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
+
+# What a parquet table names its dimensions in, since it has no comment
+# line to declare them in and its footer is the place a format states what
+# its columns cannot. A JSON document, as GeoParquet's `geo` key holds one;
+# namespaced, so a file may carry both without either reading the other's.
+DIMS_KEY = "dascore:dims"
 
 # What a range column is spelled with.
 _START, _END = "_start", "_end"
@@ -753,14 +769,54 @@ class AnnotationSet:
 
         A bare table states one grain, so a set holding vertices is written
         with [save](`dascore.core.annotations.AnnotationSet.save`) instead;
-        this is the spelling for a set of regions. The set's dimensions are
-        not part of the table, so reading one back states them again.
+        this is the spelling for a set of regions.
+
+        The dimensions are not written: they are not a column, and the only
+        place a CSV has for them is a comment line, which a reader not told
+        to expect one takes for the header. Reading such a table back states
+        them again, in the call or in a ``# dims: distance, time`` line
+        written above the header by hand.
 
         Parameters
         ----------
         path
             Where to write the text, or None to only return it.
         """
+        self._refuse_bare_vertices()
+        return _write_table(self._df, path)
+
+    def to_parquet(self, path) -> pathlib.Path:
+        """
+        Write the annotations as one parquet file.
+
+        The parquet spelling of
+        [to_csv](`dascore.core.annotations.AnnotationSet.to_csv`), for a
+        set too big to want text. It keeps what a CSV cannot: a column
+        parquet has a type for comes back as that type rather than as a
+        spelling to be guessed at, and the dimensions travel in the file's
+        own metadata rather than having to be stated again. A column with
+        no one type is written as JSON, which keeps the value of each cell
+        but not every python type it may have been held in -- a tuple comes
+        back as a list.
+
+        Needs pyarrow, which CSV does not; a set of regions can always be
+        written as a table, whatever is installed.
+
+        Parameters
+        ----------
+        path
+            Where to write the file.
+
+        Returns
+        -------
+        The path written to, so a save reads straight back.
+        """
+        self._refuse_bare_vertices()
+        write_parquet(self._df, path, {DIMS_KEY: json.dumps(list(self.dims))})
+        return pathlib.Path(path)
+
+    def _refuse_bare_vertices(self) -> None:
+        """Refuse to write a set of shapes as one table, which has one grain."""
         if not self._vertices.empty:
             msg = (
                 "This set holds vertices, which a bare table has no row for. "
@@ -768,9 +824,8 @@ class AnnotationSet:
                 "annotations."
             )
             raise ParameterError(msg)
-        return _write_table(self._df, path)
 
-    def save(self, path) -> pathlib.Path:
+    def save(self, path, format: str = "csv") -> pathlib.Path:
         """
         Write the set to a directory, creating it if needed.
 
@@ -788,9 +843,15 @@ class AnnotationSet:
         belongs to, and what each of them states for itself travels in the
         attributes, so the flat spelling loses nothing.
 
+        The tables are CSV unless another encoding is asked for. Parquet
+        writes the same parts under the same names, with its own suffix, and
+        keeps a column's type rather than its spelling wherever it has one
+        for it; it needs pyarrow, where CSV needs nothing.
+
         Writing states the whole directory, so a part this set does not
-        have is removed rather than left behind. A stale vertices table, or
-        the YAML the attributes used to be spelled in, would otherwise sit
+        have is removed rather than left behind. A stale vertices table, the
+        YAML the attributes used to be spelled in, or the CSV a set was
+        written as before it was written as parquet, would otherwise sit
         beside what was written and leave a directory which loaded before
         the save refusing to load after it.
 
@@ -798,6 +859,8 @@ class AnnotationSet:
         ----------
         path
             The directory to write into.
+        format
+            The encoding the tables are written in: ``csv`` or ``parquet``.
 
         Returns
         -------
@@ -810,33 +873,40 @@ class AnnotationSet:
         # Defaults are dropped from the document, so it says what the set
         # says; dims has no default, so it is always written, and the
         # attributes name their own model, which is what the file holds.
+        suffix = _table_suffix(format)
         document = self._attrs.model_dump(mode="json", exclude_defaults=True)
-        annotation_text = _write_table(self._df)
-        vertex_text = None if self._vertices.empty else _write_table(self._vertices)
+        spelled = {ANNOTATION_STEM: _spell_table(self._df, suffix, self.dims)}
+        if not self._vertices.empty:
+            spelled[VERTEX_STEM] = _spell_table(self._vertices, suffix)
         directory = pathlib.Path(path)
         directory.mkdir(parents=True, exist_ok=True)
-        vertex_table = directory / f"{VERTEX_STEM}{TABLE_SUFFIX}"
         attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
+        writing = {attrs_file, *(directory / f"{x}{suffix}" for x in spelled)}
         # Only the spellings this format claims: a notes.txt or an
         # attrs.bak beside them participates in no convention and is not
         # this function's to delete. The suffix is matched without regard
         # to case, as the loader matches it.
+        claimed = {
+            ATTRS_STEM: OBJECT_SUFFIXES,
+            ANNOTATION_STEM: TABLE_SUFFIXES,
+            VERTEX_STEM: TABLE_SUFFIXES,
+        }
         superseded = [
             x
             for x in directory.iterdir()
-            if x.stem == ATTRS_STEM
-            and x.suffix.casefold() in OBJECT_SUFFIXES
-            and x != attrs_file
+            if x.suffix.casefold() in claimed.get(x.stem, ()) and x not in writing
         ]
-        if vertex_text is None:
-            superseded.append(vertex_table)
-        for stale in superseded:
-            stale.unlink(missing_ok=True)
+        # Written before the superseded parts are cleared, not after: a
+        # write which fails partway -- a full disk, a permission changed
+        # under it -- then leaves the set it was replacing still in the
+        # directory, and a reader finds two spellings of one part and says
+        # so, rather than finding the set gone.
         with open(attrs_file, "w") as stream:
             json.dump(document, stream, indent=2)
-        _write_text(annotation_text, directory / f"{ANNOTATION_STEM}{TABLE_SUFFIX}")
-        if vertex_text is not None:
-            _write_text(vertex_text, vertex_table)
+        for stem, payload in spelled.items():
+            _write_spelled(payload, directory / f"{stem}{suffix}")
+        for stale in superseded:
+            stale.unlink(missing_ok=True)
         return directory
 
     # --- what the set holds
@@ -1579,6 +1649,40 @@ def _refuse_ambiguous_values(frame: pd.DataFrame) -> None:
             "something only text can be."
         )
         raise ParameterError(msg)
+
+
+def _table_suffix(format: str) -> str:
+    """Return the suffix an encoding is named by, refusing an unknown one."""
+    suffix = f".{str(format).lower().lstrip('.')}"
+    if suffix not in TABLE_SUFFIXES:
+        named = ", ".join(x.lstrip(".") for x in TABLE_SUFFIXES)
+        msg = f"{format!r} is not a table encoding; a set is written as {named}."
+        raise ParameterError(msg)
+    return suffix
+
+
+def _spell_table(frame: pd.DataFrame, suffix: str, dims: Sequence[str] | None = None):
+    """
+    Spell one table for the encoding its suffix names.
+
+    Spelled before the directory is touched, so whichever encoding is
+    asked for, a table which cannot be written raises with the stored set
+    still whole.
+    """
+    if suffix == TABLE_SUFFIX:
+        return _write_table(frame)
+    # A parquet file has no comment line to declare its dimensions in, so
+    # they go in the metadata its footer holds.
+    metadata = None if dims is None else {DIMS_KEY: json.dumps(list(dims))}
+    return parquet_table(frame, metadata)
+
+
+def _write_spelled(payload, path) -> None:
+    """Write what `_spell_table` spelled, whichever encoding it is."""
+    if isinstance(payload, str):
+        _write_text(payload, path)
+    else:
+        write_parquet_table(payload, path)
 
 
 def _write_table(frame: pd.DataFrame, path=None) -> str:

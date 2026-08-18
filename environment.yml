@@ -15,6 +15,7 @@ dependencies:
   - matplotlib>=3.5
   - scipy>=1.15.0
   - findiff
+  - pyarrow
   - jupyter
   - nbformat
   - pint
