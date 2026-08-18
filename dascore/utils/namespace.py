@@ -173,7 +173,13 @@ class AnnotationNameSpace(_MethodNameSpace):
 
 
 class NamespaceOwner:
-    """Mixin for classes with lazily-loadable method namespaces."""
+    """
+    Mixin for classes with lazily-loadable method namespaces.
+
+    List this before any base which defines its own ``__getattr__``, as a
+    pydantic model does. The one the MRO reaches first is the only one
+    called, so a host which lists this last resolves no namespace at all.
+    """
 
     _namespace_entry_point_group: ClassVar[str | None] = None
     _namespace_attr_errors: ClassVar[dict[str, str]] = {}

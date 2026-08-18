@@ -134,8 +134,9 @@ class TestGetPluginTable:
     def test_one_row_per_host(self):
         """A namespace registered on two hosts keeps a row for each."""
         df = get_plugin_table()
-        hosts = set(df.loc[df["namespace"] == "zug", "host"])
-        assert hosts == {"patch", "spool"}
+        rows = df[df["namespace"] == "zug"]
+        assert set(rows["host"]) == {"patch", "spool"}
+        assert len(rows) == 2
 
     def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
         """An empty registry directory returns a DataFrame with the correct columns."""
