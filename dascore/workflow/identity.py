@@ -65,6 +65,32 @@ def fold_ids(attrs_list) -> dict[str, Any]:
     }
 
 
+def stamp_combination(attrs, members, fingerprint: str):
+    """
+    Return the ids a patch made from several members carries.
+
+    Parameters
+    ----------
+    attrs
+        The attrs the result is being built with.
+    members
+        The attrs of the patches which actually went into it -- the kept
+        ones. A member which was dropped for being incompatible did not
+        contribute its data, so it is not part of what this data is.
+    fingerprint
+        The fingerprint of the operation which combined them.
+    """
+    if not ids_enabled():
+        return attrs
+    folded = fold_ids(members)
+    if not folded:
+        return attrs
+    return attrs.update(
+        patch_id=folded["patch_id"],
+        processing_id=advance(folded["processing_id"], fingerprint),
+    )
+
+
 def ids_enabled() -> bool:
     """Whether this process is keeping track of what a patch is."""
     # Imported here rather than at module scope: `dascore.config` is not
@@ -83,7 +109,10 @@ def with_data_id(attrs):
     which knows better -- one whose file stores an id, or which can derive
     one from the path -- stamps over this.
     """
-    if attrs.patch_id or not ids_enabled():
+    # `getattr`, not attribute access: a `PatchAttrs` unpickled from before
+    # these fields existed has neither, and `PatchAttrs.from_dict` hands an
+    # instance back untouched rather than revalidating it into one.
+    if getattr(attrs, "patch_id", None) or not ids_enabled():
         return attrs
     return attrs.update(patch_id=new_data_id())
 
@@ -160,6 +189,11 @@ def fold_data_ids(data_ids: Sequence[str]) -> str:
     ids = tuple(data_ids)
     if len(ids) == 1:
         return ids[0]
+    # Data which never said which data it was does not acquire an identity
+    # by being combined: folding a pile of empty strings would give every
+    # such combination one deterministic id, and they are not one datum.
+    if not any(ids):
+        return NOTHING_DONE
     return combine_hashes(ids)
 
 

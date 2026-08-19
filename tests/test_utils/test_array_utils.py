@@ -688,7 +688,11 @@ class TestApplyArrayFunc:
         assert isinstance(result, dc.Patch)
         assert result.shape == random_patch.shape
         assert result.coords.equals(random_patch.coords)  # coords should be preserved
-        assert result.attrs == random_patch.attrs  # attrs should be preserved
+        # attrs should be preserved, apart from the id which says an array
+        # function was applied -- which is the one thing that did happen.
+        managed = ("processing_id",)
+        assert result.attrs.drop(*managed) == random_patch.attrs.drop(*managed)
+        assert result.attrs.processing_id != random_patch.attrs.processing_id
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
 
 

@@ -8,7 +8,9 @@ applied live beside the things which apply them.
 from __future__ import annotations
 
 import pickle
+import warnings
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -23,8 +25,9 @@ from dascore.workflow.identity import (
     fold_processing_ids,
     new_data_id,
     source_data_id,
+    stamp_combination,
 )
-from dascore.workflow.processor import _signature
+from dascore.workflow.processor import _as_key, _signature
 
 
 class TestNewDataId:
@@ -262,11 +265,19 @@ class TestTheRulesOnRealPatches:
         """
         Even one which builds its result from scratch.
 
-        `fbe` does; without the wrapper carrying the id across, it would
-        mint a new one and claim the data had changed.
+        Without the wrapper carrying the id across from the input, a body
+        which returns a patch it built itself would mint a fresh one and
+        claim the data had changed.
         """
-        out = patch.fbe(0.5, time=(10, 100))
-        assert out.attrs.patch_id == patch.attrs.patch_id
+
+        @dc.patch_function()
+        def rebuilds(patch):
+            """Return a patch built from nothing but the data."""
+            return dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
+
+        assert rebuilds(patch).attrs.patch_id == patch.attrs.patch_id
+        # And a real one which does the same thing.
+        assert patch.fbe(0.5, time=(10, 100)).attrs.patch_id == patch.attrs.patch_id
 
     def test_the_same_route_gives_the_same_id(self, patch):
         """So two patches processed alike can be told to be alike."""
@@ -309,6 +320,10 @@ class TestTheRulesOnRealPatches:
         """Two sources make a third answer, not either of the two."""
         other = patch.update_attrs(patch_id="other")
         merged = dc.utils.attrs.combine_patch_attrs([patch.attrs, other.attrs])
+        assert merged.patch_id == fold_data_ids([patch.attrs.patch_id, "other"])
+        # Spelled out, because `not in {...}` is also true of the empty
+        # string, which is what dropping the fold entirely would leave.
+        assert merged.patch_id
         assert merged.patch_id not in {patch.attrs.patch_id, "other"}
 
     def test_combining_patches_keeps_a_common_route(self, patch):
@@ -387,3 +402,127 @@ class TestTheAwkwardCases:
                 return patch
 
         assert _signature(Unhashable()) is not None
+
+
+class TestOperationsWhichAreNotPatchFunctions:
+    """Concatenating, stacking and ufuncs still have to say what they did."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A patch to operate on."""
+        return dc.get_example_patch("random_das")
+
+    @pytest.fixture(scope="class")
+    def spool(self):
+        """A spool whose patches are different data."""
+        return dc.get_example_spool()
+
+    def test_arithmetic_says_which_operation(self, patch):
+        """
+        `patch + 1` and `patch - (-1)` give the same data and are not the
+        same operation; without the `Ufunc` task they shared an id.
+        """
+        made = {
+            (patch * 2).attrs.processing_id,
+            (patch * 3).attrs.processing_id,
+            (patch + 5).attrs.processing_id,
+            (patch - 7).attrs.processing_id,
+            (patch + 1).attrs.processing_id,
+            (patch - (-1)).attrs.processing_id,
+        }
+        assert len(made) == 6
+
+    def test_arithmetic_leaves_which_data_alone(self, patch):
+        """Scaling data does not make it other data."""
+        assert (patch * 2).attrs.patch_id == patch.attrs.patch_id
+
+    def test_two_patches_fold(self, patch):
+        """Adding two patches is data from two sources."""
+        other = patch.update_attrs(patch_id="other")
+        assert (patch + other).attrs.patch_id == fold_data_ids(
+            [patch.attrs.patch_id, "other"]
+        )
+
+    def test_a_unary_ufunc_says_which_one(self, patch):
+        """`np.abs` is not `np.sqrt`."""
+        assert np.abs(patch).attrs.processing_id != patch.attrs.processing_id
+        assert np.abs(patch).attrs.processing_id != (
+            np.sqrt(np.abs(patch)).attrs.processing_id
+        )
+
+    def test_an_array_function_says_which_one(self, patch):
+        """And what it was given."""
+        first = np.mean(patch, axis=0).attrs.processing_id
+        assert first != patch.attrs.processing_id
+        assert first != np.mean(patch, axis=1).attrs.processing_id
+
+    def test_a_patch_argument_is_an_input_not_a_parameter(self, patch):
+        """
+        Which patch was handed in is said by the ids, not the fingerprint.
+
+        Encoding it would hash a whole patch on every call, and warn that
+        a patch has no encoding of its own.
+        """
+        one = patch.new(data=patch.data > 0.5)
+        two = patch.new(data=patch.data < 0.5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            first = patch.where(one, 0.0)
+        assert first.attrs.processing_id == patch.where(two, 0.0).attrs.processing_id
+
+    def test_concatenating_folds_which_data(self, spool):
+        """Taking the first patch's id would claim it was the only source."""
+        members = {x.attrs.patch_id for x in spool}
+        merged = spool.chunk(time=None)[0]
+        assert merged.attrs.patch_id not in members
+        assert merged.attrs.patch_id
+
+    def test_stacking_folds_which_data(self, spool):
+        """As does adding them together."""
+        members = {x.attrs.patch_id for x in spool}
+        stacked = spool.stack(dim_vary="time")
+        assert stacked.attrs.patch_id not in members
+        assert stacked.attrs.processing_id != NOTHING_DONE
+
+    def test_the_raw_function_bypass_is_not_recorded(self, patch):
+        """
+        A body which calls `.raw_function` skips the wrapper, so nothing
+        is stamped -- which is what those bypasses are for, and worth
+        pinning so a refactor which removes one is a visible change.
+        """
+        wrapped = dc.proc.normalize(patch, "time")
+        raw = dc.proc.normalize.raw_function(patch, "time")
+        assert wrapped.attrs.processing_id != raw.attrs.processing_id
+        assert raw.attrs.processing_id == patch.attrs.processing_id
+
+
+class TestCombinationEdges:
+    """The branches a combination reaches only in odd cases."""
+
+    def test_disabled_leaves_a_combination_alone(self):
+        """A process not keeping ids does not stamp one on a merge."""
+        patch = dc.get_example_patch()
+        with dc.config_context(patch_provenance="disabled"):
+            out = stamp_combination(patch.attrs, [patch.attrs], "abc")
+        assert out is patch.attrs
+
+    def test_no_members_leaves_a_combination_alone(self):
+        """Nothing went in, so there is nothing to fold."""
+        patch = dc.get_example_patch()
+        assert stamp_combination(patch.attrs, [], "abc") is patch.attrs
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param([0] * 64, id="a long sequence"),
+            pytest.param({str(x): x for x in range(64)}, id="a big mapping"),
+        ],
+    )
+    def test_a_big_argument_is_not_worth_keying(self, value):
+        """
+        Working the key out would cost more than the digest it saves.
+
+        `TypeError` is how `_as_key` says "do not cache this".
+        """
+        with pytest.raises(TypeError):
+            _as_key(value)

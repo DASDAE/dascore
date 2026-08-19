@@ -56,8 +56,13 @@ from dascore.utils.misc import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
-from dascore.workflow.identity import advance, ids_enabled
+from dascore.workflow.identity import (
+    advance,
+    ids_enabled,
+    stamp_combination,
+)
 from dascore.workflow.processor import (
     PatchOp,
     fingerprint_call,
@@ -1508,6 +1513,16 @@ def concatenate_patches(
     for patch_list in yield_sub_sequences(patches, val):
         ar = get_output_array(patch_list, dims.index(dim), new_dim)
         attrs = _maybe_add_history_str(patch_list[0].attrs, "concatenate")
+        # Which data this now is: every member which went in, in order.
+        # Taking the first patch's id would claim the result was only the
+        # first source.
+        attrs = stamp_combination(
+            attrs,
+            [x.attrs for x in patch_list],
+            Concatenate.from_kwargs(
+                check_behavior=check_behavior, **kwargs
+            ).fingerprint,
+        )
         coords = _get_new_coords(patch_list, dim, new_dim)
         out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
     return out
@@ -1546,6 +1561,7 @@ def stack_patches(
         msg = f"Dimension {dim_vary} is not in first patch."
         raise PatchCoordinateError(msg)
 
+    kept = []
     for p in patches:
         # check dimensions of patch compared to init_patch
         dims_ok = check_dims(init_patch, p, check_behavior)
@@ -1553,9 +1569,17 @@ def stack_patches(
         # actually do the stacking of data
         if dims_ok and coords_ok:
             stack_arr = stack_arr + p.data
+            kept.append(p.attrs)
 
     # create attributes for the stack with adjusted history
     stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
+    # The kept members only: one dropped for being incompatible did not
+    # contribute its data, so it is not part of what this data is.
+    stack_attrs = stamp_combination(
+        stack_attrs,
+        kept,
+        Stack(dim_vary=dim_vary, check_behavior=check_behavior).fingerprint,
+    )
 
     # create coords array for the stack
     stack_coords = init_patch.coords

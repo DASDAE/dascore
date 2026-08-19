@@ -34,6 +34,8 @@ from dascore.utils.patch import (
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
+from dascore.workflow.builtin import ArrayFunc, Ufunc
+from dascore.workflow.identity import stamp_combination
 
 # Numpy reductions which skip nans, and the name they are known by in
 # dascore.utils.array_api.nan_reduce.
@@ -254,7 +256,15 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     We assume the shape of the array won't change.
     """
     out = _apply_operator(operator, patch.data, *args, **kwargs)
-    return patch.new(data=out)
+    # As for the binary case: a ufunc has no patch function to name it, so
+    # `np.abs(patch)` would otherwise record that nothing happened.
+    task = Ufunc(
+        name=getattr(operator, "__name__", str(operator)),
+        operands=tuple(args),
+        kwargs=_without_patch_values(kwargs),
+    )
+    attrs = stamp_combination(patch.attrs, [patch.attrs], task.fingerprint)
+    return patch.new(data=out, attrs=attrs)
 
 
 def _apply_binary_ufunc(
@@ -369,6 +379,9 @@ def _apply_binary_ufunc(
         patch, other = other, patch
         reversed = True
 
+    # Taken before the operands are aligned and possibly replaced below:
+    # what went in is what decides which data comes out.
+    members = [x.attrs for x in (patch, other) if isinstance(x, dc.Patch)]
     if patch_count > 1:
         patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
     else:
@@ -379,6 +392,16 @@ def _apply_binary_ufunc(
         new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
+    # A ufunc is not a patch function, so nothing else names it. Without
+    # this, `patch + 1` and `patch - (-1)` produce the same data and the
+    # same id, though they are different operations.
+    task = Ufunc(
+        name=getattr(operator, "__name__", str(operator)),
+        reversed=reversed,
+        operands=() if other_is_patch else (other,),
+        kwargs=kwargs,
+    )
+    attrs = stamp_combination(attrs, members, task.fingerprint)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -657,7 +680,23 @@ def _apply_array_func(func, *args, **kwargs):
     patch = _reassemble_patch(
         result, first_patch, func, converted_args, converted_kwargs
     )
-    return _clear_units_if_bool_dtype(patch)
+    # An array function is not a patch function either, so nothing else
+    # names it: without this `np.mean(patch, axis=0)` leaves the ids where
+    # they were and claims nothing was done.
+    task = ArrayFunc(
+        name=getattr(func, "__name__", str(func)),
+        kwargs=_without_patch_values(converted_kwargs),
+    )
+    attrs = stamp_combination(patch.attrs, [x.attrs for x in patches], task.fingerprint)
+    return _clear_units_if_bool_dtype(patch.new(attrs=attrs))
+
+
+def _without_patch_values(kwargs):
+    """Return kwargs with any patch replaced: it is an input, not a parameter."""
+    return {
+        key: "$patch" if isinstance(value, dc.Patch) else value
+        for key, value in kwargs.items()
+    }
 
 
 # Mapping of ufunc dispatches. Keys are method name or num input/num output.

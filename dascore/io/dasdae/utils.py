@@ -90,6 +90,12 @@ def _save_attrs_and_dims(patch, patch_group):
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
     attr_dict = patch.attrs.model_dump(exclude_unset=True)
+    # Not written yet. An older DASCore reading a file which carries them
+    # treats them as ordinary attrs, and then refuses to merge two patches
+    # whose ids differ -- which is every pair. Persisting them is for the
+    # format version which knows to fold them instead.
+    attr_dict.pop("patch_id", None)
+    attr_dict.pop("processing_id", None)
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded

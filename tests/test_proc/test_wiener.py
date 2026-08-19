@@ -151,7 +151,7 @@ class TestWienerFilter:
 
         # Remove what the patch_function decorator maintains: history, and
         # the ids which say what was done to the data.
-        for managed in ("history", "processing_id", "patch_id"):
+        for managed in ("history", "processing_id"):
             original_attrs.pop(managed, None)
             result_attrs.pop(managed, None)
 

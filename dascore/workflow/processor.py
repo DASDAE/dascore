@@ -43,6 +43,8 @@ from pydantic import Field
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.serialize import digest
 from dascore.workflow.task import Task, _resolve_default
@@ -483,7 +485,7 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     """
     version = getattr(func, "__version__", "1.0")
     name = _call_name(func)
-    bound = _bind(func, args, kwargs or {})
+    bound = _without_patches(_bind(func, args, kwargs or {}))
     # Answered from the cache when the same call has been made before,
     # which in a loop over a spool is every call after the first. Hashing
     # the bound arguments costs a few microseconds; the digest of their
@@ -504,18 +506,73 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     return found
 
 
-def _as_key(value):
-    """
-    Return a hashable stand-in for a value, which two values cannot share.
+# The only leaves a cache key may be built from. The rule is not "hashable":
+# it is "two of these are the same argument exactly when Python says they are
+# equal". A pint quantity fails that -- `1 * m == 100 * cm` and the two hash
+# alike, while the serializer encodes them differently -- so caching on it
+# would give one call two answers depending on what ran first.
+_KEYABLE = (str, bytes, int, float, bool, type(None))
 
-    The type is part of it: `1`, `1.0` and `True` are equal and hash alike
-    in Python, and they are not the same argument.
+# Beyond this many elements, working the key out costs more than the digest
+# it saves.
+_KEY_LIMIT = 32
+
+# Stands for a patch handed to an operation as an argument.
+_PATCH_ARGUMENT = "$patch"
+
+
+def _without_patches(kwargs: dict) -> dict:
+    """
+    Return the bound arguments with any patch replaced by a marker.
+
+    A patch given as an argument is not a *parameter* of the operation, it
+    is another input to it: `where(cond_patch)` is the same operation
+    whichever patch it was handed, and which one it was is said by the ids
+    folded from the operands. Encoding it here would also hash a whole
+    patch on every call, and warn that it has no encoding of its own.
+    """
+    # Imported here rather than at module scope: this module is imported
+    # while `dascore.utils.patch` is still being imported.
+    import dascore as dc  # noqa: PLC0415
+
+    if not any(isinstance(x, dc.Patch) for x in kwargs.values()):
+        return kwargs
+    return {
+        key: _PATCH_ARGUMENT if isinstance(value, dc.Patch) else value
+        for key, value in kwargs.items()
+    }
+
+
+def _as_key(value, budget: int = _KEY_LIMIT):
+    """
+    Return a hashable stand-in a different value cannot share.
+
+    Raises `TypeError` for anything it cannot key safely or cheaply, which
+    is the caller's signal to compute the digest instead of caching it.
     """
     if isinstance(value, Mapping):
-        return (dict, tuple((k, _as_key(v)) for k, v in value.items()))
+        if len(value) > budget:
+            raise TypeError(value)
+        # The keys are typed too: `{1: "x"}` and `{True: "x"}` are equal
+        # mappings to Python and different calls to the serializer.
+        return (
+            dict,
+            tuple(
+                (_as_key(k, budget - len(value)), _as_key(v, budget - len(value)))
+                for k, v in value.items()
+            ),
+        )
     if isinstance(value, (list, tuple)):
-        return (type(value), tuple(_as_key(x) for x in value))
-    hash(value)  # TypeError here is the caller's signal to not cache
+        if len(value) > budget:
+            raise TypeError(value)
+        return (
+            type(value),
+            tuple(_as_key(x, budget - len(value)) for x in value),
+        )
+    # `type(value) in`, not `isinstance`: a subclass may compare equal to
+    # its base and encode differently, which is the trap this exists for.
+    if type(value) not in _KEYABLE:
+        raise TypeError(value)
     return (type(value), value)
 
 
@@ -536,12 +593,23 @@ def _call_name(func) -> str:
 
 
 def _fingerprint(name: str, version: str, kwargs: dict) -> str:
-    """Return the digest a name, a version and bound arguments make."""
+    """
+    Return the digest a name, a version and bound arguments make.
+
+    The serializer's warning about a value it has no encoding for is
+    suppressed. It is worth hearing when a *task* is being written to a
+    document, which is what it was written for; here it would fire on
+    every ordinary call carrying, say, a numpy dtype, and hashing such a
+    value by its type is all an id needs of it.
+    """
     # Spelled the way `Task.fingerprint_at` spells one, so a pipe holding a
     # PatchOp hashes the same whichever built it.
-    return digest(
-        {"task": "dascore:PatchOp", "version": version, "params": {name: kwargs}}
-    )
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return digest(
+            {"task": "dascore:PatchOp", "version": version, "params": {name: kwargs}}
+        )
 
 
 @cache
