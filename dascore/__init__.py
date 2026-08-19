@@ -24,7 +24,11 @@ from dascore.config import (
     reset_config,
     set_config,
 )
-from dascore.examples import get_example_patch, get_example_spool
+from dascore.examples import (
+    get_example_inventory,
+    get_example_patch,
+    get_example_spool,
+)
 from dascore.io.core import get_format, read, scan, scan_payloads, scan_to_df, write
 from dascore.units import get_quantity, get_unit
 from dascore.utils.patch import patch_function
