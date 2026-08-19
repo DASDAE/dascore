@@ -19,5 +19,12 @@ from dascore.workflow.serialize import (
     encode,
 )
 from dascore.workflow.pipe import Pipe
+from dascore.workflow.processor import (
+    PatchOp,
+    PatchProcessor,
+    fingerprint_call,
+    register_implementation,
+    resolve_patch_function,
+)
 from dascore.workflow.provenance import Provenance, ProvenanceNode, SourceInfo
 from dascore.workflow.task import Task, intern, make_function_task_class, task

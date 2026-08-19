@@ -8,7 +8,7 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Literal, Protocol, cast, overload
+from typing import Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,6 @@ from dascore.exceptions import (
     CoordError,
     IncompatiblePatchError,
     ParameterError,
-    PatchAttributeError,
     PatchCoordinateError,
 )
 from dascore.units import convert_units, get_quantity, is_percent
@@ -57,8 +56,8 @@ from dascore.utils.misc import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
-
-attr_type = dict[str, Any] | str | Sequence[str] | None
+from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
+from dascore.workflow.processor import PatchOp, register_patch_function
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -157,78 +156,28 @@ def _maybe_add_history_str(attrs, hist_str):
     return attrs.update(history=new_history)
 
 
-def check_patch_coords(
-    patch: PatchType,
-    dims: Sequence[str] | None = None,
-    coords: Sequence[str] | None = None,
-):
-    """
-    Check if a patch object has required coordinates, else raise PatchDimError.
-
-    Parameters
-    ----------
-    patch
-        The input patch
-    dims
-        A tuple of required dimension names.
-    coords
-        A tuple of required coordinate names.
-    """
-    missing = set()
-    if dims is not None:
-        dim_set = set(patch.dims)
-        missing |= set(dims) - dim_set
-    if coords is not None:
-        coord_set = set(patch.coords.coord_map)
-        missing |= set(coords) - coord_set
-    if missing:
-        msg = f"patch is missing required coordinates: {tuple(missing)}"
-        raise PatchCoordinateError(msg)
-    return patch
-
-
-def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
-    """
-    Check for expected attributes.
-
-    Parameters
-    ----------
-    patch
-        The patch to validate
-    required_attrs
-        The expected attrs. Can be a sequence or mapping. If sequence, only
-        check that attrs exist. If mapping also check that values are equal.
-    """
-    if required_attrs is None:
-        return patch
-    # test that patch attr mapping is equal
-    patch_attrs = patch.attrs
-    if isinstance(required_attrs, Mapping):
-        sub = {i: patch_attrs[i] for i in required_attrs}
-        if sub != dict(required_attrs):
-            msg = f"Patch's attrs {sub} are not required attrs: {required_attrs}"
-            raise PatchAttributeError(msg)
-    else:
-        missing = set(required_attrs) - set(dict(patch.attrs))
-        if missing:
-            msg = f"Patch is missing the following attributes: {missing}"
-            raise PatchAttributeError(msg)
-    return patch
-
-
 class _PatchFunction(Protocol):
     """
     A function wrapped by `patch_function`.
 
-    The decorator attaches references back to the function it wrapped so
-    callers can skip the patch-function machinery when calling it again.
+    The decorator attaches references back to the function it wrapped, so
+    callers can skip the patch-function machinery when calling it again. It
+    also attaches `op`, which builds the operation this function is, and
+    `__version__`, which that operation is declared at.
     """
 
     func: Callable
     raw_function: Callable
+    op: Callable
+    __version__: str
     __wrapped__: Callable
 
     def __call__(self, patch, *args, **kwargs): ...
+
+
+def _op_from_call(patch_func, *args, **kwargs):
+    """Return the operation a call to a patch function is."""
+    return PatchOp.from_call(patch_func, args, kwargs)
 
 
 def _to_numpy_arg(obj):
@@ -277,12 +226,13 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
 
 
 def patch_function(
-    required_dims: tuple[str, ...] | Callable | None = None,
-    required_coords: tuple[str, ...] | None = None,
+    required_dims: str | Sequence[str] | Callable | None = None,
+    required_coords: str | Sequence[str] | None = None,
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
     validate_call: bool = False,
     data_type: str | None = None,
+    version: str = "1.0",
 ):
     """
     Decorator to mark a function as a patch method.
@@ -290,12 +240,14 @@ def patch_function(
     Parameters
     ----------
     required_dims
-        A tuple of dimensions which must be found in the Patch.
+        A dimension name, or a sequence of them, which must be found in the
+        Patch.
     required_coords
-        A tuple of coordinates which must be found in the Patch.
+        A coordinate name, or a sequence of them, which must be found in the
+        Patch.
     required_attrs
-        A dict of attributes which must be found in the Patch and whose
-        values must be equal to those provided.
+        An attr name, a sequence of them, or a mapping of names to the values
+        the Patch must hold for them.
     history
         Specifies how to track history on Patch.
             Full - Records function name and str version of input arguments.
@@ -309,6 +261,10 @@ def patch_function(
         Controls the output patch's ``data_type`` attr. If None, leave the
         returned patch's ``data_type`` unchanged. Otherwise, set to specified
         value. Use an empty string ("") to clear.
+    version
+        The version of the operation. Bump it when the same arguments should
+        mean a different answer, so that fingerprints recorded against the
+        old behaviour do not name the new one.
 
     Examples
     --------
@@ -355,6 +311,14 @@ def patch_function(
     ... def do_portable_thing(patch):
     ...     xp = array_namespace(patch.data)
     ...     return patch.new(data=xp.abs(patch.data))
+    >>>
+    >>> # 7. Every patch function builds the operation it is with `.op`:
+    >>> # the same call said as a task, which can be compared,
+    >>> # fingerprinted, written to a file and joined into a pipe.
+    >>> patch = dc.get_example_patch()
+    >>> op = dc.proc.normalize.op(dim="time")
+    >>> assert op(patch).equals(patch.normalize(dim="time"))
+    >>> assert op == dc.proc.normalize.op(dim="time")
 
     Notes
     -----
@@ -362,13 +326,20 @@ def patch_function(
       attribute. This may be useful for avoiding calling the patch_func
       machinery multiple times from within another patch function.
 
+    - The decorated function also carries ``op``, which builds the
+      [PatchOp](`dascore.workflow.processor.PatchOp`) a call to it is:
+      ``dc.proc.normalize.op(dim="time")``. The call is bound against the
+      signature, so a positional and a keyword spelling of one call are one
+      operation with one fingerprint.
+
     - If using `PatchType` or `SpoolType` type variables from the
       [constants module](`dascore.constants`), make sure dascore is imported
       as dc at the top of the file where the patch function is defined so
       the forward refs can be resolved properly for type checking.
     """
     # Handled before the wrapper is built so the rest of this function sees
-    # required_dims as the tuple of dimension names it is everywhere else.
+    # required_dims as the dimension names it is everywhere else, not as the
+    # decorated function.
     if callable(required_dims):  # the decorator is used without parens
         return patch_function()(required_dims)
 
@@ -408,7 +379,15 @@ def patch_function(
         # matches pydantic naming.
         patch_func.raw_function = getattr(func, "raw_function", func)
         patch_func.__wrapped__ = func
-
+        patch_func.__version__ = version
+        # Registered as it is decorated, so a function is nameable in a
+        # document exactly when its module has been imported. A function
+        # defined inside a call takes no tag; `op` says so if it is asked.
+        register_patch_function(patch_func)
+        # `op` builds the operation a call to this function is. A partial
+        # rather than a lambda so it pickles, and so the wrapper carries no
+        # closure of its own.
+        patch_func.op = functools.partial(_op_from_call, patch_func)
         return patch_func
 
     return _wrapper
