@@ -137,6 +137,11 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     )
 
 
+# Which data a patch is and what was done to it are not part of what it
+# *is*: two patches holding the same data are equal however they were made.
+_LINEAGE = {"patch_id", "processing_id"}
+
+
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:
     """
     Determine if the current patch equals another.
@@ -178,16 +183,14 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     if only_required_attrs:  # only include default fields
         # The ids are not part of what a patch *is*: two patches with the
         # same data, coords and attrs are equal however they were made.
-        attrs_to_compare = set(PatchAttrs.model_fields) - {
-            "history",
-            "patch_id",
-            "processing_id",
-        }
+        attrs_to_compare = set(PatchAttrs.model_fields) - {"history"} - _LINEAGE
         attrs1 = self.attrs.model_dump(include=attrs_to_compare)
         attrs2 = other.attrs.model_dump(include=attrs_to_compare)
     else:
-        attrs1 = self.attrs.model_dump()
-        attrs2 = other.attrs.model_dump()
+        # The ids are excluded here too: comparing every attr is about
+        # the user's attrs, not about where the data came from.
+        attrs1 = self.attrs.model_dump(exclude=_LINEAGE)
+        attrs2 = other.attrs.model_dump(exclude=_LINEAGE)
     if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
         return False
     if attrs1 != attrs2:

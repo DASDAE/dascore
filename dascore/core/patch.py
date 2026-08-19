@@ -180,7 +180,9 @@ class Patch(NamespaceOwner):
         return apply_ufunc(np.mod, other, self)
 
     def __neg__(self):
-        return self.update(data=-self.data)
+        # Through the ufunc, not `update`: `-patch` and `np.negative(patch)`
+        # are one operation, and `update` records nothing.
+        return apply_ufunc(np.negative, self)
 
     # Numpy Compatibility things
     __array_ufunc__ = patch_array_ufunc

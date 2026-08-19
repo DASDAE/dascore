@@ -59,9 +59,11 @@ def fold_ids(attrs_list) -> dict[str, Any]:
     kept = list(attrs_list)
     if not kept:
         return {}
+    # `getattr`, for the reason `with_data_id` gives: attrs unpickled from
+    # before these fields existed have neither.
     return {
-        "patch_id": fold_data_ids([x.patch_id for x in kept]),
-        "processing_id": fold_processing_ids([x.processing_id for x in kept]),
+        "patch_id": fold_data_ids([data_id_of(x) for x in kept]),
+        "processing_id": fold_processing_ids([processing_id_of(x) for x in kept]),
     }
 
 
@@ -89,6 +91,16 @@ def stamp_combination(attrs, members, fingerprint: str):
         patch_id=folded["patch_id"],
         processing_id=advance(folded["processing_id"], fingerprint),
     )
+
+
+def data_id_of(attrs) -> str:
+    """Return which data some attrs say they are, or nothing if they cannot."""
+    return getattr(attrs, "patch_id", NOTHING_DONE) or NOTHING_DONE
+
+
+def processing_id_of(attrs) -> str:
+    """Return what some attrs say was done, or nothing if they cannot."""
+    return getattr(attrs, "processing_id", NOTHING_DONE) or NOTHING_DONE
 
 
 def ids_enabled() -> bool:

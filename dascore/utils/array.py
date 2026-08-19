@@ -7,7 +7,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -35,7 +35,7 @@ from dascore.utils.patch import (
     swap_kwargs_dim_to_axis,
 )
 from dascore.workflow.builtin import ArrayFunc, Ufunc
-from dascore.workflow.identity import stamp_combination
+from dascore.workflow.identity import ids_enabled, stamp_combination
 
 # Numpy reductions which skip nans, and the name they are known by in
 # dascore.utils.array_api.nan_reduce.
@@ -394,14 +394,20 @@ def _apply_binary_ufunc(
         new_data = _apply_op(patch.data, other, operator, reversed)
     # A ufunc is not a patch function, so nothing else names it. Without
     # this, `patch + 1` and `patch - (-1)` produce the same data and the
-    # same id, though they are different operations.
-    task = Ufunc(
-        name=getattr(operator, "__name__", str(operator)),
-        reversed=reversed,
-        operands=() if other_is_patch else (other,),
-        kwargs=kwargs,
-    )
-    attrs = stamp_combination(attrs, members, task.fingerprint)
+    # same id, though they are different operations. Guarded, so that a
+    # process which has turned the ids off does not hash operands for a
+    # value nothing will read.
+    if ids_enabled():
+        rest = () if other_is_patch else (other,)
+        task = Ufunc(
+            name=getattr(operator, "__name__", str(operator)),
+            reversed=reversed,
+            # `args` reaches the operator too, so two calls which differ
+            # only in those are two operations.
+            operands=_without_patch_values((*rest, *args)),
+            kwargs=_without_patch_values(kwargs),
+        )
+        attrs = stamp_combination(attrs, members, task.fingerprint)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -683,20 +689,55 @@ def _apply_array_func(func, *args, **kwargs):
     # An array function is not a patch function either, so nothing else
     # names it: without this `np.mean(patch, axis=0)` leaves the ids where
     # they were and claims nothing was done.
-    task = ArrayFunc(
-        name=getattr(func, "__name__", str(func)),
-        kwargs=_without_patch_values(converted_kwargs),
-    )
-    attrs = stamp_combination(patch.attrs, [x.attrs for x in patches], task.fingerprint)
-    return _clear_units_if_bool_dtype(patch.new(attrs=attrs))
+    if ids_enabled():
+        task = ArrayFunc(
+            name=_array_func_name(func),
+            # The positional arguments say which reduction it was:
+            # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
+            args=_without_patch_values(converted_args),
+            kwargs=_without_patch_values(converted_kwargs),
+        )
+        attrs = stamp_combination(
+            patch.attrs, [x.attrs for x in patches], task.fingerprint
+        )
+        patch = patch.new(attrs=attrs)
+    return _clear_units_if_bool_dtype(patch)
 
 
-def _without_patch_values(kwargs):
-    """Return kwargs with any patch replaced: it is an input, not a parameter."""
-    return {
-        key: "$patch" if isinstance(value, dc.Patch) else value
-        for key, value in kwargs.items()
-    }
+def _array_func_name(func) -> str:
+    """
+    Return the name an array function is recorded under.
+
+    A ufunc method arrives here as the bound `np.add.reduce`, whose
+    `__name__` is only "reduce" -- so `np.add.reduce` and
+    `np.multiply.reduce` would be one operation without the ufunc it
+    belongs to.
+    """
+    name = getattr(func, "__name__", str(func))
+    owner = getattr(getattr(func, "__self__", None), "__name__", None)
+    return f"{owner}.{name}" if owner else name
+
+
+def _without_patch_values(values):
+    """
+    Return arguments with anything the fingerprint should not hold replaced.
+
+    A patch is an *input*, not a parameter -- which one it was is said by
+    the ids folded from the operands. A numpy dtype has no encoding of its
+    own, so it is spelled out rather than hashed by its class, which would
+    give every dtype one fingerprint and warn on every call.
+    """
+
+    def _plain(value):
+        if isinstance(value, dc.Patch):
+            return "$patch"
+        if isinstance(value, np.dtype):
+            return str(value)
+        return value
+
+    if isinstance(values, Mapping):
+        return {key: _plain(value) for key, value in values.items()}
+    return tuple(_plain(x) for x in values)
 
 
 # Mapping of ufunc dispatches. Keys are method name or num input/num output.

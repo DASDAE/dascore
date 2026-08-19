@@ -20,10 +20,12 @@ from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
 from dascore.workflow.identity import (
     NOTHING_DONE,
     advance,
+    data_id_of,
     fold_data_ids,
     fold_ids,
     fold_processing_ids,
     new_data_id,
+    processing_id_of,
     source_data_id,
     stamp_combination,
 )
@@ -526,3 +528,113 @@ class TestCombinationEdges:
         """
         with pytest.raises(TypeError):
             _as_key(value)
+
+
+class TestWhatTheReviewsFound:
+    """Cases the first round of this PR got wrong."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A patch to operate on."""
+        return dc.get_example_patch("random_das")
+
+    def test_every_patch_argument_counts(self, patch):
+        """
+        `where(cond, other)` uses all of them, so all of them fold.
+
+        Copying the primary patch's id would say a result built from three
+        sources was only the first.
+        """
+        one = patch.new(data=patch.data > 0.5).update_attrs(patch_id="a")
+        two = patch.new(data=patch.data < 0.5).update_attrs(patch_id="b")
+        assert patch.where(one, 0.0).attrs.patch_id != (
+            patch.where(two, 0.0).attrs.patch_id
+        )
+
+    def test_provenance_never_fails_a_call(self, patch):
+        """
+        It is metadata about the work, not the work.
+
+        A self-referential argument cannot be encoded; that is a reason to
+        say nothing about the call, not to fail one which otherwise worked.
+        """
+        loop: dict = {}
+        loop["self"] = loop
+
+        @dc.patch_function()
+        def takes_anything(patch, thing=None):
+            """Accept whatever it is given."""
+            return patch.new(data=patch.data)
+
+        out = takes_anything(patch, thing=loop)
+        assert out.attrs.processing_id == patch.attrs.processing_id
+
+    def test_attrs_from_before_these_fields(self, patch):
+        """
+        An old pickle restores a `PatchAttrs` which has neither.
+
+        It must still be usable: unpickling bypasses the constructor, so
+        nothing fills the defaults in.
+        """
+        bare = dc.PatchAttrs()
+        held = dict(bare.model_dump())
+        held.pop("patch_id"), held.pop("processing_id")
+        legacy = dc.PatchAttrs.model_construct(**held)
+        made = dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
+        assert data_id_of(legacy) == NOTHING_DONE
+        assert processing_id_of(legacy) == NOTHING_DONE
+        # The fold reads them without raising, and says the result is data
+        # from two places even though one of them could not say which.
+        folded = fold_ids([legacy, made.attrs])["patch_id"]
+        assert folded and folded != made.attrs.patch_id
+
+    def test_equality_ignores_the_ids_either_way(self, patch):
+        """Both spellings of `equals`, not just the default."""
+        other = patch.update_attrs(patch_id="x", processing_id="y")
+        assert patch.equals(other)
+        assert patch.equals(other, only_required_attrs=False)
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            pytest.param(0.0, -0.0, id="signed zero"),
+            pytest.param(1, True, id="int and bool"),
+            pytest.param(1, 1.0, id="int and float"),
+        ],
+    )
+    def test_the_cache_cannot_confuse_two_arguments(self, first, second):
+        """
+        Python calls these equal; the serializer does not.
+
+        Caching on one would give a call two answers depending on which
+        ran first, which is the one thing an id must never do.
+        """
+        assert _as_key(first) != _as_key(second)
+
+    def test_a_quantity_is_never_cached(self):
+        """`1 * m == 100 * cm` and the two hash alike; they encode apart."""
+        from dascore.units import m  # noqa: PLC0415
+
+        with pytest.raises(TypeError):
+            _as_key(1 * m)
+
+    def test_two_closures_are_two_operations(self, patch):
+        """
+        A factory gives every function it makes one module and qualname.
+
+        Naming them by where they were written alone would make
+        `make(2)` and `make(3)` one operation.
+        """
+
+        def make(factor):
+            """Return a patch function which scales by a fixed amount."""
+
+            @dc.patch_function()
+            def scale(patch):
+                """Scale by whatever this closure captured."""
+                return patch.new(data=patch.data * factor)
+
+            return scale
+
+        first, second = make(2), make(3)
+        assert first(patch).attrs.processing_id != second(patch).attrs.processing_id

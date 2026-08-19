@@ -60,7 +60,11 @@ from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
     advance,
+    data_id_of,
+    fold_data_ids,
+    fold_processing_ids,
     ids_enabled,
+    processing_id_of,
     stamp_combination,
 )
 from dascore.workflow.processor import (
@@ -183,6 +187,37 @@ class _PatchFunction(Protocol):
     __wrapped__: Callable
 
     def __call__(self, patch, *args, **kwargs): ...
+
+
+def _stamp(patch, attrs, patch_func, args, kwargs):
+    """
+    Return attrs saying which data this is and what was just done to it.
+
+    Every patch given to the call counts towards which data the result is
+    -- `where(cond_patch, other_patch)` uses all three -- so their ids are
+    folded rather than the first one being copied across. The ids are read
+    with `getattr`, because attrs unpickled from before these fields
+    existed have neither.
+    """
+    members = [patch.attrs]
+    members += [x.attrs for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    try:
+        fingerprint = fingerprint_call(patch_func, args, kwargs)
+    except Exception:
+        # Provenance is metadata about the work, not the work. An argument
+        # the serializer cannot encode is a reason to say nothing about
+        # this call, never a reason to fail a call which otherwise worked.
+        return attrs
+    return attrs.update(
+        # Carried from the inputs rather than from whatever the body
+        # returned: filtering data does not make it other data, and a
+        # function building its result from scratch would otherwise mint a
+        # new id and claim it had.
+        patch_id=fold_data_ids([data_id_of(x) for x in members]),
+        processing_id=advance(
+            fold_processing_ids([processing_id_of(x) for x in members]), fingerprint
+        ),
+    )
 
 
 def _op_from_call(patch_func, *args, **kwargs):
@@ -384,16 +419,7 @@ def patch_function(
                 # handed the patch straight through did nothing, and nothing
                 # is what it records.
                 if ids_enabled():
-                    fingerprint = fingerprint_call(patch_func, args, kwargs)
-                    attrs = attrs.update(
-                        processing_id=advance(patch.attrs.processing_id, fingerprint),
-                        # Carried from the input rather than left to
-                        # whatever the body returned: filtering data does
-                        # not make it other data, and a function building
-                        # its result from scratch would otherwise mint a
-                        # new id and claim it had.
-                        patch_id=patch.attrs.patch_id,
-                    )
+                    attrs = _stamp(patch, attrs, patch_func, args, kwargs)
                 if attrs is not out.attrs:
                     out = out.update(attrs=attrs)
             if attr_updates and hasattr(out, "attrs"):

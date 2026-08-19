@@ -113,9 +113,12 @@ class ArrayFunc(Task):
     ----------
     name
         The function's name, as numpy spells it: `"mean"`, `"concatenate"`.
+    args
+        The positional arguments, which for a reduction say which axis.
     kwargs
         Whatever the call carried, minus the patches themselves.
     """
 
     name: str
+    args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = Field(default_factory=dict)

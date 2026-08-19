@@ -573,6 +573,10 @@ def _as_key(value, budget: int = _KEY_LIMIT):
     # its base and encode differently, which is the trap this exists for.
     if type(value) not in _KEYABLE:
         raise TypeError(value)
+    if type(value) is float:
+        # `0.0 == -0.0` and the two hash alike, while the encoder keeps
+        # the sign; `repr` tells them apart, and NaN from NaN.
+        return (float, repr(value))
     return (type(value), value)
 
 
@@ -589,7 +593,11 @@ def _call_name(func) -> str:
     """
     if (tag := patch_function_tag(func)) is not None:
         return tag
-    return _spell(func)
+    # Where it was written, and *which* one: a factory making patch
+    # functions gives every one of them the same module and qualname, and
+    # two closures over different values are two operations. The identity
+    # is process-local, which is honest -- so is the function.
+    return f"{_spell(func)}#{id(func):x}"
 
 
 def _fingerprint(name: str, version: str, kwargs: dict) -> str:
