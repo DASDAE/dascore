@@ -9,11 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+import yaml
 
 try:
     import pyarrow
@@ -326,7 +322,6 @@ class TestSavingOverASet:
         assert not (directory / "vertices.csv").exists()
         assert dc.annotations(directory) == regions
 
-    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_a_hand_authored_yaml_is_superseded(self, tmp_path):
         """Saving a set read from YAML does not leave two attrs files."""
         directory = tmp_path / "picks"
@@ -494,7 +489,6 @@ class TestDeclaringDimensions:
 class TestTheAttrsFile:
     """What a set directory says about itself."""
 
-    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_yaml_spelling(self, regions, tmp_path):
         """One data model stands behind both spellings; a set may be authored
         in the more readable one.
@@ -528,7 +522,6 @@ class TestTheAttrsFile:
         with pytest.raises(InvalidAnnotationError, match="no mapping"):
             dc.annotations(directory)
 
-    @pytest.mark.skipif(yaml is None, reason="pyyaml is not installed")
     def test_which_does_not_parse(self, regions, tmp_path):
         """Unparseable YAML names the file rather than the parser."""
         directory = regions.io.save(tmp_path / "picks")

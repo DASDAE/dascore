@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pandas as pd
+import yaml
 
 from dascore.core.inventory import (
     Acquisition,
@@ -58,14 +59,10 @@ from dascore.core.inventory import (
     _overlapping_epochs,
     _times_equal,
 )
-from dascore.exceptions import (
-    InvalidInventoryError,
-    MissingOptionalDependencyError,
-    ParameterError,
-)
+from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
-from dascore.utils.misc import check_code, optional_import
+from dascore.utils.misc import check_code
 from dascore.utils.paths import quote_path as _quote
 from dascore.utils.tables import (
     ordered_rows,
@@ -221,7 +218,6 @@ def _read_object(path: Path) -> dict[str, Any]:
             msg = f"Could not parse JSON from {_quote(path)}: {error}."
             raise InvalidInventoryError(msg) from error
     else:
-        yaml = optional_import("yaml", required_for="YAML inventory serialization")
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as error:
@@ -245,7 +241,7 @@ def _declared_type(path: Path) -> str | None:
     """
     try:
         data = _read_object(path)
-    except (InvalidInventoryError, MissingOptionalDependencyError):
+    except InvalidInventoryError:
         return None
     declared = data.get(TAG_FIELD)
     return declared if isinstance(declared, str) else None
