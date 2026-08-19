@@ -249,10 +249,18 @@ class TestConflicts:
         assert out.attrs.gauge_length == 10.0
 
     def test_re_enrich_is_a_refresh(self, patch, inventory):
-        """Enriching twice is not an error and changes nothing."""
+        """
+        Enriching twice is not an error and changes nothing.
+
+        Nothing but what the decorator maintains, that is: doing it twice
+        is two operations, so `processing_id` says so even though every
+        attr it copied is the one it copied the first time.
+        """
         once = patch.enrich(inventory, coords=False)
         twice = once.enrich(inventory, coords=False)
-        assert dict(twice.attrs.drop("history")) == dict(once.attrs.drop("history"))
+        managed = ("history", "processing_id")
+        assert dict(twice.attrs.drop(*managed)) == dict(once.attrs.drop(*managed))
+        assert twice.attrs.processing_id != once.attrs.processing_id
 
     def test_bad_conflicts_raises(self, patch, inventory):
         """The flag shares chunking's vocabulary and its validation."""

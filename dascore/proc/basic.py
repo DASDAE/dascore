@@ -176,7 +176,13 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     if not self.coords == other.coords:
         return False
     if only_required_attrs:  # only include default fields
-        attrs_to_compare = set(PatchAttrs.model_fields) - {"history"}
+        # The ids are not part of what a patch *is*: two patches with the
+        # same data, coords and attrs are equal however they were made.
+        attrs_to_compare = set(PatchAttrs.model_fields) - {
+            "history",
+            "patch_id",
+            "processing_id",
+        }
         attrs1 = self.attrs.model_dump(include=attrs_to_compare)
         attrs2 = other.attrs.model_dump(include=attrs_to_compare)
     else:

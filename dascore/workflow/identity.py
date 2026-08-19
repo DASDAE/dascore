@@ -31,14 +31,61 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from typing import Any
 from uuid import uuid4
 
-from dascore.workflow.serialize import digest
+from dascore.workflow.serialize import combine_hashes, digest
 
 # What a patch carries before anything has been done to it. Not a digest:
 # an empty string is the identity element of `advance`, and reads as "this
 # is how the data arrived" rather than as an operation which did nothing.
 NOTHING_DONE = ""
+
+
+# The attrs which say which data a patch is and what was done to it. They
+# are folded rather than compared wherever patches are combined.
+_ID_FIELDS = ("patch_id", "processing_id")
+
+
+def fold_ids(attrs_list) -> dict[str, Any]:
+    """
+    Return the ids a patch combined from several inherits.
+
+    Kept members only: a merge which dropped an incompatible patch did not
+    use its data, so its id is not part of what this data is.
+    """
+    if not ids_enabled():
+        return {}
+    kept = list(attrs_list)
+    if not kept:
+        return {}
+    return {
+        "patch_id": fold_data_ids([x.patch_id for x in kept]),
+        "processing_id": fold_processing_ids([x.processing_id for x in kept]),
+    }
+
+
+def ids_enabled() -> bool:
+    """Whether this process is keeping track of what a patch is."""
+    # Imported here rather than at module scope: `dascore.config` is not
+    # built while the workflow package is being imported.
+    from dascore import get_config  # noqa: PLC0415
+
+    return get_config().patch_provenance != "disabled"
+
+
+def with_data_id(attrs):
+    """
+    Return attrs which name which data they belong to.
+
+    Minted rather than derived when there is nothing to derive one from: a
+    patch built in memory is not the same data as anything else. A reader
+    which knows better -- one whose file stores an id, or which can derive
+    one from the path -- stamps over this.
+    """
+    if attrs.patch_id or not ids_enabled():
+        return attrs
+    return attrs.update(patch_id=new_data_id())
 
 
 def new_data_id() -> str:
@@ -93,7 +140,10 @@ def advance(processing_id: str, fingerprint: str) -> str:
         The operation's fingerprint; see
         [`fingerprint_call`](`dascore.workflow.processor.fingerprint_call`).
     """
-    return digest({"prev": processing_id, "task": fingerprint})
+    # `combine_hashes` rather than a digest of a mapping: both halves are
+    # already digests, and this is what it is for -- an ordered series of
+    # them, where the order is part of the answer.
+    return combine_hashes([processing_id, fingerprint])
 
 
 def fold_data_ids(data_ids: Sequence[str]) -> str:
@@ -110,7 +160,7 @@ def fold_data_ids(data_ids: Sequence[str]) -> str:
     ids = tuple(data_ids)
     if len(ids) == 1:
         return ids[0]
-    return digest({"members": list(ids)})
+    return combine_hashes(ids)
 
 
 def fold_processing_ids(processing_ids: Iterable[str]) -> str:
@@ -132,4 +182,4 @@ def fold_processing_ids(processing_ids: Iterable[str]) -> str:
         return NOTHING_DONE
     if len(seen) == 1:
         return seen[0]
-    return digest({"routes": seen})
+    return combine_hashes(seen)

@@ -57,7 +57,12 @@ from dascore.utils.misc import (
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
-from dascore.workflow.processor import PatchOp, register_patch_function
+from dascore.workflow.identity import advance, ids_enabled
+from dascore.workflow.processor import (
+    PatchOp,
+    fingerprint_call,
+    register_patch_function,
+)
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -366,6 +371,24 @@ def patch_function(
                     patch, func, *args, _history=history, **kwargs
                 )
                 attrs = _maybe_add_history_str(out.attrs, hist_str)
+                # What was done, folded into what the input carried, into
+                # the same attrs object the history went into: an operation
+                # should cost one new patch, not one per thing it stamps.
+                #
+                # Only when something new came back: an operation which
+                # handed the patch straight through did nothing, and nothing
+                # is what it records.
+                if ids_enabled():
+                    fingerprint = fingerprint_call(patch_func, args, kwargs)
+                    attrs = attrs.update(
+                        processing_id=advance(patch.attrs.processing_id, fingerprint),
+                        # Carried from the input rather than left to
+                        # whatever the body returned: filtering data does
+                        # not make it other data, and a function building
+                        # its result from scratch would otherwise mint a
+                        # new id and claim it had.
+                        patch_id=patch.attrs.patch_id,
+                    )
                 if attrs is not out.attrs:
                     out = out.update(attrs=attrs)
             if attr_updates and hasattr(out, "attrs"):

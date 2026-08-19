@@ -84,6 +84,22 @@ class PatchAttrs(DascoreBaseModel):
         default_factory=tuple,
         description="A list of processing performed on the patch.",
     )
+    patch_id: str = Field(
+        default="",
+        description=(
+            "Identifies which data this is. It survives every operation "
+            "which does not change what the data is of, and changes only "
+            "when data from more than one source is combined."
+        ),
+    )
+    processing_id: str = Field(
+        default="",
+        description=(
+            "Identifies what was done to the data. It advances on every "
+            "operation, so two patches which took the same route from the "
+            "same source carry the same value and two which did not, do not."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

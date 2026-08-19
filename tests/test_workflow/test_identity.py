@@ -7,18 +7,24 @@ applied live beside the things which apply them.
 
 from __future__ import annotations
 
+import pickle
+
 import pytest
 
+import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.workflow import Task
 from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
 from dascore.workflow.identity import (
     NOTHING_DONE,
     advance,
     fold_data_ids,
+    fold_ids,
     fold_processing_ids,
     new_data_id,
     source_data_id,
 )
+from dascore.workflow.processor import _signature
 
 
 class TestNewDataId:
@@ -223,3 +229,161 @@ class TestBuiltinTasks:
     def test_they_are_written_down(self, task):
         """A provenance record holds them, so they have to survive one."""
         assert Task.from_dict(task.to_dict()) == task
+
+
+class TestTheRulesOnRealPatches:
+    """The rules, where they are actually applied."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A patch to operate on."""
+        return dc.get_example_patch("random_das")
+
+    def test_data_arrives_with_an_id(self, patch):
+        """Everything downstream needs something to carry forward."""
+        assert patch.attrs.patch_id
+        assert patch.attrs.processing_id == NOTHING_DONE
+
+    def test_two_patches_are_two_data(self):
+        """Nothing derives an id from values, so nothing claims they are one."""
+        first = dc.get_example_patch("random_das")
+        assert first.attrs.patch_id != dc.get_example_patch("random_das").attrs.patch_id
+
+    def test_an_operation_advances_what_was_done(self, patch):
+        """Which is what the id is for."""
+        out = patch.normalize("time")
+        assert out.attrs.processing_id != patch.attrs.processing_id
+
+    def test_an_operation_leaves_which_data_alone(self, patch):
+        """Filtering data does not make it other data."""
+        assert patch.normalize("time").attrs.patch_id == patch.attrs.patch_id
+
+    def test_a_function_which_rebuilds_still_leaves_it_alone(self, patch):
+        """
+        Even one which builds its result from scratch.
+
+        `fbe` does; without the wrapper carrying the id across, it would
+        mint a new one and claim the data had changed.
+        """
+        out = patch.fbe(0.5, time=(10, 100))
+        assert out.attrs.patch_id == patch.attrs.patch_id
+
+    def test_the_same_route_gives_the_same_id(self, patch):
+        """So two patches processed alike can be told to be alike."""
+        first = patch.normalize("time").decimate(time=2)
+        second = patch.normalize("time").decimate(time=2)
+        assert first.attrs.processing_id == second.attrs.processing_id
+
+    def test_a_different_route_does_not(self, patch):
+        """Order included."""
+        forward = patch.normalize("time").decimate(time=2)
+        backward = patch.decimate(time=2).normalize("time")
+        assert forward.attrs.processing_id != backward.attrs.processing_id
+
+    def test_different_arguments_are_a_different_route(self, patch):
+        """The operation's fingerprint is what distinguishes them."""
+        assert patch.normalize("time").attrs.processing_id != (
+            patch.normalize("distance").attrs.processing_id
+        )
+
+    def test_a_no_op_records_nothing(self, patch):
+        """
+        An operation which handed the patch straight back did nothing.
+
+        `select` with no bounds is the live case: it returns the patch it
+        was given, and a `processing_id` which moved would say otherwise.
+        """
+        assert patch.select(time=None).attrs.processing_id == patch.attrs.processing_id
+
+    def test_the_ids_are_not_part_of_equality(self, patch):
+        """Two patches with the same data are equal however they were made."""
+        assert patch.equals(patch.update_attrs(patch_id="x", processing_id="y"))
+
+    def test_a_raw_constructor_keeps_what_it_was_given(self, patch):
+        """You edited it; that is on you."""
+        made = patch.update_attrs(patch_id="kept", processing_id="also")
+        assert made.attrs.patch_id == "kept"
+        assert made.new(data=made.data).attrs.patch_id == "kept"
+
+    def test_combining_patches_folds_which_data(self, patch):
+        """Two sources make a third answer, not either of the two."""
+        other = patch.update_attrs(patch_id="other")
+        merged = dc.utils.attrs.combine_patch_attrs([patch.attrs, other.attrs])
+        assert merged.patch_id not in {patch.attrs.patch_id, "other"}
+
+    def test_combining_patches_keeps_a_common_route(self, patch):
+        """Windows of one file have one history, not one each."""
+        first = patch.normalize("time")
+        merged = dc.utils.attrs.combine_patch_attrs([first.attrs, first.attrs])
+        assert merged.processing_id == first.attrs.processing_id
+
+    def test_the_ids_survive_a_pickle(self, patch):
+        """A patch handed to another process is the same data."""
+        out = patch.normalize("time")
+        assert pickle.loads(pickle.dumps(out)).attrs.patch_id == out.attrs.patch_id
+        assert pickle.loads(pickle.dumps(out)).attrs.processing_id == (
+            out.attrs.processing_id
+        )
+
+    def test_they_can_be_turned_off(self, patch):
+        """A process which does not want them does not pay for them."""
+        with dc.config_context(patch_provenance="disabled"):
+            made = dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
+            assert made.attrs.patch_id == ""
+            assert made.normalize("time").attrs.processing_id == ""
+
+    def test_a_summary_does_not_carry_them(self, patch):
+        """
+        An index does not store an id, so a summary holding one would make
+        scanning a file and reading it disagree about the same data.
+        """
+        summary = patch.summary
+        assert summary.attrs.patch_id == ""
+        assert summary.attrs.processing_id == ""
+
+
+class TestTheAwkwardCases:
+    """The branches the ordinary path never reaches."""
+
+    def test_no_members_folds_to_nothing(self):
+        """A fold given nothing has nothing to say."""
+        assert fold_ids([]) == {}
+
+    def test_disabled_folds_to_nothing(self):
+        """A process which is not keeping ids does not invent them."""
+        patch = dc.get_example_patch()
+        with dc.config_context(patch_provenance="disabled"):
+            assert fold_ids([patch.attrs, patch.attrs]) == {}
+
+    def test_a_function_defined_inside_a_call_is_still_named(self):
+        """
+        It cannot be named in a document, but it still did something.
+
+        A `processing_id` which did not move would say it had not.
+        """
+        patch = dc.get_example_patch()
+
+        @dc.patch_function()
+        def only_here(patch):
+            """Exist only for the length of this test."""
+            return patch.new(data=patch.data + 1)
+
+        out = only_here(patch)
+        assert out.attrs.processing_id != patch.attrs.processing_id
+        # Named by where it was written, which is honestly not resolvable.
+        with pytest.raises(ParameterError, match="cannot be named"):
+            only_here.op()
+
+    def test_a_callable_which_cannot_be_hashed(self):
+        """Its signature is asked for the slow way rather than cached."""
+
+        class Unhashable:
+            """A callable which refuses to be a dict key."""
+
+            __hash__ = None
+
+            def __call__(self, patch, factor=1):
+                """Do nothing."""
+                return patch
+
+        assert _signature(Unhashable()) is not None

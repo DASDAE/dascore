@@ -156,7 +156,10 @@ FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
 # These attributes are the default to ignore when determine if patches
 # can be merged or broadcast together.
-DEFAULT_ATTRS_TO_IGNORE = ("history", "dims")
+# The ids say where a patch came from and what was done to it, which is
+# never a reason to refuse to combine two patches; the folds decide what
+# the result carries instead.
+DEFAULT_ATTRS_TO_IGNORE = ("history", "dims", "patch_id", "processing_id")
 
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")

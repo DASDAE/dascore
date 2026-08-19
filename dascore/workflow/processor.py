@@ -34,8 +34,9 @@ from __future__ import annotations
 import inspect
 import re
 import warnings
+from collections.abc import Mapping
 from contextlib import suppress
-from functools import cached_property
+from functools import cache, cached_property
 from typing import Any, ClassVar
 
 from pydantic import Field
@@ -74,6 +75,11 @@ _DEFERRED_MODULES = ("dascore.viz",)
 
 # Set once the install has been swept looking for an unregistered tag.
 _swept = False
+
+# Fingerprints of calls already made, so a loop over a spool pays for the
+# digest of one call rather than of every one.
+_FINGERPRINTS: dict[Any, str] = {}
+_FINGERPRINT_LIMIT = 4096
 
 
 class PatchProcessor(Task):
@@ -475,9 +481,58 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     >>> called = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
     >>> assert called == dc.proc.normalize.op(dim="time").fingerprint
     """
-    name = op_name(func)
     version = getattr(func, "__version__", "1.0")
-    return _fingerprint(name, version, _bind(func, args, kwargs or {}))
+    name = _call_name(func)
+    bound = _bind(func, args, kwargs or {})
+    # Answered from the cache when the same call has been made before,
+    # which in a loop over a spool is every call after the first. Hashing
+    # the bound arguments costs a few microseconds; the digest of their
+    # canonical JSON costs several times that.
+    try:
+        key = (name, version, _as_key(bound))
+    except TypeError:
+        # Something unhashable -- an array argument, most often. Its
+        # digest is the honest cost of saying which array it was.
+        return _fingerprint(name, version, bound)
+    if (found := _FINGERPRINTS.get(key)) is None:
+        found = _fingerprint(name, version, bound)
+        # Bounded, and simply stops growing rather than evicting: the
+        # entries are one small string each, and a process which has made
+        # four thousand distinct calls is not one this is hot for.
+        if len(_FINGERPRINTS) < _FINGERPRINT_LIMIT:
+            _FINGERPRINTS[key] = found
+    return found
+
+
+def _as_key(value):
+    """
+    Return a hashable stand-in for a value, which two values cannot share.
+
+    The type is part of it: `1`, `1.0` and `True` are equal and hash alike
+    in Python, and they are not the same argument.
+    """
+    if isinstance(value, Mapping):
+        return (dict, tuple((k, _as_key(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_as_key(x) for x in value))
+    hash(value)  # TypeError here is the caller's signal to not cache
+    return (type(value), value)
+
+
+def _call_name(func) -> str:
+    """
+    Return the name a call is fingerprinted under.
+
+    The registry tag when the function has one. When it does not -- a patch
+    function defined inside another call -- something was still done to the
+    patch, and a `processing_id` which did not move would claim it was not.
+    So the call is named by where it was written instead: enough to tell it
+    from another operation, and honestly not resolvable, which is why
+    `op_name` still refuses it and no `PatchOp` can be built.
+    """
+    if (tag := patch_function_tag(func)) is not None:
+        return tag
+    return _spell(func)
 
 
 def _fingerprint(name: str, version: str, kwargs: dict) -> str:
@@ -489,9 +544,24 @@ def _fingerprint(name: str, version: str, kwargs: dict) -> str:
     )
 
 
+@cache
+def _signature_of(func) -> inspect.Signature:
+    """Return a function's signature, worked out once."""
+    return inspect.signature(func)
+
+
 def _signature(func) -> inspect.Signature:
-    """Return the signature of the function inside a patch function."""
-    return inspect.signature(getattr(func, "raw_function", func))
+    """
+    Return the signature of the function inside a patch function.
+
+    Cached on the function: `inspect.signature` is not cheap, a signature
+    cannot change, and every call which is fingerprinted asks for one.
+    """
+    inner = getattr(func, "raw_function", func)
+    try:
+        return _signature_of(inner)
+    except TypeError:  # something unhashable; ask the slow way
+        return inspect.signature(inner)
 
 
 def _canonical(value):

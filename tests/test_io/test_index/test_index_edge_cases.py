@@ -16,6 +16,7 @@ import re
 import sqlite3
 import sys
 import threading
+import warnings
 import warnings as warnings_mod
 from typing import Any
 
@@ -896,9 +897,16 @@ class TestIngestEdges:
         assert typed_value(np.array([1.0, 2.0]) * get_quantity("m")) is None
 
     def test_reserved_attr_name_warns(self):
-        """An attr named patch_id is skipped with a warning."""
+        """
+        An attr named for a structural column is skipped with a warning.
+
+        It used to be spelled with `patch_id`, which is now a field of
+        `PatchAttrs` in its own right -- a first-class id rather than a
+        user attr which happens to collide -- and is skipped silently.
+        `source_id` is still only a column, so it still warns.
+        """
         summary = PatchSummary(
-            attrs={"patch_id": 5, "tag": "x"},
+            attrs={"source_id": 5, "tag": "x"},
             coords={
                 "distance": {
                     "dtype": "float64",
@@ -917,7 +925,38 @@ class TestIngestEdges:
         )
         with pytest.warns(UserWarning, match="reserved attr name"):
             records = s2r([summary])
-        assert "patch_id" not in records[0].patches[0].attrs
+        assert "source_id" not in records[0].patches[0].attrs
+
+    @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
+    def test_the_ids_are_skipped_silently(self, name):
+        """
+        Every patch carries them, so a warning would fire on every patch.
+
+        They are not indexed: an index is for finding data, and an id is
+        not a search term.
+        """
+        summary = PatchSummary(
+            attrs={name: "0123456789abcdef", "tag": "x"},
+            coords={
+                "distance": {
+                    "dtype": "float64",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "dims": ("distance",),
+                    "len": 2,
+                }
+            },
+            dims=("distance",),
+            shape=(2,),
+            dtype="float32",
+            source_path="a.h5",
+            source_format="DASDAE",
+            source_version="1",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            records = s2r([summary])
+        assert name not in records[0].patches[0].attrs
 
     @pytest.mark.parametrize("name", ["shape", "n_dims", "sample_count_total"])
     def test_dropped_columns_stay_reserved(self, random_patch, name):
