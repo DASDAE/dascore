@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import threading
 import time
@@ -18,6 +19,7 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import (
+    _callable_name,
     _get_install_name,
     _iter_filesystem,
     _locked,
@@ -713,6 +715,36 @@ class TestToObjectArray:
         assert isinstance(out, np.ndarray)
 
 
+def _dim_count(patch, value=1):
+    """Return the dimension count plus value; named, unlike a lambda."""
+    return len(patch.dims) + value
+
+
+class TestCallableName:
+    """Tests for naming a callable for a progress label."""
+
+    def test_function(self):
+        """A plain function is named by `__name__`."""
+        assert _callable_name(iterate) == "iterate"
+
+    def test_partial(self):
+        """A partial has no `__name__`; it is named for what it wraps."""
+        assert _callable_name(functools.partial(iterate, 1)) == "iterate"
+
+    def test_callable_object(self):
+        """A callable object is named for its class."""
+
+        class Doubler:
+            def __call__(self, patch):
+                return patch * 2
+
+        assert _callable_name(Doubler()) == "Doubler"
+
+    def test_node_name(self):
+        """An object with `node_name` is named for its operation, not its class."""
+        assert _callable_name(dc.proc.abs.op()) == "abs"
+
+
 class TestSpoolMap:
     """Tests for the private spool mapping helper."""
 
@@ -726,7 +758,15 @@ class TestSpoolMap:
         )
         assert out == [3, 3, 3]
 
-    def test_with_client(self, random_spool, monkeypatch):
+    @pytest.mark.parametrize(
+        "func, label",
+        [
+            (lambda patch, value=1: len(patch.dims) + value, "<lambda>"),
+            (functools.partial(_dim_count), "_dim_count"),
+        ],
+        ids=["function", "partial"],
+    )
+    def test_with_client(self, random_spool, monkeypatch, func, label):
         """A client should receive split spools and flatten mapped outputs."""
         seen = []
 
@@ -742,13 +782,13 @@ class TestSpoolMap:
         monkeypatch.setattr("dascore.utils.misc.os.cpu_count", lambda: 2)
         out = _spool_map(
             random_spool[:4],
-            lambda patch, value=1: len(patch.dims) + value,
+            func,
             client=DummyClient(),
             size=None,
             progress="standard",
         )
         assert out == [3, 3, 3]
-        assert seen == ["Applying <lambda> to spool"]
+        assert seen == [f"Applying {label} to spool"]
 
     def test_empty_spool_with_client(self):
         """An empty spool asks for no work rather than a split size of zero."""

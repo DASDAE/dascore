@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import shutil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
@@ -32,6 +33,13 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 def _gigo(garbage):
     """Dummy func which can be serialized."""
     return garbage
+
+
+class _CallableObject:
+    """A callable object, which has no `__name__`."""
+
+    def __call__(self, patch):
+        return patch
 
 
 class _SerialClient:
@@ -737,6 +745,16 @@ class TestMap:
         except (PermissionError, OSError, RuntimeError) as exc:
             pytest.skip(f"ProcessPoolExecutor unavailable: {exc}")
 
+    @pytest.fixture(params=["partial", "callable_object", "patch_op"])
+    def nameless_callable(self, request):
+        """A callable with no `__name__`, of each kind DASCore makes."""
+        callables = {
+            "partial": functools.partial(_gigo),
+            "callable_object": _CallableObject(),
+            "patch_op": dc.proc.abs.op(),
+        }
+        return callables[request.param]
+
     def test_simple(self, random_spool):
         """Simplest case for mapping a function on all patches."""
         out = list(random_spool.map(lambda x: x))
@@ -767,6 +785,16 @@ class TestMap:
         out = list(random_spool.map(_gigo, client=proc_client))
         assert len(out) == len(random_spool)
         assert dc.spool(out) == random_spool
+
+    def test_callable_without_name(self, random_spool, nameless_callable):
+        """A callable with no `__name__` can be mapped."""
+        out = list(random_spool.map(nameless_callable))
+        assert len(out) == len(random_spool)
+
+    def test_callable_without_name_client(self, random_spool, nameless_callable):
+        """A client maps a nameless callable; the worker builds the label."""
+        out = list(random_spool.map(nameless_callable, client=_SerialClient()))
+        assert len(out) == len(random_spool)
 
     def test_map_docstring(self, random_spool):
         """Ensure the docstring examples work."""

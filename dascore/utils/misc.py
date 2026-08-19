@@ -815,6 +815,21 @@ def cached_method(func):
     return wrapper
 
 
+def _callable_name(func) -> str:
+    """
+    Return a human-readable name for a callable's progress label.
+
+    A `functools.partial` is named for the function it wraps. A callable
+    object and a `Task` have no `__name__`; a `Task` standing for more than
+    one operation names itself with `node_name` (see `pipe.default_key`),
+    and anything else falls back to its class name.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    name = getattr(func, "__name__", None) or getattr(func, "node_name", None)
+    return name or type(func).__name__
+
+
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
@@ -835,7 +850,7 @@ class _MapFuncWrapper:
             # displays the progress bar. A huge hack, maybe there is a better
             # way? See #265.
             if not getattr(spool, "_no_progress", False):
-                desc = f"Applying {self._func.__name__} to spool"
+                desc = f"Applying {_callable_name(self._func)} to spool"
                 iterable = track(spool, desc, self._progress)
             return [self._func(x, **self._kwargs) for x in iterable]
 
@@ -869,8 +884,8 @@ def _spool_map(
     # accepted or refused depending on how much data there was.
     validate_progress_level(progress)
     # no client; simple for loop.
-    desc = f"Applying {func.__name__} to spool"
     if client is None:
+        desc = f"Applying {_callable_name(func)} to spool"
         return [func(patch, **kwargs) for patch in track(spool, desc, progress)]
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
