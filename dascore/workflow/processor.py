@@ -36,7 +36,7 @@ import re
 import warnings
 from collections.abc import Mapping
 from contextlib import suppress
-from functools import cache, cached_property
+from functools import cached_property, lru_cache
 from typing import Any, ClassVar
 
 from pydantic import Field
@@ -491,7 +491,13 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     # the bound arguments costs a few microseconds; the digest of their
     # canonical JSON costs several times that.
     try:
-        key = (name, version, _as_key(bound))
+        # The function itself is in the key, not just its name. For one
+        # which has no tag the name ends in `id(func)`, and CPython reuses
+        # an address once the function is collected -- so a factory making
+        # one patch function per call could hand a later one the earlier
+        # one's fingerprint. Holding the function here makes the key exact
+        # and keeps the address from being reused underneath it.
+        key = (func, name, version, _as_key(bound))
     except TypeError:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
@@ -620,7 +626,10 @@ def _fingerprint(name: str, version: str, kwargs: dict) -> str:
         )
 
 
-@cache
+# Bounded, and it holds function references: a process which builds patch
+# functions in a loop should not keep every one of them, and the closures
+# they captured, alive for its lifetime.
+@lru_cache(maxsize=2048)
 def _signature_of(func) -> inspect.Signature:
     """Return a function's signature, worked out once."""
     return inspect.signature(func)

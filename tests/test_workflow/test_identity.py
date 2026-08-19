@@ -7,6 +7,7 @@ applied live beside the things which apply them.
 
 from __future__ import annotations
 
+import gc
 import pickle
 import warnings
 
@@ -651,3 +652,30 @@ class TestWhatTheReviewsFound:
             single = np.mean(patch, axis=0, dtype=np.dtype("float32"))
             double = np.mean(patch, axis=0, dtype=np.dtype("float64"))
         assert single.attrs.processing_id != double.attrs.processing_id
+
+    def test_a_collected_closure_does_not_lend_its_id(self):
+        """
+        An unnameable function is named partly by `id(func)`, and CPython
+        reuses an address once the function is collected. The one before
+        must not hand its fingerprint to the one after.
+
+        Written this way deliberately: holding both alive at once, as the
+        test above does, cannot reach the case.
+        """
+        patch = dc.get_example_patch()
+
+        def make(factor):
+            """Return a patch function which scales by a fixed amount."""
+
+            @dc.patch_function()
+            def scale(patch):
+                """Scale by whatever this closure captured."""
+                return patch.new(data=patch.data * factor)
+
+            return scale
+
+        first = make(2)
+        first_id = first(patch).attrs.processing_id
+        del first
+        gc.collect()
+        assert make(3)(patch).attrs.processing_id != first_id
