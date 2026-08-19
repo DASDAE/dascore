@@ -18,6 +18,14 @@ from dascore.workflow.serialize import (
     digest,
     encode,
 )
+from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
+from dascore.workflow.identity import (
+    advance,
+    fold_data_ids,
+    fold_processing_ids,
+    new_data_id,
+    source_data_id,
+)
 from dascore.workflow.pipe import Pipe
 from dascore.workflow.processor import (
     PatchOp,

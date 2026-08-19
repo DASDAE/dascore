@@ -1,0 +1,135 @@
+"""
+What a patch is, and what was done to it.
+
+Two ids answer two different questions, and they move independently:
+
+`patch_id` says **which data**. It survives every operation which does not
+change what the data is *of* -- filtering, decimating, transposing, changing
+units -- and changes only when data from more than one source is combined.
+
+`processing_id` says **what was done**. It advances on every operation, by
+folding the operation's fingerprint into the id the input carried, so that
+two patches which took the same route from the same source arrive at the
+same id and two which did not, do not.
+
+Neither is a random number after the first: they are digests of what came
+before, so the same data processed the same way gives the same pair on
+another machine, in another process, next year.
+
+Examples
+--------
+>>> from dascore.workflow.identity import advance, fold_data_ids
+>>>
+>>> # What was done: the operation folds into what came before.
+>>> first = advance("", "0123456789abcdef")
+>>> assert advance(first, "0123456789abcdef") != first
+>>>
+>>> # Which data: combining two sources makes a new answer.
+>>> assert fold_data_ids(["a", "b"]) != fold_data_ids(["b", "a"])
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
+from uuid import uuid4
+
+from dascore.workflow.serialize import digest
+
+# What a patch carries before anything has been done to it. Not a digest:
+# an empty string is the identity element of `advance`, and reads as "this
+# is how the data arrived" rather than as an operation which did nothing.
+NOTHING_DONE = ""
+
+
+def new_data_id() -> str:
+    """
+    Return an id for data which names no source.
+
+    A random one, because there is nothing to derive it from: a patch built
+    in memory from an array is not the same data as anything else, and
+    saying so is more honest than hashing the values and claiming two
+    coincidentally equal arrays are one datum.
+    """
+    return uuid4().hex
+
+
+def source_data_id(format_name: str, path: str, key: object = None) -> str:
+    """
+    Return the id of data read from a file.
+
+    Derived rather than random, so reading the same file twice -- in two
+    processes, on two days -- gives the same answer and the ids in a
+    result can be traced back to what they came from.
+
+    Parameters
+    ----------
+    format_name
+        The format the reader was using.
+    path
+        The resolved path or URI the data came from.
+    key
+        What names this patch within the file, when a file holds more than
+        one. The reader's own key if it has one, else the ordinal.
+
+    Notes
+    -----
+    An id derived this way is stable for a given archive laid out the same
+    way; it is not stable across hosts, because the path is part of it. A
+    format which stores an id -- DASDAE does -- keeps that one instead, and
+    those are stable everywhere.
+    """
+    return digest({"format": format_name, "path": path, "key": key})
+
+
+def advance(processing_id: str, fingerprint: str) -> str:
+    """
+    Return the processing id an operation leads to.
+
+    Parameters
+    ----------
+    processing_id
+        What the input carried.
+    fingerprint
+        The operation's fingerprint; see
+        [`fingerprint_call`](`dascore.workflow.processor.fingerprint_call`).
+    """
+    return digest({"prev": processing_id, "task": fingerprint})
+
+
+def fold_data_ids(data_ids: Sequence[str]) -> str:
+    """
+    Return the data id of a patch combined from several.
+
+    Ordered, and not deduplicated: how many patches went in and in what
+    order is part of what the data *is*, so stacking a patch with itself is
+    not the same datum as the patch alone.
+
+    A single id folds to itself, so an operation which combines one patch
+    with nothing leaves the id where it was.
+    """
+    ids = tuple(data_ids)
+    if len(ids) == 1:
+        return ids[0]
+    return digest({"members": list(ids)})
+
+
+def fold_processing_ids(processing_ids: Iterable[str]) -> str:
+    """
+    Return the processing id which several inputs agree on.
+
+    When every input took the same route, that route is the answer: a
+    chunk of sixty windows of one file has one history, not sixty.
+
+    When they did not, the answer is a digest of the distinct routes in
+    the order they were first seen -- so combining differently processed
+    data says so, and says it the same way every time.
+    """
+    seen: list[str] = []
+    for processing_id in processing_ids:
+        if processing_id not in seen:
+            seen.append(processing_id)
+    if not seen:
+        return NOTHING_DONE
+    if len(seen) == 1:
+        return seen[0]
+    return digest({"routes": seen})
