@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import difflib
 import itertools
-import json
 import os
 import re
 from collections import defaultdict
@@ -41,7 +40,6 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pandas as pd
-import yaml
 
 from dascore.core.inventory import (
     Acquisition,
@@ -62,6 +60,7 @@ from dascore.core.inventory import (
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
+from dascore.utils.documents import read_document
 from dascore.utils.misc import check_code
 from dascore.utils.paths import quote_path as _quote
 from dascore.utils.tables import (
@@ -206,27 +205,12 @@ def _read_object(path: Path) -> dict[str, Any]:
     Both spellings share one data model, so the suffix picks the parser
     and decides nothing else.
     """
-    try:
-        text = path.read_text()
-    except (OSError, UnicodeDecodeError) as error:
-        msg = f"Could not read {_quote(path)}: {error}."
-        raise InvalidInventoryError(msg) from error
-    if _object_suffix(path) == ".json":
-        try:
-            data = json.loads(text)
-        except ValueError as error:
-            msg = f"Could not parse JSON from {_quote(path)}: {error}."
-            raise InvalidInventoryError(msg) from error
-    else:
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as error:
-            msg = f"Could not parse YAML from {_quote(path)}: {error}."
-            raise InvalidInventoryError(msg) from error
-    if not isinstance(data, Mapping):
-        msg = f"{_quote(path)} holds no mapping, so it defines no object."
-        raise InvalidInventoryError(msg)
-    return dict(data)
+    return read_document(
+        path,
+        "json" if _object_suffix(path) == ".json" else "yaml",
+        error=InvalidInventoryError,
+        holds="defines no object",
+    )
 
 
 def _declared_type(path: Path) -> str | None:

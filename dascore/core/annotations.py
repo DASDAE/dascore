@@ -51,6 +51,7 @@ from dascore.models import (
     PositiveFiniteFloat,
     UnitQuantity,
 )
+from dascore.utils.documents import write_document
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
@@ -1879,8 +1880,7 @@ def save_annotation_set(
     # under it -- then leaves the set it was replacing still in the
     # directory, and a reader finds two spellings of one part and says
     # so, rather than finding the set gone.
-    with open(attrs_file, "w") as stream:
-        json.dump(document, stream, indent=2)
+    write_document(document, attrs_file, "json")
     for stem, payload in spelled.items():
         _write_spelled(payload, directory / f"{stem}{suffix}")
     for stale in superseded:

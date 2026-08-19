@@ -18,6 +18,7 @@ from dascore.core import inventory_loader as loader
 from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, TimeRangedModel
 from dascore.models.registry import TAG_FIELD
+from dascore.utils import documents
 
 # A minimal directory which loads: one acquisition names everything above it.
 PATH_DIRECTORY = {
@@ -2293,9 +2294,9 @@ class TestLoadSerializedFile:
             raise AssertionError("the JSON route parsed YAML")
 
         # JSON is legal YAML, so a fallback to the YAML route would parse
-        # this file and pass a test which only checked the result.
-        monkeypatch.setattr(loader.yaml, "safe_load", refuse)
-        monkeypatch.setattr(inv.yaml, "safe_load", refuse)
+        # this file and pass a test which only checked the result. The one
+        # binding there is to watch is the shared reader's.
+        monkeypatch.setattr(documents.yaml, "safe_load", refuse)
         assert dc.inventory(path).description == "a JSON inventory"
 
     def test_a_document_which_does_not_parse(self, tmp_path):

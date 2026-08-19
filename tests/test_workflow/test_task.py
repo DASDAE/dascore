@@ -59,16 +59,16 @@ class TimedValueTask(Task):
     where: object = None
 
 
-@task
+@task(inputs=0)
 def add_numbers(first, second=1):
     """Add two numbers."""
     return first + second
 
 
 @task(version="2.0")
-def multiply_numbers(first, second=2):
-    """Multiply two numbers."""
-    return first * second
+def multiply_numbers(number, factor=2):
+    """Multiply a number by a factor."""
+    return number * factor
 
 
 def every_kind(positional, /, normal=1, *rest, named=2, **extra):
@@ -87,7 +87,7 @@ def skips_first(given, /, normal=1, *rest, named=2, **extra):
 
 
 EveryKind = make_function_task_class(every_kind)
-SkipsFirst = make_function_task_class(skips_first, skip_first=True)
+SkipsFirst = make_function_task_class(skips_first, inputs=1)
 WithFieldDefault = make_function_task_class(with_field_default)
 
 
@@ -123,6 +123,21 @@ class TestFingerprint:
         within one run.
         """
         assert ScaleTask(factor=2).fingerprint == "761d418c84549e16"
+
+    def test_hard_coded_with_tagged_values(self):
+        """
+        A parameter the serializer tags is pinned as well.
+
+        The plain values above go through the encoding unchanged, so they
+        cannot see a change in how a tagged one -- an array, a time -- is
+        written; this pins that half.
+        """
+        # The dtype is spelled out: `arange` gives int32 where a C long is
+        # 32 bits -- WebAssembly, for one -- and the digest names the dtype.
+        task_ = TimedValueTask(
+            when=np.datetime64("2020-01-01"), where=np.arange(3, dtype="int64")
+        )
+        assert task_.fingerprint == "53791ea82cf3fe6d"
 
     def test_params_matter(self):
         """Two different calls are two different tasks."""
@@ -215,6 +230,62 @@ class TestEquality:
         assert hash(first) == hash(TimedValueTask(when=np.arange(3)))
 
 
+class TestOwnedParameters:
+    """Tests for a task taking ownership of the arrays it is given."""
+
+    def test_array_is_read_only(self):
+        """
+        An array handed to a task cannot be written to afterwards.
+
+        Which is what keeps the fingerprint from going stale: it is cached
+        on first use, so an array a caller kept writing to would leave the
+        task naming values it no longer holds.
+        """
+        values = np.arange(3)
+        TimedValueTask(when=values)
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_the_callers_array_is_the_one_frozen(self):
+        """
+        Nothing is copied, so the caller's own array is what is marked.
+
+        Stated as a test because it is the cost of the policy rather than a
+        detail of it: a caller who keeps writing to a buffer it passed as a
+        parameter finds out at the write, not at the call.
+        """
+        values = np.arange(3)
+        TimedValueTask(when=values)
+        assert values.flags.writeable is False
+
+    def test_array_inside_a_sequence(self):
+        """An array reaches a task inside a container too."""
+        values = np.arange(3)
+        TimedValueTask(when=[values, "something else"])
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_array_inside_a_mapping(self):
+        """A mapping of arrays is walked as well."""
+        values = np.arange(3)
+        TimedValueTask(when={"mask": values})
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+    def test_other_values_are_left_alone(self):
+        """Nothing which is not an array is touched on the way in."""
+        task_ = TimedValueTask(when=(1, 2), where="time")
+        assert task_.when == (1, 2)
+        assert task_.where == "time"
+
+    def test_from_call_owns_them_too(self):
+        """The call path skips validation, and takes ownership anyway."""
+        values = np.arange(3)
+        add_numbers._from_call((values,), {})
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = 99
+
+
 class TestUpdate:
     """Tests for making one task from another."""
 
@@ -249,12 +320,10 @@ class TestDocuments:
         document = ScaleTask(factor=2).to_dict()
         assert document["object_type"] == "tests:ScaleTask"
 
-    def test_code_path_is_a_hint(self):
-        """The import hint is written but does not change the fingerprint."""
+    def test_names_the_class_once(self):
+        """A document names the class by its tag and by nothing else."""
         document = ScaleTask(factor=2).to_dict()
-        assert "code_path" in document
-        document["code_path"] = "somewhere:else"
-        assert _fingerprint_of(document) == ScaleTask(factor=2).fingerprint
+        assert set(document) == {"object_type", "version", "params"}
 
     def test_local_class_refused(self):
         """A task class defined in a function cannot be written down."""
@@ -390,6 +459,14 @@ class TestRun:
         """A subclass runs what it implements."""
         assert ScaleTask(factor=2).run(3) == 6
 
+    def test_calling_runs(self):
+        """Calling a task runs it, so a task can stand for a function."""
+        assert ScaleTask(factor=2)(3) == 6
+
+    def test_calling_a_function_task(self):
+        """Calling reaches the subclass's own run, not the base class's."""
+        assert multiply_numbers(factor=3)(2) == 6
+
 
 class TestFunctionTasks:
     """Tests for the task a function makes."""
@@ -418,7 +495,7 @@ class TestFunctionTasks:
     def test_version(self):
         """The decorator's version reaches the class."""
         assert multiply_numbers.__version__ == "2.0"
-        assert multiply_numbers(first=2).run() == 4
+        assert multiply_numbers(factor=2).run(2) == 4
 
     def test_extra_input_passed_first(self):
         """Arguments given to run are passed before the stored ones."""
@@ -522,16 +599,114 @@ class TestTaskDecorator:
         """The decorator works without parentheses."""
 
         @task
-        def bare(value=1):
+        def bare(number, value=1):
             """A task made without parentheses."""
+            return number + value
+
+        assert bare(value=2).run(1) == 3
+
+    def test_one_input_by_default(self):
+        """The first parameter is what the task is given when it runs."""
+
+        @task
+        def scaled(number, factor=2):
+            """Scale a number."""
+            return number * factor
+
+        assert "number" not in scaled.model_fields
+        assert scaled(factor=3).run(2) == 6
+
+    def test_no_inputs(self):
+        """A task of no inputs takes everything as a parameter."""
+
+        @task(inputs=0)
+        def constant(value=1):
+            """Make a number out of nothing."""
             return value
 
-        assert bare(value=2).run() == 2
+        assert constant(value=2).run() == 2
+
+    def test_more_inputs_than_arguments(self):
+        """A count of inputs the function could not be given is refused."""
+        with pytest.raises(ParameterError, match="was asked for 2"):
+
+            @task(inputs=2)
+            def too_few(number):
+                """Take one argument, and be asked for two."""
+                return number
+
+    def test_inputs_cannot_be_negative(self):
+        """A negative count would make a parameter out of nothing."""
+        with pytest.raises(ParameterError, match="was asked for -1"):
+
+            @task(inputs=-1)
+            def negative(number):
+                """Take one argument, and be asked for less than none."""
+                return number
+
+    def test_keyword_only_is_not_an_input(self):
+        """An input is passed positionally, so a keyword only one is not."""
+        with pytest.raises(ParameterError, match="was asked for 2"):
+
+            @task(inputs=2)
+            def keyword_only(number, *, named=1):
+                """Take an argument which cannot be passed by position."""
+                return number + named
+
+    def test_a_group_takes_any_number_of_inputs(self):
+        """A function which packs its arguments can be asked for any count."""
+
+        @task(inputs=2)
+        def merged(*numbers):
+            """Add up whatever it is given."""
+            return sum(numbers)
+
+        assert merged().run(1, 2) == 3
+        # Which is what lets a decorated function join two branches: the
+        # two sources are handed one input each, and the join both results.
+        assert ((merged(), merged()) | merged()).run(1, 2) == 3
+
+    def test_a_parameter_after_a_group(self):
+        """
+        What is declared after a `*args` group is still the task's.
+
+        The group absorbs the inputs; taking the inputs off by counting
+        parameters would walk past it and drop everything behind.
+        """
+
+        @task(inputs=2)
+        def scaled_sum(*numbers, scale=1):
+            """Add numbers and scale the total."""
+            return sum(numbers) * scale
+
+        assert "scale" in scaled_sum.model_fields
+        assert scaled_sum(scale=10).run(1, 2) == 30
+        assert scaled_sum().run(1, 2) == 3
+
+    def test_a_kwargs_group_after_a_group(self):
+        """A `**kwargs` group behind a `*args` group still takes extras."""
+
+        @task(inputs=1)
+        def collected(*numbers, **extra):
+            """Take numbers and whatever else."""
+            return (sum(numbers), extra)
+
+        assert collected(other=1).run(2) == (2, {"other": 1})
+
+    def test_several_inputs(self):
+        """A task can be given more than one input."""
+
+        @task(inputs=2)
+        def combined(first, second, factor=1):
+            """Combine two numbers."""
+            return (first + second) * factor
+
+        assert combined(factor=2).run(1, 2) == 6
 
     def test_with_version(self):
         """The decorator works with arguments."""
 
-        @task(version="3.0")
+        @task(version="3.0", inputs=0)
         def versioned(value=1):
             """A task made with a version."""
             return value

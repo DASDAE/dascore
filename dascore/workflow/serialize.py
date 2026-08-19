@@ -1,5 +1,6 @@
 """
-Canonical encoding, decoding and hashing for workflow objects.
+Canonical encoding, decoding and hashing for workflow objects, and the files
+those documents are written to.
 
 A [`Task`](`dascore.workflow.task.Task`) is identified by a fingerprint: a
 digest of what it is and what it was given. That only works if the same
@@ -13,7 +14,8 @@ becomes a digest of its bytes and a value left at ``None`` is dropped.
 nothing is dropped, so most values read back. A function, a partial, or a
 value with no encoding of its own is named rather than reproduced in either
 mode, and a dataframe has no document form at all; decoding any of them
-raises.
+raises. `write_workflow` and `read_workflow` put a document on disk in the
+format its suffix names, refusing a suffix which names none.
 
 Stability rests on `json`, `repr` of a float, numpy's byte layout and blake2b,
 none of which change between python versions, and -- for frames and quantities
@@ -31,7 +33,7 @@ import warnings
 from collections.abc import Callable, Iterable, Mapping, Set
 from enum import Enum
 from functools import partial
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any, Literal
 
 import numpy as np
@@ -42,6 +44,8 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array_api import is_foreign, to_numpy
+from dascore.utils.documents import DocumentFormat, read_document, write_document
+from dascore.utils.paths import quote_path
 from dascore.warnings import DASCoreWarning
 
 # The two encoding modes; see the module docstring.
@@ -68,13 +72,23 @@ _FLOAT = "$float"
 _MODEL = "$model"
 _OPAQUE = "$opaque"
 _PARTIAL = "$partial"
+PIPE_TAG = "$pipe"
+_PIPE = PIPE_TAG
 _QUANTITY = "$quantity"
 _SLICE = "$slice"
-_TASK = "$task"
+TASK_TAG = "$task"
+_TASK = TASK_TAG
 _TIMEDELTA = "$timedelta64"
 
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
 DIGEST_SIZE = 8
+
+# The suffixes a workflow is written and read as, enumerated rather than
+# inferred: a path spelled `.txt` is a caller who meant something this does
+# not do, and picking a format for them would hide it. A path with no
+# suffix at all is JSON.
+YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+JSON_SUFFIXES = frozenset({".json", ""})
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -174,6 +188,41 @@ def decode(obj: Any) -> Any:
     return obj
 
 
+def write_workflow(document: Mapping, path: Path) -> Path:
+    """
+    Write a workflow document to a file, in the format its suffix names.
+
+    ``.yaml`` and ``.yml`` write YAML, ``.json`` and a bare name write
+    JSON, and anything else is refused.
+    """
+    return write_document(document, path, _file_format(path))
+
+
+def read_workflow(path: Path) -> Any:
+    """Return the workflow document a file holds; see `write_workflow`."""
+    return read_document(
+        path,
+        _file_format(path),
+        error=ParameterError,
+        holds="describes no workflow",
+    )
+
+
+def _file_format(path: Path) -> DocumentFormat:
+    """Return the format a path names, refusing a suffix which names none."""
+    suffix = Path(path).suffix.lower()
+    if suffix in YAML_SUFFIXES:
+        return "yaml"
+    if suffix in JSON_SUFFIXES:
+        return "json"
+    msg = (
+        f"{quote_path(Path(path))} has a suffix which names no format. Use "
+        f"one of {sorted(YAML_SUFFIXES | JSON_SUFFIXES - {''})}, or no "
+        "suffix at all."
+    )
+    raise ParameterError(msg)
+
+
 def _digest_bytes(data: bytes | memoryview) -> str:
     """Return the digest of some bytes."""
     return hashlib.blake2b(data, digest_size=DIGEST_SIZE).hexdigest()
@@ -217,6 +266,11 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         # Checked before the model branch below, which every task also
         # answers to: a task carries a version its fields do not show.
         return {_TASK: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
+    if isinstance(obj, _pipe_class()):
+        # A pipe is one operation too, and says so its own way: dumping its
+        # fields would name the tasks by class rather than by tag, and would
+        # hash a graph by the names of its nodes.
+        return {_PIPE: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
     if isinstance(obj, DascoreBaseModel):
         return _encode_model(obj, mode)
     if isinstance(obj, pd.DataFrame | pd.Series):
@@ -521,6 +575,13 @@ def _task_class() -> type:
     return Task
 
 
+def _pipe_class() -> type:
+    """Return the Pipe class; deferred for the reason `_task_class` is."""
+    from dascore.workflow.pipe import Pipe  # noqa: PLC0415
+
+    return Pipe
+
+
 def _decode_mapping(obj: Mapping) -> Any:
     """Decode a mapping, inverting whichever tag it carries."""
     if len(obj) == 1:
@@ -597,6 +658,20 @@ def _decode_task(value: Any) -> Any:
     return Task.from_dict(value)
 
 
+def _decode_pipe(value: Any) -> Any:
+    """Decode a pipe from its document."""
+    if not isinstance(value, Mapping):
+        msg = (
+            "A pipe encoded for a fingerprint holds only its digest, so the "
+            "pipe itself cannot be read back from it."
+        )
+        raise ParameterError(msg)
+    # Imported here rather than at module scope: pipe.py imports this module.
+    from dascore.workflow.pipe import Pipe  # noqa: PLC0415
+
+    return Pipe.from_dict(value)
+
+
 def _decode_dict(pairs: list) -> dict:
     """Decode a mapping whose keys are not strings."""
     # A key which was a tuple comes back as a list, which cannot be a key
@@ -636,6 +711,7 @@ _DECODERS: dict[str, Callable[[Any], Any]] = {
     _MODEL: _decode_model,
     _OPAQUE: _refuse("value"),
     _PARTIAL: _refuse("partial"),
+    _PIPE: _decode_pipe,
     _QUANTITY: _decode_quantity,
     _SLICE: _decode_slice,
     _TASK: _decode_task,

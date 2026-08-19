@@ -40,7 +40,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 from pydantic import ValidationError
 
 from dascore.core.annotations import (
@@ -61,6 +60,7 @@ from dascore.core.annotations import (
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
+from dascore.utils.documents import read_document
 from dascore.utils.misc import iterate
 from dascore.utils.paths import quote_path
 from dascore.utils.tables import (
@@ -103,32 +103,18 @@ BLESSED_NAME = ".annotations"
 
 def _read_object(path: Path) -> dict[str, Any]:
     """Parse one YAML or JSON object file into a mapping."""
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as error:
-        msg = f"Could not read {quote_path(path)}: {error}."
-        raise ParameterError(msg) from error
     # The suffix is casefolded, as the inventory casefolds its own: an
     # attrs.JSON is the file attrs.json would be, and reading it as YAML
     # for its spelling would fail on a document which is not wrong. The
     # stem is not: the part names are exact, as every other name a format
     # reserves is.
-    if path.suffix.casefold() == OBJECT_SUFFIXES[0]:
-        try:
-            data = json.loads(text)
-        except ValueError as error:
-            msg = f"Could not parse JSON from {quote_path(path)}: {error}."
-            raise ParameterError(msg) from error
-    else:
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as error:
-            msg = f"Could not parse YAML from {quote_path(path)}: {error}."
-            raise ParameterError(msg) from error
-    if not isinstance(data, Mapping):
-        msg = f"{quote_path(path)} holds no mapping, so it states no attributes."
-        raise ParameterError(msg)
-    return dict(data)
+    is_json = path.suffix.casefold() == OBJECT_SUFFIXES[0]
+    return read_document(
+        path,
+        "json" if is_json else "yaml",
+        error=ParameterError,
+        holds="states no attributes",
+    )
 
 
 def _entries(directory: Path) -> list[Path]:

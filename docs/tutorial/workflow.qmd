@@ -1,0 +1,234 @@
+---
+title: Workflow
+execute:
+  warning: false
+---
+A workflow is processing written down as an object rather than as a script. Its two pieces are a [Task](`dascore.workflow.task.Task`), which is one operation and the parameters it was given, and a [Pipe](`dascore.workflow.pipe.Pipe`), which is several tasks arranged into the shape of one. Both are immutable, both know their own fingerprint, and both can be written to a file and read back, so a processing chain can be compared, stored, shared, and run later against other data.
+
+::: {.callout-note}
+The workflow module is new, and DASCore's own patch functions do not use it yet. Today you can write tasks of your own; a later release turns every patch function into one.
+:::
+
+# Tasks
+
+A task is a frozen model whose fields are the parameters of the operation, plus a `run` which does it.
+
+```{python}
+from dascore.workflow import Task
+
+
+class Scale(Task):
+    """Multiply data by a factor."""
+
+    factor: float = 1.0
+
+    def run(self, patch):
+        """Scale a patch."""
+        return patch.update(data=patch.data * self.factor)
+
+
+task = Scale(factor=2)
+task
+```
+
+Because the parameters are the object, a task holds its parameters for good: an array given to one is marked read-only in place, so a task cannot come to report a fingerprint of values it no longer holds. Nothing is copied, so pass a copy of a buffer you are still writing to.
+
+Because the parameters are the object, two tasks which would do the same thing are the same task:
+
+```{python}
+assert Scale(factor=2) == Scale(factor=2)
+assert Scale(factor=2) != Scale(factor=3)
+```
+
+## Fingerprints
+
+Every task has a `fingerprint`: a short digest of which task it is, which version of it, and what it was given. The same call gives the same fingerprint in another process, on another machine, and in a later release, barring a change in how pandas or pint hash their own objects.
+
+```{python}
+Scale(factor=2).fingerprint
+```
+
+The fingerprint names the package, the class and its parameters, not the module inside the package nor the source of the body. Moving `Scale` to another module of the same package does not change it; changing what the same parameters *mean* should, which is what `__version__` is for:
+
+```{python}
+class Scale(Task):
+    """Multiply data by a factor, differently."""
+
+    __version__ = "2.0"
+    factor: float = 1.0
+
+    def run(self, patch):
+        """Scale a patch."""
+        return patch.update(data=patch.data * self.factor)
+
+
+Scale(factor=2).fingerprint
+```
+
+## Tasks from functions
+
+A function can become a task class without being rewritten. The decorator reads its signature: the first parameter is what the task is given when it runs, and the rest become its fields.
+
+```{python}
+from dascore.workflow import task
+
+
+@task
+def scale_number(number, factor=1):
+    """Scale a number."""
+    return number * factor
+
+
+scale_number(factor=3).run(2)
+```
+
+`inputs=` says how many leading parameters are inputs — `inputs=0` makes a task which is handed nothing and produces a value of its own, and `inputs=2` one which takes a pair. A function which packs its arguments (`def merge(*patches)`) can be asked for any number, which is what a task joining two branches needs.
+
+A task is callable, so it can stand anywhere a function of its inputs can:
+
+```{python}
+scale_number(factor=3)(2)
+```
+
+# Pipes
+
+Tasks joined with `|` make a pipe, which runs them in order.
+
+```{python}
+from dascore.workflow import Task
+
+
+class AddValue(Task):
+    """Add a number."""
+
+    value: int = 1
+
+    def run(self, number):
+        """Add to a number."""
+        return number + self.value
+
+
+class TimesValue(Task):
+    """Multiply by a number."""
+
+    value: int = 2
+
+    def run(self, number):
+        """Multiply a number."""
+        return number * self.value
+
+
+pipe = AddValue(value=2) | TimesValue(value=3)
+pipe(1)
+```
+
+A pipe is a graph rather than a list, so several branches can feed one task. Each branch gets the input, and the task which joins them is given their outputs in the order they were wired.
+
+```{python}
+class JoinValues(Task):
+    """Add up everything it is given."""
+
+    def run(self, *numbers):
+        """Add up numbers."""
+        return sum(numbers)
+
+
+branched = (AddValue(value=1), TimesValue(value=5)) | JoinValues()
+branched(10)
+```
+
+`|` works the same way round: a tuple on the right fans out, and a pipe which fans out returns one result per branch.
+
+```{python}
+fanned = AddValue(value=1) | (TimesValue(value=2), TimesValue(value=3))
+fanned(10)
+```
+
+Putting the two together makes a diamond — one input, two branches, joined again:
+
+```{python}
+diamond = AddValue(value=1) | (TimesValue(value=2), TimesValue(value=3)) | JoinValues()
+diamond(10)
+```
+
+DASCore does not schedule or stream: running a pipe gives each task its inputs, in order, and nothing else. Running one over many patches is a loop, `spool.map`, or whatever else already does that work:
+
+```{python}
+[pipe(x) for x in [1, 2, 3]]
+```
+
+## Nodes
+
+Each task in a pipe is a node under a name of its own, taken from the class and numbered when the same task appears twice. Names are for reading and for referring to a node — `get` reads one, `update` changes its parameters and gives back a new pipe, and `relabel` gives it a name of your own.
+
+```{python}
+print(list(diamond.tasks))
+diamond.update("times_value", value=10)(10)
+```
+
+```{python}
+diamond.get("times_value_2")
+```
+
+A pipe has a fingerprint of its own, covering the tasks, how they are wired, the order its branches are fed and the order it returns its results. It is structural rather than nominal, so renaming a node leaves the pipe the pipe it was:
+
+```{python}
+assert diamond.relabel(times_value="left").fingerprint == diamond.fingerprint
+```
+
+A pipe also writes itself out as a mermaid flowchart, which anywhere that draws mermaid turns into a diagram:
+
+```{python}
+print(diamond.to_mermaid())
+```
+
+## Saving and loading
+
+A pipe can be written to JSON or YAML — `.yaml` and `.yml` write YAML, `.json` or a bare name write JSON, and any other suffix is refused rather than guessed at — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name. The other side of that is that a task class has to live at module level, under a name no other class in its package claims, and that whatever defines it has to be imported before the pipe is loaded.
+
+<!--
+`execute: false` keeps the chunk below out of the generated doc tests
+(scripts/generate_doc_code_tests.py), which run a page's chunks inside a
+function, where a task class is a local one and no document could name it.
+Quarto ignores the option and still runs the chunk at build time.
+-->
+
+```{python}
+#| execute: false
+import tempfile
+from pathlib import Path
+
+from dascore.workflow import Pipe
+
+path = Path(tempfile.mkdtemp()) / "run.yaml"
+pipe.save(path)
+assert Pipe.load(path) == pipe
+print(path.read_text()[:120])
+```
+
+# Provenance
+
+A [Provenance](`dascore.workflow.provenance.Provenance`) records a pipe together with the run which used it: the version of DASCore, the python, and the machine. It is the durable record — the thing worth writing next to results.
+
+```{python}
+provenance = pipe.get_provenance(operator="a tutorial")
+provenance.dascore_version, provenance.fingerprint
+```
+
+Alongside it is a [ProvenanceNode](`dascore.workflow.provenance.ProvenanceNode`), the live record: one immutable node per step, each pointing back at the nodes which fed it. A graph starts wide, at the files data was read from, and narrows as data is merged. `describe` reads it back as a listing, and `to_pipe` turns it into something runnable again.
+
+```{python}
+from dascore.workflow import ProvenanceNode, SourceInfo
+
+source = ProvenanceNode(source=SourceInfo(format="DASDAE", path="/data/patch.h5"))
+first = ProvenanceNode(task=AddValue(value=2), parents=(source,))
+second = ProvenanceNode(task=TimesValue(value=3), parents=(first,))
+
+print(second.describe())
+```
+
+```{python}
+second.to_pipe().run(1)
+```
+
+Building that graph as patches are processed comes in a later release, along with the two ids — `patch_id` for which data, `processing_id` for what was done — which the nodes carry.

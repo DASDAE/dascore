@@ -30,13 +30,14 @@ from __future__ import annotations
 import inspect
 import warnings
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cached_property
 from typing import Any, ClassVar, Self
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic.fields import FieldInfo
 
+from dascore.compat import array, is_array_like
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import (
@@ -48,11 +49,18 @@ from dascore.models.registry import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
-from dascore.workflow.serialize import DOCUMENT, decode, digest, encode, model_values
+from dascore.workflow.serialize import (
+    DOCUMENT,
+    PIPE_TAG,
+    TASK_TAG,
+    decode,
+    digest,
+    encode,
+    model_values,
+)
 
 # The keys a task's document holds beside its parameters.
 _VERSION_KEY = "version"
-_CODE_PATH_KEY = "code_path"
 _PARAMS_KEY = "params"
 
 
@@ -63,9 +71,26 @@ class Task(DascoreBaseModel):
     Subclasses declare their parameters as fields and implement `run`. Every
     instance is frozen, so a task can be shared, cached and reused; changing
     one means making another with `update`.
+
+    What `run` takes is what the task is given when it runs, positionally
+    and in the order its parameters are declared; everything the task was
+    *configured* with is a field. A pipe wires its edges by position for
+    the same reason: there is no name to bind them to, and the order the
+    inputs are given in is part of what the step did.
+
+    An array given as a parameter is marked read-only in place, as a
+    patch's data is, so that the fingerprint cannot come to describe values
+    the task no longer holds. Nothing is copied, so the array marked is the
+    caller's own: pass a copy of a buffer which is still being written to.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _own_the_arrays(cls, data: Any) -> Any:
+        """Take ownership of any array a task was handed."""
+        return own_arrays(data) if isinstance(data, dict) else data
 
     # Bumped by a subclass whenever the same parameters should mean a
     # different answer, so that old fingerprints do not name the new
@@ -95,10 +120,31 @@ class Task(DascoreBaseModel):
         within a package nor a faster kernel makes an operation a different
         operation.
         """
+        return self.fingerprint_at(self.__version__)
+
+    def fingerprint_at(self, version: str) -> str:
+        """
+        Return the fingerprint this task has at a stated version.
+
+        For reading a document back: the version is part of what a task is,
+        so a document written before its class moved on records a
+        fingerprint this task no longer has. Asking for it at the version
+        the document names says what it was, which is how an edited file
+        can still be told from an old one.
+
+        Parameters
+        ----------
+        version
+            The version to compute it at, as `__version__` spells one.
+        """
+        # The parameters go in as the objects they are: `digest` encodes
+        # what it is given, and encoding them here as well would put every
+        # tagged value -- an array, a time, a quantity -- through the
+        # escape which exists for a mapping that spells a tag itself.
         payload = {
             "task": _qualified_tag(type(self)),
-            _VERSION_KEY: self.__version__,
-            _PARAMS_KEY: encode(self._params()),
+            _VERSION_KEY: version,
+            _PARAMS_KEY: self._params(),
         }
         return digest(payload)
 
@@ -106,6 +152,16 @@ class Task(DascoreBaseModel):
         """Execute the task. Subclasses must implement this."""
         msg = f"{type(self).__name__} does not implement run."
         raise NotImplementedError(msg)
+
+    def __call__(self, *args, **kwargs) -> Any:
+        """
+        Run the task; see `run`.
+
+        Defined rather than aliased so that a subclass's own `run` is the
+        one called, and so a task can stand anywhere a function of its
+        inputs can -- `spool.map(task)`, most of all.
+        """
+        return self.run(*args, **kwargs)
 
     def update(self, **kwargs) -> Self:
         """
@@ -124,16 +180,14 @@ class Task(DascoreBaseModel):
         """
         Return a document which describes this task.
 
-        The document names the class by its registered tag, never by an
-        import path; `code_path` is written only so a human, or an error
-        message, can find the class the tag stands for.
+        The class is named by its registered tag and by nothing else: the
+        tag already names the package, and a module path would go stale as
+        soon as the class moved, which a fingerprint deliberately survives.
         """
-        cls = type(self)
-        _check_nameable(cls, self.tag)
+        _check_nameable(type(self), self.tag)
         return {
             TAG_FIELD: self.tag,
             _VERSION_KEY: self.__version__,
-            _CODE_PATH_KEY: f"{cls.__module__}:{cls.__qualname__}",
             _PARAMS_KEY: encode(self._params(), mode=DOCUMENT),
         }
 
@@ -174,6 +228,19 @@ class Task(DascoreBaseModel):
         """Hash a task the way it compares."""
         return hash(self.fingerprint)
 
+    def __or__(self, other) -> Any:
+        """Return the pipe which runs this task and then what follows it."""
+        # pipe.py imports this module, so it is named where it is used.
+        from dascore.workflow.pipe import join  # noqa: PLC0415
+
+        return join(self, other)
+
+    def __ror__(self, other) -> Any:
+        """Return the pipe which runs what precedes this task and then it."""
+        from dascore.workflow.pipe import join  # noqa: PLC0415
+
+        return join(other, self)
+
     def __reduce__(self):
         """
         Pickle a task by its tag, and its parameters as themselves.
@@ -210,6 +277,63 @@ def _check_nameable(task_class: type[Task], tag: str | None) -> None:
             "its package claims."
         )
         raise ParameterError(msg)
+
+
+def holds_a_nested_version(document: Mapping) -> bool:
+    """
+    Return True when a task or pipe a document holds as a *parameter* was
+    written at another version.
+
+    The tasks a pipe is made of are not looked at: their fingerprints can
+    be recomputed at the version the document records, which says exactly
+    what they were. A nested one cannot, because the task holding it
+    fingerprints it at the version its class has now -- so a bump down
+    there is the one version difference which still cannot be told from an
+    edit, and is tolerated rather than reported as one.
+    """
+    return any(
+        _holds_another_version(nested)
+        for task in document.get("tasks", {}).values()
+        for nested in _nested_documents(task)
+    )
+
+
+def _holds_another_version(document: Mapping) -> bool:
+    """
+    Return True when a task document, or one it holds, moved on.
+
+    Only a nested task or pipe is followed, never a parameter's own
+    contents: a task may legitimately hold a mapping which spells a tag and
+    a version -- a stored attrs document does -- and reading that as a
+    version bump would let a parameter speak for the tasks around it.
+    """
+    return _task_moved_on(document) or any(
+        _holds_another_version(x) for x in _nested_documents(document)
+    )
+
+
+def _task_moved_on(document: Mapping) -> bool:
+    """Return True when a task document names a version its class does not."""
+    tag, version = document.get(TAG_FIELD), document.get(_VERSION_KEY)
+    if version is None or not isinstance(tag, str):
+        return False
+    model = resolve_model_tag(tag)
+    return getattr(model, "__version__", version) != version
+
+
+def _nested_documents(document: Mapping) -> list:
+    """Return the task and pipe documents one document holds directly."""
+    # A pipe writes its nodes under `tasks`; a task writes a nested task or
+    # pipe as the one tagged value the encoding gives it.
+    out = list(document.get("tasks", {}).values())
+    for value in document.get(_PARAMS_KEY, {}).values():
+        if isinstance(value, Mapping) and len(value) == 1:
+            nested = value.get(TASK_TAG, value.get(PIPE_TAG))
+            # A mapping, so a nested value written for a fingerprint -- a
+            # digest rather than a document -- is nothing to walk into.
+            if isinstance(nested, Mapping):
+                out.append(nested)
+    return out
 
 
 def _check_version(task_class: type[Task], version: object) -> None:
@@ -256,6 +380,37 @@ def intern(task: Task) -> Task:
         return existing
     _INTERNED[task.fingerprint] = task
     return task
+
+
+def own_arrays(values: Mapping) -> dict:
+    """
+    Return parameters with every array in them made read-only.
+
+    A task is immutable and its fingerprint is cached on first use, so an
+    array a caller kept writing to would leave the task reporting a
+    fingerprint of values it no longer holds. Marking it read-only is what
+    dascore does with a patch's data, and costs no copy -- which means the
+    array marked is the caller's own, not a copy of it.
+    """
+    return {key: _own(value) for key, value in values.items()}
+
+
+def _own(value: Any) -> Any:
+    """Return one parameter value with the arrays inside it made read-only."""
+    # Only array-likes: `array` would turn anything else, a string or a
+    # tuple of bounds, into an array of its own.
+    if is_array_like(value):
+        return array(value)
+    # Arrays reach a task inside a sequence as well -- a pair of masks, a
+    # mapping of them -- and a container is walked rather than rebuilt when
+    # it holds none.
+    if isinstance(value, list | tuple):
+        owned = [_own(x) for x in value]
+        return type(value)(owned) if owned != list(value) else value
+    if isinstance(value, Mapping):
+        owned = {key: _own(x) for key, x in value.items()}
+        return owned if owned != dict(value) else value
+    return value
 
 
 def _qualified_tag(cls: type) -> str:
@@ -310,7 +465,9 @@ class FunctionTask(Task):
         for name, parameter in cls._signature.parameters.items():
             if parameter.kind == inspect.Parameter.VAR_KEYWORD:
                 values |= values.pop(name, {})
-        return cls.model_construct(**values)
+        # model_construct skips validation, and with it the validator which
+        # takes ownership of an array, so it is done here instead.
+        return cls.model_construct(**own_arrays(values))
 
     def _call_args(self) -> tuple:
         """Return the arguments this task passes positionally."""
@@ -330,12 +487,12 @@ class FunctionTask(Task):
         return out
 
 
-def task(func: Callable | None = None, *, version: str = "1.0") -> Any:
+def task(func: Callable | None = None, *, version: str = "1.0", inputs: int = 1) -> Any:
     """
     Turn a function into a `Task` subclass.
 
-    The function's parameters become the task's fields, and calling `run`
-    calls the function with them.
+    The function's parameters become the task's fields, except the first
+    `inputs` of them, which are what the task is given when it runs.
 
     Parameters
     ----------
@@ -343,22 +500,35 @@ def task(func: Callable | None = None, *, version: str = "1.0") -> Any:
         The function to convert.
     version
         The version of the new task class.
+    inputs
+        How many of the function's leading positional parameters are run
+        time inputs rather than parameters. One by default, which is what a
+        step of a pipe takes; zero makes a task which is fed nothing and is
+        a source of its own.
 
     Examples
     --------
     >>> from dascore.workflow import task
     >>>
     >>> @task
-    ... def add_example(a, b=1):
-    ...     '''Add two numbers.'''
-    ...     return a + b
+    ... def scale_number_example(number, factor=1):
+    ...     '''Scale a number.'''
+    ...     return number * factor
     >>>
-    >>> assert add_example(a=1, b=2).run() == 3
-    >>> assert add_example(a=1).run() == 2
+    >>> assert scale_number_example(factor=2).run(3) == 6
+    >>> # A pipe step is a task of one input, so `|` works on them.
+    >>> assert (scale_number_example(factor=2) | scale_number_example(factor=3))(1) == 6
+    >>>
+    >>> @task(inputs=0)
+    ... def source_number_example(value=1):
+    ...     '''Make a number out of nothing.'''
+    ...     return value
+    >>>
+    >>> assert source_number_example(value=2).run() == 2
     """
 
     def decorator(function: Callable) -> type[Task]:
-        return make_function_task_class(function, version=version)
+        return make_function_task_class(function, version=version, inputs=inputs)
 
     return decorator if func is None else decorator(func)
 
@@ -367,7 +537,7 @@ def make_function_task_class(
     func: Callable,
     base: type[Task] = Task,
     version: str = "1.0",
-    skip_first: bool = False,
+    inputs: int = 0,
 ) -> type[Task]:
     """
     Return a `Task` subclass whose fields are a function's parameters.
@@ -381,16 +551,19 @@ def make_function_task_class(
         `PatchProcessor` rather than from `Task` itself.
     version
         The version of the new class.
-    skip_first
-        If True the first parameter is not made a field. It is the input the
+    inputs
+        How many leading parameters are not made fields. They are what the
         task is given when it runs, such as the patch a patch function
-        operates on.
+        operates on. None by default here, unlike the `task` decorator,
+        which takes one.
     """
     signature = inspect.signature(func)
     # A callable which is not a function -- a class, or an object with a
     # __call__ -- is named by its own class instead.
     qualname = getattr(func, "__qualname__", type(func).__qualname__)
-    parameters = list(signature.parameters.values())[1 if skip_first else 0 :]
+    declared = list(signature.parameters.values())
+    _check_inputs(func, declared, inputs)
+    parameters = _remaining_parameters(declared, inputs)
     namespace, annotations = _build_fields(parameters)
     positional, keyword = _call_plan(parameters)
     # Declared ClassVar so that pydantic leaves them as class attributes
@@ -426,6 +599,62 @@ def make_function_task_class(
     # the function, and the attribute it hides is not part of a task's API.
     with suppress_warnings(UserWarning, message="Field name .* shadows an attribute"):
         return type(name, (FunctionTask, base), namespace)
+
+
+def _check_inputs(
+    func: Callable, parameters: list[inspect.Parameter], inputs: int
+) -> None:
+    """
+    Refuse a count of run time inputs the function could not be given.
+
+    An input is passed positionally, so only a positional parameter can be
+    one; a keyword only parameter, or a ``**kwargs`` group, stays with the
+    task. A ``*args`` group takes as many as it is given, so a function
+    which has one can be asked for any number. Refusing here puts the
+    failure where the count is written rather than in the call which finds
+    itself missing an argument.
+    """
+    positional = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    takeable = [x for x in parameters if x.kind in positional]
+    packs_args = any(x.kind == inspect.Parameter.VAR_POSITIONAL for x in parameters)
+    if inputs < 0 or (inputs > len(takeable) and not packs_args):
+        name = getattr(func, "__name__", type(func).__name__)
+        msg = (
+            f"{name} takes {len(takeable)} arguments which could be an "
+            f"input, and was asked for {inputs}. Spell the count it takes, "
+            "such as inputs=0 for a task which is handed nothing."
+        )
+        raise ParameterError(msg)
+
+
+def _remaining_parameters(
+    declared: list[inspect.Parameter], inputs: int
+) -> list[inspect.Parameter]:
+    """
+    Return the parameters left once the run time inputs are taken out.
+
+    Taken off the front one at a time rather than sliced by count: a
+    ``*args`` group absorbs every input which is left, and whatever is
+    declared after it -- a keyword only parameter, a ``**kwargs`` group --
+    is still the task's, which slicing by count would drop.
+    """
+    positional = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    out: list[inspect.Parameter] = []
+    taken = 0
+    for parameter in declared:
+        if taken < inputs and parameter.kind in positional:
+            taken += 1
+        elif taken < inputs and parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+            taken = inputs
+        else:
+            out.append(parameter)
+    return out
 
 
 def _call_plan(
