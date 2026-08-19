@@ -638,3 +638,16 @@ class TestWhatTheReviewsFound:
 
         first, second = make(2), make(3)
         assert first(patch).attrs.processing_id != second(patch).attrs.processing_id
+
+    def test_a_dtype_argument_is_spelled_out(self, patch):
+        """
+        The serializer has no encoding for a `np.dtype`.
+
+        Hashed by its class it would give every dtype one fingerprint and
+        warn on every call, so it is recorded as its string instead.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            single = np.mean(patch, axis=0, dtype=np.dtype("float32"))
+            double = np.mean(patch, axis=0, dtype=np.dtype("float64"))
+        assert single.attrs.processing_id != double.attrs.processing_id
