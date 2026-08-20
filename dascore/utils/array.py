@@ -269,6 +269,19 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     return patch.new(data=out, attrs=attrs)
 
 
+def _quantity(array, units):
+    """
+    Attach a unit quantity to an array without multiplying by it.
+
+    Multiplying by an offset quantity (1 degC) would have the registry
+    convert to base units first; constructing the quantity keeps each
+    element a value in those units. A scale in the units ("100 cm") is
+    folded into the magnitudes, as multiplication would.
+    """
+    magnitude = array if units.magnitude == 1 else array * units.magnitude
+    return type(units)(magnitude, units.units)
+
+
 def _is_offset_unit(quantity) -> bool:
     """
     Return True for a unit with an offset (degC), which cannot be scaled.
@@ -485,10 +498,21 @@ def _apply_binary_ufunc(
         Two known units are left to the unit registry to reconcile or
         reject; the result's data are its magnitudes in the registry's
         units (a scale in either side's units is folded into the data).
+        Offset units are the exception: the registry's ufunc dispatch does
+        not handle them, so they are done by hand — the other side is
+        converted to the patch's units, a difference is a delta, extrema
+        and comparisons keep or drop the units, anything else is refused.
         """
+        if _is_offset_unit(data_units) or _is_offset_unit(other_units):
+            return _apply_op_both_offset(
+                patch, other, operator, attrs, data_units, other_units, reversed
+            )
         try:
             result = _apply_op(
-                patch.data * data_units, other * other_units, operator, reversed
+                _quantity(patch.data, data_units),
+                _quantity(other, other_units),
+                operator,
+                reversed,
             )
         except DimensionalityError as er:
             msg = f"{operator} failed with units {data_units} and {other_units}"
@@ -501,7 +525,7 @@ def _apply_binary_ufunc(
                 other_data = other  # untouched, dtype included
             else:
                 try:
-                    in_patch_units = (other * other_units).to(data_units.units)
+                    in_patch_units = _quantity(other, other_units).to(data_units.units)
                 except DimensionalityError as er:
                     msg = f"{operator} failed with units {data_units} and {other_units}"
                     raise UnitError(msg) from er
@@ -511,6 +535,28 @@ def _apply_binary_ufunc(
             return result.magnitude, attrs.update(data_units=str(result.units))
         # Result is unitless (e.g., from boolean comparison)
         return result, attrs.update(data_units=None)
+
+    def _apply_op_both_offset(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """Apply an operation to two quantities in offset units (degC)."""
+        # two absolute temperatures can be subtracted, compared, or ranked,
+        # never added
+        if operator not in _OFFSET_UNIT_OPERATORS or operator is np.add:
+            msg = f"{operator} is not defined for the offset units {data_units}."
+            raise UnitError(msg)
+        try:
+            other_data = _quantity(other, other_units).to(data_units.units).magnitude
+        except DimensionalityError as er:
+            msg = f"{operator} failed with units {data_units} and {other_units}"
+            raise UnitError(msg) from er
+        new_data = _apply_op(patch.data, other_data, operator, reversed)
+        if getattr(new_data, "dtype", None) == np.bool_:
+            return new_data, attrs.update(data_units=None)
+        if operator is np.subtract:
+            one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)
+            return new_data, attrs.update(data_units=str((one - zero).units))
+        return new_data, attrs.update(data_units=_label(data_units))
 
     def _apply_op_units(
         patch, other, operator, attrs, reversed=False, other_units=None

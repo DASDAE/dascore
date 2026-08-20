@@ -392,6 +392,7 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
+        attr_units: Mapping[str, str | None] | None = None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -412,6 +413,10 @@ class PlanResolver(PatchResolver):
         self.origin_path = origin_path
         # attrs the outputs state about themselves rather than inherit
         self.stamped = tuple(stamped)
+        # the units the index stores each numeric attr column in (None for
+        # a plain number), resolved at planning so a row's magnitude can
+        # be turned back into the attr it came from
+        self.attr_units = dict(attr_units or {})
         # Whether the outputs leave samples of their sources out. A lossy
         # plan must never be collapsed: its members do not cover their
         # sources, so re-planning over them would load back what it
@@ -551,18 +556,44 @@ class PlanResolver(PatchResolver):
         skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
         names = {x for x in row if not x.startswith("_") and x not in skip}
         # A number in a row may be a quantity the index stored as a base-SI
-        # magnitude with its units kept elsewhere, so stamping it could
-        # mislabel; only values the row holds losslessly are filled.
-        fill = {
-            x: row[x]
-            for x in names
-            if not _is_missing(row[x])
-            and _is_missing(attrs.get(x))
-            and not _is_number(row[x])
-        }
+        # magnitude with its units kept in the attr metadata resolved at
+        # planning; a number whose units the plan does not know is left
+        # alone rather than stamped as a bare magnitude.
+        fill = {}
+        for x in names:
+            value = row[x]
+            if _is_missing(value) or not _is_missing(attrs.get(x)):
+                continue
+            if _is_number(value):
+                if x not in self.attr_units:
+                    continue
+                if units := self.attr_units[x]:
+                    value = value * get_quantity(units)
+            fill[x] = value
         if fill:
             patch = patch.new(attrs=attrs.update(**fill))
         return patch
+
+
+def _numeric_attr_units(parent, outputs: pd.DataFrame) -> dict[str, str | None]:
+    """
+    The units the parent index stores each attr column in.
+
+    None marks a plain value. Columns the index holds no attr metadata
+    for (envelopes, bookkeeping) come back as None too; `_stamp` never
+    fills those anyway.
+    """
+    if parent is None:
+        return {}
+    out: dict[str, str | None] = {}
+    for col in outputs.columns:
+        # carried columns come out object-typed, so every public column is
+        # asked about rather than only the numeric-looking ones
+        if col.startswith("_"):
+            continue
+        kinds = parent.backend.attr_units(col)
+        out[col] = next((x for x in kinds.values() if x), None)
+    return out
 
 
 def _is_number(value) -> bool:
@@ -674,6 +705,7 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
+        attr_units=_numeric_attr_units(parent, plan.outputs),
     )
     backend = get_backend(":memory:")
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()

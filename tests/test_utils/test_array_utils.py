@@ -332,6 +332,23 @@ class TestApplyUfunc:
         with pytest.raises(UnitError, match="names no units"):
             apply_ufunc(np.multiply, random_patch, "")
 
+    def test_two_offset_unit_patches(self, random_patch):
+        """Two temperatures differ by a delta; their sum has no meaning."""
+        warm = random_patch.new(data=np.full(random_patch.shape, 20.0)).set_units(
+            "degC"
+        )
+        cool = random_patch.new(data=np.full(random_patch.shape, 5.0)).set_units("degC")
+        out = warm - cool
+        assert np.allclose(out.data, 15.0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("delta_degC")
+        with pytest.raises(UnitError, match="offset units"):
+            warm + cool
+        assert np.all((warm > cool).data)
+        hottest = np.maximum(warm, cool)
+        assert get_quantity(hottest.attrs.data_units) == get_quantity("degC")
+        with pytest.raises(UnitError, match="failed with units"):
+            warm - random_patch.set_units("m")
+
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
         square = dc.get_example_patch(shape=(10, 10)).set_units("m")

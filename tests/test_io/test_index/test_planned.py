@@ -18,6 +18,7 @@ from dascore.io.index.planned import (
     _aux_coord_info,
     _coord_record_from_row,
     _ns,
+    _numeric_attr_units,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -386,3 +387,11 @@ class TestStatedUnits:
     def test_stated_units_pass_through(self):
         """A real spelling survives as a string."""
         assert _stated_units("ft") == "ft"
+
+
+class TestNumericAttrUnits:
+    """The attr units a plan resolves for stamping."""
+
+    def test_no_parent_knows_nothing(self):
+        """Without a parent index there are no attr units to resolve."""
+        assert _numeric_attr_units(None, pd.DataFrame({"foo": [1.0]})) == {}
