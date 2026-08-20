@@ -242,6 +242,27 @@ subspool = spool.select(acquisition_key={'DAS2.R2D1..RAW', 'DAS3.R2D1..RAW'})
 subspool = spool.select(tag='some*')
 ```
 
+## Finding a patch by its id
+
+`patch_id` — which data a patch is, described in [Patch identity](patch.qmd#patch-identity) — is indexed like any other attribute. A spool can therefore hand back the patch an id names without loading anything to look for it, which is how a result written down somewhere else finds its way back to the data it came from.
+
+```{python}
+import dascore as dc
+spool = dc.get_example_spool()
+
+wanted = spool.get_contents()["patch_id"].iloc[1]
+found = spool.select(patch_id=wanted)
+
+assert len(found) == 1
+assert found[0].attrs.patch_id == wanted
+```
+
+An id is the same on every read of the same file, so one written down today still names the same data next year — see [Patch identity](patch.qmd#patch-identity) for what an id is derived from and when it changes.
+
+Two things do not carry an id. `processing_id` is not indexed at all: it advances whenever an operation runs, and a spool runs one as it loads, so what the index recorded would not be what came back. And a spool whose patches are built rather than read — a chunked one, most of all — has no `patch_id` column, because a merged patch folds its members' ids rather than inheriting any one of them; selecting by id there says the spool has no such attribute rather than quietly matching nothing.
+
+An id names a path, so a file which moves — including the directory rename that attaches metadata to an archive — is no longer the row the index derived an id for. The index clears the id rather than keeping a stale one, so a moved source has an empty `patch_id` until the archive is scanned again; the patches themselves still carry theirs.
+
 # unselect
 
 [`unselect`](`dascore.core.spool.Spool.unselect`) is the complement of `select`: it returns the patches the same selection would have removed. Each keyword means what it means in `select`, so this is how to name what a spool does *not* want without spelling out the rest of the archive.

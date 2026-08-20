@@ -45,6 +45,7 @@ from dascore.io.index.schema import (
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
+    SPOOL_EARLY_RENAMES,
     TABLE_CONSTRAINTS,
     TABLES,
     WHAT_IS_THIS,
@@ -150,6 +151,10 @@ def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:
         else:  # string/boolean/... -> classic object with None for missing
             df[name] = col.to_numpy(dtype=object, na_value=None)
     return df
+
+
+# The attr a moved source can no longer vouch for; see `_forget_lineage`.
+_LINEAGE_ATTR = "patch_id"
 
 
 class SQLiteIndexBackend:
@@ -805,6 +810,37 @@ class SQLiteIndexBackend:
                         f"WHERE source_id IN ({marks}))",
                         (*values, *chunk),
                     )
+            self._forget_lineage(list(ids.values()))
+
+    def _forget_lineage(self, source_ids: list[int]) -> None:
+        """
+        Clear the indexed `patch_id` of sources which have moved.
+
+        A derived id names the path it was derived from, so a moved
+        source's stored id is the id of where it used to be: selecting by
+        it would hand back a patch which no longer carries it. Cleared
+        rather than recomputed, because telling a derived id from one a
+        format stored means reading rows this path exists to avoid
+        reading; a rescan fills them back in.
+
+        A missing id is a missed lookup. A stale one is a wrong answer.
+        """
+        columns = [column for _, column in self._attr_kinds(_LINEAGE_ATTR)]
+        if not columns or not source_ids:
+            return
+        assignments = ", ".join(f"{quote(col)} = NULL" for col in columns)
+        for chunk, marks in self._iter_in_batches(source_ids):
+            self._execute(
+                f"UPDATE attrs SET {assignments} WHERE patch_id IN "
+                f"(SELECT patch_id FROM patches WHERE source_id IN ({marks}))",
+                chunk,
+            )
+
+    def _attr_kinds(self, name: str) -> list[tuple[str, str]]:
+        """Return the (kind, column) pairs an attr name is stored under."""
+        meta = self._attr_meta()
+        rows = meta[meta["attr_name"] == name]
+        return list(zip(rows["value_kind"], rows["column_name"], strict=True))
 
     # --- queries -----------------------------------------------------
 
@@ -838,6 +874,10 @@ class SQLiteIndexBackend:
         df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
+        # Renamed before the attrs land, not after: `patch_id` names a
+        # row here and a datum on a patch, and the attr must find the
+        # public spelling free rather than collide with the row's.
+        df = df.rename(columns=dict(SPOOL_EARLY_RENAMES))
         df = self._apply_attr_columns(df, attr_columns)
         if residuals:
             # Residuals only ever come from attr predicates, so they must
@@ -860,7 +900,7 @@ class SQLiteIndexBackend:
         if residuals:
             # regex residuals need string values; realize the relation
             df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
-            return [int(x) for x in df["patch_id"]]
+            return [int(x) for x in df["_patch_id"]]
         return [int(x) for x in self._fetch_df(sql, params)["patch_id"]]
 
     def count(self, query=None, patch_ids=None) -> int:

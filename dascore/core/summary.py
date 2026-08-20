@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from pydantic import ConfigDict, Field, SerializeAsAny, model_validator
+from upath import UPath
 
 import dascore as dc
 from dascore.constants import path_types
@@ -154,6 +155,33 @@ def _normalize_source_patch_key(
     return attrs, normalized
 
 
+def _upath_from_dump(value) -> UPath | None:
+    """
+    Return the path a dumped `UPath` describes, or None if it is not one.
+
+    A remote `UPath` does not survive `model_dump` as a path: it comes
+    back as its parts. Without this a summary round-tripped through a
+    dump -- which is what `new` does -- would lose its source path, and
+    then its format and version with it, because a summary with nothing
+    to reload from states no reload metadata.
+
+    A local path dumps as itself, so this is only ever reached by a
+    remote one.
+    """
+    if not isinstance(value, Mapping) or "path" not in value:
+        return None
+    protocol = value.get("protocol") or ""
+    options = value.get("storage_options") or {}
+    try:
+        if not protocol:
+            return UPath(value["path"])
+        return UPath(value["path"], protocol=protocol, **options)
+    except Exception:
+        # A mapping which is not a path is simply not one; the caller
+        # drops the source metadata as it would for any other value.
+        return None
+
+
 def _build_patch_summary_payload(
     *,
     attrs: PatchAttrs,
@@ -175,6 +203,8 @@ def _build_patch_summary_payload(
         normalized_source_path = ""
     elif is_pathlike(source_path):
         normalized_source_path = coerce_to_upath(source_path)
+    elif (restored := _upath_from_dump(source_path)) is not None:
+        normalized_source_path = restored
     else:
         normalized_source_path = ""
     normalized_source_format = "" if source_format in (None, "") else str(source_format)
@@ -250,13 +280,13 @@ class PatchSummary(DascoreBaseModel):
         """
         Create a summary from a loaded patch.
 
-        The lineage ids are dropped. A summary describes what data a file
-        holds, and the index does not store an id -- so a summary which
-        carried one would make scanning a file and reading it disagree
-        about the same data, for a field neither of them indexes.
+        The lineage ids are carried, not dropped: the index stores them,
+        so a summary which left them behind would be the one thing which
+        made scanning a patch and reading it disagree about which data it
+        is.
         """
         return cls(
-            attrs=patch.attrs.drop("patch_id", "processing_id"),
+            attrs=patch.attrs,
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,

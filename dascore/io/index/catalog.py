@@ -41,7 +41,7 @@ from dascore.io.index.query import (
     Query,
     resolve_query,
 )
-from dascore.io.index.schema import SPOOL_PRIVATE_RENAMES
+from dascore.io.index.schema import SPOOL_LATE_RENAMES
 from dascore.utils.misc import (
     _canonical_range,
     _CanonicalRange,
@@ -935,9 +935,10 @@ class PatchCatalog:
                 # id membership presents in its own (window/array) order
                 position = {pid: i for i, pid in enumerate(self._ids)}
                 df = df.sort_values(
-                    "patch_id", key=lambda s: s.map(position), kind="stable"
+                    "_patch_id", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
-            df = df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
+            # The early ones are already done; see SPOOL_EARLY_RENAMES.
+            df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
             # SQL identifies overlapping source patches. Expose the selected
             # envelopes, matching spool.get_contents() and the exact trim
             # applied when each patch is materialized. Each pass copies the

@@ -31,7 +31,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 10
+INDEX_VERSION = 11
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -261,8 +261,11 @@ TABLE_CONSTRAINTS = MappingProxyType(
 # not indexed; ingest warns about them.
 RESERVED_ATTR_COLUMNS = frozenset(
     {
-        # storage tables
-        "patch_id",
+        # storage tables. `patch_id` is deliberately absent: the row id it
+        # names here is renamed private (SPOOL_EARLY_RENAMES) before attr
+        # columns are applied, so a patch's own `patch_id` claims the
+        # public spelling rather than colliding with it. A path may still
+        # not claim it; see `_UNCLAIMABLE_BY_PATH`.
         "source_id",
         "source_patch_key",
         "source_path",
@@ -319,7 +322,12 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # grouping and conflict policing both compare all non-private columns, so
 # a public `dtype` would raise CoordMergeError on every merge of patches
 # with differing element types.
-SPOOL_PRIVATE_RENAMES = MappingProxyType({"patch_id": "_patch_id", "dtype": "_dtype"})
+# `patch_id` is the one of these an attr also legitimately claims: it
+# names a row in this schema and a datum on a patch. It is renamed in the
+# backend, before attr columns land, so the attr finds the public spelling
+# free; the rest are renamed where the spool relation is built.
+SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
+SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype"})
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,

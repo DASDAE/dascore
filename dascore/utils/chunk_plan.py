@@ -48,8 +48,17 @@ from dascore.utils.pd import get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
-# outputs: source bookkeeping (outputs are not file rows).
-_SOURCE_COLUMNS = ("source_path", "source_format", "source_version", "source_patch_key")
+# outputs: source bookkeeping (outputs are not file rows) and the two
+# lineage ids, which every patch states differently and a merged patch
+# folds from its members rather than inheriting from any one of them.
+_SOURCE_COLUMNS = (
+    "source_path",
+    "source_format",
+    "source_version",
+    "source_patch_key",
+    "patch_id",
+    "processing_id",
+)
 # The default continuity tolerance; looser values warn when they force
 # merges (#662).
 _DEFAULT_TOLERANCE = 1.5
@@ -1018,7 +1027,7 @@ def build_chunk_plan(
         # and make the plan row disagree with the patch it assembles
         # (which spool equality compares). Uniform partitions (the
         # common case) resolve in one shot; mixed ones resolve per
-        # output below. Carried privately (see SPOOL_PRIVATE_RENAMES)
+        # output below. Carried privately (see SPOOL_EARLY_RENAMES)
         # because a size-based chunk needs it.
         dtype_all = sorted_df["_dtype"].to_numpy()
         kdtypes = dtype_all[keep_row]

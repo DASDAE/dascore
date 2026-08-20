@@ -30,9 +30,11 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.io import core as io_core
 from dascore.io.core import (
     STORED_PATCH_ID,
     FiberIO,
+    _canonical_path,
     _FiberIOManager,
     _get_missing_install_name,
     _get_reloadable_source_path,
@@ -1831,6 +1833,68 @@ class TestConvertAttrUnits:
         assert "gauge_length" not in out
 
 
+class TestSummaryRoundTrip:
+    """What a summary keeps when it is rebuilt from itself."""
+
+    @pytest.fixture
+    def remote_summary(self, random_patch):
+        """A summary naming a source on a filesystem which is not local."""
+        return random_patch.summary.new(
+            source_path=UPath("memory://archive/one.h5"),
+            source_format="DASDAE",
+            source_version="1",
+        )
+
+    def test_a_remote_path_survives(self, remote_summary):
+        """
+        A remote path does not survive `model_dump` as a path.
+
+        It comes back as its parts, and a summary which cannot read those
+        back drops the path -- and then the format and version with it,
+        because a summary with nothing to reload from states no reload
+        metadata. Every `new` on a remote-backed summary went that way.
+        """
+        rebuilt = remote_summary.new(attrs=remote_summary.attrs.update(tag="x"))
+        assert str(rebuilt.source_path) == "memory://archive/one.h5"
+        assert rebuilt.source_format == "DASDAE"
+        assert rebuilt.source_version == "1"
+        assert rebuilt.attrs.tag == "x"
+
+    @pytest.mark.parametrize("path", ["one.h5", "/tmp/one.h5"])
+    def test_a_local_path_survives_too(self, random_patch, path):
+        """Local paths dump as themselves; this is the control."""
+        summary = random_patch.summary.new(source_path=path, source_format="DASDAE")
+        rebuilt = summary.new(dtype="float32")
+        assert str(rebuilt.source_path) == str(summary.source_path)
+        assert rebuilt.source_format == "DASDAE"
+
+    def test_a_mapping_naming_no_filesystem(self, random_patch):
+        """The parts of a local path, which is the form with no protocol."""
+        dumped = {"path": "/tmp/one.h5", "protocol": "", "storage_options": {}}
+        summary = random_patch.summary.new(
+            source_path=dumped, source_format="DASDAE", source_version="1"
+        )
+        # Compared as paths, not as text: windows spells this one with
+        # backslashes, and what matters is that it is the same path.
+        assert summary.source_path == UPath("/tmp/one.h5")
+        assert summary.source_format == "DASDAE"
+
+    def test_a_mapping_naming_no_such_filesystem(self, random_patch):
+        """A protocol nothing implements is not a path either."""
+        dumped = {"path": "/one.h5", "protocol": "nosuchfs", "storage_options": {}}
+        summary = random_patch.summary.new(source_path=dumped, source_format="DASDAE")
+        assert str(summary.source_path) == ""
+        assert summary.source_format == ""
+
+    def test_a_mapping_which_is_not_a_path(self, random_patch):
+        """Something else shaped like one is not one, and is dropped."""
+        summary = random_patch.summary.new(
+            source_path={"not": "a path"}, source_format="DASDAE"
+        )
+        assert str(summary.source_path) == ""
+        assert summary.source_format == ""
+
+
 class TestSourceIds:
     """The id a patch gets from the file it was read out of."""
 
@@ -1933,6 +1997,37 @@ class TestSourceIds:
         (tmp_path / ".cache").mkdir()
         (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
         assert _source_stats(tmp_path) == before
+
+    def test_one_file_spelled_two_ways(self, terra15_path, monkeypatch):
+        """
+        A relative and an absolute spelling name one datum.
+
+        The relative one is made by moving to the file's own directory:
+        `relpath` refuses to answer across windows drives, and where the
+        test data is cached is not this test's business.
+        """
+        absolute = dc.read(terra15_path)[0].attrs.patch_id
+        monkeypatch.chdir(Path(terra15_path).parent)
+        assert dc.read(Path(terra15_path).name)[0].attrs.patch_id == absolute
+
+    def test_a_path_which_cannot_be_canonicalized(self, monkeypatch):
+        """
+        A spelling nothing can resolve is still the spelling given.
+
+        Forced rather than found: which strings a filesystem refuses is
+        the filesystem's business, and differs by platform and python.
+        """
+
+        def _refuse(_):
+            raise OSError("no")
+
+        monkeypatch.setattr(io_core, "coerce_to_local_path", _refuse)
+        assert _canonical_path("one.h5") == "one.h5"
+
+    def test_scanning_with_the_ids_disabled(self, terra15_path):
+        """The config which turns the ids off turns scanning off too."""
+        with config_context(patch_provenance="disabled"):
+            assert dc.scan(terra15_path)[0].attrs.patch_id == ""
 
     def test_a_source_which_will_not_answer(self):
         """Nothing said is better than fields which pretend to be equal."""

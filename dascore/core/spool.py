@@ -2023,13 +2023,20 @@ class Spool(NamespaceOwner):
             # synthetic per-catalog identities (memory:// paths, ids) and
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
-            # (a construction artifact) must not matter. Coordinate def
-            # keys are representation artifacts too: a residual-trimmed
+            # (a construction artifact) must not matter. A patch's own
+            # lineage ids go too: a plan's outputs state none (a merged
+            # patch folds its members' rather than inheriting one), so
+            # keeping them would make a view unequal to its own
+            # materialization over a column neither describes it by.
+            # Coordinate def keys are representation artifacts too: a
+            # residual-trimmed
             # view cannot know its trimmed fingerprint without loading,
             # and data values are never compared here anyway.
             drop = [
                 "source_path",
                 "_patch_id",
+                "patch_id",
+                "processing_id",
                 "source_patch_key",
                 "source_format",
                 "source_version",

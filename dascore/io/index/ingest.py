@@ -45,7 +45,17 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # Attrs handled structurally or intentionally excluded from the index.
 # The ids are not indexed until the schema version which adds columns for
 # them; an index is for finding data, and an id is not a search term.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "patch_id", "processing_id"})
+# Attrs which are structure rather than metadata, and are never indexed.
+# `patch_id` is not here: it is an ordinary string, one per patch, and
+# indexing it is what lets a spool find a patch by the id it carries
+# rather than by loading every patch to look.
+#
+# `processing_id` is. It advances on every operation, and a spool applies
+# operations as it loads -- a residual trim is a real `select` on the
+# patch -- so what the index recorded is not what the patch which comes
+# back carries. `patch_id` survives those same operations by definition,
+# which is what makes it, and not this, the one worth indexing.
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "processing_id"})
 
 
 @dataclass(frozen=True)
@@ -286,15 +296,31 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
     return out
 
 
+# What a directory name may never claim to be. A path says where data is
+# kept, which is how renaming a directory corrects metadata; it does not
+# get to say which data it is, or a directory called `patch_id=x` would
+# rewrite the lineage of everything under it.
+_UNCLAIMABLE_BY_PATH = frozenset({"patch_id"})
+
+
 def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
     """
     Return the indexable hive-style path attrs for a stored relative path.
 
     Applies the same name rules as file attrs: structural/underscore
     names are dropped silently, reserved column collisions warn and drop.
+    A name only the data itself may state is dropped with a warning too.
     """
     out = {}
     for name, value in parse_hive_path_attrs(rel_posix).items():
+        if name in _UNCLAIMABLE_BY_PATH:
+            if warn:
+                msg = (
+                    f"Ignoring hive-style path key {name!r} in {rel_posix!r}; "
+                    "a path says where data is kept, not which data it is."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=2)
+            continue
         status = _attr_name_status(name)
         if status == "reserved" and warn:
             msg = (

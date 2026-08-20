@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
@@ -557,3 +558,120 @@ class TestCoordPivot:
         df = backend.query(Query(attrs={"tag": "corr"}))
         assert df["lag_time_min"].notna().all()
         assert "frequency_min" not in df.columns or df["frequency_min"].isna().all()
+
+
+class TestLineageIds:
+    """A patch can be found by the id it carries, without loading it."""
+
+    @pytest.fixture
+    def written_spool(self, tmp_path):
+        """Three patches on disk, each its own datum."""
+        with config_context(patch_provenance="disabled"):
+            for index, patch in enumerate(dc.get_example_spool("random_das")):
+                patch.io.write(tmp_path / f"{index}.h5", "dasdae")
+        return dc.spool(tmp_path).update()
+
+    def test_the_two_ids_are_different_columns(self, written_spool):
+        """The row's id is private; the patch's owns the public name."""
+        df = written_spool.get_contents()
+        assert {"_patch_id", "patch_id"}.issubset(df.columns)
+        assert df["_patch_id"].tolist() != df["patch_id"].tolist()
+
+    def test_scanning_and_reading_agree(self, tmp_path):
+        """Or an id found in the index would not name the patch it loads."""
+        path = tmp_path / "one.h5"
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(path, "dasdae")
+        assert dc.scan(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
+
+    def test_selecting_by_id_finds_that_patch(self, written_spool):
+        """Which is what indexing the id is for."""
+        wanted = written_spool.get_contents()["patch_id"].iloc[1]
+        selected = written_spool.select(patch_id=wanted)
+        assert len(selected) == 1
+        assert selected[0].attrs.patch_id == wanted
+
+    def test_what_was_done_is_not_indexed(self, tmp_path):
+        """
+        `processing_id` advances whenever an operation runs, and a spool
+        runs one as it loads: a residual trim is a real `select` on the
+        patch. What the index recorded would not be what came back, so it
+        is not recorded. `patch_id` survives those same operations, which
+        is what makes it the one worth indexing.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        assert "processing_id" not in spool.get_contents().columns
+
+    def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
+        """The index and the patch which loads must not disagree."""
+        trimmed = written_spool.select(time=(10, 20), samples=True)
+        indexed = trimmed.get_contents()["patch_id"].iloc[0]
+        assert trimmed[0].attrs.patch_id == indexed
+
+    def test_a_memory_spool_too(self):
+        """A summary carries the ids, so a patch never written is findable."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(patches)
+        wanted = patches[1].attrs.patch_id
+        assert spool.select(patch_id=wanted)[0].attrs.patch_id == wanted
+
+    def test_an_id_no_patch_carries(self, written_spool):
+        """An id which names nothing selects nothing, rather than raising."""
+        assert len(written_spool.select(patch_id="0" * 16)) == 0
+
+    def test_a_renamed_source_forgets_its_id(self, tmp_path):
+        """
+        A derived id names the path it came from.
+
+        Renaming a file is how metadata is attached to an archive, and
+        the index rewrites the path without re-reading the file. The id
+        the row held is the id of where it used to be, so it is cleared
+        rather than left to select a patch which no longer carries it.
+        """
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        stale = spool.get_contents()["patch_id"].iloc[0]
+        assert stale
+        (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+        moved = dc.spool(tmp_path).update()
+        assert moved.get_contents()["patch_id"].iloc[0] == ""
+        assert len(moved.select(patch_id=stale)) == 0
+        # The patch itself still says which data it is; only the index
+        # stopped claiming to know without looking.
+        assert moved[0].attrs.patch_id
+
+    def test_a_path_may_not_claim_the_lineage(self, tmp_path):
+        """
+        A directory name says where data is kept, not which data it is.
+
+        Hive-style path keys become ordinary attrs and override what a
+        file states, which is how a rename corrects metadata. Letting one
+        claim `patch_id` would rewrite the lineage of everything beneath
+        it -- on the loaded patch, not merely in the index.
+        """
+        directory = tmp_path / "patch_id=bogus"
+        directory.mkdir()
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(directory / "x.h5", "dasdae")
+        with pytest.warns(UserWarning, match="not which data it is"):
+            spool = dc.spool(tmp_path).update()
+        assert spool.get_contents()["patch_id"].iloc[0] != "bogus"
+        assert spool[0].attrs.patch_id != "bogus"
+
+    def test_a_rename_when_no_id_was_indexed(self, tmp_path):
+        """An archive indexed with the ids off has none to forget."""
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+            spool = dc.spool(tmp_path).update()
+            assert "patch_id" not in spool.get_contents().columns
+            (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+            moved = dc.spool(tmp_path).update()
+        assert len(moved) == 1
+
+    def test_chunk_still_merges_across_ids(self, written_spool):
+        """Every patch states a different id; none of them blocks a merge."""
+        assert len(set(written_spool.get_contents()["patch_id"])) == 3
+        assert len(written_spool.chunk(time=None)) == 1
