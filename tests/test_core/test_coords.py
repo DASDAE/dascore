@@ -2834,6 +2834,33 @@ class TestUnitNoOps:
         assert out is not coord
         assert out.units == get_quantity("100 cm")
 
+    def test_every_coord_class_implements_the_hook(self):
+        """
+        `_convert_units` is concrete, so nothing else would notice.
+
+        It is concrete to keep a subclass written against the older API
+        instantiable, which costs the abstract check that would have
+        caught a coord class shipping without a conversion. This asks
+        the question that check used to.
+        """
+
+        def _subclasses(cls):
+            for sub in cls.__subclasses__():
+                yield sub
+                yield from _subclasses(sub)
+
+        missing = [
+            sub.__name__
+            for sub in _subclasses(BaseCoord)
+            if sub._convert_units is BaseCoord._convert_units
+        ]
+        assert not missing
+
+    def test_the_hook_says_so_when_it_is_not_implemented(self, evenly_sampled_coord):
+        """A class which did not implement it gets an error naming itself."""
+        with pytest.raises(NotImplementedError, match="unit conversion"):
+            BaseCoord._convert_units(evenly_sampled_coord, "m")
+
     def test_partial_coord(self):
         """A coord with no values, which the meta-fixture does not hold."""
         coord = CoordPartial(

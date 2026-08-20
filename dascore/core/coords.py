@@ -388,9 +388,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return self
         return self._convert_units(units)
 
-    @abc.abstractmethod
     def _convert_units(self, units) -> Self:
-        """Perform the conversion; callers normally screen out no-op requests."""
+        """
+        Perform the conversion; callers normally screen out no-op requests.
+
+        Concrete rather than abstract so that a subclass written against
+        the older API, where `convert_units` was the abstract method,
+        still instantiates. DASCore's own classes are held to it by
+        `TestUnitNoOps.test_every_coord_class_implements_the_hook`.
+        """
+        msg = f"{type(self).__name__} does not implement unit conversion."
+        raise NotImplementedError(msg)
 
     def _get_value_index(self, coord_array, values_to_find):
         """Get the indices were values occur in array, account for duplicates."""
