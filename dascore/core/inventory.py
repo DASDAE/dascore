@@ -1153,9 +1153,10 @@ def _track_identity_fields() -> Mapping[str, str]:
 
 
 # Names a label group may not take: a group becomes a patch coordinate
-# at enrichment, where it would shadow one of these.
+# at enrichment, where it would shadow one of these, and a stamped attr
+# at expansion, where it would replace the patch's identity.
 RESERVED_GROUP_NAMES = frozenset(
-    {"time", "distance", "channel", "instrument_distance"}
+    {"time", "distance", "channel", "instrument_distance", "acquisition_key"}
     | {"optical_components", "geometry", "coupling", "labels"}
     | set(VALID_COORDINATE_LABELS)
 )

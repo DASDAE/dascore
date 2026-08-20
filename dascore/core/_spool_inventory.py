@@ -26,6 +26,7 @@ import pandas as pd
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
@@ -45,14 +46,20 @@ from dascore.exceptions import (
     PatchError,
     UnresolvedPatchError,
 )
+from dascore.models import values_equal
 from dascore.units import get_quantity_str
+from dascore.utils.attrs import validate_conflict
 from dascore.utils.intervals import interval_masks, value_kind
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, validate_acquisition_key
+from dascore.utils.time import to_datetime64
 
 # One vocabulary for both fiber verbs. What the quiet option leaves
 # behind still differs -- enrich leaves the patch as it was, conform
 # removes it -- but that is the verb's business rather than the value's.
 VALID_ON_UNRESOLVED = ("raise", "warn", "ignore")
+
+# What `Patch.enrich` does about a named attr the inventory leaves unset.
+VALID_ON_MISSING = ("raise", "warn", "ignore", "null")
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.
@@ -193,11 +200,12 @@ def combine_inventories(first, second) -> tuple:
     """
     Return the (inventory, enrich kwargs) a union of two spools carries.
 
-    The two halves carry over independently: an inventory attached to one
-    operand still describes the patches it came with, and so does the
-    enrichment set up from it — which is why attaching the same inventory
-    to the other operand cannot turn a working union into an error. Two
-    operands answering either question differently have no single answer.
+    An inventory and its enrichment are spool-wide state, so the union
+    carries whichever either operand has and applies it to every patch
+    it yields -- including the other operand's, as attaching and
+    enriching the union would. Attaching the same inventory to both
+    operands therefore cannot turn a working union into an error, while
+    two operands carrying different ones have no single answer.
     """
     # At call time only; importing Spool at module top would be circular.
     from dascore.core.spool import Spool  # noqa: PLC0415
@@ -245,10 +253,18 @@ def normalize_enrich_kwargs(kwargs) -> dict:
         raise ParameterError(msg)
     bound = signature.bind_partial(**kwargs)
     bound.apply_defaults()
-    # Refused on this call rather than on whichever patch is pulled first.
+    # Refused on this call rather than on whichever patch is pulled first;
+    # selection reads the policies and the key too, so none can wait.
+    arguments = bound.arguments
     validate_enrich_selection(
-        bound.arguments.get("attrs", False), bound.arguments.get("coords", False)
+        arguments.get("attrs", False), arguments.get("coords", False)
     )
+    validate_conflict(arguments.get("conflict", "keep_first"))
+    if (on_missing := arguments.get("on_missing", "raise")) not in VALID_ON_MISSING:
+        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
+        raise ParameterError(msg)
+    if key := arguments.get("acquisition_key"):
+        validate_acquisition_key(key)
     # A collection of names means what it holds, not which container holds it.
     return {
         name: tuple(value) if isinstance(value, list) else value
@@ -257,10 +273,32 @@ def normalize_enrich_kwargs(kwargs) -> dict:
     }
 
 
+# Facts the patch's own coordinates already state: the time coordinate has
+# the sample rate and the distance coordinate the channel spacing, and
+# decimating changes both. Nothing should be redundant between coords and
+# attrs, so a blanket request leaves these alone; naming one restores the
+# as-acquired value.
+COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
+
+# Attrs describing the data as it now stands rather than the system which
+# recorded it. Processing functions maintain them, so blanket enrichment
+# leaves them alone; naming one explicitly restores the as-acquired value.
+DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
+
+
+def enriched_attr_names(attrs) -> frozenset[str]:
+    """Return the attr names `Patch.enrich` may write for an `attrs` argument."""
+    if attrs is False:
+        return frozenset()
+    if attrs is True:
+        return frozenset(INVENTORY_ATTRS) - set(COORD_REDUNDANT_ATTRS)
+    return frozenset(iterate(attrs))
+
+
 # --- planning-frame helpers -------------------------------------------
 
 
-def resolution_columns(frame: pd.DataFrame) -> list | None:
+def resolution_columns(frame: pd.DataFrame, enrich_kwargs=None) -> list | None:
     """
     Return the columns a relation resolves against an inventory with.
 
@@ -269,12 +307,38 @@ def resolution_columns(frame: pd.DataFrame) -> list | None:
     `acquisition_key` has no identity to offer, and one whose time axis
     is not physical — lag times from a correlation, say — has no
     instants, which is the same thing `Patch.enrich` refuses to guess at.
+
+    Pending enrichment can supply both: its `acquisition_key` names the
+    entry for rows stating none, and its `time` the instant for rows
+    without instants of their own, so such rows resolve here as the
+    patches will on extraction. A dated row keeps its own instants and a
+    stated key stands, though `Patch.enrich` refuses either beside the
+    pending argument: the refusal is extraction's to make.
     """
-    columns = [frame.get(x) for x in ("acquisition_key", "time_min", "time_max")]
-    physical = all(column is not None for column in columns) and all(
-        np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
+    key, start, end = (
+        frame.get(x) for x in ("acquisition_key", "time_min", "time_max")
     )
-    return columns if physical else None
+    enrich_kwargs = enrich_kwargs or {}
+    if override := enrich_kwargs.get("acquisition_key"):
+        # A relation no row states the key in has no column for it.
+        if key is None:
+            key = pd.Series(override, index=frame.index, dtype=object)
+        else:
+            key = key.where(~_unstated(key), override)
+    if key is None:
+        return None
+    physical = all(column is not None for column in (start, end)) and all(
+        np.issubdtype(column.dtype, np.datetime64) for column in (start, end)
+    )
+    when = enrich_kwargs.get("time")
+    if when is None:
+        return [key, start, end] if physical else None
+    # A row without instants is NaT beside physical rows, and the whole
+    # column is something else when no row has them.
+    stamp = pd.Series(to_datetime64(when), index=frame.index)
+    if physical:
+        return [key, start.fillna(stamp), end.fillna(stamp)]
+    return [key, stamp, stamp]
 
 
 def _first_few(items, limit: int = 5) -> str:
@@ -410,12 +474,14 @@ def check_stampable(name: str, rows: pd.DataFrame) -> None:
     called `output_id` would replace the column binding each output to
     its members, and one called `time_min` an envelope. Overwriting a
     carried attr is fine and is how re-splitting restamps; these are not
-    attrs.
+    attrs. `acquisition_key` is one, but it is the identity every later
+    resolution goes by, and a label value is not a valid one.
     """
     envelopes = {
         x for x in rows.columns if x.rsplit("_", 1)[-1] in {"min", "max", "step"}
     }
-    if name not in {"output_id", "dims", *envelopes} and not name.startswith("_"):
+    structural = {"output_id", "dims", "acquisition_key", *envelopes}
+    if name not in structural and not name.startswith("_"):
         return
     msg = (
         f"{name!r} is how the spool itself describes a patch, so stamping "
@@ -480,6 +546,37 @@ def match_resolved(values, name: str, selector, units=None) -> np.ndarray:
     stated = ~_unstated(values)
     if stated.any():
         out[stated] = evaluate_attr_predicate(values[stated], name, selector, units)
+    return out
+
+
+def effective_matches(
+    stated, by_index, answers, by_inventory, headers=None, conflict=None, resolved=None
+) -> np.ndarray:
+    """
+    Combine the index's verdict with the inventory's the way extraction will.
+
+    An unstated row holds whatever the inventory answers, so its verdict
+    is the inventory's. A stated row keeps the index's verdict unless a
+    pending enrichment rewrites the name: under `keep_first` the
+    inventory's answer replaces the header where it has one, and under
+    `drop` a header disagreeing with the answer comes out blank, which
+    nothing selects. `resolved` is given when `on_missing="null"` is
+    pending on a named attr: a resolved row the inventory has no answer
+    for then comes out blank too. `conflict` is None when nothing rewrites.
+    """
+    out = np.where(stated, by_index, by_inventory)
+    if conflict is None:
+        return out
+    rewritten = stated & ~_unstated(answers)
+    if conflict == "keep_first":
+        out[rewritten] = by_inventory[rewritten]
+    else:
+        assert conflict == "drop" and headers is not None
+        for row in np.flatnonzero(rewritten):
+            if not values_equal(headers[row], answers[row]):
+                out[row] = False
+    if resolved is not None:
+        out[stated & resolved & _unstated(answers)] = False
     return out
 
 

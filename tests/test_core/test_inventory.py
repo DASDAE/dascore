@@ -597,6 +597,24 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="one kind of value"):
             path.check()
 
+    def test_acquisition_key_is_a_reserved_group(self):
+        """A group becomes a stamped attr at expansion, and the key is the
+        patch's identity rather than a thing a label may say.
+        """
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            labels=(
+                inv.OpticalPathLabel(
+                    start_distance=0.0,
+                    end_distance=10.0,
+                    group="acquisition_key",
+                    value="bad",
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="reserved name"):
+            path.check()
+
     def test_numeric_label_group(self):
         """Numeric groups are single valued but otherwise ordinary."""
         path = inv.OpticalPath(
