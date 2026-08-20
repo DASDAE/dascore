@@ -643,6 +643,34 @@ class TestLineageIds:
         # stopped claiming to know without looking.
         assert moved[0].attrs.patch_id
 
+    def test_a_path_may_not_claim_the_lineage(self, tmp_path):
+        """
+        A directory name says where data is kept, not which data it is.
+
+        Hive-style path keys become ordinary attrs and override what a
+        file states, which is how a rename corrects metadata. Letting one
+        claim `patch_id` would rewrite the lineage of everything beneath
+        it -- on the loaded patch, not merely in the index.
+        """
+        directory = tmp_path / "patch_id=bogus"
+        directory.mkdir()
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(directory / "x.h5", "dasdae")
+        with pytest.warns(UserWarning, match="not which data it is"):
+            spool = dc.spool(tmp_path).update()
+        assert spool.get_contents()["patch_id"].iloc[0] != "bogus"
+        assert spool[0].attrs.patch_id != "bogus"
+
+    def test_a_rename_when_no_id_was_indexed(self, tmp_path):
+        """An archive indexed with the ids off has none to forget."""
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+            spool = dc.spool(tmp_path).update()
+            assert "patch_id" not in spool.get_contents().columns
+            (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+            moved = dc.spool(tmp_path).update()
+        assert len(moved) == 1
+
     def test_chunk_still_merges_across_ids(self, written_spool):
         """Every patch states a different id; none of them blocks a merge."""
         assert len(set(written_spool.get_contents()["patch_id"])) == 3
