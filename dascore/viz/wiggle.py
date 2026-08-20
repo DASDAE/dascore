@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import matplotlib.dates as mdates
+import string
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection, PolyCollection
@@ -17,7 +18,7 @@ from dascore.utils.plotting import (
     _get_data_label,
     _get_dim_label,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64
+from dascore.utils.time import dtype_time_like
 
 
 def _get_offsets_factor(patch, dim, scale, other_labels):
@@ -28,24 +29,28 @@ def _get_offsets_factor(patch, dim, scale, other_labels):
     with suppress_warnings(RuntimeWarning):  # all-NaN traces
         mx = np.nanmax(patch.data, axis=dim_axis)
         mn = np.nanmin(patch.data, axis=dim_axis)
-        offsets = (np.nanmedian(mx - mn) * scale) * np.arange(len(other_labels))
+        separation = np.nanmedian(mx - mn) * scale
+    if not np.isfinite(separation):  # no trace has a finite range
+        separation = 0.0
+    offsets = separation * np.arange(len(other_labels))
     # add scale factor to data
     data_scaled = offsets[None, :] + patch.data
     return offsets, data_scaled
 
 
-def _get_plot_values(patch, dim):
+def _get_plot_values(ax, patch, dim):
     """
-    Get the values of a coordinate as floats for plotting.
+    Get the values of a coordinate as floats for the x axis.
 
-    Datetimes become matplotlib date numbers, which is what xaxis_date (set
-    up later by _format_time_axis) expects, so they can share float arrays
-    with the trace data.
+    The conversion is matplotlib's own, the one ax.plot would apply, so
+    datetimes become date numbers (which xaxis_date, set up later by
+    _format_time_axis, expects) and anything else with a registered
+    converter is handled the same way. Floats can then share arrays with
+    the trace data.
     """
     values = patch.coords.get_array(dim)
-    if is_datetime64(values):
-        values = mdates.date2num(values)
-    return values
+    ax.xaxis.update_units(values)
+    return np.asarray(ax.xaxis.convert_units(values), dtype=float)
 
 
 def _plot_traces(ax, x, data_scaled, color, alpha):
@@ -104,6 +109,9 @@ def _shade(ax, x, offsets, data_scaled, color):
     verts[:, [0, -1], 1] = offsets[:, None]
     poly = PolyCollection(verts, facecolors=color, edgecolors="none", alpha=0.6)
     ax.add_collection(poly)
+    # The fill reaches the offset line, which may be outside the data range
+    # the lines were scaled to.
+    ax.autoscale_view()
 
 
 def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
@@ -122,7 +130,7 @@ def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
 def _wiggle_1d(patch, ax, alpha, color, shade):
     """Plot a 1D patch as a single trace against its only coordinate."""
     dim = patch.dims[0]
-    x_values = _get_plot_values(patch, dim)
+    x_values = _get_plot_values(ax, patch, dim)
     ax.plot(x_values, patch.data, color=color, alpha=alpha)
     if shade:
         _shade(ax, x_values, np.array([0.0]), patch.data[:, None], color)
@@ -139,7 +147,7 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     patch = patch.transpose(dim, ...)
     other_dim = next(iter(set(patch.dims) - {dim}))
     # values for axis which is connected
-    connect_axis_values = _get_plot_values(patch, dim)
+    connect_axis_values = _get_plot_values(ax, patch, dim)
     # values for y axis (not connected)
     other_axis_ticks = patch.coords.get_array(other_dim)
     offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
@@ -149,11 +157,15 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     if shade:
         _shade(ax, connect_axis_values, offsets, data_scaled, color)
     _format_y_axis_ticks(ax, offsets, other_axis_ticks)
-    for dim, x in zip(patch.dims, ["x", "y"], strict=True):
-        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        # format all dims which have time types.
-        if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
-            _format_time_axis(ax, dim, x)
+    for name, x in zip(patch.dims, ["x", "y"], strict=True):
+        is_time = np.issubdtype(patch.get_coord(name).dtype, np.datetime64)
+        label = string.capwords(name) if is_time else _get_dim_label(patch, name)
+        getattr(ax, f"set_{x}label")(label)
+    # Only the connected (x) axis is a continuous time axis; the y axis
+    # holds trace offsets whose tick labels were set above, and a date
+    # formatter there would overwrite them.
+    if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
+        _format_time_axis(ax, dim, "x")
     ax.invert_yaxis()  # invert y so it's consistent with waterfall
     return ax
 

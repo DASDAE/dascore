@@ -60,6 +60,11 @@ class TestWiggle:
         ax = sub_patch.viz.wiggle(dim="distance")
         assert "Distance [m]" in str(ax.get_xlabel())
         assert "Time" in str(ax.get_ylabel())
+        # The y ticks label traces by their time, not a date axis of offsets.
+        ax.figure.canvas.draw()
+        labels = [x.get_text() for x in ax.get_yticklabels()]
+        times = sub_patch.coords.get_array("time")
+        assert labels[0] == str(times[0])
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
@@ -227,7 +232,7 @@ class TestWiggle:
         # Center the traces so each has both signs.
         patch = small_patch - np.mean(small_patch.data)
         ax = patch.viz.wiggle(shade=True)
-        poly, verts = _get_shade_vertices(ax)
+        poly, _ = _get_shade_vertices(ax)
         traces = _get_traces(ax)
         offsets = [x[0, 1] - patch.data[i, 0] for i, x in enumerate(traces)]
         paths = poly.get_paths()
@@ -247,7 +252,7 @@ class TestWiggle:
             dims=("time", "distance"),
         )
         ax = patch.viz.wiggle(shade=True)
-        poly, verts = _get_shade_vertices(ax)
+        _, verts = _get_shade_vertices(ax)
         x, y = verts[:, 0], verts[:, 1]
         area = 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
         # Two triangles of area 0.25 (crossings at x=0.5, 1.5) and a 1x1 box.
@@ -265,3 +270,17 @@ class TestWiggle:
         assert np.all(np.isfinite(ax.get_ylim()))
         _, verts = _get_shade_vertices(ax)
         assert np.all(np.isfinite(verts))
+
+    def test_all_nan_data(self, small_patch):
+        """A patch with no finite data should still produce a plot."""
+        patch = small_patch.new(data=np.full(small_patch.shape, np.nan))
+        ax = patch.viz.wiggle(shade=True)
+        assert np.all(np.isfinite(ax.get_yticks()))
+        assert np.all(np.isfinite(ax.get_ylim()))
+
+    def test_1d_shade_includes_baseline(self, random_patch):
+        """Shading an all-positive trace must keep the zero line in view."""
+        patch_1d = random_patch.mean("distance", dim_reduce="squeeze")
+        patch = patch_1d + 10  # everything well above zero
+        ax = patch.viz.wiggle(shade=True)
+        assert min(ax.get_ylim()) <= 0
