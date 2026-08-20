@@ -550,14 +550,26 @@ class PlanResolver(PatchResolver):
         envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
         skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
         names = {x for x in row if not x.startswith("_") and x not in skip}
+        # A number in a row may be a quantity the index stored as a base-SI
+        # magnitude with its units kept elsewhere, so stamping it could
+        # mislabel; only values the row holds losslessly are filled.
         fill = {
             x: row[x]
             for x in names
-            if not _is_missing(row[x]) and _is_missing(attrs.get(x))
+            if not _is_missing(row[x])
+            and _is_missing(attrs.get(x))
+            and not _is_number(row[x])
         }
         if fill:
             patch = patch.new(attrs=attrs.update(**fill))
         return patch
+
+
+def _is_number(value) -> bool:
+    """True for a numeric scalar other than a bool."""
+    return isinstance(value, int | float | np.number) and not isinstance(
+        value, bool | np.bool_
+    )
 
 
 def _residual_ranges(residuals) -> dict:

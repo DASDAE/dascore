@@ -576,6 +576,15 @@ class TestChunkMerge:
         assert patch.attrs.get("latitude_min") is None
         assert patch.attrs.get("latitude_max") is None
 
+    def test_quantity_attr_is_not_stamped_as_a_bare_number(self):
+        """A quantity the index stores as a magnitude is not re-stamped unitless."""
+        p1 = dc.get_example_patch().update_attrs(gauge=10 * dc.get_quantity("m"))
+        p2 = dc.get_example_patch()
+        for patches in ([p1, p2], [p2, p1]):
+            patch = dc.spool(patches).chunk(time=None)[0]
+            gauge = patch.attrs.get("gauge")
+            assert gauge is None or gauge == 10 * dc.get_quantity("m")
+
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
         p1 = dc.get_example_patch()
