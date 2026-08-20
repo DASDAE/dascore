@@ -24,6 +24,7 @@ from dascore.examples import spool_to_directory
 from dascore.io.index import ingest
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
+from tests.test_io.test_xml_binary.test_xml_binary import metadata
 
 # The literal version stamped on indexes built while file names still
 # contributed attrs. Spelled out rather than derived from INDEX_VERSION,
@@ -452,17 +453,13 @@ class TestEdgeCases:
         finally:
             spool.indexer.close()
 
-    def test_directory_format_unit_name_is_not_indexed(self, tmp_path, monkeypatch):
+    def test_directory_format_unit_name_is_not_indexed(self, tmp_path):
         """A directory-format source is named, not partitioned, by its dir."""
-        monkeypatch.syspath_prepend("tests/test_io/test_xml_binary")
-        from test_xml_binary import metadata  # noqa: PLC0415
-
         unit = tmp_path / "cable=north" / "tag=ignored"
         unit.mkdir(parents=True)
         (unit / "metadata.xml").write_text(metadata)
         rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
-        for name in ("DAS_20240530T011500_000000Z.raw",):
-            (unit / name).write_bytes(rand.tobytes())
+        (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(rand.tobytes())
         spool = Spool.from_directory(tmp_path).update(progress=None)
         try:
             stored = spool.get_contents()["_path_attrs"].iloc[0]
