@@ -25,7 +25,7 @@ from dascore.utils.array_api import (
     is_numpy,
     nan_reduce,
 )
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, suppress_warnings
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
@@ -34,8 +34,10 @@ from dascore.utils.patch import (
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import DASCoreWarning
 from dascore.workflow.builtin import ArrayFunc, Ufunc
 from dascore.workflow.identity import ids_enabled, stamp_combination
+from dascore.workflow.processor import _PATCH_ARGUMENT
 
 # Numpy reductions which skip nans, and the name they are known by in
 # dascore.utils.array_api.nan_reduce.
@@ -407,7 +409,7 @@ def _apply_binary_ufunc(
             operands=_without_patch_values((*rest, *args)),
             kwargs=_without_patch_values(kwargs),
         )
-        attrs = stamp_combination(attrs, members, task.fingerprint)
+        attrs = stamp_combination(attrs, members, _fingerprint_of(task))
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -698,7 +700,7 @@ def _apply_array_func(func, *args, **kwargs):
             kwargs=_without_patch_values(converted_kwargs),
         )
         attrs = stamp_combination(
-            patch.attrs, [x.attrs for x in patches], task.fingerprint
+            patch.attrs, [x.attrs for x in patches], _fingerprint_of(task)
         )
         patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
@@ -718,6 +720,20 @@ def _array_func_name(func) -> str:
     return f"{owner}.{name}" if owner else name
 
 
+def _fingerprint_of(task) -> str:
+    """
+    Return a task's fingerprint without complaining about the patch marker.
+
+    The marker is a singleton, so hashing it by its type -- which is what
+    the warning is about -- loses nothing. The warning is worth hearing
+    for a value where it would.
+    """
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return task.fingerprint
+
+
 def _without_patch_values(values):
     """
     Return arguments with anything the fingerprint should not hold replaced.
@@ -730,7 +746,7 @@ def _without_patch_values(values):
 
     def _plain(value):
         if isinstance(value, dc.Patch):
-            return "$patch"
+            return _PATCH_ARGUMENT
         if isinstance(value, np.dtype):
             return str(value)
         return value

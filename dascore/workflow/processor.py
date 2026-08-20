@@ -523,8 +523,24 @@ _KEYABLE = (str, bytes, int, float, bool, type(None))
 # it saves.
 _KEY_LIMIT = 32
 
-# Stands for a patch handed to an operation as an argument.
-_PATCH_ARGUMENT = "$patch"
+
+class _PatchArgument:
+    """
+    Stands for a patch handed to an operation as an argument.
+
+    A class rather than a string: a caller is free to pass the string
+    `"$patch"`, and a marker it could be mistaken for would make that call
+    and a call with an actual patch one operation.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        """Say what it is, which is what the digest records."""
+        return "<patch argument>"
+
+
+_PATCH_ARGUMENT = _PatchArgument()
 
 
 def _without_patches(kwargs: dict) -> dict:

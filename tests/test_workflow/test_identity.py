@@ -7,7 +7,6 @@ applied live beside the things which apply them.
 
 from __future__ import annotations
 
-import gc
 import pickle
 import warnings
 
@@ -15,8 +14,9 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.workflow.processor as processor_module
 from dascore.exceptions import ParameterError
-from dascore.workflow import Task
+from dascore.workflow import Task, fingerprint_call
 from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
 from dascore.workflow.identity import (
     NOTHING_DONE,
@@ -30,7 +30,7 @@ from dascore.workflow.identity import (
     source_data_id,
     stamp_combination,
 )
-from dascore.workflow.processor import _as_key, _signature
+from dascore.workflow.processor import _PATCH_ARGUMENT, _as_key, _signature
 
 
 class TestNewDataId:
@@ -653,29 +653,39 @@ class TestWhatTheReviewsFound:
             double = np.mean(patch, axis=0, dtype=np.dtype("float64"))
         assert single.attrs.processing_id != double.attrs.processing_id
 
-    def test_a_collected_closure_does_not_lend_its_id(self):
+    def test_the_cache_holds_the_function_it_named(self):
         """
         An unnameable function is named partly by `id(func)`, and CPython
-        reuses an address once the function is collected. The one before
-        must not hand its fingerprint to the one after.
+        reuses an address once the function is collected -- so a cache
+        entry outliving its function could hand a later one the earlier
+        one's fingerprint.
 
-        Written this way deliberately: holding both alive at once, as the
-        test above does, cannot reach the case.
+        Asserted on the mechanism rather than by trying to collect one:
+        the key holds the function, which is exactly what stops it being
+        collected, so a test which deleted it and looked for a collision
+        would pass whether or not the fix were there.
         """
         patch = dc.get_example_patch()
 
-        def make(factor):
-            """Return a patch function which scales by a fixed amount."""
+        @dc.patch_function()
+        def unnameable(patch):
+            """Be defined inside a call, so it takes no tag."""
+            return patch.new(data=patch.data)
 
-            @dc.patch_function()
-            def scale(patch):
-                """Scale by whatever this closure captured."""
-                return patch.new(data=patch.data * factor)
+        unnameable(patch)
+        held = [k[0] for k in processor_module._FINGERPRINTS]
+        assert any(x is unnameable for x in held)
 
-            return scale
+    def test_a_patch_argument_is_not_the_string_that_stands_for_it(self):
+        """
+        A caller may pass the marker's own spelling as an ordinary value.
 
-        first = make(2)
-        first_id = first(patch).attrs.processing_id
-        del first
-        gc.collect()
-        assert make(3)(patch).attrs.processing_id != first_id
+        If the marker were that string the two calls would be one
+        operation, though their operands are entirely different.
+        """
+        patch = dc.get_example_patch()
+        assert fingerprint_call(dc.proc.where, (patch,), {}) != (
+            fingerprint_call(dc.proc.where, ("$patch",), {})
+        )
+        # It says what it is, which is what the digest records of it.
+        assert "patch argument" in repr(_PATCH_ARGUMENT)
