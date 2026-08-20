@@ -1380,6 +1380,8 @@ def _concat_compatible_rows(
     selected patches and concatenate those.
     """
     validate_warn_level(check_behavior)
+    if df.empty:
+        return df
     names = [x for x in get_config().patch_kind_attrs if x in df.columns]
     first = df.iloc[0]
     # every public coordinate other than the concatenated one must keep its
@@ -1402,7 +1404,7 @@ def _concat_compatible_rows(
             # as concatenate_patches: different dimensions are never skipped
             msg = "Cannot concatenate patches with different dimensions."
             raise PatchCoordinateError(msg)
-        if ok and structure:
+        if ok and (structure or "data_units" in df.columns):
             # only coordinates both rows have are compared, as check_coords
             # compares the shared coordinates
             differing = [
@@ -1414,11 +1416,16 @@ def _concat_compatible_rows(
                     or _values_equal(row[x], first[x])
                 )
             ]
+            if not differing and "data_units" in df.columns:
+                pair = (row["data_units"], first["data_units"])
+                units = [get_quantity(x) for x in pair]
+                if None not in units and units[0] != units[1]:
+                    differing = ["data_units"]
             if differing:
                 msg = (
                     "Patches are not compatible for concatenation: coordinates "
-                    "other than the concatenated one differ from the first "
-                    "patch's."
+                    "other than the concatenated one, or the data units, differ "
+                    "from the first patch's."
                 )
                 if any(x in inconclusive for x in differing):
                     msg += (
@@ -1435,6 +1442,47 @@ def _concat_compatible_rows(
         if ok:
             run.add(kind)
     return df if all(keep) else df[keep]
+
+
+def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
+    """
+    Return True unless the patches hold known, different data units.
+
+    Splicing or summing data demands one unit: a patch without units
+    adopts the other's, but metres beside kilometres are not converted
+    for the caller — convert with
+    [`Patch.convert_units`](`dascore.Patch.convert_units`) first.
+
+    Parameters
+    ----------
+    patch1
+        The first patch.
+    patch2
+        The second patch.
+    check_behavior
+        What to do when the units differ: 'raise' (default) raises
+        [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`),
+        'warn' warns and returns False, 'ignore' returns False quietly.
+    """
+    validate_warn_level(check_behavior)
+    units1 = get_quantity(patch1.attrs.data_units)
+    units2 = get_quantity(patch2.attrs.data_units)
+    if units1 is None or units2 is None or units1 == units2:
+        return True
+    msg = (
+        f"Patches are not compatible: data units differ ({units1} and {units2}); "
+        "convert one with Patch.convert_units first."
+    )
+    warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+    return False
+
+
+def _with_data_units(attrs: dc.PatchAttrs, members: Sequence[dc.PatchAttrs]):
+    """Fill missing data units from the first member which knows them."""
+    if not _is_missing(attrs.data_units):
+        return attrs
+    known = next((x.data_units for x in members if not _is_missing(x.data_units)), None)
+    return attrs.update(data_units=known) if known is not None else attrs
 
 
 def check_dims(
@@ -1748,7 +1796,8 @@ def concatenate_patches(
                 dim_to_ignore=dim,
                 ignore_dim_eq_shape=False,
             )
-            if coords_ok:
+            units_ok = coords_ok and check_data_units(first_patch, p, check_behavior)
+            if units_ok:
                 run.add(kind)
                 compat_patches.append(p)
         return compat_patches, dims, new_dim
@@ -1781,6 +1830,7 @@ def concatenate_patches(
         for p in patch_list:
             run.add(get_patch_kind(p))
         attrs = _with_kind(patch_list[0].attrs, run.kind)
+        attrs = _with_data_units(attrs, [x.attrs for x in patch_list])
         attrs = _maybe_add_history_str(attrs, "concatenate")
         # Which data this now is: every member which went in, in order.
         # Taking the first patch's id would claim the result was only the
@@ -1845,16 +1895,16 @@ def stack_patches(
         kind_ok = run.admits(kind, check_behavior)
         dims_ok = kind_ok and check_dims(init_patch, p, check_behavior)
         coords_ok = dims_ok and check_coords(init_patch, p, check_behavior, dim_vary)
+        units_ok = coords_ok and check_data_units(init_patch, p, check_behavior)
         # actually do the stacking of data
-        if coords_ok:
+        if units_ok:
             run.add(kind)
             stack_arr = stack_arr + p.data
             kept.append(p.attrs)
 
     # create attributes for the stack with adjusted history
-    stack_attrs = _maybe_add_history_str(
-        _with_kind(init_patch.attrs, run.kind), "stack"
-    )
+    stack_attrs = _with_data_units(_with_kind(init_patch.attrs, run.kind), kept)
+    stack_attrs = _maybe_add_history_str(stack_attrs, "stack")
     # The kept members only: one dropped for being incompatible did not
     # contribute its data, so it is not part of what this data is.
     stack_attrs = stamp_combination(

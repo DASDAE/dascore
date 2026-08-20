@@ -786,14 +786,25 @@ class TestConcatenate:
         assert len(out) == 1
         assert out[0].shape == random_patch.shape
 
-    def test_other_attrs_do_not_gate(self, random_patch):
-        """Units differing still concatenate, silently."""
+    def test_missing_units_adopt_the_known(self, random_patch):
+        """A patch without units concatenates and the output takes the known units."""
         other = random_patch.set_units("m/s").update_attrs(
             history=random_patch.attrs.history
         )
         with suppress_warnings(action="error"):
             out = concatenate_patches([random_patch, other], time=None)
         assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m/s")
+
+    def test_different_units_are_not_spliced(self, random_patch):
+        """Known, different data units are skipped or raise, never mixed."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km").update_attrs(history=metres.attrs.history)
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([metres, km], time=None)
+        assert out[0].shape == metres.shape
+        with pytest.raises(IncompatiblePatchError, match="data units differ"):
+            concatenate_patches([metres, km], time=None, check_behavior="raise")
 
     def test_history_divergence_warns(self, random_patch):
         """Splicing processed beside unprocessed data warns but proceeds."""
@@ -1045,6 +1056,18 @@ class TestStackPatches:
         assert np.allclose(out.data, random_patch.data)
         with pytest.raises(IncompatiblePatchError, match=msg):
             stack_patches([random_patch, other], check_behavior="raise")
+
+    def test_different_units_are_not_summed(self, random_patch):
+        """Stacking metres onto kilometres is refused; a unitless patch adopts."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km")
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = stack_patches([metres, km])
+        assert np.allclose(out.data, metres.data)
+        bare = random_patch.set_units(None)
+        out = stack_patches([bare, metres])
+        assert np.allclose(out.data, 2 * metres.data)
+        assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("m")
 
     def test_rejected_patch_binds_nothing(self, random_patch):
         """A patch dropped for its coordinates must not set the stack's kind."""

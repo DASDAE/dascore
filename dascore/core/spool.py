@@ -1787,6 +1787,11 @@ class Spool(NamespaceOwner):
             self._catalog.backend.coord_dims_map(),
             working.columns,
         )
+        # Decided here, from metadata, twice, as the patches are: the
+        # compatible sequence first (concatenate_patches admits members
+        # before it groups them), then each output against its own first
+        # member, which is what assembly concatenates it by.
+        working = _concat_compatible_rows(working, dim, check_behavior, stale)
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
         rows = working.reset_index(drop=True)
@@ -1794,9 +1799,6 @@ class Spool(NamespaceOwner):
         output_rows = []
         output_id = -1
         for start in range(0, len(rows), count):
-            # Decided here, from metadata, per output: assembly concatenates
-            # each output's members with the same gates against that
-            # output's first member, so the plan rows agree with the patches.
             group_rows = _concat_compatible_rows(
                 rows.iloc[start : start + count], dim, check_behavior, stale
             )
@@ -1810,8 +1812,8 @@ class Spool(NamespaceOwner):
             )
             member_frames.append(members)
             first = group_rows.iloc[0].to_dict()
-            # kind values the first member lacks come from the others
-            for col in dc.get_config().patch_kind_attrs:
+            # kind values and data units the first member lacks come from the others
+            for col in (*dc.get_config().patch_kind_attrs, "data_units"):
                 if col in group_rows.columns and _is_missing(first.get(col)):
                     known = known_only(group_rows[col]).dropna()
                     if len(known):

@@ -1269,6 +1269,28 @@ class TestConcatenateKind:
         assert second.shape[1] == first.shape[1]
         assert out.get_contents()["time_max"].iloc[1] == lat_a.get_coord("time").max()
 
+    def test_rejected_rows_take_no_slots(self, mixed_kind):
+        """Members are chosen before they are grouped, as concatenate_patches does."""
+        first, other = mixed_kind
+        third = first.update_coords(
+            time_min=other.get_coord("time").max() + other.get_coord("time").step
+        )
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = dc.spool([first, other, third]).concatenate(time=2)
+        # [A, B, A] with B rejected: one output holding both A patches
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_different_units_kept_apart_in_plans(self, mixed_kind):
+        """The plan refuses to splice different data units, as assembly would."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        metres, km = first.set_units("m"), other.set_units("km")
+        with pytest.warns(UserWarning, match="data units"):
+            out = dc.spool([metres, km]).concatenate(time=None)
+        assert out.get_contents()["time_max"].iloc[0] == metres.get_coord("time").max()
+        assert out[0].shape == metres.shape
+
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""
         first, other = mixed_kind
