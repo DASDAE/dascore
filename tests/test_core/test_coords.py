@@ -2806,3 +2806,40 @@ class TestDimensionalityErrors:
         """Constructing a CoordRange with a 2D shape must be rejected."""
         with pytest.raises(ValidationError, match="only works for 1D coords"):
             CoordRange(start=0, step=1, shape=(2, 3))
+
+
+class TestUnitNoOps:
+    """A coord asked for the units it already has hands itself back."""
+
+    def test_no_op_on_every_coord_class(self, coord):
+        """Setting or converting to the units already carried changes nothing."""
+        with_units = coord.set_units("m") if coord.units is None else coord
+        assert with_units.convert_units(with_units.units) is with_units
+        assert with_units.set_units(with_units.units) is with_units
+
+    def test_every_coord_class_implements_the_hook(self):
+        """
+        `_convert_units` is concrete, so nothing else would notice.
+
+        It is concrete to keep a subclass written against the older API,
+        where `convert_units` was the abstract method, instantiable. That
+        costs the abstract check which would have caught a coord class
+        shipping without a conversion, so this asks the question instead.
+        """
+
+        def _subclasses(cls):
+            for sub in cls.__subclasses__():
+                yield sub
+                yield from _subclasses(sub)
+
+        missing = [
+            sub.__name__
+            for sub in _subclasses(BaseCoord)
+            if sub._convert_units is BaseCoord._convert_units
+        ]
+        assert not missing
+
+    def test_the_hook_says_so_when_it_is_not_implemented(self, evenly_sampled_coord):
+        """A class which did not implement it gets an error naming itself."""
+        with pytest.raises(NotImplementedError, match="unit conversion"):
+            BaseCoord._convert_units(evenly_sampled_coord, "m")

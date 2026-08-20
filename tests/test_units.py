@@ -30,6 +30,7 @@ from dascore.units import (
     maybe_convert_percent_to_fraction,
     miles,
     quant_sequence_to_quant_array,
+    units_match,
 )
 from dascore.utils.time import to_float
 
@@ -605,3 +606,37 @@ class TestDataSize:
             assert to_float(quant) != get_byte_count(quant)
         except UnitError:
             pass
+
+
+class TestUnitsMatch:
+    """Tests for asking whether two specifications name the same units."""
+
+    @pytest.mark.parametrize(
+        ("units1", "units2"),
+        [
+            ("m", "meter"),  # one unit, two spellings
+            ("m/s", "meter / second"),
+            (m, "m"),  # a quantity and the string for it
+            (None, None),  # the several ways to spell "no units"
+            (None, ""),
+            ("", None),
+        ],
+    )
+    def test_match(self, units1, units2):
+        """Two names for the same units match."""
+        assert units_match(units1, units2)
+
+    @pytest.mark.parametrize(
+        ("units1", "units2"),
+        [
+            (None, "m"),  # setting units on something with none is a change
+            ("m", None),
+            ("m", "100 cm"),  # equal quantities, but not the same units
+            ("m", "100 m"),  # the same unit at a different magnitude
+            ("m", "s"),
+            ("m", "km"),
+        ],
+    )
+    def test_no_match(self, units1, units2):
+        """Anything a conversion would have to act on does not match."""
+        assert not units_match(units1, units2)

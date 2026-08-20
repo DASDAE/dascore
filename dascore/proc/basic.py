@@ -29,6 +29,22 @@ from dascore.utils.patch import (
     patch_function,
 )
 
+# The dtypes which promise, without the values being looked at, that there
+# is no imaginary part: bool, signed and unsigned integers, and floats.
+_REAL_KINDS = ("b", "i", "u", "f")
+
+
+def _known_real(data) -> bool:
+    """
+    Whether the dtype alone says the data has no imaginary part.
+
+    Object arrays are not among them: their dtype says nothing about the
+    elements, and `np.conj` really does conjugate a complex object held in
+    one. Anything whose dtype cannot be read is treated the same way --
+    not known to be real, so the operation runs.
+    """
+    return getattr(getattr(data, "dtype", None), "kind", None) in _REAL_KINDS
+
 
 def _as_float(data):
     """
@@ -291,6 +307,8 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
+    if _known_real(patch.data):  # real data is its own conjugate
+        return patch
     return patch.new(data=np.conj(patch.data))
 
 
@@ -305,6 +323,8 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
+    if _known_real(patch.data):  # already only a real part
+        return patch
     return patch.new(data=np.real(patch.data))
 
 
@@ -501,6 +521,8 @@ def dropna(
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
+    if not np.any(to_drop):  # nothing nullish along this dimension
+        return patch
     to_keep = ~to_drop
     assert len(to_keep.shape) == 1
     assert to_keep.shape[0] == patch.data.shape[axis]
@@ -552,6 +574,8 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
         to_replace = ~np.isfinite(patch.data)
     else:
         to_replace = pd.isnull(patch.data)
+    if not np.any(to_replace):  # nothing nullish to fill
+        return patch
     new_data = patch.data.copy()
     new_data[to_replace] = value
 

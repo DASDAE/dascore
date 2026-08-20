@@ -476,6 +476,9 @@ class PlanResolver(PatchResolver):
             return patch
         coord = patch.coords.coord_map.get(self.dim)
         current = getattr(coord, "units", None) if coord is not None else None
+        # `==`, not `units_match`: the plan asks whether the values are
+        # already at the right scale, and `m` and `100 cm` label the same
+        # ones. Converting between them would relabel and change nothing.
         if current is None or get_quantity(current) == get_quantity(plan_units):
             return patch
         # raw_function: the conversion serves the plan's own bookkeeping,
