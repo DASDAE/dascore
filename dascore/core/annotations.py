@@ -557,7 +557,8 @@ class AnnotationColumn(_AnnotationModel):
 
     Documenting a column never gates it: an undeclared column is carried
     as an extra just the same. A stated dtype is checked, so a column
-    which says what it holds must hold it.
+    which says what it holds must hold it; a column read back from a CSV,
+    which keeps no types, is given its stated dtype again.
     """
 
     description: str = Field(default="", description="What the column means.")
@@ -731,7 +732,9 @@ class AnnotationSet(NamespaceOwner):
             attrs, dims, creation_info, acquisition_key, history, columns
         )
         frame = _coerce_frame(data, "annotations")
-        frame = _normalize_blanks(_normalize_times(frame, self._attrs.dims))
+        # Blanks first: a blank cell beside times written as text is unset,
+        # not a word the time column holds.
+        frame = _normalize_times(_normalize_blanks(frame), self._attrs.dims)
         spellings = _read_spellings(frame, self._attrs.dims)
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
@@ -740,7 +743,7 @@ class AnnotationSet(NamespaceOwner):
         ids = _check_ids(frame)
         frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
         vertex_frame = _normalize_times(
-            _coerce_frame(vertices, "vertices"), self._attrs.dims
+            _normalize_blanks(_coerce_frame(vertices, "vertices")), self._attrs.dims
         )
         self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
         self._df = _fill_vertex_bounds(frame, self._vertices, spellings)
@@ -888,6 +891,14 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
             "states one thing."
         )
         raise ParameterError(msg)
+    # A table names a column by a string, so any other name would come
+    # back from a saved set as the string it was written as.
+    if odd := [repr(x) for x in frame.columns if not isinstance(x, str)][:5]:
+        msg = (
+            f"The {what} name the column(s) {', '.join(odd)} by something other "
+            "than a string, which is what a table names a column by."
+        )
+        raise ParameterError(msg)
     return frame
 
 
@@ -956,7 +967,7 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
         # Compared by name rather than by identity: a column documented as
         # `category` says it is categorical, not which categories it holds,
         # and the two dtypes are otherwise unequal.
-        if declared.name != actual.name:
+        if not _dtype_matches(declared, frame[name]):
             # A time is held at nanoseconds whatever it arrived as, so
             # another unit is not a column this set could ever hold, and
             # saying it "holds datetime64[ns]" reads as a mistake the
@@ -969,6 +980,28 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
                 raise ParameterError(msg)
             msg = f"The column {name!r} states dtype {column.dtype} but holds {actual}."
             raise ParameterError(msg)
+
+
+TEXT_DTYPES = frozenset({"object", "str", "string"})
+
+
+def _dtype_matches(declared, series: pd.Series) -> bool:
+    """
+    Whether a column holds its declared dtype, however pandas spells text.
+
+    Text has several spellings -- `object`, `str`, `string` -- and which
+    one a column gets depends on the pandas version and on what wrote it,
+    so a declaration of any of them is a declaration of text. An `object`
+    column may hold anything, so it is text only if its cells are.
+    """
+    actual = series.dtype
+    if declared.name == actual.name:
+        return True
+    if declared.name not in TEXT_DTYPES or actual.name not in TEXT_DTYPES:
+        return False
+    return actual.name != "object" or all(
+        isinstance(x, str) for x in series if _stated(x)
+    )
 
 
 def _check_ranges(frame: pd.DataFrame, spellings) -> None:
@@ -1183,6 +1216,7 @@ def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
         rows = ", ".join(str(x) for x in vertices.index[vertices["seq"].isnull()][:5])
         msg = f"Vertex row(s) {rows} state no seq, so they have no place in the order."
         raise ParameterError(msg)
+    vertices = vertices.assign(seq=read_ordinal(vertices["seq"]))
     blank = vertices[vertex_dims].isnull().any(axis=1)
     if blank.any():
         rows = ", ".join(str(x) for x in vertices.index[blank][:5])
@@ -1348,53 +1382,98 @@ def _normalize_basis(frame, dims) -> pd.DataFrame:
     return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
 
 
-def _states_times(series: pd.Series) -> bool:
-    """Whether every cell a column states is a datetime written as text."""
-    stated = [x for x in series if _stated(x)]
-    return bool(stated) and all(
-        isinstance(x, str) and _DATETIME_TEXT.match(x) for x in stated
+def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
+    """
+    Read a dimension column as the numbers or times its cells state.
+
+    Numbers are tried first because every datetime spelling this writes is
+    an ISO string, which is not a number, while seconds from the epoch are
+    a number a distance column would lose to a date. Times arriving at
+    another resolution are held at nanoseconds, the resolution DASCore
+    keeps them at, and a column holding neither numbers nor times is
+    refused: a dimension is a coordinate, and the set's own store would
+    refuse to read it back. `where` names the source in the refusal.
+    """
+    kind = getattr(series.dtype, "kind", "")
+    if kind in "iuf":
+        return series
+    if kind == "M":
+        return (
+            series
+            if series.dtype == np.dtype("datetime64[ns]")
+            else to_datetime64(series)
+        )
+    if kind == "m":
+        return (
+            series
+            if series.dtype == np.dtype("timedelta64[ns]")
+            else to_timedelta64(series)
+        )
+    stated = np.array([_stated(x) for x in series], dtype=bool)
+    if not stated.any():
+        return series
+    cells = series[stated]
+    if kind != "b" and not any(isinstance(x, bool) for x in cells):
+        with suppress(TypeError, ValueError):
+            return pd.to_numeric(series)
+        try:
+            values = to_datetime64(cells.to_numpy(dtype=str))
+        except (TypeError, ValueError) as error:
+            msg = (
+                f"The column {series.name!r}{where} states neither numbers nor "
+                f"times: {error}."
+            )
+            raise ParameterError(msg) from error
+        out = pd.Series(
+            np.datetime64("NaT", "ns"), index=series.index, dtype="datetime64[ns]"
+        )
+        out[stated] = values
+        return out
+    msg = (
+        f"The column {series.name!r}{where} holds {cells.iloc[0]!r}, where a "
+        "dimension holds numbers or times."
     )
+    raise ParameterError(msg)
+
+
+def read_ordinal(series: pd.Series, where: str = "") -> pd.Series:
+    """Read the vertex order column as the numbers it states."""
+    try:
+        return pd.to_numeric(series)
+    except (TypeError, ValueError) as error:
+        msg = (
+            f"The vertices{where} state a non-numeric {_VERTEX_COLUMNS[1]}: "
+            f"{error}. A vertex states its place in the order as a number."
+        )
+        raise ParameterError(msg) from error
 
 
 def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFrame:
     """
-    Hold every time at nanoseconds, the resolution DASCore keeps them at.
+    Hold every time at nanoseconds, and read each dimension column.
 
     A column arriving at another resolution states the same times, but
     everything which reads one back -- a stored table, a coordinate, a
     curve -- states them at DASCore's, so a set which kept both spellings
-    would differ from itself over nothing.
-
-    A dimension column holding times as *text* is read as times for the
-    same reason: the geometry a row builds reads that spelling back, so a
-    frame which kept the text would disagree with the region built from
-    it about what the row says.
+    would differ from itself over nothing. A dimension column is read as
+    the numbers or times it states, text included, for the same reason:
+    the geometry a row builds reads that spelling back, so a frame which
+    kept the text would disagree with the region built from it.
     """
     spelled = {x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")}
     changed = {}
     for name in frame.columns:
         series = frame[name]
         kind = getattr(series.dtype, "kind", "")
-        if kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
+        if name in spelled:
+            read = read_dimension(series)
+            if read is not series:
+                changed[name] = read
+        elif kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
             changed[name] = to_datetime64(series)
         elif kind == "m" and series.dtype != np.dtype("timedelta64[ns]"):
             changed[name] = to_timedelta64(series)
-        elif str(name) in spelled and _states_times(series):
-            # Only the stated cells are converted, then put back where
-            # they came from: masking the result instead hands every blank
-            # cell to the datetime parser first, and what a blank one reads
-            # as there is up to `astype`.
-            stated = series[series.notna()]
-            times = to_datetime64(stated.astype(str))
-            changed[name] = times.reindex(series.index)
-    if not changed:
-        return frame
-    # Assigned by item rather than by keyword: a column need not be named
-    # anything a keyword can spell.
-    out = frame.copy()
-    for name, series in changed.items():
-        out[name] = series
-    return out
+    return frame.assign(**changed) if changed else frame
 
 
 def _normalize_tags(frame) -> pd.DataFrame:
@@ -1439,7 +1518,9 @@ def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
         series = frame[name]
         if getattr(series.dtype, "kind", "") not in "OTU":
             continue
-        blank = series.map(lambda x: isinstance(x, str) and not x)
+        # Not `Series.map`: on a categorical column it returns a categorical,
+        # which pandas 3 refuses to reduce with `any`.
+        blank = np.array([isinstance(x, str) and not x for x in series], dtype=bool)
         if blank.any():
             changed[name] = series.where(~blank, None)
     # An all-blank value column is how a membership-only set is spelled,

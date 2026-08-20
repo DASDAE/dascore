@@ -209,9 +209,46 @@ class TestDimensionSpelling:
 
     def test_incomparable_range_refused(self):
         """A range whose ends cannot be compared says so, not TypeError."""
-        frame = pd.DataFrame({"distance_start": [1.0, "a"], "distance_end": ["b", 2.0]})
+        when = np.datetime64("2020-01-01", "ns")
+        frame = pd.DataFrame({"distance_start": [1.0], "distance_end": [when]})
         with pytest.raises(ParameterError, match="cannot be compared"):
             AnnotationSet(frame, dims=DIMS)
+
+    @pytest.mark.parametrize("spelling", ["distance", "distance_start"])
+    def test_text_in_a_dimension_refused(self, spelling):
+        """A dimension is a coordinate, so a word is no place on it."""
+        frame = pd.DataFrame({spelling: ["alpha"]})
+        if spelling != "distance":
+            frame["distance_end"] = ["omega"]
+        with pytest.raises(ParameterError, match="neither numbers nor times"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_numeric_text_in_a_dimension_is_read_as_numbers(self):
+        """Read as a stored table reads it, so the two cannot disagree."""
+        frame = pd.DataFrame(
+            {"distance_start": ["1.5", None], "distance_end": ["2", None]}
+        )
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out[0].region.bounds["distance"] == (1.5, 2.0)
+        assert "distance" not in out[1].region.bounds
+
+    @pytest.mark.parametrize(
+        "text", ["2020-01-01 10:00:00", "2020-01-01T10:00:00Z", "2020-01-01T10:00:00"]
+    )
+    def test_time_text_in_any_spelling_is_a_time(self, text):
+        """What `to_csv` writes and `read_csv` hands back is a time here too."""
+        out = AnnotationSet(pd.DataFrame({"time": [text]}), dims=DIMS)
+        assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01T10:00:00")
+
+    def test_a_malformed_date_is_refused_not_a_value_error(self):
+        """Shaped like a date without being one is text, and said to be."""
+        with pytest.raises(ParameterError, match="neither numbers nor times"):
+            AnnotationSet(pd.DataFrame({"time": ["2020-13-45"]}), dims=DIMS)
+
+    def test_a_boolean_dimension_refused(self):
+        """A truth value is no place on an axis, and a table reads it as a word."""
+        with pytest.raises(ParameterError, match="numbers or times"):
+            AnnotationSet(pd.DataFrame({"distance": [True]}), dims=DIMS)
 
     def test_datetime_endpoints_keep_their_type(self):
         """A time bound is a time, not the integer behind it."""
@@ -284,6 +321,54 @@ class TestColumns:
         frame = pd.DataFrame({"note": values}).astype(dtype)
         out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": dtype}})
         assert len(out) == 2
+
+    @pytest.mark.parametrize("declared", ["str", "string", "object"])
+    def test_a_text_dtype_matches_any_text_spelling(self, declared):
+        """
+        Pandas spells text as `object`, `str` or `string` depending on its
+        version and on what built the column; a declaration of any of them
+        is a declaration of text.
+        """
+        for frame in (
+            pd.DataFrame({"note": pd.Series(["a"], dtype=object)}),
+            pd.DataFrame({"note": pd.Series(["a"], dtype="string")}),
+        ):
+            out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": declared}})
+            assert len(out) == 1
+        with pytest.raises(ParameterError, match="states dtype"):
+            AnnotationSet(
+                pd.DataFrame({"note": [1.0]}),
+                dims=DIMS,
+                columns={"note": {"dtype": declared}},
+            )
+
+    def test_an_object_column_is_text_only_if_its_cells_are(self):
+        """`object` may hold anything, so a text declaration reads its cells."""
+        frame = pd.DataFrame({"note": pd.Series(["a", {"x": 1}], dtype=object)})
+        with pytest.raises(ParameterError, match="states dtype"):
+            AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "string"}})
+        # Declared as what it is, an object column holding anything is fine.
+        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "object"}})
+        assert len(out) == 2
+
+    def test_a_categorical_column_builds(self):
+        """A categorical extra is carried like any other, blank cells and all."""
+        frame = pd.DataFrame(
+            {
+                "distance_start": [0.0, 1.0],
+                "distance_end": [1.0, 2.0],
+                "note": pd.Series(["a", ""], dtype="category"),
+            }
+        )
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out[0].extra["note"] == "a"
+        assert "note" not in out[1].extra
+
+    def test_a_column_named_by_something_other_than_a_string(self):
+        """A table names a column by a string, so a set does too."""
+        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], 1: ["x"]})
+        with pytest.raises(ParameterError, match="other than a string"):
+            AnnotationSet(frame, dims=DIMS)
 
     def test_category_needs_no_categories(self):
         """A column documented as categorical says so, not which categories."""
@@ -539,6 +624,44 @@ class TestGeometryKinds:
 
 class TestVertices:
     """The vertices frame is checked against the rows which need it."""
+
+    def test_seq_is_read_as_a_number(self):
+        """Text ordinals order '10' before '2'; a vertex states a number."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 3, "seq": ["10", "2", "1"], "distance": [3.0, 2.0, 1.0]}
+        )
+        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        vertices = out.io.to_vertices()
+        assert vertices["seq"].tolist() == [1, 2, 10]
+        assert vertices["distance"].tolist() == [1.0, 2.0, 3.0]
+
+    def test_non_numeric_seq_refused(self):
+        """What the loader refuses to read, the set refuses to hold."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 2, "seq": ["first", "second"], "distance": [1.0, 2.0]}
+        )
+        with pytest.raises(ParameterError, match="non-numeric seq"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
+    def test_text_in_a_vertex_dimension_refused(self):
+        """A vertex places a shape, so its dimensions are numbers or times too."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 2, "seq": [0, 1], "distance": ["here", "there"]}
+        )
+        with pytest.raises(ParameterError, match="neither numbers nor times"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
+    def test_a_blank_seq_is_no_seq(self):
+        """The empty string is how a table spells an unset cell, here too."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 2, "seq": ["", "1"], "distance": [1.0, 2.0]}
+        )
+        with pytest.raises(ParameterError, match="state no seq"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
 
     def test_bounds_derived_from_vertices(self, path_set):
         """A path's bounding region is the box its vertices fill."""

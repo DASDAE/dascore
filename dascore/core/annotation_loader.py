@@ -38,7 +38,6 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
@@ -52,11 +51,14 @@ from dascore.core.annotations import (
     OBJECT_SUFFIXES,
     RESERVED_COLUMNS,
     TABLE_SUFFIXES,
+    TEXT_DTYPES,
     VERTEX_STEM,
     AnnotationSet,
     _text,
     annotation_set_to_dataframe,
     annotation_set_to_vertices,
+    read_dimension,
+    read_ordinal,
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
@@ -69,7 +71,6 @@ from dascore.utils.tables import (
     read_parquet_metadata,
     read_table,
 )
-from dascore.utils.time import to_datetime64
 
 # What an attrs file declares itself to be; the model writes its own tag.
 _SET_TAG = "AnnotationSetAttrs"
@@ -167,43 +168,13 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
 
 
 def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
-    """
-    Read a dimension column as the numbers or times its cells state.
-
-    Numbers are tried first because every datetime spelling this writes is
-    an ISO string, which is not a number, while seconds from the epoch are
-    a number a distance column would lose to a date.
-    """
-    stated = series.notna()
-    if not stated.any():
-        return series
-    with suppress(TypeError, ValueError):
-        return pd.to_numeric(series)
-    try:
-        values = to_datetime64(series[stated].to_numpy(dtype=str))
-    except (TypeError, ValueError) as error:
-        msg = (
-            f"The column {series.name!r} of {quote_path(path)} states neither "
-            f"numbers nor times: {error}."
-        )
-        raise ParameterError(msg) from error
-    out = pd.Series(
-        np.datetime64("NaT", "ns"), index=series.index, dtype="datetime64[ns]"
-    )
-    out[stated] = values
-    return out
+    """Read a dimension column as the set reads one, naming the table."""
+    return read_dimension(series, f" of {quote_path(path)}")
 
 
 def _read_ordinal(series: pd.Series, path: Path) -> pd.Series:
-    """Read the vertex order column as the numbers it states."""
-    try:
-        return pd.to_numeric(series)
-    except (TypeError, ValueError) as error:
-        msg = (
-            f"{quote_path(path)} has a non-numeric {_ORDINAL}: {error}. A vertex "
-            "states its place in the order as a number."
-        )
-        raise ParameterError(msg) from error
+    """Read the vertex order column as the set reads one, naming the table."""
+    return read_ordinal(series, f" of {quote_path(path)}")
 
 
 def _read_basis(series: pd.Series, path: Path) -> pd.Series:
@@ -989,6 +960,7 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     declared, skip = _read_table_dims(table)
     stated = _declared_dims(attrs, dims, directory, declared, table)
     frame = _read_set_table(table, stated, "no annotations", skip=skip)
+    frame = _restore_dtypes(frame, attrs.get("columns"), table)
     # Found as the annotations table is: a set spells each of its parts
     # once, and a `vertices.CSV` beside a `vertices.csv` is two spellings of
     # one part rather than a table nobody reads.
@@ -1008,6 +980,41 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     return AnnotationSet(frame, dims=stated, vertices=vertices, attrs=attrs, **kwargs)
 
 
+def _restore_dtypes(frame, columns: Mapping | None, path: Path):
+    """
+    Give each column back the dtype the set declares for it.
+
+    A CSV states no types, so a `category` or an `Int64` column comes
+    back as whatever its cells parse as; the declaration beside it is
+    what says which the column holds, and the set checks it on building.
+    Parquet keeps its own types, so the cast changes nothing there. Text
+    is left as it arrived: every spelling of it satisfies the check, and
+    casting would change which spelling a column carries. A declaration
+    which is not one is left for the set's own validation to refuse.
+    """
+    restored = {}
+    for name, spec in (columns or {}).items():
+        dtype = (
+            spec.get("dtype")
+            if isinstance(spec, Mapping)
+            else getattr(spec, "dtype", None)
+        )
+        if frame is None or not dtype or name not in frame.columns:
+            continue
+        with suppress(TypeError):
+            if pd.api.types.pandas_dtype(dtype).name in TEXT_DTYPES:
+                continue
+        try:
+            restored[name] = frame[name].astype(dtype)
+        except (TypeError, ValueError) as error:
+            msg = (
+                f"The column {name!r} of {quote_path(path)} declares the dtype "
+                f"{dtype}, which its cells cannot be read as: {error}."
+            )
+            raise ParameterError(msg) from error
+    return frame.assign(**restored) if restored else frame
+
+
 def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     """Load the set a bare table holds."""
     if path.suffix.casefold() not in TABLE_SUFFIXES:
@@ -1021,12 +1028,11 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     # A bare table states no attributes of its own, so a caller may hand it
     # some -- and the dimensions they name are the ones its cells are read
     # in, since nothing can be read before that is known.
-    stated = _declared_dims(_given_attrs(kwargs), dims, path, declared, path)
-    return AnnotationSet(
-        _read_set_table(path, stated, "no annotations", skip=skip),
-        dims=stated,
-        **kwargs,
-    )
+    given = _given_attrs(kwargs)
+    stated = _declared_dims(given, dims, path, declared, path)
+    frame = _read_set_table(path, stated, "no annotations", skip=skip)
+    columns = kwargs.get("columns") or given.get("columns")
+    return AnnotationSet(_restore_dtypes(frame, columns, path), dims=stated, **kwargs)
 
 
 def _vertex_declaration(path: Path) -> int:
