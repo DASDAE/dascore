@@ -22,7 +22,7 @@ from matplotlib.patches import Rectangle
 
 from dascore.exceptions import ParameterError
 from dascore.utils.intervals import normalize_value, value_kind
-from dascore.utils.plotting import _get_ax, _get_cmap
+from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
 # Palettes are module level so that two figures of one inventory agree.
 STRING_CMAP = "tab20"
@@ -42,12 +42,7 @@ _MAX_DISCRETE = 6
 def _as_numeric(values):
     """Return values as floats, converting datetimes to matplotlib dates."""
     array = np.asarray(values)
-    dated = pd.api.types.is_datetime64_any_dtype(values) or (
-        array.dtype == object
-        and len(array)
-        and isinstance(array.flat[0], datetime.datetime | np.datetime64)
-    )
-    if dated:
+    if _is_dated(values):
         # Losing nanosecond precision is fine; this is a picture.
         stamps = pd.DatetimeIndex(array.ravel())
         if stamps.tz is not None:
@@ -66,8 +61,21 @@ def _default_label(value) -> str:
     return f"{value:g}" if isinstance(value, float) else str(value)
 
 
+def _is_dated(values) -> bool:
+    """Whether a column of interval bounds states times rather than numbers."""
+    array = np.asarray(values)
+    return bool(
+        pd.api.types.is_datetime64_any_dtype(values)
+        or (
+            array.dtype == object
+            and len(array)
+            and isinstance(array.flat[0], datetime.datetime | np.datetime64)
+        )
+    )
+
+
 def _read_frame(intervals, start, end, lane, value, label):
-    """Pull the named columns out into a frame with canonical names."""
+    """Pull the named columns out into a frame, and say if it is dated."""
     if not isinstance(intervals, pd.DataFrame):
         intervals = pd.DataFrame(intervals)
     missing = [x for x in (start, end) if x not in intervals.columns]
@@ -99,7 +107,8 @@ def _read_frame(intervals, start, end, lane, value, label):
     for flag in ("open_start", "open_end"):
         col = intervals[flag] if flag in intervals.columns else False
         out[flag] = np.asarray(col, dtype=bool) if flag in intervals.columns else False
-    return out
+    dated = _is_dated(intervals[start]) or _is_dated(intervals[end])
+    return out, dated
 
 
 def _lane_kind(values) -> str:
@@ -175,7 +184,9 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         colors = [cmap(norm(x)) for x in values]
         if len(set(values.tolist())) <= _MAX_DISCRETE:
             return colors, None
-        return colors, ("colorbar", (cmap, norm))
+        # Each numeric lane is its own scale, so each earns its own bar;
+        # one bar for two lanes would read from a scale only one of them has.
+        return colors, ("colorbar", (rows["lane"].iloc[0], cmap, norm))
     # Boolean and unvalued lanes take one color, so the lane reads as one
     # variable; a False interval is drawn faintly rather than dropped.
     base = plt.get_cmap(LANE_CMAP)(lane_index % 10)
@@ -304,7 +315,8 @@ def plot_lanes(
         lanes, so two figures of different subjects still line up.
     color
         A color for every row, a mapping of value to color, or a mapping
-        of lane name to either of those.
+        of lane name to such a mapping. A lane whose values are numbers
+        reads a color string as the name of a colormap.
     gaps
         Whether to also draw what each lane does not cover.
     pack
@@ -338,7 +350,7 @@ def plot_lanes(
     ... )
     >>> _ = plot_lanes(frame, lane="group", value="value")
     """
-    frame = _read_frame(intervals, start, end, lane, value, label)
+    frame, dated = _read_frame(intervals, start, end, lane, value, label)
     if not len(frame):
         msg = "The interval frame holds no rows, so there is nothing to draw."
         raise ParameterError(msg)
@@ -368,7 +380,7 @@ def plot_lanes(
     span = x_limits[1] - x_limits[0]
 
     legend_entries: dict = {}
-    colorbar: tuple | None = None
+    colorbars: list[tuple] = []
     placements: list[tuple] = []
     for index, name in enumerate(order):
         rows = frame[frame["lane"] == name]
@@ -390,7 +402,7 @@ def plot_lanes(
         if described and described[0] == "legend":
             legend_entries.update(described[1])
         elif described and described[0] == "colorbar":
-            colorbar = described[1]
+            colorbars.append(described[1])
         if gaps:
             gap_spans = _gap_rows(rows, x_limits)
             if gap_spans:
@@ -457,15 +469,18 @@ def plot_lanes(
     ax.set_axisbelow(True)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
+    if dated:
+        _format_time_axis(ax, x_label or "time", "x")
     _fit_labels(ax, placements, max_labels)
-    if legend and colorbar is not None:
-        cmap, norm = colorbar
-        ax.get_figure().colorbar(
-            plt.cm.ScalarMappable(norm=norm, cmap=cmap),
-            ax=ax,
-            fraction=0.05,
-            pad=0.02,
-        )
+    if legend:
+        for name, cmap, norm in colorbars:
+            bar = ax.get_figure().colorbar(
+                plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+                ax=ax,
+                fraction=0.05,
+                pad=0.02,
+            )
+            bar.set_label(name)
     if legend and legend_entries and legend != "off":
         handles = [
             PatchArtist(facecolor=color, label=name)
@@ -502,7 +517,7 @@ def lane_gaps(intervals, *, start="start", end="end", lane=None, limits=None):
     >>> lane_gaps(frame)[["start", "end"]].to_numpy().tolist()
     [[10.0, 20.0]]
     """
-    frame = _read_frame(intervals, start, end, lane, None, None)
+    frame, _ = _read_frame(intervals, start, end, lane, None, None)
     out = []
     for name in dict.fromkeys(frame["lane"]):
         rows = frame[frame["lane"] == name]

@@ -11,7 +11,7 @@ import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Patch as PatchArtist
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.intervals import interval_masks, normalize_value, value_kind
 from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
@@ -49,7 +49,15 @@ def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
         msg = "This inventory holds no optical paths, so there is nothing to plot."
         raise ParameterError(msg)
     if acquisition_key is not None:
-        context = inventory.resolve(acquisition_key, time)
+        try:
+            context = inventory.resolve(acquisition_key, time)
+        except InvalidInventoryError as error:
+            msg = (
+                f"Acquisition key {acquisition_key!r} names more than one "
+                "acquisition, which happens where it was reconfigured. Pass a "
+                "time as well, to say which of its epochs to draw."
+            )
+            raise ParameterError(msg) from error
         if context.optical_path is None:
             msg = (
                 f"Acquisition key {acquisition_key!r} resolves to no optical "
@@ -81,6 +89,15 @@ def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
         address, _, array, path = candidates[0]
         return address, array, path
     names = sorted({f"{x[0]} ({_epoch_label(x[3])})" for x in candidates})
+    if len({x[0] for x in candidates}) == 1:
+        # One address, several epochs of it: only a time tells them apart.
+        msg = (
+            f"Optical path {candidates[0][0]!r} has {len(candidates)} epochs, "
+            "so which one to plot must be stated. Pass a time, since an "
+            "address names the path rather than one epoch of it. The epochs "
+            "are: " + ", ".join(names) + "."
+        )
+        raise ParameterError(msg)
     msg = (
         f"This inventory holds {len(candidates)} optical paths, so which one "
         "to plot must be stated. Pass optical_path=<address>, "
@@ -492,10 +509,11 @@ def map_path(
     ax = _get_ax(ax)
     x_axis, y_axis = crs.axis_index(x), crs.axis_index(y)
     handles: dict = {}
+    palette: dict = {}
     # Two passes: every path is measured before any is drawn, so that one
     # color scale spans them all rather than the last one drawn winning.
     pieces = []
-    for index, (address, _, one) in enumerate(chosen):
+    for address, _, one in chosen:
         distances = np.linspace(one.start_distance, one.end_distance, n_samples)
         coords = one.coordinates_at(distances, crs)
         points = np.column_stack([coords[:, x_axis], coords[:, y_axis]])
@@ -505,10 +523,19 @@ def map_path(
         good = ~np.isnan(segments).any(axis=(1, 2))
         if not good.any():
             continue
-        values, colors = _segment_colors(one, color, mid[good], crs, index, handles)
+        values, colors = _segment_colors(one, color, mid[good], crs, handles, palette)
         pieces.append((segments[good], values, colors))
     drawn = len(pieces)
     scalar = None
+    # A value nothing states is not fiber nothing placed. Left as NaN it
+    # would map to a transparent color and the cable would simply vanish.
+    unstated = any(
+        values is not None and bool(np.isnan(values).any()) for _, values, _ in pieces
+    )
+    if unstated:
+        handles.setdefault(
+            "not stated", PatchArtist(facecolor=UNPLACED, label="not stated")
+        )
     if drawn:
         finite = [v[np.isfinite(v)] for _, v, _ in pieces if v is not None]
         finite = [v for v in finite if len(v)]
@@ -522,7 +549,11 @@ def map_path(
                 list(segments),
                 linewidths=linewidth,
                 colors=colors,
-                cmap=_get_cmap(cmap) if values is not None else None,
+                cmap=(
+                    _get_cmap(cmap).with_extremes(bad=UNPLACED)
+                    if values is not None
+                    else None
+                ),
                 norm=norm if values is not None else None,
                 capstyle="round",
             )
@@ -563,11 +594,13 @@ def map_path(
             scalar, ax=ax, fraction=0.05, pad=0.02, shrink=shrink
         )
         bar.set_label("Optical distance [m]" if color == "distance" else color)
-    elif legend and handles:
+    if legend and handles:
+        # A colorbar already occupies the strip beside the axes.
+        offset = 1.18 if scalar is not None else 1.01
         ax.legend(
             handles=list(handles.values()),
             loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
+            bbox_to_anchor=(offset, 1.0),
             frameon=False,
             fontsize="small",
             title=color,
@@ -587,7 +620,7 @@ def _axis_label(crs, name) -> str:
 UNPLACED = (0.8, 0.8, 0.8, 1.0)
 
 
-def _segment_colors(one, color, mid, crs, index, handles):
+def _segment_colors(one, color, mid, crs, handles, palette):
     """Return (values, colors) for one path's segments; one of them is None."""
     if color == "distance":
         return mid, None
@@ -614,8 +647,12 @@ def _segment_colors(one, color, mid, crs, index, handles):
         for item, mask in zip(items, masks, strict=True):
             values[mask] = float(normalize_value(item.value))
         return values, None
-    palette = plt.get_cmap("tab20")
-    seen = {k: palette(i % 20) for i, k in enumerate(dict.fromkeys(map(str, keys)))}
+    # The palette is the figure's, not this path's, so one value is one
+    # color however many paths are drawn and whatever order they state it.
+    wheel = plt.get_cmap("tab20")
+    for key in dict.fromkeys(map(str, keys)):
+        palette.setdefault(key, wheel(len(palette) % 20))
+    seen = palette
     colors = [UNPLACED] * len(mid)
     for key, mask in zip(keys, masks, strict=True):
         placed = np.flatnonzero(mask)
@@ -755,7 +792,7 @@ def timeline(
     ]
     # An epoch outside the window is left out rather than clipped to a
     # sliver at the edge, which would read as an epoch which ended there.
-    frame = frame[(frame["start"] <= high) & (frame["end"] >= low)]
+    frame = frame[(frame["start"] < high) & (frame["end"] > low)]
     if frame.empty:
         msg = f"No epoch in this inventory falls within time={time!r}."
         raise ParameterError(msg)

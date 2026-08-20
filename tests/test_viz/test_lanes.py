@@ -121,6 +121,19 @@ class TestReadFrame:
             mdates.date2num(np.datetime64("2024-01-01"))
         )
 
+    def test_datetime_axis_is_formatted(self):
+        """Dated bounds get a date axis, not raw ordinals."""
+        frame = pd.DataFrame(
+            {
+                "start": pd.to_datetime(["2024-01-01"]),
+                "end": pd.to_datetime(["2024-01-05"]),
+            }
+        )
+        ax = plot_lanes(frame)
+        assert isinstance(ax.xaxis.get_major_formatter(), mdates.ConciseDateFormatter)
+        ticks = " ".join(x.get_text() for x in ax.get_xticklabels())
+        assert "Jan" in ticks, f"expected dates, got {ticks}"
+
     def test_missing_bounds(self):
         """A frame without the bound columns names what it has."""
         with pytest.raises(ParameterError, match="needs the columns"):
@@ -294,6 +307,23 @@ class TestColors:
         )
         ax = plot_lanes(frame, value="v")
         assert len(ax.get_figure().axes) == 2
+
+    def test_numeric_lanes_get_their_own_colorbar(self):
+        """Each numeric lane is its own scale, so each names its own bar."""
+        n = 8
+        frame = pd.DataFrame(
+            {
+                "lane": ["a"] * n + ["b"] * n,
+                "start": list(range(n)) * 2,
+                "end": [x + 1 for x in range(n)] * 2,
+                "value": list(range(n)) + [100 + x for x in range(n)],
+            }
+        )
+        ax = plot_lanes(frame, lane="lane", value="value")
+        bars = [x for x in ax.get_figure().axes if x is not ax]
+        assert [x.get_ylabel() for x in bars] == ["a", "b"]
+        assert bars[0].get_ylim() == pytest.approx((0.0, 7.0))
+        assert bars[1].get_ylim() == pytest.approx((100.0, 107.0))
 
     def test_numeric_one_value(self):
         """One number is not a scale, so every box shares one color."""

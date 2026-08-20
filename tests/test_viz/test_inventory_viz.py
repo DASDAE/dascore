@@ -225,6 +225,17 @@ class TestSelectPath:
         with pytest.raises(ParameterError, match="not part of this inventory"):
             path(site, foreign)
 
+    def test_epochs_need_a_time(self, site):
+        """An address names a path, so it cannot pick among its epochs."""
+        with pytest.raises(ParameterError, match="has 2 epochs") as info:
+            path(site, "DAS.L1.00")
+        assert "Pass a time" in str(info.value)
+
+    def test_ambiguous_acquisition_key(self, site):
+        """A key naming two acquisition epochs asks for a time, in our terms."""
+        with pytest.raises(ParameterError, match="names more than one"):
+            path(site, acquisition_key="DAS.L1.00.RAW")
+
     def test_acquisition_key(self, site):
         """An acquisition key resolves through the inventory."""
         ax = path(site, acquisition_key="DAS.L1.00.RAW", time="2026-06-10")
@@ -457,6 +468,27 @@ class TestMap:
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="coupling")
         assert _legend_labels(ax)[:2] == ["trench", "conduit"]
 
+    def test_unstated_numeric_is_drawn(self, site):
+        """Fiber whose color value is unstated is drawn grey, not made invisible."""
+        ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="count")
+        collection = next(x for x in ax.collections if isinstance(x, LineCollection))
+        # The cable is placed from 350 m on, but states no count there, so
+        # those segments are masked and take the colormap's "bad" color.
+        assert np.ma.getmaskarray(collection.get_array()).any()
+        bad = collection.get_cmap().get_bad()
+        assert bad[3] == pytest.approx(1.0), "unstated fiber would be invisible"
+        assert "not stated" in _legend_labels(ax)
+
+    def test_one_palette_for_every_path(self, site):
+        """A value is one color across the paths of one figure."""
+        ax = map_path(site, color="zone")
+        lines = [x for x in ax.collections if isinstance(x, LineCollection)]
+        assert len(lines) == 2
+        first, second = (x.get_colors() for x in lines)
+        # Both epochs state north then south, so their colors must agree.
+        assert np.allclose(first[0], second[0])
+        assert len(set(map(tuple, np.vstack([first, second])))) == 3
+
     def test_color_unknown(self, site):
         """An unknown coloring lists what would work."""
         with pytest.raises(ParameterError, match="names neither"):
@@ -561,6 +593,26 @@ class TestTimeline:
         # And a window after it, since the epoch states both of its bounds.
         with pytest.raises(ParameterError, match="falls within time"):
             timeline(bounded, time=("2030-01-01", "2030-02-01"))
+
+    def test_window_excludes_touching_epoch(self):
+        """An epoch which ends where the window starts does not overlap it."""
+        acquisition = inv.Acquisition(
+            code="RAW",
+            location_code="00",
+            start_time="2026-06-01",
+            end_time="2026-06-15",
+            data_category="DAS",
+            sample_rate=1.0,
+            gauge_length=1.0,
+        )
+        array = inv.FiberArray(code="A", acquisitions=(acquisition,))
+        bounded = inv.Inventory(
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(ParameterError, match="falls within time"):
+            timeline(bounded, time=("2026-06-15", "2026-07-01"))
+        with pytest.raises(ParameterError, match="falls within time"):
+            timeline(bounded, time=("2026-05-01", "2026-06-01"))
 
     def test_no_epochs(self):
         """An inventory whose epochs state no time still draws, and says so."""
