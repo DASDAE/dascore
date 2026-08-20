@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection, PolyCollection
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
@@ -14,51 +17,115 @@ from dascore.utils.plotting import (
     _get_data_label,
     _get_dim_label,
 )
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64
 
 
 def _get_offsets_factor(patch, dim, scale, other_labels):
     """Get the offsets and scale the data."""
     dim_axis = patch.get_axis(dim)
     # get and apply scale_factor. This controls how far apart the wiggles are.
-    diffs = np.max(patch.data, axis=dim_axis) - np.min(patch.data, axis=dim_axis)
-    offsets = (np.median(diffs) * scale) * np.arange(len(other_labels))
+    # NaN samples are skipped so one gap doesn't blank the whole plot.
+    with suppress_warnings(RuntimeWarning):  # all-NaN traces
+        mx = np.nanmax(patch.data, axis=dim_axis)
+        mn = np.nanmin(patch.data, axis=dim_axis)
+        offsets = (np.nanmedian(mx - mn) * scale) * np.arange(len(other_labels))
     # add scale factor to data
     data_scaled = offsets[None, :] + patch.data
     return offsets, data_scaled
 
 
-def _shade(offsets, ax, data_scaled, color, wiggle_labels):
-    """Shades the part of each waveform above its offset line."""
-    for i in range(len(offsets)):
-        ax.fill_between(
-            wiggle_labels,
-            offsets[i],
-            data_scaled[:, i],
-            where=(data_scaled[:, i] > offsets[i]),
-            color=color,
-            alpha=0.6,
-        )
+def _get_plot_values(patch, dim):
+    """
+    Get the values of a coordinate as floats for plotting.
+
+    Datetimes become matplotlib date numbers, which is what xaxis_date (set
+    up later by _format_time_axis) expects, so they can share float arrays
+    with the trace data.
+    """
+    values = patch.coords.get_array(dim)
+    if is_datetime64(values):
+        values = mdates.date2num(values)
+    return values
+
+
+def _plot_traces(ax, x, data_scaled, color, alpha):
+    """
+    Draw each column of data_scaled as a line against x.
+
+    A single LineCollection is much faster to build than one Line2D per
+    trace. Each trace is still rendered as its own path, so overlapping
+    traces darken with alpha like separate lines do. (One NaN separated
+    Line2D would draw faster for very long traces, but Agg composites a
+    path once, so overlaps wouldn't darken.)
+    """
+    n_samples, n_traces = data_scaled.shape
+    segments = np.empty((n_traces, n_samples, 2))
+    segments[:, :, 0] = x[None, :]
+    segments[:, :, 1] = data_scaled.T
+    ax.add_collection(LineCollection(segments, colors=color, alpha=alpha))
+    # Collections don't update the view limits on their own.
+    ax.autoscale_view()
+
+
+def _shade(ax, x, offsets, data_scaled, color):
+    """
+    Shade the part of each trace above its offset line.
+
+    Builds one polygon per trace (rather than calling fill_between for each)
+    with a vertex wherever the trace crosses its offset, like
+    fill_between(interpolate=True), so the shading stops at the crossing
+    rather than at the neighboring sample.
+    """
+    # Height of each sample above its offset; non-finite samples sit on it.
+    d = data_scaled - offsets[None, :]
+    d = np.where(np.isfinite(d), d, np.nan)
+    above = np.fmax(d, 0)
+    d0, d1 = d[:-1], d[1:]
+    x0, x1 = x[:-1, None], x[1:, None]
+    # Between samples add a vertex on the offset at the crossing. Next to a
+    # non-finite sample drop to the offset at the finite one, so gaps aren't
+    # shaded. Elsewhere repeat the next sample (a zero length edge).
+    finite = np.isfinite(d0) & np.isfinite(d1)
+    cross = finite & ((d0 > 0) != (d1 > 0))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        x_mid = np.where(cross, x0 + (x1 - x0) * d0 / (d0 - d1), x1)
+    x_mid = np.where(np.isnan(d1) & np.isfinite(d0), x0, x_mid)
+    y_mid = np.where(cross | ~finite, 0.0, above[1:])
+    n_samples, n_traces = d.shape
+    xs = np.empty((2 * n_samples - 1, n_traces))
+    ys = np.empty_like(xs)
+    xs[0::2], ys[0::2] = x[:, None], above
+    xs[1::2], ys[1::2] = x_mid, y_mid
+    # Assemble the polygons, closing each along its offset line.
+    verts = np.empty((n_traces, 2 * n_samples + 1, 2))
+    verts[:, 1:-1, 0] = xs.T
+    verts[:, 1:-1, 1] = (ys + offsets[None, :]).T
+    verts[:, [0, -1], 0] = x[[0, -1]]
+    verts[:, [0, -1], 1] = offsets[:, None]
+    poly = PolyCollection(verts, facecolors=color, edgecolors="none", alpha=0.6)
+    ax.add_collection(poly)
 
 
 def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
-    """Format the Y axis tick labels."""
+    """Put at most max_ticks trace labels on the Y axis."""
     # make sure not printing too many digits on the figure
     if not dtype_time_like(other_axis_ticks):
         other_axis_ticks = np.around(other_axis_ticks, decimals=2)
-    # set the offset
-    ax.set_yticks(offsets, other_axis_ticks)
-    min_bins = min(len(other_axis_ticks), max_ticks)
-    plt.locator_params(axis="y", nbins=min_bins)
+    # Only create the ticks which will be shown; matplotlib builds a Tick
+    # for every location passed to set_yticks, which dominates the run time
+    # with thousands of traces. The step keeps the positions the previous
+    # set-all-then-locator_params(nbins) approach produced.
+    step = max(int(0.99 + len(offsets) / max_ticks), 1)
+    ax.set_yticks(offsets[::step], other_axis_ticks[::step])
 
 
 def _wiggle_1d(patch, ax, alpha, color, shade):
     """Plot a 1D patch as a single trace against its only coordinate."""
     dim = patch.dims[0]
-    x_values = patch.coords.get_array(dim)
+    x_values = _get_plot_values(patch, dim)
     ax.plot(x_values, patch.data, color=color, alpha=alpha)
     if shade:
-        _shade(np.array([0]), ax, patch.data[:, None], color, x_values)
+        _shade(ax, x_values, np.array([0.0]), patch.data[:, None], color)
     ax.set_xlabel(_get_dim_label(patch, dim))
     ax.set_ylabel(_get_data_label(patch, default="amplitude"))
     if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
@@ -72,15 +139,15 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     patch = patch.transpose(dim, ...)
     other_dim = next(iter(set(patch.dims) - {dim}))
     # values for axis which is connected
-    connect_axis_ticks = patch.coords.get_array(dim)
+    connect_axis_values = _get_plot_values(patch, dim)
     # values for y axis (not connected)
     other_axis_ticks = patch.coords.get_array(other_dim)
     offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
     # now plot, add labels, etc.
-    ax.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
+    _plot_traces(ax, connect_axis_values, data_scaled, color, alpha)
     # shade the part of each wiggle above its offset if desired
     if shade:
-        _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
+        _shade(ax, connect_axis_values, offsets, data_scaled, color)
     _format_y_axis_ticks(ax, offsets, other_axis_ticks)
     for dim, x in zip(patch.dims, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
