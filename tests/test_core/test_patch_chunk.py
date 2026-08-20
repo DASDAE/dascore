@@ -556,6 +556,20 @@ class TestChunkMerge:
             assert out[0].attrs.foo == "a"
             assert out[0].attrs.data_type == "velocity"
 
+    def test_attr_held_in_two_kinds_takes_the_numeric_units(self):
+        """An attr stored as text in one patch and a quantity in another."""
+        p1 = dc.get_example_patch().update_attrs(foo=2 * dc.get_quantity("m"))
+        p2 = dc.get_example_patch(time_min=p1.get_coord("time").max()).update_attrs(
+            foo="text"
+        )
+        spool = dc.spool([p1, p2])
+        assert spool._catalog.backend.attr_units_map()["foo"] == "m"
+        assert "foo" not in spool._catalog.backend.attr_units_map(kind="bool")
+        # the quantity member dropped by overlap removal still stamps metres
+        dup = dc.get_example_patch()
+        out = dc.spool([dup, p1]).chunk(time=None)
+        assert out[0].attrs.foo == 2 * dc.get_quantity("m")
+
     def test_attr_pair_named_like_an_envelope_is_stamped(self):
         """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
         p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")

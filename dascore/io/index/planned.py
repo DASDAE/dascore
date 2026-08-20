@@ -578,16 +578,17 @@ class PlanResolver(PatchResolver):
 
 def _plan_attr_units(parent, outputs: pd.DataFrame) -> dict[str, str | None]:
     """
-    The units the parent index stores each public output column in.
+    The units the parent index stores each public numeric output column in.
 
-    One read of the index's attr metadata; None marks a plain value, and
-    columns the index holds no attr metadata for (envelopes, bookkeeping)
-    are None too — `_stamp` never fills those anyway.
+    One read of the index's attr metadata for the numeric kind, the only
+    kind which carries units: None marks a plain number, and a column the
+    index never held as a number is absent, so `_stamp` leaves a number
+    it cannot account for alone.
     """
     if parent is None:
         return {}
     known = parent.backend.attr_units_map()
-    return {x: known.get(x) for x in outputs.columns if not x.startswith("_")}
+    return {x: known[x] for x in outputs.columns if x in known}
 
 
 def _is_number(value) -> bool:

@@ -1189,20 +1189,21 @@ class SQLiteIndexBackend:
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
 
-    def attr_units_map(self) -> dict[str, str | None]:
+    def attr_units_map(self, kind: str = "num") -> dict[str, str | None]:
         """
-        Return the canonical units the index stores every attr in, by name.
+        Return the canonical units the index stores each attr of one kind in.
 
-        One read of the attr metadata; an attr stored in several kinds
-        reports the first kind's units, None for a plain value.
+        Units belong to an (attr name, value kind) pair, and only numbers
+        carry any, so the default asks about the numeric kind; an attr the
+        index holds in that kind without units maps to None, and one it
+        does not hold in that kind is absent. One read of the metadata.
         """
-        out: dict[str, str | None] = {}
         rows = self._attr_meta()
-        for name, unit in zip(rows["attr_name"], rows["units"], strict=True):
-            units = _normalize_unit(unit)
-            if name not in out or (out[name] is None and units):
-                out[name] = units
-        return out
+        rows = rows[rows["value_kind"] == kind]
+        return {
+            str(name): _normalize_unit(unit)
+            for name, unit in zip(rows["attr_name"], rows["units"], strict=True)
+        }
 
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""

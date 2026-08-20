@@ -1212,16 +1212,17 @@ class TestConcatenateKind:
         # phase-shifted grid would not, and metadata cannot tell the two apart
         shifted = later.update_coords(distance_min=5)
         selected = dc.spool([base, shifted]).select(distance=(5, 299))
-        with pytest.warns(UserWarning, match="concatenate before selecting"):
+        with pytest.warns(UserWarning, match="load the selected patches"):
             out = selected.concatenate(time=None)
         assert len(out) == 1
         assert out[0].shape[1] == base.shape[1]
         assert out.get_contents()["time_max"].iloc[0] == time.max()
-        # the same selection after concatenating works
-        whole = dc.spool([base, shifted]).concatenate(
-            time=None, check_behavior="ignore"
-        )
-        assert whole.select(distance=(5, 299))[0].get_coord("distance").min() == 5
+        # loading the selected patches settles their coordinates, and then
+        # they concatenate
+        loaded = dc.spool(list(selected)).concatenate(time=None)
+        assert len(loaded) == 1
+        assert loaded[0].shape[1] == 2 * base.shape[1]
+        assert loaded[0].get_coord("distance").min() == 5
 
     def test_selection_cannot_settle_irregular_coordinates(self):
         """Irregular coordinates under a pending selection stay apart too."""

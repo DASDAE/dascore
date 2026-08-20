@@ -1376,7 +1376,8 @@ def _concat_compatible_rows(
     load makes stale: equal stale keys are still equal after the same trim,
     but differing ones cannot be decided from metadata (a def key is a hash,
     and the trimmed envelope is clamped to the query, not to the samples
-    kept), so such a row is not admitted and the message says why.
+    kept), so such a row is not admitted and the message says to load the
+    selected patches and concatenate those.
     """
     validate_warn_level(check_behavior)
     names = [x for x in get_config().patch_kind_attrs if x in df.columns]
@@ -1423,7 +1424,8 @@ def _concat_compatible_rows(
                     msg += (
                         " A selection still to be applied when the patches load "
                         "may or may not reconcile them, which cannot be decided "
-                        "from metadata; concatenate before selecting."
+                        "from metadata; load the selected patches (for example "
+                        "dc.spool(list(spool))) and concatenate those."
                     )
                 warn_or_raise(
                     msg, exception=IncompatiblePatchError, behavior=check_behavior
