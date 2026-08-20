@@ -30,6 +30,7 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.io import core as io_core
 from dascore.io.core import (
     STORED_PATCH_ID,
     FiberIO,
@@ -1997,18 +1998,31 @@ class TestSourceIds:
         (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
         assert _source_stats(tmp_path) == before
 
-    def test_one_file_spelled_two_ways(self, terra15_path):
-        """A relative and an absolute spelling name one datum."""
-        relative = os.path.relpath(terra15_path)
-        assert (
-            dc.read(relative)[0].attrs.patch_id
-            == dc.read(terra15_path)[0].attrs.patch_id
-        )
+    def test_one_file_spelled_two_ways(self, terra15_path, monkeypatch):
+        """
+        A relative and an absolute spelling name one datum.
 
-    def test_a_path_which_cannot_be_canonicalized(self):
-        """A spelling nothing can resolve is still the spelling given."""
-        unresolvable = "one\x00two.h5"
-        assert _canonical_path(unresolvable) == unresolvable
+        The relative one is made by moving to the file's own directory:
+        `relpath` refuses to answer across windows drives, and where the
+        test data is cached is not this test's business.
+        """
+        absolute = dc.read(terra15_path)[0].attrs.patch_id
+        monkeypatch.chdir(Path(terra15_path).parent)
+        assert dc.read(Path(terra15_path).name)[0].attrs.patch_id == absolute
+
+    def test_a_path_which_cannot_be_canonicalized(self, monkeypatch):
+        """
+        A spelling nothing can resolve is still the spelling given.
+
+        Forced rather than found: which strings a filesystem refuses is
+        the filesystem's business, and differs by platform and python.
+        """
+
+        def _refuse(_):
+            raise OSError("no")
+
+        monkeypatch.setattr(io_core, "coerce_to_local_path", _refuse)
+        assert _canonical_path("one.h5") == "one.h5"
 
     def test_scanning_with_the_ids_disabled(self, terra15_path):
         """The config which turns the ids off turns scanning off too."""
