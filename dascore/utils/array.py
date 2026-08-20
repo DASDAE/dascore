@@ -372,6 +372,14 @@ def _apply_binary_ufunc(
         A ufunc the registry does not implement falls through to numpy with
         the units left as they were.
         """
+        known = data_units if data_units is not None else other_units
+        if not known._is_multiplicative:
+            # An offset unit (degC) cannot be probed by scaling; the data
+            # keep their units unless the result is a comparison.
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            if getattr(new_data, "dtype", None) == np.bool_:
+                return new_data, attrs.update(data_units=None)
+            return new_data, attrs.update(data_units=_label(known))
         is_power = operator in (np.power, np.float_power)
         if is_power and np.ndim(other) > 0 and data_units is not None and not reversed:
             msg = f"{operator} with units {data_units} needs a scalar exponent."
@@ -400,9 +408,12 @@ def _apply_binary_ufunc(
 
         try:
             probe = _probe(2.0)
-        except TypeError:
-            # The unit registry does not implement this ufunc (or cannot
-            # hold this scalar, a bool say); numpy does, and the units are
+        except UnitError:
+            raise
+        except (TypeError, ValueError):
+            # The unit registry does not implement this ufunc, or cannot
+            # hold this scalar (a bool), or the ufunc wants dimensioned
+            # operands (matmul); numpy does the work, and the units are
             # whatever they were.
             return _apply_op(patch.data, other, operator, reversed), attrs
         new_data = _apply_op(patch.data, other, operator, reversed)

@@ -1362,8 +1362,8 @@ def _concat_compatible_rows(
     The same gates, from metadata, so a plan decided without loading data
     agrees with the patches assembled from it: a row must not conflict in
     kind with the rows admitted so far, and must share the first row's
-    dimensions and coordinate identity (def keys) on every dimension other
-    than the concatenated one. A row rejected for its structure binds no
+    dimensions and coordinate identity (def keys) on every public coordinate
+    other than the concatenated one. A row rejected for its structure binds no
     kind, exactly as a patch rejected for its coordinates does not. Kind
     attrs absent from the columns are absent from every patch and ignored.
     """
@@ -1372,12 +1372,14 @@ def _concat_compatible_rows(
         return df
     names = [x for x in get_config().patch_kind_attrs if x in df.columns]
     first = df.iloc[0]
-    # the first row's dimensions, other than the concatenated one, carry
-    # the coordinate identities every row must share
-    first_dims = str(first["dims"]).split(",") if "dims" in df.columns else []
+    # every public coordinate other than the concatenated one must keep its
+    # identity across rows, as check_coords asks of the patches; private
+    # coordinates (def keys starting "__") are dropped before concatenation
     structure = ["dims"] if "dims" in df.columns else []
     structure += [
-        key for x in first_dims if x != dim and (key := f"_{x}_def_key") in df.columns
+        x
+        for x in df.columns
+        if x.endswith("_def_key") and not x.startswith("__") and x != f"_{dim}_def_key"
     ]
     run, keep = _KindRun(), []
     for _, row in df.iterrows():

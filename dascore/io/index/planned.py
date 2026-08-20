@@ -541,15 +541,9 @@ class PlanResolver(PatchResolver):
         # every public attr column the row carries, extras included; the
         # coordinate envelope columns and the row's own bookkeeping are not attrs
         coords = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
-        coord_prefixes = tuple(f"{x}_" for x in coords)
-        skip = {*_SOURCE_COLUMNS, *coords, "dims", "output_id"}
-        names = {
-            x
-            for x in row
-            if not x.startswith("_")
-            and x not in skip
-            and not x.startswith(coord_prefixes)
-        }
+        envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
+        skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
+        names = {x for x in row if not x.startswith("_") and x not in skip}
         fill = {
             x: row[x]
             for x in names

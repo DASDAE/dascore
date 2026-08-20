@@ -1171,6 +1171,19 @@ class TestConcatenateKind:
         assert out[0].attrs.tag == "b"
         assert out[0].shape[1] == 2 * first.shape[1]
 
+    def test_auxiliary_coordinate_gate(self, mixed_kind):
+        """A differing non-dimensional coordinate is caught at planning time."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        other = other.update_coords(latitude=("distance", np.ones(n)))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        # the plan row and the patch agree: only the first patch
+        assert out.get_contents()["time_max"].iloc[0] == first.get_coord("time").max()
+        assert out[0].shape == first.shape
+
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""
         first, other = mixed_kind

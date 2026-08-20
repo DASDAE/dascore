@@ -556,6 +556,14 @@ class TestChunkMerge:
             assert out[0].attrs.foo == "a"
             assert out[0].attrs.data_type == "velocity"
 
+    def test_attr_named_like_a_coordinate_is_stamped(self):
+        """An attr such as time_zone is not coordinate metadata."""
+        p1 = dc.get_example_patch().update_attrs(time_zone="UTC")
+        p2 = dc.get_example_patch()
+        out = dc.spool([p2, p1]).chunk(time=None)
+        assert out.get_contents()["time_zone"].iloc[0] == "UTC"
+        assert out[0].attrs.time_zone == "UTC"
+
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
         p1 = dc.get_example_patch()

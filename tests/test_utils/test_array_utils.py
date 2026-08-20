@@ -299,6 +299,23 @@ class TestApplyUfunc:
         out = metres.set_units("100 cm") - metres.data
         assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
 
+    def test_offset_units_are_kept(self, random_patch):
+        """Temperatures are not scaled by a probe: degC stays degC."""
+        temp = random_patch.set_units("degC")
+        out = temp + 1
+        assert np.allclose(out.data, random_patch.data + 1)
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        assert (temp > 20).attrs.data_units is None
+        out = random_patch.set_units(None) + temp
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+
+    def test_generalized_ufunc_with_units(self):
+        """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
+        square = dc.get_example_patch(shape=(10, 10)).set_units("m")
+        out = np.matmul(square, np.eye(10))
+        assert np.allclose(out.data, square.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+
     def test_scalar_units_need_no_array_wrapping(self, random_patch):
         """Scalars settle units on a probe; comparisons and powers behave."""
         metres = random_patch.set_units("m")
