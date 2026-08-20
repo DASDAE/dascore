@@ -88,8 +88,9 @@ class DascoreConfig(BaseModel):
             "station",
         ),
         description=(
-            "Attributes which decide whether patches are the same kind. "
-            "Patches holding conflicting values for any of these are never "
+            "Attributes which decide whether patches are the same kind; they "
+            "are categorical labels (strings), not quantities. Patches "
+            "holding conflicting values for any of these are never "
             "combined: operators and ufuncs raise, concatenate and stack "
             "skip them, and chunk puts them in separate outputs (its "
             "per-call `group` argument overrides this default). A missing "

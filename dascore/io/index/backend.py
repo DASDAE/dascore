@@ -1189,6 +1189,21 @@ class SQLiteIndexBackend:
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
 
+    def attr_units_map(self) -> dict[str, str | None]:
+        """
+        Return the canonical units the index stores every attr in, by name.
+
+        One read of the attr metadata; an attr stored in several kinds
+        reports the first kind's units, None for a plain value.
+        """
+        out: dict[str, str | None] = {}
+        rows = self._attr_meta()
+        for name, unit in zip(rows["attr_name"], rows["units"], strict=True):
+            units = _normalize_unit(unit)
+            if name not in out or (out[name] is None and units):
+                out[name] = units
+        return out
+
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""
         rows = self._attr_meta()

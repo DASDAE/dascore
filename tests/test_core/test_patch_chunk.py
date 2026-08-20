@@ -556,6 +556,14 @@ class TestChunkMerge:
             assert out[0].attrs.foo == "a"
             assert out[0].attrs.data_type == "velocity"
 
+    def test_attr_pair_named_like_an_envelope_is_stamped(self):
+        """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
+        p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")
+        p2 = dc.get_example_patch()
+        out = dc.spool([p2, p1]).chunk(time=None)
+        assert out[0].attrs.foo_min == "a"
+        assert out[0].attrs.foo_max == "b"
+
     def test_attr_named_like_a_coordinate_is_stamped(self):
         """An attr such as time_zone is not coordinate metadata."""
         p1 = dc.get_example_patch().update_attrs(time_zone="UTC")

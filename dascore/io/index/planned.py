@@ -17,7 +17,7 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -393,6 +393,7 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         attr_units: Mapping[str, str | None] | None = None,
+        coord_names: Iterable[str] = (),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -417,6 +418,9 @@ class PlanResolver(PatchResolver):
         # a plain number), resolved at planning so a row's magnitude can
         # be turned back into the attr it came from
         self.attr_units = dict(attr_units or {})
+        # every coordinate the parent index knows, so a row's envelope
+        # columns are told from attrs which merely look like one
+        self.coord_names = frozenset(coord_names)
         # Whether the outputs leave samples of their sources out. A lossy
         # plan must never be collapsed: its members do not cover their
         # sources, so re-planning over them would load back what it
@@ -545,13 +549,10 @@ class PlanResolver(PatchResolver):
         attrs = patch.attrs
         # every public attr column the row carries, extras included; the
         # coordinate envelope columns and the row's own bookkeeping are not attrs
-        # a coordinate envelope is a min and a max column (step and units
-        # may ride along); the row may carry one for a coordinate the
-        # assembled patch no longer has, so the row's own envelopes count
+        # the row may carry an envelope for a coordinate the assembled patch
+        # no longer has, so every coordinate the index knows counts
         coords = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
-        coords |= {x[:-4] for x in row if x.endswith("_min")} & {
-            x[:-4] for x in row if x.endswith("_max")
-        }
+        coords |= self.coord_names
         envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
         skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
         names = {x for x in row if not x.startswith("_") and x not in skip}
@@ -575,25 +576,18 @@ class PlanResolver(PatchResolver):
         return patch
 
 
-def _numeric_attr_units(parent, outputs: pd.DataFrame) -> dict[str, str | None]:
+def _plan_attr_units(parent, outputs: pd.DataFrame) -> dict[str, str | None]:
     """
-    The units the parent index stores each attr column in.
+    The units the parent index stores each public output column in.
 
-    None marks a plain value. Columns the index holds no attr metadata
-    for (envelopes, bookkeeping) come back as None too; `_stamp` never
-    fills those anyway.
+    One read of the index's attr metadata; None marks a plain value, and
+    columns the index holds no attr metadata for (envelopes, bookkeeping)
+    are None too — `_stamp` never fills those anyway.
     """
     if parent is None:
         return {}
-    out: dict[str, str | None] = {}
-    for col in outputs.columns:
-        # carried columns come out object-typed, so every public column is
-        # asked about rather than only the numeric-looking ones
-        if col.startswith("_"):
-            continue
-        kinds = parent.backend.attr_units(col)
-        out[col] = next((x for x in kinds.values() if x), None)
-    return out
+    known = parent.backend.attr_units_map()
+    return {x: known.get(x) for x in outputs.columns if not x.startswith("_")}
 
 
 def _is_number(value) -> bool:
@@ -705,7 +699,8 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
-        attr_units=_numeric_attr_units(parent, plan.outputs),
+        attr_units=_plan_attr_units(parent, plan.outputs),
+        coord_names=() if parent is None else parent.backend.coord_names(),
     )
     backend = get_backend(":memory:")
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()

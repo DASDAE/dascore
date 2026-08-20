@@ -18,7 +18,7 @@ from dascore.io.index.planned import (
     _aux_coord_info,
     _coord_record_from_row,
     _ns,
-    _numeric_attr_units,
+    _plan_attr_units,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -394,4 +394,4 @@ class TestNumericAttrUnits:
 
     def test_no_parent_knows_nothing(self):
         """Without a parent index there are no attr units to resolve."""
-        assert _numeric_attr_units(None, pd.DataFrame({"foo": [1.0]})) == {}
+        assert _plan_attr_units(None, pd.DataFrame({"foo": [1.0]})) == {}

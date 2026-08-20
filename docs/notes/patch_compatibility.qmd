@@ -8,7 +8,7 @@ Several operations combine patches: the arithmetic operators and ufuncs (`patch1
 
 The kind of a patch is the set of values it holds for the attributes named by the config option `patch_kind_attrs`. By default these are `acquisition_key`, `data_category`, and `tag` (plus the legacy `network` and `station`, which only archives predating `acquisition_key` still carry). Two patches are the same kind unless they hold *conflicting* values for one of these: a value that is missing — the attribute is absent, null, or left at its empty default `""` — conflicts with nothing. So a hand-built patch with no `acquisition_key` combines with one that has it, a reader that stamps `network=""` agrees with a patch carrying no `network` at all (which is also how spool metadata records such attributes), and the result of combining carries the union of the known values.
 
-Kind is decided from attributes alone. Coordinates, data units, history, the patch and processing ids, and every attribute outside the configured names never enter: a filtered patch is the same kind as its raw source, and so is a copy with different units or a different time range. Attributes are scalars, and the missing-value rule is the same everywhere: an attribute nobody recorded (absent, null, or `""`) is satisfied by whatever another patch knows. `data_type` is deliberately *not* a kind attribute: processing rewrites it (`standardize` clears it, `envelope` sets it), so it would separate a patch from its own derivatives — `vel / vel.envelope("time")` must work — while the acquisition key, category, and tag already keep unrelated data apart.
+Kind attributes are categorical labels — strings naming an acquisition, a category, a tag — not quantities; the spool index partitions on them as stored text, so a quantity named as a kind attribute is not supported. Kind is decided from attributes alone. Coordinates, data units, history, the patch and processing ids, and every attribute outside the configured names never enter: a filtered patch is the same kind as its raw source, and so is a copy with different units or a different time range. Attributes are scalars, and the missing-value rule is the same everywhere: an attribute nobody recorded (absent, null, or `""`) is satisfied by whatever another patch knows. `data_type` is deliberately *not* a kind attribute: processing rewrites it (`standardize` clears it, `envelope` sets it), so it would separate a patch from its own derivatives — `vel / vel.envelope("time")` must work — while the acquisition key, category, and tag already keep unrelated data apart.
 
 ```{python}
 import dascore as dc
@@ -90,10 +90,10 @@ with pytest.raises(PatchCoordinateError, match="share no values"):
 
 Attributes outside the kind — `data_units`, `history`, the ids, and any custom attribute — never decide whether patches combine. They are folded instead:
 
-- **Operators and ufuncs**: data units take part in the arithmetic, so metres times seconds gives metre-seconds and metres plus seconds raises a [`UnitError`](`dascore.exceptions.UnitError`); convertible units are converted to the first patch's. An operand without units — a patch with no `data_units`, an array, or a scalar — conflicts with nothing, just like a missing kind value: it is dimensionless where that works (metres times it is metres, it divided by metres is 1/metres) and takes the other operand's units where the operation needs equal units (metres plus it is metres; comparisons likewise). Offset units such as `degC` cannot be scaled, so a patch in them accepts only sums, differences, extrema, and comparisons with a unitless operand — which counts as a difference of so many degrees for sums and differences — and anything else asks you to convert to kelvin first. Every other attribute keeps the first patch's value, and attributes only the second patch has are added. History and the ids follow the [patch identity rules](../tutorial/patch.qmd#patch-identity).
-- **`concatenate` and `stack`**: the output carries the first patch's attributes, with kind values it lacks filled from the others.
+- **Operators and ufuncs**: data units take part in the arithmetic, so metres times seconds gives metre-seconds and metres plus seconds raises a [`UnitError`](`dascore.exceptions.UnitError`); convertible units are converted to the first patch's. An operand without units — a patch with no `data_units`, an array, or a scalar — conflicts with nothing, just like a missing kind value: it is dimensionless where that works (metres times it is metres, it divided by metres is 1/metres) and takes the other operand's units where the operation needs equal units (metres plus it is metres; comparisons likewise). Offset units such as `degC` cannot be scaled, so a patch in them accepts only sums, differences, extrema, and comparisons: beside a unitless operand, which counts as a difference of so many degrees, it may be added to or taken from the temperature but the temperature not from it (`temp - 1` is Celsius, `1 - temp` raises); beside another temperature, a difference is a delta (`delta_degC`), extrema and comparisons work, and a sum is refused; beside a difference (`delta_degC`, or anything convertible to it), a sum or a difference is a temperature. Anything else asks you to convert to kelvin first. Every other attribute keeps the first patch's value, and attributes only the second patch has are added. History and the ids follow the [patch identity rules](../tutorial/patch.qmd#patch-identity).
+- **`concatenate` and `stack`**: the output carries the first patch's attributes, with kind values it lacks filled from the others, and its history with the operation's own entry appended.
 - **`chunk`**: attributes must hold no conflicting known values within a partition, policed by its `conflict` argument (`"raise"` by default, `"drop"`, or `"keep_first"`); a missing value conflicts with nothing and the output carries the known one, exactly as for kind.
-- **History** is never compared by any operation — processing differing between members is what combining is for — and the output carries the first patch's. Operations which splice members side by side along a dimension (`chunk`'s merge and `concatenate`) warn when the histories differ, since a raw patch merged beside a filtered one is usually a mistake; elementwise operations do not, since a residual is exactly filtered minus raw.
+- **History** is never compared by any operation — processing differing between members is what combining is for — and the output carries the first patch's (plus the combining operation's own entry, where it records one). Operations which splice members side by side along a dimension (`chunk`'s merge and `concatenate`) warn when the histories differ, since a raw patch merged beside a filtered one is usually a mistake; elementwise operations do not, since a residual is exactly filtered minus raw.
 
 ```{python}
 from dascore.exceptions import UnitError
@@ -109,6 +109,14 @@ assert dc.get_quantity((unitless + metres).attrs.data_units) == dc.get_quantity(
 
 first = patch.update_attrs(foo="a")
 assert (first + patch.update_attrs(foo="b")).attrs.foo == "a"
+
+warm, cool = patch.set_units("degC"), patch.set_units("degC") - 5
+assert dc.get_quantity((warm - 1).attrs.data_units) == dc.get_quantity("degC")
+assert dc.get_quantity((warm - cool).attrs.data_units) == dc.get_quantity("delta_degC")
+with pytest.raises(UnitError):
+    1 - warm
+with pytest.raises(UnitError):
+    warm + cool
 ```
 
 ## Configuring kind

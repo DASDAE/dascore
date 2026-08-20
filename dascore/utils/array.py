@@ -539,24 +539,52 @@ def _apply_binary_ufunc(
     def _apply_op_both_offset(
         patch, other, operator, attrs, data_units, other_units, reversed=False
     ):
-        """Apply an operation to two quantities in offset units (degC)."""
-        # two absolute temperatures can be subtracted, compared, or ranked,
-        # never added
-        if operator not in _OFFSET_UNIT_OPERATORS or operator is np.add:
-            msg = f"{operator} is not defined for the offset units {data_units}."
-            raise UnitError(msg)
-        try:
+        """
+        Apply an operation where an offset unit (degC) meets another unit.
+
+        Two temperatures may be subtracted (a delta), ranked, or compared,
+        never added. A temperature and a difference (delta_degC, or any
+        unit convertible to it) may be added, and the difference taken
+        from the temperature; the result is a temperature.
+        """
+        patch_offset = _is_offset_unit(data_units)
+        other_offset = _is_offset_unit(other_units)
+        refused = UnitError(
+            f"{operator} is not defined for the offset units "
+            f"{data_units if patch_offset else other_units}."
+        )
+        if patch_offset and other_offset:
+            if operator not in _OFFSET_UNIT_OPERATORS or operator is np.add:
+                raise refused
+            # every offset unit is a temperature, so this always converts
             other_data = _quantity(other, other_units).to(data_units.units).magnitude
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            if getattr(new_data, "dtype", None) == np.bool_:
+                return new_data, attrs.update(data_units=None)
+            if operator is np.subtract:
+                one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)
+                return new_data, attrs.update(data_units=str((one - zero).units))
+            return new_data, attrs.update(data_units=_label(data_units))
+        # one temperature, one difference: the temperature must be the
+        # minuend of a subtraction, and the sum or difference is a temperature
+        absolute = data_units if patch_offset else other_units
+        temperature_first = patch_offset != reversed
+        if operator not in (np.add, np.subtract) or (
+            operator is np.subtract and not temperature_first
+        ):
+            raise refused
+        delta = (_quantity(1.0, absolute) - _quantity(0.0, absolute)).units
+        try:
+            if patch_offset:
+                other = _quantity(other, other_units).to(delta).magnitude
+                patch_data = patch.data
+            else:
+                patch_data = _quantity(patch.data, data_units).to(delta).magnitude
         except DimensionalityError as er:
             msg = f"{operator} failed with units {data_units} and {other_units}"
             raise UnitError(msg) from er
-        new_data = _apply_op(patch.data, other_data, operator, reversed)
-        if getattr(new_data, "dtype", None) == np.bool_:
-            return new_data, attrs.update(data_units=None)
-        if operator is np.subtract:
-            one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)
-            return new_data, attrs.update(data_units=str((one - zero).units))
-        return new_data, attrs.update(data_units=_label(data_units))
+        new_data = _apply_op(patch_data, other, operator, reversed)
+        return new_data, attrs.update(data_units=_label(absolute))
 
     def _apply_op_units(
         patch, other, operator, attrs, reversed=False, other_units=None

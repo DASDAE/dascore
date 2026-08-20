@@ -349,6 +349,27 @@ class TestApplyUfunc:
         with pytest.raises(UnitError, match="failed with units"):
             warm - random_patch.set_units("m")
 
+    def test_temperature_and_difference(self, random_patch):
+        """A temperature plus or minus a difference is a temperature."""
+        shape = random_patch.shape
+        warm = random_patch.new(data=np.full(shape, 20.0)).set_units("degC")
+        step = random_patch.new(data=np.full(shape, 5.0)).set_units("delta_degC")
+        for out in (warm + step, step + warm):
+            assert np.allclose(out.data, 25.0)
+            assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        out = warm - step
+        assert np.allclose(out.data, 15.0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        # a kelvin difference converts; a difference minus a temperature does not exist
+        kelvin_step = step.set_units("kelvin")
+        assert np.allclose((warm + kelvin_step).data, 25.0)
+        with pytest.raises(UnitError, match="offset units"):
+            step - warm
+        with pytest.raises(UnitError, match="offset units"):
+            warm * step
+        with pytest.raises(UnitError, match="failed with units"):
+            warm + random_patch.set_units("m")
+
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
         square = dc.get_example_patch(shape=(10, 10)).set_units("m")
