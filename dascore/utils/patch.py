@@ -1710,31 +1710,20 @@ def concatenate_patches(
         compat_patches = []
         # Different kinds are skipped before anything else is asked of them;
         # a patch binds the run's kind only once its coordinates pass too.
-        run, same_kind = _KindRun(), []
-        for p in patches:
-            # a dry run, quietly: the loop below warns or raises. A patch
-            # whose dimensions differ can never be concatenated, so it
-            # binds no kind here either.
-            if run.admits(kind := get_patch_kind(p), "ignore"):
-                same_kind.append(p)
-                if p.dims == first_patch.dims:
-                    run.add(kind)
         run = _KindRun()
-        # Ensure patch dimensions are compatible.
-        dim_set = {x.dims for x in same_kind}
-        if not len(dim_set) == 1:
-            msg = "Cannot concatenate patches with different dimensions."
-            raise PatchCoordinateError(msg)
         # Get dim name and such
-        first_dims = next(iter(dim_set))
+        first_dims = first_patch.dims
         new_dim = dim not in first_dims
         dims = tuple([*list(first_dims), dim]) if new_dim else first_dims
         # Get patches compatible with first.
         for p in patches:
             kind = get_patch_kind(p)
             kind_ok = run.admits(kind, check_behavior)
-            dims_ok = kind_ok and check_dims(first_patch, p, check_behavior)
-            coords_ok = dims_ok and check_coords(
+            if kind_ok and p.dims != first_dims:
+                # a same-kind patch with other dimensions is never skipped
+                msg = "Cannot concatenate patches with different dimensions."
+                raise PatchCoordinateError(msg)
+            coords_ok = kind_ok and check_coords(
                 patch1=first_patch,
                 patch2=p,
                 check_behavior=check_behavior,

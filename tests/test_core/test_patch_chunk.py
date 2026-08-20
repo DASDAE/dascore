@@ -564,6 +564,18 @@ class TestChunkMerge:
         assert out.get_contents()["time_zone"].iloc[0] == "UTC"
         assert out[0].attrs.time_zone == "UTC"
 
+    def test_dropped_coordinate_envelope_is_not_an_attr(self):
+        """A coordinate only one member has leaves no stray attrs behind."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        n = p1.shape[p1.get_axis("distance")]
+        p1 = p1.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        patch = out[0]
+        assert patch.attrs.get("latitude_min") is None
+        assert patch.attrs.get("latitude_max") is None
+
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
         p1 = dc.get_example_patch()

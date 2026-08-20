@@ -26,6 +26,7 @@ from dascore.utils.array import (
     UFUNC_NAMES,
     PatchUFunc,
     _BoundPatchUFunc,
+    _is_offset_unit,
     apply_array_func,
     apply_ufunc,
     convert_bytes_to_strings,
@@ -312,6 +313,24 @@ class TestApplyUfunc:
         for bad in (lambda: 1 / temp, lambda: temp**2, lambda: temp * 2):
             with pytest.raises(UnitError, match="offset units"):
                 bad()
+        # degrees may be taken from a temperature, not a temperature from a number
+        assert get_quantity((temp - 1).attrs.data_units) == get_quantity("degC")
+        with pytest.raises(UnitError, match="Cannot subtract a temperature"):
+            1 - temp
+        with pytest.raises(UnitError, match="Cannot subtract a temperature"):
+            random_patch.set_units(None) - temp
+
+    def test_offset_unit_detection(self):
+        """Offset units are told apart by behaviour, not a registry attribute."""
+        assert _is_offset_unit(get_quantity("degC"))
+        assert _is_offset_unit(get_quantity("degF"))
+        assert not _is_offset_unit(get_quantity("kelvin"))
+        assert not _is_offset_unit(get_quantity("100 cm"))
+
+    def test_empty_unit_string_raises(self, random_patch):
+        """A string operand must name units."""
+        with pytest.raises(UnitError, match="names no units"):
+            apply_ufunc(np.multiply, random_patch, "")
 
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""

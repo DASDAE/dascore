@@ -269,8 +269,23 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     return patch.new(data=out, attrs=attrs)
 
 
-# The binary ufuncs which keep an offset unit (degC) meaningful: sums,
-# differences, extrema, and comparisons. Anything else needs an absolute unit.
+def _is_offset_unit(quantity) -> bool:
+    """
+    Return True for a unit with an offset (degC), which cannot be scaled.
+
+    Decided by behaviour rather than a registry attribute: doubling a
+    multiplicative quantity doubles its base-unit magnitude, an offset one
+    does not (dascore's registry converts offsets to base units rather
+    than refusing the product).
+    """
+    one = (1.0 * quantity).to_base_units().magnitude
+    two = (2.0 * quantity).to_base_units().magnitude
+    return not np.isclose(two, 2 * one)
+
+
+# The binary ufuncs which keep an offset unit (degC) meaningful beside a
+# unitless operand — a difference for sums and differences, an absolute
+# value for extrema and comparisons. Anything else needs an absolute unit.
 _OFFSET_UNIT_OPERATORS = frozenset(
     {
         np.add,
@@ -393,7 +408,7 @@ def _apply_binary_ufunc(
         the units left as they were.
         """
         known = data_units if data_units is not None else other_units
-        if not known._is_multiplicative:
+        if _is_offset_unit(known):
             # An offset unit (degC) cannot be probed by scaling, and only
             # the operations which keep a temperature a temperature are
             # meaningful on one: the data keep their units for those, and a
@@ -402,6 +417,14 @@ def _apply_binary_ufunc(
                 msg = (
                     f"{operator} is not defined for the offset units {known}; "
                     "convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
+            # The unitless side is a difference in those units, so it may be
+            # added to or taken from the temperature, never the other way.
+            if operator is np.subtract and not ((data_units is not None) ^ reversed):
+                msg = (
+                    f"Cannot subtract a temperature in {known} from a value "
+                    "without units; convert to an absolute unit (kelvin) first."
                 )
                 raise UnitError(msg)
             new_data = _apply_op(patch.data, other, operator, reversed)
@@ -503,7 +526,10 @@ def _apply_binary_ufunc(
         if isinstance(other, Unit):
             other = 1 * other
         elif isinstance(other, str):
-            other = get_quantity(other)
+            if (quantity := get_quantity(other)) is None:
+                msg = f"{other!r} names no units; a string operand must."
+                raise UnitError(msg)
+            other = quantity
         if isinstance(other, Quantity):
             other, other_units = other.magnitude, 1.0 * other.units
         if data_units is not None and other_units is not None:

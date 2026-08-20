@@ -540,7 +540,13 @@ class PlanResolver(PatchResolver):
         attrs = patch.attrs
         # every public attr column the row carries, extras included; the
         # coordinate envelope columns and the row's own bookkeeping are not attrs
+        # a coordinate envelope is a min and a max column (step and units
+        # may ride along); the row may carry one for a coordinate the
+        # assembled patch no longer has, so the row's own envelopes count
         coords = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
+        coords |= {x[:-4] for x in row if x.endswith("_min")} & {
+            x[:-4] for x in row if x.endswith("_max")
+        }
         envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
         skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
         names = {x for x in row if not x.startswith("_") and x not in skip}
