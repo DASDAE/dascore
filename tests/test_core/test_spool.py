@@ -1217,6 +1217,39 @@ class TestConcatenateKind:
         assert patch.shape[1] == 2 * base.shape[1]
         assert patch.get_coord("distance").min() == 5
 
+    def test_selection_cannot_settle_irregular_coordinates(self):
+        """Irregular coordinates a selection may or may not reconcile stay apart."""
+        base = dc.get_example_patch()
+        time = base.get_coord("time")
+        n = base.shape[base.get_axis("distance")]
+        rng = np.random.default_rng(0)
+        irregular = np.sort(rng.uniform(0, 300, n))
+        first = base.update_coords(distance=irregular)
+        other = base.update_coords(
+            time_min=time.max() + time.step, distance=np.sort(rng.uniform(0, 300, n))
+        )
+        selected = dc.spool([first, other]).select(distance=(50, 250))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = selected.concatenate(time=None)
+        # the plan and the patch agree: the second patch is not in the output
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        assert out[0].shape[1] == base.shape[1]
+
+    def test_each_output_has_its_own_baseline(self, mixed_kind):
+        """Gates are applied per output against that output's first member."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        lat_b = other.update_coords(latitude=("distance", np.ones(n)))
+        # the global first lacks latitude; the second output's members disagree on it
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, first.new(), lat_a, lat_b]).concatenate(time=2)
+        assert len(out) == 2
+        second = out[1]
+        assert second.shape[1] == first.shape[1]
+        assert out.get_contents()["time_max"].iloc[1] == lat_a.get_coord("time").max()
+
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""
         first, other = mixed_kind

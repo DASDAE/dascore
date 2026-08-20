@@ -1354,7 +1354,10 @@ def _with_kind(attrs: dc.PatchAttrs, kind: Mapping) -> dc.PatchAttrs:
 
 
 def _concat_compatible_rows(
-    df: pd.DataFrame, dim: str, check_behavior: WARN_LEVELS
+    df: pd.DataFrame,
+    dim: str,
+    check_behavior: WARN_LEVELS,
+    inconclusive: Sequence[str] = (),
 ) -> pd.DataFrame:
     """
     Keep the patch-summary rows `concatenate_patches` would concatenate.
@@ -1368,6 +1371,12 @@ def _concat_compatible_rows(
     coordinates binds no kind, exactly as a patch rejected for its
     coordinates does not. Kind attrs absent from the columns are absent from
     every patch and ignored.
+
+    `inconclusive` names def-key columns a selection still to be applied at
+    load makes stale: equal stale keys are still equal after the same trim,
+    but differing ones are decided from the trimmed envelope instead — equal
+    min, max, and a known step say the evenly sampled coordinates agree —
+    and a coordinate which cannot be decided that way is not admitted.
     """
     validate_warn_level(check_behavior)
     if df.empty:
@@ -1401,6 +1410,7 @@ def _concat_compatible_rows(
                 _is_missing(row[x])
                 or _is_missing(first[x])
                 or _values_equal(row[x], first[x])
+                or (x in inconclusive and _trimmed_envelopes_agree(row, first, x))
                 for x in structure
             )
             if not same:
@@ -1417,6 +1427,23 @@ def _concat_compatible_rows(
         if ok:
             run.add(kind)
     return df if all(keep) else df[keep]
+
+
+def _trimmed_envelopes_agree(row, first, def_key: str) -> bool:
+    """
+    Decide from trimmed envelopes whether a stale def key's coordinate agrees.
+
+    Evenly sampled coordinates with equal min, max, and step are equal; a
+    coordinate without a step (irregular) or without an envelope cannot be
+    decided from metadata, and is not admitted.
+    """
+    coord = def_key[1 : -len("_def_key")]
+    columns = [f"{coord}_{x}" for x in ("min", "max", "step")]
+    if any(x not in row.index for x in columns):
+        return False
+    if _is_missing(row[columns[2]]) or _is_missing(first[columns[2]]):
+        return False
+    return all(_values_equal(row[x], first[x]) for x in columns)
 
 
 def check_dims(

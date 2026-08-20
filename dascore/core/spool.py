@@ -1780,25 +1780,29 @@ class Spool(NamespaceOwner):
         # a dim absent from the metadata envelopes is legal: concatenate
         # can stack patches along a brand-new dimension
         has_envelope = f"{dim}_min" in working.columns
-        # Decided here, from metadata, so the plan rows agree with the
-        # patches assembly later concatenates (which applies the same gates).
         # A selection still to be applied at load leaves the def keys of the
-        # trimmed coordinates describing the untrimmed values: not compared.
+        # trimmed coordinates describing the untrimmed values: inconclusive.
         stale = stale_def_keys(
             self._catalog.residuals,
             self._catalog.backend.coord_dims_map(),
             working.columns,
-        )
-        working = _concat_compatible_rows(
-            working.drop(columns=stale), dim, check_behavior
         )
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
         rows = working.reset_index(drop=True)
         member_frames = []
         output_rows = []
-        for output_id, start in enumerate(range(0, len(rows), count)):
-            group_rows = rows.iloc[start : start + count]
+        output_id = -1
+        for start in range(0, len(rows), count):
+            # Decided here, from metadata, per output: assembly concatenates
+            # each output's members with the same gates against that
+            # output's first member, so the plan rows agree with the patches.
+            group_rows = _concat_compatible_rows(
+                rows.iloc[start : start + count], dim, check_behavior, stale
+            )
+            if group_rows.empty:
+                continue
+            output_id += 1
             members = pd.DataFrame(
                 {
                     "output_id": output_id,
