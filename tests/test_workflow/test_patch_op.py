@@ -22,6 +22,7 @@ import dascore as dc
 import dascore.workflow.processor as processor_module
 from dascore.exceptions import ParameterError
 from dascore.models.registry import registered_models
+from dascore.units import get_quantity
 from dascore.workflow import (
     PatchOp,
     PatchProcessor,
@@ -680,6 +681,27 @@ class TestFingerprintCall:
         assert fingerprint_call(
             dc.proc.demean, (), {"dim": "time"}
         ) != fingerprint_call(dc.proc.demedian, (), {"dim": "time"})
+
+    def test_equal_quantities_are_two_calls(self):
+        """
+        A pint quantity is not a cache key.
+
+        `1 * m` and `100 * cm` are equal and hash alike, while the
+        serializer encodes them differently. Were the cache keyed on them,
+        whichever call ran second would be handed the first one's answer,
+        and the same call would fingerprint differently depending on what
+        a process happened to do before it.
+        """
+        one_meter, hundred_cm = get_quantity("1 m"), get_quantity("100 cm")
+        # The trap itself: equal to Python, and the same hash.
+        assert one_meter == hundred_cm
+        assert hash(one_meter) == hash(hundred_cm)
+        first = fingerprint_call(dc.proc.select, (), {"distance": one_meter})
+        second = fingerprint_call(dc.proc.select, (), {"distance": hundred_cm})
+        assert first != second
+        # And whichever ran first, both still answer for themselves.
+        assert fingerprint_call(dc.proc.select, (), {"distance": one_meter}) == first
+        assert fingerprint_call(dc.proc.select, (), {"distance": hundred_cm}) == second
 
     @pytest.mark.parametrize(
         ("func", "args", "kwargs", "expected"),

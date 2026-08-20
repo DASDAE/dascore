@@ -21,13 +21,13 @@ from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
 from dascore.workflow.identity import (
     NOTHING_DONE,
     advance,
-    data_id_of,
-    fold_data_ids,
     fold_ids,
+    fold_patch_ids,
     fold_processing_ids,
-    new_data_id,
+    new_patch_id,
+    patch_id_of,
     processing_id_of,
-    source_data_id,
+    source_patch_id,
     stamp_combination,
 )
 from dascore.workflow.processor import _PATCH_ARGUMENT, _as_key, _signature
@@ -38,11 +38,11 @@ class TestNewDataId:
 
     def test_each_is_its_own(self):
         """Two arrays are two data, however alike they look."""
-        assert new_data_id() != new_data_id()
+        assert new_patch_id() != new_patch_id()
 
     def test_it_is_a_hex_string(self):
         """The same shape as every other id, so nothing can tell them apart."""
-        made = new_data_id()
+        made = new_patch_id()
         assert isinstance(made, str)
         assert int(made, 16) >= 0
 
@@ -52,8 +52,8 @@ class TestSourceDataId:
 
     def test_it_is_derived(self):
         """Reading the same file twice is reading the same data."""
-        first = source_data_id("DASDAE", "/data/one.h5", 0)
-        assert first == source_data_id("DASDAE", "/data/one.h5", 0)
+        first = source_patch_id("DASDAE", "/data/one.h5", 0)
+        assert first == source_patch_id("DASDAE", "/data/one.h5", 0)
 
     @pytest.mark.parametrize(
         ("format_name", "path", "key"),
@@ -66,12 +66,12 @@ class TestSourceDataId:
     )
     def test_every_part_counts(self, format_name, path, key):
         """The format, the path and the key each name different data."""
-        base = source_data_id("DASDAE", "/data/one.h5", 0)
-        assert source_data_id(format_name, path, key) != base
+        base = source_patch_id("DASDAE", "/data/one.h5", 0)
+        assert source_patch_id(format_name, path, key) != base
 
     def test_a_key_may_be_anything_encodable(self):
         """A reader names its patches however it likes."""
-        assert source_data_id("X", "/a", "channel-3") != source_data_id("X", "/a", 3)
+        assert source_patch_id("X", "/a", "channel-3") != source_patch_id("X", "/a", 3)
 
 
 class TestAdvance:
@@ -111,23 +111,23 @@ class TestFoldDataIds:
 
     def test_one_folds_to_itself(self):
         """Combining a patch with nothing leaves the id where it was."""
-        assert fold_data_ids(["only"]) == "only"
+        assert fold_patch_ids(["only"]) == "only"
 
     def test_order_is_part_of_it(self):
         """Concatenating a before b is not concatenating b before a."""
-        assert fold_data_ids(["a", "b"]) != fold_data_ids(["b", "a"])
+        assert fold_patch_ids(["a", "b"]) != fold_patch_ids(["b", "a"])
 
     def test_repeats_are_part_of_it(self):
         """Stacking a patch with itself is not the patch."""
-        assert fold_data_ids(["a", "a"]) != fold_data_ids(["a"])
+        assert fold_patch_ids(["a", "a"]) != fold_patch_ids(["a"])
 
     def test_it_is_derived(self):
         """So the same combination gives the same answer twice."""
-        assert fold_data_ids(["a", "b"]) == fold_data_ids(["a", "b"])
+        assert fold_patch_ids(["a", "b"]) == fold_patch_ids(["a", "b"])
 
     def test_it_takes_any_sequence(self):
         """Callers hold their members in whatever they hold them in."""
-        assert fold_data_ids(("a", "b")) == fold_data_ids(["a", "b"])
+        assert fold_patch_ids(("a", "b")) == fold_patch_ids(["a", "b"])
 
 
 class TestFoldProcessingIds:
@@ -323,7 +323,7 @@ class TestTheRulesOnRealPatches:
         """Two sources make a third answer, not either of the two."""
         other = patch.update_attrs(patch_id="other")
         merged = dc.utils.attrs.combine_patch_attrs([patch.attrs, other.attrs])
-        assert merged.patch_id == fold_data_ids([patch.attrs.patch_id, "other"])
+        assert merged.patch_id == fold_patch_ids([patch.attrs.patch_id, "other"])
         # Spelled out, because `not in {...}` is also true of the empty
         # string, which is what dropping the fold entirely would leave.
         assert merged.patch_id
@@ -442,7 +442,7 @@ class TestOperationsWhichAreNotPatchFunctions:
     def test_two_patches_fold(self, patch):
         """Adding two patches is data from two sources."""
         other = patch.update_attrs(patch_id="other")
-        assert (patch + other).attrs.patch_id == fold_data_ids(
+        assert (patch + other).attrs.patch_id == fold_patch_ids(
             [patch.attrs.patch_id, "other"]
         )
 
@@ -582,7 +582,7 @@ class TestWhatTheReviewsFound:
         held.pop("patch_id"), held.pop("processing_id")
         legacy = dc.PatchAttrs.model_construct(**held)
         made = dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
-        assert data_id_of(legacy) == NOTHING_DONE
+        assert patch_id_of(legacy) == NOTHING_DONE
         assert processing_id_of(legacy) == NOTHING_DONE
         # The fold reads them without raising, and says the result is data
         # from two places even though one of them could not say which.

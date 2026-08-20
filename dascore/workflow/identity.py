@@ -13,19 +13,22 @@ two patches which took the same route from the same source arrive at the
 same id and two which did not, do not.
 
 Neither is a random number after the first: they are digests of what came
-before, so the same data processed the same way gives the same pair on
-another machine, in another process, next year.
+before, so the same data processed the same way gives the same
+`processing_id` on another machine, in another process, next year. That
+holds for `patch_id` too once a patch read from a file derives its id from
+the source; until then one is minted for each patch built in memory, and
+is stable only within the process which built it.
 
 Examples
 --------
->>> from dascore.workflow.identity import advance, fold_data_ids
+>>> from dascore.workflow.identity import advance, fold_patch_ids
 >>>
 >>> # What was done: the operation folds into what came before.
 >>> first = advance("", "0123456789abcdef")
 >>> assert advance(first, "0123456789abcdef") != first
 >>>
 >>> # Which data: combining two sources makes a new answer.
->>> assert fold_data_ids(["a", "b"]) != fold_data_ids(["b", "a"])
+>>> assert fold_patch_ids(["a", "b"]) != fold_patch_ids(["b", "a"])
 """
 
 from __future__ import annotations
@@ -59,10 +62,10 @@ def fold_ids(attrs_list) -> dict[str, Any]:
     kept = list(attrs_list)
     if not kept:
         return {}
-    # `getattr`, for the reason `with_data_id` gives: attrs unpickled from
+    # `getattr`, for the reason `with_patch_id` gives: attrs unpickled from
     # before these fields existed have neither.
     return {
-        "patch_id": fold_data_ids([data_id_of(x) for x in kept]),
+        "patch_id": fold_patch_ids([patch_id_of(x) for x in kept]),
         "processing_id": fold_processing_ids([processing_id_of(x) for x in kept]),
     }
 
@@ -93,7 +96,7 @@ def stamp_combination(attrs, members, fingerprint: str):
     )
 
 
-def data_id_of(attrs) -> str:
+def patch_id_of(attrs) -> str:
     """Return which data some attrs say they are, or nothing if they cannot."""
     return getattr(attrs, "patch_id", NOTHING_DONE) or NOTHING_DONE
 
@@ -112,7 +115,7 @@ def ids_enabled() -> bool:
     return get_config().patch_provenance != "disabled"
 
 
-def with_data_id(attrs):
+def with_patch_id(attrs):
     """
     Return attrs which name which data they belong to.
 
@@ -126,10 +129,10 @@ def with_data_id(attrs):
     # instance back untouched rather than revalidating it into one.
     if getattr(attrs, "patch_id", None) or not ids_enabled():
         return attrs
-    return attrs.update(patch_id=new_data_id())
+    return attrs.update(patch_id=new_patch_id())
 
 
-def new_data_id() -> str:
+def new_patch_id() -> str:
     """
     Return an id for data which names no source.
 
@@ -141,7 +144,7 @@ def new_data_id() -> str:
     return uuid4().hex
 
 
-def source_data_id(format_name: str, path: str, key: object = None) -> str:
+def source_patch_id(format_name: str, path: str, key: object = None) -> str:
     """
     Return the id of data read from a file.
 
@@ -187,9 +190,9 @@ def advance(processing_id: str, fingerprint: str) -> str:
     return combine_hashes([processing_id, fingerprint])
 
 
-def fold_data_ids(data_ids: Sequence[str]) -> str:
+def fold_patch_ids(patch_ids: Sequence[str]) -> str:
     """
-    Return the data id of a patch combined from several.
+    Return the patch id of a patch combined from several.
 
     Ordered, and not deduplicated: how many patches went in and in what
     order is part of what the data *is*, so stacking a patch with itself is
@@ -198,7 +201,7 @@ def fold_data_ids(data_ids: Sequence[str]) -> str:
     A single id folds to itself, so an operation which combines one patch
     with nothing leaves the id where it was.
     """
-    ids = tuple(data_ids)
+    ids = tuple(patch_ids)
     if len(ids) == 1:
         return ids[0]
     # Data which never said which data it was does not acquire an identity

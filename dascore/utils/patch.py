@@ -60,10 +60,10 @@ from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
     advance,
-    data_id_of,
-    fold_data_ids,
+    fold_patch_ids,
     fold_processing_ids,
     ids_enabled,
+    patch_id_of,
     processing_id_of,
     stamp_combination,
 )
@@ -213,7 +213,7 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
         # returned: filtering data does not make it other data, and a
         # function building its result from scratch would otherwise mint a
         # new id and claim it had.
-        patch_id=fold_data_ids([data_id_of(x) for x in members]),
+        patch_id=fold_patch_ids([patch_id_of(x) for x in members]),
         processing_id=advance(
             fold_processing_ids([processing_id_of(x) for x in members]), fingerprint
         ),
