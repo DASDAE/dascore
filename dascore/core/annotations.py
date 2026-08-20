@@ -1370,7 +1370,13 @@ def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFr
         elif kind == "m" and series.dtype != np.dtype("timedelta64[ns]"):
             changed[name] = to_timedelta64(series)
         elif str(name) in spelled and _states_times(series):
-            changed[name] = to_datetime64(series.astype(str)).where(series.notna())
+            # Only the stated cells are converted, then put back where
+            # they came from: masking the result instead hands every blank
+            # cell to the datetime parser first, and what a blank one reads
+            # as there is up to `astype`.
+            stated = series[series.notna()]
+            times = to_datetime64(stated.astype(str))
+            changed[name] = times.reindex(series.index)
     if not changed:
         return frame
     # Assigned by item rather than by keyword: a column need not be named
