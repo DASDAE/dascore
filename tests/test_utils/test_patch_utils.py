@@ -745,6 +745,14 @@ class TestConcatenate:
         assert out[0].shape[1] == 2 * random_patch.shape[1]
         assert out[0].attrs.tag == "b"
 
+    def test_dims_mismatch_binds_nothing(self, random_patch):
+        """A patch with other dimensions binds no kind, though dims still raise."""
+        blank = random_patch.update_attrs(tag="")
+        odd = random_patch.update_attrs(tag="a").rename_coords(time="money")
+        good = random_patch.update_attrs(tag="b")
+        with pytest.raises(PatchCoordinateError, match="different dimensions"):
+            concatenate_patches([blank, odd, good], time=None)
+
     def test_kind_is_per_output(self, random_patch):
         """Each output's kind comes from its own members only."""
         blank = random_patch.update_attrs(tag="")

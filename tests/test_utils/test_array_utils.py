@@ -248,6 +248,9 @@ class TestApplyUfunc:
         assert np.array_equal(out.data, ints.data & ints.data)
         with pytest.raises(UnitError):
             apply_ufunc(np.bitwise_and, metres, ints.set_units("s"))
+        # convertible units are converted into the patch's for the fallback
+        out = apply_ufunc(np.logical_and, metres, ints.set_units("km"))
+        assert out.data.dtype == np.bool_
 
     def test_scaled_units_keep_their_scale(self, random_patch):
         """Data in "100 cm" stay as they are; the scale rides on the units."""
@@ -273,6 +276,28 @@ class TestApplyUfunc:
         # dimensionless ** metres and metres ** metres both fail
         with pytest.raises(UnitError, match="failed with units"):
             apply_ufunc(np.power, 2.0, patch)
+
+    def test_adopting_scaled_units_is_symmetric(self, random_patch):
+        """A unitless patch adopts "100 cm" whole, whichever side it is on."""
+        bare = random_patch.set_units(None)
+        scaled = random_patch.set_units("100 cm")
+        expected = 2 * random_patch.data
+        for out in (bare + scaled, scaled + bare):
+            assert np.allclose(out.data, expected)
+            assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = bare / scaled
+        units = get_quantity(out.attrs.data_units)
+        assert units.units == get_quantity("1 / cm").units
+        assert np.isclose(units.magnitude, 0.01)
+
+    def test_multiply_by_zero_keeps_units(self, random_patch):
+        """A result of all zeros is still in the patch's units."""
+        metres = random_patch.set_units("m")
+        out = metres * 0
+        assert np.all(out.data == 0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        out = metres.set_units("100 cm") - metres.data
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
 
     def test_scalar_units_need_no_array_wrapping(self, random_patch):
         """Scalars settle units on a probe; comparisons and powers behave."""

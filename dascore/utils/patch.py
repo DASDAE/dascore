@@ -1698,10 +1698,13 @@ def concatenate_patches(
         # a patch binds the run's kind only once its coordinates pass too.
         run, same_kind = _KindRun(), []
         for p in patches:
-            # a dry run, quietly: the loop below warns or raises
+            # a dry run, quietly: the loop below warns or raises. A patch
+            # whose dimensions differ can never be concatenated, so it
+            # binds no kind here either.
             if run.admits(kind := get_patch_kind(p), "ignore"):
-                run.add(kind)
                 same_kind.append(p)
+                if p.dims == first_patch.dims:
+                    run.add(kind)
         run = _KindRun()
         # Ensure patch dimensions are compatible.
         dim_set = {x.dims for x in same_kind}
