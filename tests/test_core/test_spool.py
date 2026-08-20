@@ -1203,6 +1203,20 @@ class TestConcatenateKind:
         with pytest.raises(PatchCoordinateError, match="different dimensions"):
             dc.spool([first, other]).concatenate(time=None, check_behavior="ignore")
 
+    def test_selection_before_concatenate(self):
+        """Coordinates which agree once a selection is applied concatenate."""
+        base = dc.get_example_patch()
+        time = base.get_coord("time")
+        later = base.update_coords(time_min=time.max() + time.step)
+        # distance 0..299 and 5..304: they agree on 5..299 only
+        shifted = later.update_coords(distance_min=5)
+        selected = dc.spool([base, shifted]).select(distance=(5, 299))
+        out = selected.concatenate(time=None)
+        assert len(out) == 1
+        patch = out[0]
+        assert patch.shape[1] == 2 * base.shape[1]
+        assert patch.get_coord("distance").min() == 5
+
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""
         first, other = mixed_kind

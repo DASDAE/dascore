@@ -597,6 +597,31 @@ def _is_number(value) -> bool:
     )
 
 
+def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
+    """The dimensions a residual (load-time) selection trims."""
+    names = {n for coords, _ in residuals for n in coords}
+    return frozenset(
+        d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
+    )
+
+
+def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
+    """
+    The def-key columns which describe coordinates a residual will trim.
+
+    A residual selection is applied when a patch is loaded, so until then
+    the identity claims (def keys) of coordinates on the trimmed
+    dimensions describe the untrimmed values and must not be compared or
+    published.
+    """
+    trimmed = _trimmed_dims(residuals, coord_dims_map)
+    return [
+        f"_{c}_def_key"
+        for c, dims_str in coord_dims_map.items()
+        if set(str(dims_str).split(",")) & trimmed and f"_{c}_def_key" in columns
+    ]
+
+
 def _residual_ranges(residuals) -> dict:
     """Envelope-applicable value ranges from a residual tuple.
 
@@ -706,17 +731,9 @@ def derived_catalog(
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
-    residual_names = {n for coords, _ in parent_residuals for n in coords}
-    trimmed_dims = frozenset(
-        d for n in residual_names for d in str(coord_dims_map.get(n, n)).split(",") if d
-    )
+    trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
     outputs = plan.outputs
-    stale_keys = [
-        f"_{c}_def_key"
-        for c, dims_str in coord_dims_map.items()
-        if set(str(dims_str).split(",")) & trimmed_dims
-        and f"_{c}_def_key" in outputs.columns
-    ]
+    stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)

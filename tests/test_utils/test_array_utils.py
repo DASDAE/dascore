@@ -249,9 +249,13 @@ class TestApplyUfunc:
         assert np.array_equal(out.data, ints.data & ints.data)
         with pytest.raises(UnitError):
             apply_ufunc(np.bitwise_and, metres, ints.set_units("s"))
-        # convertible units are converted into the patch's for the fallback
+        # convertible units are converted into the patch's for the fallback,
+        # and a boolean result has no units whichever path produced it
         out = apply_ufunc(np.logical_and, metres, ints.set_units("km"))
         assert out.data.dtype == np.bool_
+        assert out.attrs.data_units is None
+        assert apply_ufunc(np.logical_and, metres, metres).attrs.data_units is None
+        assert apply_ufunc(np.logical_or, metres, True).attrs.data_units is None
 
     def test_scaled_units_keep_their_scale(self, random_patch):
         """Data in "100 cm" stay as they are; the scale rides on the units."""

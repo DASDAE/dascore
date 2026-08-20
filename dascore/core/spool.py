@@ -1763,7 +1763,10 @@ class Spool(NamespaceOwner):
     @compose_docstring(desc=get_docstring(concatenate_patches))
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.io.index.planned import (  # noqa: PLC0415
+            derived_catalog,
+            stale_def_keys,
+        )
 
         if len(kwargs) != 1:
             msg = (
@@ -1779,7 +1782,16 @@ class Spool(NamespaceOwner):
         has_envelope = f"{dim}_min" in working.columns
         # Decided here, from metadata, so the plan rows agree with the
         # patches assembly later concatenates (which applies the same gates).
-        working = _concat_compatible_rows(working, dim, check_behavior)
+        # A selection still to be applied at load leaves the def keys of the
+        # trimmed coordinates describing the untrimmed values: not compared.
+        stale = stale_def_keys(
+            self._catalog.residuals,
+            self._catalog.backend.coord_dims_map(),
+            working.columns,
+        )
+        working = _concat_compatible_rows(
+            working.drop(columns=stale), dim, check_behavior
+        )
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
         rows = working.reset_index(drop=True)

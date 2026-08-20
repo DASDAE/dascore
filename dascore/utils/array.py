@@ -396,6 +396,12 @@ def _apply_binary_ufunc(
             array1, array2 = array2, array1
         return _apply_operator(operator, array1, array2, *args, **kwargs)
 
+    def _fallback_label(new_data, units):
+        """The units a numpy-computed result keeps: none when boolean."""
+        if getattr(new_data, "dtype", None) == np.bool_:
+            return None
+        return _label(units)
+
     def _label(quantity):
         """The data_units string for one unit of output."""
         # the scale comes out of a division, so shed its float noise
@@ -478,9 +484,10 @@ def _apply_binary_ufunc(
             # The unit registry does not implement this ufunc, or cannot
             # hold this scalar (a bool), or the ufunc wants dimensioned
             # operands (matmul); numpy does the work, and the units are
-            # whatever they were, on whichever side had them.
+            # whatever they were, on whichever side had them — unless the
+            # result is boolean, which has none.
             new_data = _apply_op(patch.data, other, operator, reversed)
-            return new_data, attrs.update(data_units=_label(known))
+            return new_data, attrs.update(data_units=_fallback_label(new_data, known))
         new_data = _apply_op(patch.data, other, operator, reversed)
         if not hasattr(probe, "units"):
             # a comparison: no units
@@ -530,7 +537,10 @@ def _apply_binary_ufunc(
                     msg = f"{operator} failed with units {data_units} and {other_units}"
                     raise UnitError(msg) from er
                 other_data = in_patch_units.magnitude / data_units.magnitude
-            return _apply_op(patch.data, other_data, operator, reversed), attrs
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            return new_data, attrs.update(
+                data_units=_fallback_label(new_data, data_units)
+            )
         if hasattr(result, "units"):
             return result.magnitude, attrs.update(data_units=str(result.units))
         # Result is unitless (e.g., from boolean comparison)
