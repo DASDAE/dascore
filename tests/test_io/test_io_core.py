@@ -41,6 +41,8 @@ from dascore.io.core import (
     _resolve_read_spool,
     _scan_result_to_summary,
     _select_patch_from_spool,
+    _size_and_mtime,
+    _source_stats,
     _validate_scan_payload,
     is_directory_format,
     make_scan_payload,
@@ -1887,11 +1889,44 @@ class TestSourceIds:
         patch = dc.read(dasdae_path)[0]
         assert STORED_PATCH_ID not in dict(patch.attrs)
 
-    def test_a_source_with_no_path_keeps_its_own_id(self, dasdae_path):
+    def test_an_open_file_is_the_file_it_was_opened_on(self, terra15_path):
+        """Reading by handle is reading the same data as reading by name."""
+        name, version = dc.get_format(terra15_path)
+        by_name = dc.read(terra15_path)[0]
+        with Path(terra15_path).open("rb") as fid:
+            by_handle = dc.read(fid, name, version)[0]
+        assert by_handle.attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_manager_names_what_it_was_built_around(self, terra15_path):
+        """A manager is a way of holding a source, not a source of its own."""
+        by_name = dc.read(terra15_path)[0]
+        with IOResourceManager(terra15_path) as man:
+            assert dc.read(man)[0].attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_source_with_no_path_keeps_its_own_id(self, terra15_path):
         """Two streams must not derive one id out of having no path."""
-        with dasdae_path.open("rb") as fid:
-            patch = dc.read(fid, "dasdae", "1")[0]
-        assert patch.attrs.patch_id
+        name, version = dc.get_format(terra15_path)
+        data = Path(terra15_path).read_bytes()
+        streams = (io.BytesIO(data), io.BytesIO(data))
+        ids = {dc.read(x, name, version)[0].attrs.patch_id for x in streams}
+        assert all(ids) and len(ids) == 2
+
+    def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
+        """Or every patch asked for at once would answer to one id."""
+        spool = dc.read(idless_multi_patch)
+        keys = [x.attrs.get("_source_patch_key", "") for x in spool]
+        ids = {
+            x.attrs.patch_id for x in dc.read(idless_multi_patch, source_patch_key=keys)
+        }
+        assert len(ids) == len(keys)
+
+    def test_a_directory_format_covers_its_members(self, tmp_path):
+        """A member rewritten in place is not the data which was there."""
+        directory = fetch("dispersion_event.h5").parent
+        stats = _source_stats(directory)
+        assert all(x is not None for x in stats)
+        # The directory's own stat says nothing about a rewritten member.
+        assert stats != _size_and_mtime(Path(directory).stat())
 
     @pytest.fixture
     def idless_multi_patch(self, tmp_path):

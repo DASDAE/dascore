@@ -62,6 +62,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.io import (
     IOResourceManager,
+    _normalize_source_patch_keys,
     get_handle_from_resource,
     release_handle,
 )
@@ -1123,25 +1124,34 @@ def _source_stats(source) -> tuple[int | None, int | None]:
     """
     Return a source's size and modification time, or nothing for both.
 
-    Nothing is not a failure: a stream, an open file object and some
-    remote backends have neither, and an id which says so is better than
-    one which pretends the fields were equal.
+    Nothing is not a failure: a stream and some remote backends have
+    neither, and an id which says so is better than one which pretends
+    the fields were equal.
 
-    Only a local path is stat-ed. A remote one would cost a metadata
-    request for every patch a spool loads, and an object store rarely
-    rewrites a key in place, so a remote source is named by its URI.
+    A remote source is stat-ed too. One metadata request is nothing
+    beside reading the bytes, and an object rewritten under the same key
+    would otherwise keep the id of what it replaced.
 
-    A directory-format source is stat-ed as the directory it is, whose
-    mtime moves when members come and go but not when one is rewritten.
-    The index computes a manifest over the members for that; this does
-    not, because it would walk the directory on every read.
+    A directory is covered by its members rather than by itself: a
+    directory's own mtime moves when members come and go, but not when
+    one of them is rewritten, which is exactly the case worth catching.
     """
-    if not is_local_path(source):
-        return None, None
     try:
-        stat = coerce_to_local_path(source).stat()
+        path = (
+            coerce_to_local_path(source)
+            if is_local_path(source)
+            else coerce_to_upath(source)
+        )
+        stat = path.stat()
     except Exception:
         return None, None
+    if _is_dir(path):
+        return _directory_stats(path)
+    return _size_and_mtime(stat)
+
+
+def _size_and_mtime(stat) -> tuple[int | None, int | None]:
+    """Return one stat result's size and modification time in nanoseconds."""
     size = getattr(stat, "st_size", None)
     mtime = getattr(stat, "st_mtime_ns", None)
     if mtime is None and (seconds := getattr(stat, "st_mtime", None)) is not None:
@@ -1149,11 +1159,59 @@ def _source_stats(source) -> tuple[int | None, int | None]:
     return (None if size is None else int(size), None if mtime is None else int(mtime))
 
 
+def _is_dir(path) -> bool:
+    """Return True when a path is a directory, and False when it cannot say."""
+    try:
+        return bool(path.is_dir())
+    except Exception:
+        return False
+
+
+def _directory_stats(path) -> tuple[int | None, int | None]:
+    """
+    Return the total size and latest modification time of a directory.
+
+    A directory-format source is one scan unit made of many files, and
+    the two numbers stand for all of them: a member rewritten in place
+    moves the latest mtime, and one which changes length moves the total
+    even if a clock does not.
+    """
+    total, latest = 0, 0
+    try:
+        members = sorted(x for x in path.rglob("*") if not x.name.startswith("."))
+    except Exception:
+        return None, None
+    for member in members:
+        try:
+            if member.is_dir():
+                continue
+            size, mtime = _size_and_mtime(member.stat())
+        except Exception:
+            return None, None
+        total += size or 0
+        latest = max(latest, mtime or 0)
+    return total, latest
+
+
 def _source_path_string(source) -> str:
-    """Return how a source spells itself, or nothing if it does not."""
+    """
+    Return how a source spells itself, or nothing if it does not.
+
+    An open file names the path it was opened on, and a manager names
+    what it was built around, so reading a file by handle is reading the
+    same data as reading it by name.
+    """
+    if isinstance(source, IOResourceManager):
+        source = source.source
     if isinstance(source, str | Path | UPath):
         return str(source)
-    return str(getattr(source, "_dascore_source_path", "") or "")
+    for attribute in ("_dascore_source_path", "name", "filename"):
+        if value := getattr(source, attribute, ""):
+            # A file object opened on a descriptor names an int, which is
+            # not a path and is not the same one twice.
+            if isinstance(value, str | Path | UPath):
+                return str(value)
+    return ""
 
 
 def _stamp_source_ids(
@@ -1183,22 +1241,30 @@ def _stamp_source_ids(
     source
         What the caller asked to read.
     source_patch_key
-        The key the caller asked for, when it asked for one. Used for a
-        reader which honours the key without recording it: the patch is
-        then the only one returned, and its position here would say 0 for
-        whichever of the file's patches it is.
+        The key the caller asked for, when it asked for exactly one.
+        Used for a reader which honours the key without recording it: the
+        patch is then the only one returned, and its position here would
+        say 0 for whichever of the file's patches it is.
     """
     # A FiberIO is free to hand back whatever its format means; only a
     # spool of patches has ids to stamp.
     path = _source_path_string(source)
     if not path or not isinstance(spool, Spool) or not ids_enabled():
         return spool
-    size_bytes, mtime_ns = _source_stats(source)
+    # Stat-ed by the path rather than by the source, so a file read
+    # through a handle or a manager is stat-ed at all, and is stat-ed the
+    # same way reading it by name would be.
+    size_bytes, mtime_ns = _source_stats(path)
+    # The key the caller asked for stands in for a patch's own only when
+    # it named exactly this patch: a key naming several says which patches
+    # were wanted, not which one any of them is.
+    keys = _normalize_source_patch_keys(source_patch_key)
+    asked_for = keys.pop() if len(keys) == 1 and len(spool) == 1 else ""
     out = []
     for index, patch in enumerate(spool):
         attrs = patch.attrs
         stored = attrs.get(STORED_PATCH_ID, "")
-        key = attrs.get("_source_patch_key", "") or source_patch_key or index
+        key = attrs.get("_source_patch_key", "") or asked_for or index
         patch_id = stored or source_patch_id(
             file_format, file_version, path, key, size_bytes, mtime_ns
         )
