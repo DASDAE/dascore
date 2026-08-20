@@ -13,7 +13,7 @@ Patches are immutable, so a processing function normally returns a new patch. Wh
 ```{python}
 import dascore as dc
 
-patch = dc.get_example_patch().set_units(distance="m")
+patch = dc.get_example_patch()  # its distance coordinate is already in metres
 
 # Converting to the units already set is not work, so nothing is done.
 assert patch.convert_units(distance="m") is patch
@@ -22,7 +22,9 @@ assert patch.convert_units(distance="m") is patch
 assert patch.transpose(*patch.dims) is patch
 ```
 
-Not every function can tell cheaply, and those which cannot still return a new patch: the test has to cost less than the copy it saves, so it is made from metadata (units, dimension names, a mask already computed) and never from comparing two data arrays. Treat the identity as an optimization to benefit from, not a check to write logic against.
+Nothing was done, so nothing is written to the patch's history either. One call mapped over a spool whose patches are not all alike therefore leaves some of them with a history entry for it and some without, and `Spool.chunk` compares histories when it merges — so such a spool refuses to merge until it is chunked with `conflict="drop"`. This is not new: `transpose`, `select` and `sort_coords` have always worked this way.
+
+The check has to cost less than the copy it saves, so it is made from metadata — units, dimension names, a mask already computed — and never from comparing two data arrays; a function which cannot tell that cheaply still returns a new patch. Treat the identity as an optimization, not a guarantee to write logic against.
 
 # Basic
 

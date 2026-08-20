@@ -2834,6 +2834,15 @@ class TestUnitNoOps:
         assert out is not coord
         assert out.units == get_quantity("100 cm")
 
+    def test_partial_coord(self):
+        """A coord with no values, which the meta-fixture does not hold."""
+        coord = CoordPartial(
+            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
+        )
+        assert coord.convert_units("meter") is coord
+        assert coord.set_units("m") is coord
+        assert coord.convert_units("km") is not coord
+
     def test_string_coord_still_rejects_units(self):
         """The guard does not swallow the string coord's refusal."""
         coord = get_coord(values=np.array(["a", "b", "c"]))

@@ -645,6 +645,20 @@ class TestConj:
         """Real data has nothing to conjugate, so the patch comes back."""
         assert random_patch.conj() is random_patch
 
+    def test_object_array_is_still_conjugated(self, random_patch):
+        """
+        An object dtype says nothing about what it holds.
+
+        The elements can be complex, and conjugating them is real work,
+        so the dtype short circuit must not claim there is none.
+        """
+        shape = random_patch.shape
+        data = np.full(shape, 1 + 2j, dtype=object)
+        patch = random_patch.new(data=data)
+        out = patch.conj()
+        assert out is not patch
+        assert out.data[0, 0] == 1 - 2j
+
 
 class TestRoll:
     """Test cases for patch roll method."""

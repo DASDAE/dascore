@@ -1434,12 +1434,22 @@ class TestUnitNoOps:
         """Simplifying base units changes nothing."""
         assert cm_with_units.simplify_units() is cm_with_units
 
-    def test_one_of_two_coords_changing(self, cm_with_units):
-        """A manager with one coord to convert converts only that one."""
-        out = cm_with_units.convert_units(distance="ft", time="s")
-        assert out is not cm_with_units
-        assert out.coord_map["time"] is cm_with_units.coord_map["time"]
-        assert out.coord_map["distance"] is not cm_with_units.coord_map["distance"]
+    def test_one_of_two_coords_changing(self):
+        """
+        A manager with one coord to convert converts only that one.
+
+        Both coords are numeric, so the one which stays put does so by
+        the units matching and not by being time-like, which coords have
+        always refused to convert.
+        """
+        cm = get_coord_manager(
+            {"distance": np.arange(10) * 1.0, "depth": np.arange(4) * 1.0},
+            dims=("distance", "depth"),
+        ).set_units(distance="m", depth="m")
+        out = cm.convert_units(distance="ft", depth="m")
+        assert out is not cm
+        assert out.coord_map["depth"] is cm.coord_map["depth"]
+        assert out.coord_map["distance"] is not cm.coord_map["distance"]
 
 
 class TestDisassociate:

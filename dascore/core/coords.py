@@ -380,9 +380,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         Convert from one unit to another. Set units if None are set.
 
-        A coordinate already carrying these units returns itself, so a
-        caller can tell a conversion which did something from one which
-        had nothing to do.
+        A coordinate already carrying exactly these units -- magnitude
+        included, so `100 cm` is not `m` -- returns itself, letting a
+        caller detect a conversion with nothing to do by identity.
         """
         if units_match(self.units, units):
             return self
@@ -390,7 +390,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @abc.abstractmethod
     def _convert_units(self, units) -> Self:
-        """Perform the conversion, knowing the requested units differ."""
+        """Perform the conversion; callers normally screen out no-op requests."""
 
     def _get_value_index(self, coord_array, values_to_find):
         """Get the indices were values occur in array, account for duplicates."""
@@ -608,10 +608,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return a coordinate normalized for stable fingerprinting."""
         if self.units is None or dtype_time_like(self.dtype):
             return self
-        # The unguarded conversion, deliberately: a coord already in base
-        # units is not normalized by being handed back, and the numeric
-        # form the conversion produces is half of what makes two
-        # equivalent coords fingerprint alike.
+        # The unguarded conversion, deliberately. A coord already in base
+        # units matches the guard and would come back with whatever dtype
+        # it happens to have, while one which is not converts to floats --
+        # so an integer range in metres and the same range in centimetres
+        # would fingerprint differently. Converting both is what puts them
+        # in one numeric form.
         _, units = get_factor_and_unit(self.units, simplify=True)
         return self._convert_units(units)
 
@@ -2303,19 +2305,34 @@ class CoordSegmented(BaseCoord):
         units = kwargs.pop("units", self.units)
         return self.__class__(segments=segments, units=units)
 
-    def set_units(self, units) -> Self:
-        """Set new units on the coordinate and all segments."""
-        if units_match(self.units, units):
+    def _rebuild_segments(self, segments) -> Self:
+        """Return a coord holding these segments, or self if none moved."""
+        if all(new is old for new, old in zip(segments, self.segments)):
             return self
-        segments = tuple(x.set_units(units) for x in self.segments)
         return self.__class__(segments=segments)
 
+    def set_units(self, units) -> Self:
+        """Set new units on the coordinate and all segments."""
+        return self._rebuild_segments(tuple(x.set_units(units) for x in self.segments))
+
+    def convert_units(self, units) -> Self:
+        """
+        Convert units, or set units if none exist.
+
+        The guard is per segment rather than on `self.units`, which speaks
+        only for the first: segments are admitted when their units are
+        merely equal, so a coord in metres can hold a segment in `100 cm`,
+        and that one still has work to do.
+        """
+        return self._convert_units(units)
+
     def _convert_units(self, units) -> Self:
-        """Convert units, or set units if none exist."""
+        """Convert each segment, keeping self when none of them moved."""
         if dtype_time_like(self.dtype):
             return self
-        segments = tuple(x.convert_units(units) for x in self.segments)
-        return self.__class__(segments=segments)
+        return self._rebuild_segments(
+            tuple(x.convert_units(units) for x in self.segments)
+        )
 
     def _rebuild(self, segments) -> BaseCoord:
         """Build the simplest coordinate from a (non-empty) list of segments."""
@@ -2801,9 +2818,8 @@ class CoordString(BaseCoord):
         """
         String coordinates cannot be converted between units.
 
-        A string coord never carries units, so the only request which
-        reaches here is one asking for some -- the null request matched
-        and was handed back before this was called.
+        A request for no units is answered by the caller's guard, so
+        anything reaching here is asking for real ones.
         """
         _raise_string_coord_error("unit conversion")
 

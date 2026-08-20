@@ -639,6 +639,11 @@ class TestUnitsMatch:
         assert get_quantity("m") == get_quantity("100 cm")
         assert not units_match("m", "100 cm")
 
+    def test_same_unit_different_magnitude(self):
+        """`100 m` is not `m`: converting between them rescales by a hundred."""
+        assert not units_match("m", "100 m")
+        assert not units_match(get_quantity("2 s"), "s")
+
     def test_different_units(self):
         """Plainly different units do not match."""
         assert not units_match("m", "s")

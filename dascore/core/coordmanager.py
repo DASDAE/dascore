@@ -837,8 +837,8 @@ class CoordManager(DascoreBaseModel):
         """
         Return a manager with these coords replaced, or self if none are.
 
-        The coords report a request which would change nothing by handing
-        back the coord they were called on, and this passes that answer up.
+        Callers pass only the coords which actually changed, so an empty
+        mapping means nothing changed.
         """
         if not new_coords:
             return self

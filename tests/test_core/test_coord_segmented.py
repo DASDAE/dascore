@@ -529,6 +529,23 @@ class TestSortAndShift:
         coord = float_gap_coord.set_units("m")
         assert coord.convert_units("m") is coord
 
+    def test_a_segment_spelled_differently_is_still_converted(self, float_gap_coord):
+        """
+        `self.units` speaks only for the first segment.
+
+        Segments are admitted when their units are merely equal, so a
+        coord reporting metres can hold one in `100 cm`; the short
+        circuit has to ask every segment, not the coord.
+        """
+        coord = float_gap_coord.set_units("m")
+        mixed = coord.__class__(
+            segments=(coord.segments[0], coord.segments[1].set_units("100 cm"))
+        )
+        assert get_quantity(mixed.units) == get_quantity("m")
+        for out in (mixed.set_units("m"), mixed.convert_units("m")):
+            assert out is not mixed
+            assert all(get_quantity(x.units) == get_quantity("m") for x in out.segments)
+
 
 class TestSimplifyAndSnap:
     """Tests for tolerance-bounded simplification and snapping."""

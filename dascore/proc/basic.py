@@ -29,6 +29,22 @@ from dascore.utils.patch import (
     patch_function,
 )
 
+# The dtypes which promise, without the values being looked at, that there
+# is no imaginary part: bool, signed and unsigned integers, and floats.
+_REAL_KINDS = ("b", "i", "u", "f")
+
+
+def _known_real(data) -> bool:
+    """
+    Whether the dtype alone says the data has no imaginary part.
+
+    Object arrays are not among them: their dtype says nothing about the
+    elements, and `np.conj` really does conjugate a complex object held in
+    one. Anything whose dtype cannot be read is treated the same way --
+    not known to be real, so the operation runs.
+    """
+    return getattr(getattr(data, "dtype", None), "kind", None) in _REAL_KINDS
+
 
 def _as_float(data):
     """
@@ -282,7 +298,7 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    if not np.iscomplexobj(patch.data):  # real data is its own conjugate
+    if _known_real(patch.data):  # real data is its own conjugate
         return patch
     return patch.new(data=np.conj(patch.data))
 
@@ -298,7 +314,7 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    if not np.iscomplexobj(patch.data):  # already only a real part
+    if _known_real(patch.data):  # already only a real part
         return patch
     return patch.new(data=np.real(patch.data))
 

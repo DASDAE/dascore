@@ -59,6 +59,7 @@ def set_units(
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
     new_coords = patch.coords.set_units(**kwargs)
+    # data_units=None means "clear them", which units_match reports as a change.
     if new_coords is patch.coords and units_match(patch.attrs.data_units, data_units):
         return patch
     new_attrs = _replace_data_units(patch.attrs, data_units)
@@ -108,9 +109,8 @@ def convert_units(
     >>> # Convert coordinate units
     >>> converted_coords = patch_with_units.convert_units(distance="km")
     """
-    # Nothing to convert: the coords kept the units they had and the data
-    # units either were not named or are the ones already set.
     coords = patch.coords.convert_units(**kwargs)
+    # Nothing to convert.
     if coords is patch.coords and (
         data_units is None or units_match(patch.attrs.data_units, data_units)
     ):
