@@ -106,24 +106,6 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-# Copy-on-write is always on from pandas 3, which also deprecates the
-# option: reading it there warns on every access, so settle it by version
-# once and only consult the option on pandas 2.
-_COPY_ON_WRITE_ALWAYS = int(pd.__version__.split(".", maxsplit=1)[0]) >= 3
-
-
-def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return a caller-owned view of an internally cached dataframe.
-
-    Copy-on-write makes a shallow copy enough, since the frames detach on
-    the first write. Only the literal True enables it; pandas 2 also
-    accepts "warn", which keeps the old sharing semantics.
-    """
-    copy_on_write = _COPY_ON_WRITE_ALWAYS or pd.options.mode.copy_on_write is True
-    return frame.copy(deep=not copy_on_write)
-
-
 class _InventoryQuery(NamedTuple):
     """How one selection call splits between the index and the inventory."""
 
@@ -257,7 +239,9 @@ class Spool(NamespaceOwner):
         >>> spool = dc.get_example_spool("random_das")
         >>> df = spool.get_contents()
         """
-        return present_units_columns(_copy_public_dataframe(self._df))
+        # Shallow: copy-on-write is always on from pandas 3, so the
+        # caller's frame detaches from the cached one on its first write.
+        return present_units_columns(self._df.copy(deep=False))
 
     def __len__(self) -> int:
         """Return len of spool."""

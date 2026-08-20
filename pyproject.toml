@@ -52,7 +52,9 @@ dependencies = [
      # write dascore against.
      "numpy>=2.0",
      "packaging",
-     "pandas>=2.0",
+     # 3.0 is where copy-on-write and the `str` dtype became the only
+     # behavior; dascore is written against those rather than around them.
+     "pandas>=3.0",
      "pooch>=1.3",  # retry_if_failed was added in 1.3
      "pydantic>2.1",
      # An inventory is authored as YAML, so reading one is not optional.

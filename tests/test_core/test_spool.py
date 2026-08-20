@@ -13,7 +13,7 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_assembly as assembly_mod
-from dascore.core.spool import _COPY_ON_WRITE_ALWAYS, BaseSpool, Spool
+from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
     InvalidSpoolError,
@@ -429,19 +429,6 @@ class TestGetContents:
         """Mutating the returned dataframe must not change the spool."""
         df = random_spool.get_contents()
         df["tag"] = "modified"
-        assert (random_spool.get_contents()["tag"] != "modified").all()
-
-    @pytest.mark.parametrize("copy_on_write", [False, True, "warn"])
-    def test_contents_owned_in_every_copy_mode(self, random_spool, copy_on_write):
-        """Ownership holds for each copy-on-write setting pandas 2 allows.
-
-        Notably "warn" is truthy but keeps the old sharing semantics.
-        """
-        if _COPY_ON_WRITE_ALWAYS:
-            pytest.skip("pandas 3 has copy-on-write always on")
-        with pd.option_context("mode.copy_on_write", copy_on_write):
-            df = random_spool.get_contents()
-            df["tag"] = "modified"
         assert (random_spool.get_contents()["tag"] != "modified").all()
 
 
