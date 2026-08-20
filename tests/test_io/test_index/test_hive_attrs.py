@@ -13,7 +13,6 @@ import json
 import os
 import pickle
 import sqlite3
-import sys
 import warnings
 
 import numpy as np
@@ -453,9 +452,9 @@ class TestEdgeCases:
         finally:
             spool.indexer.close()
 
-    def test_directory_format_unit_name_is_not_indexed(self, tmp_path):
+    def test_directory_format_unit_name_is_not_indexed(self, tmp_path, monkeypatch):
         """A directory-format source is named, not partitioned, by its dir."""
-        sys.path.insert(0, "tests/test_io/test_xml_binary")
+        monkeypatch.syspath_prepend("tests/test_io/test_xml_binary")
         from test_xml_binary import metadata  # noqa: PLC0415
 
         unit = tmp_path / "cable=north" / "tag=ignored"
