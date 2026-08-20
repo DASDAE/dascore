@@ -18,14 +18,8 @@ from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.intervals import interval_masks, normalize_value, value_kind
 from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
-from ._lanes import (
-    LANE_CMAP,
-    STRING_CMAP,
-    UNCOVERED_COLOR,
-    WHEEL_ORDER,
-    _default_label,
-    plot_lanes,
-)
+from . import _lanes
+from ._lanes import UNCOVERED_COLOR, _default_label, plot_lanes
 
 if TYPE_CHECKING:
     from dascore.constants import timeable_types
@@ -473,7 +467,7 @@ def path(
     distances = _sample_distances(chosen, limits[0], limits[1], n_samples)
     for index, (panel, name) in enumerate(zip(panels, columns, strict=True)):
         values = chosen.column_at(name, distances)
-        panel.plot(distances, values, color=plt.get_cmap(LANE_CMAP)(index % 10))
+        panel.plot(distances, values, color=plt.get_cmap(_lanes.LANE_CMAP)(index % 10))
         units = _column_units(chosen, name)
         panel.set_ylabel(f"{name} [{units}]" if units else name)
         panel.grid(color="0.9", linewidth=0.5)
@@ -793,9 +787,10 @@ def _segment_colors(one, color, mid, crs, handles, palette):
         return values, None
     # The palette is the figure's, not this path's, so one value is one
     # color however many paths are drawn and whatever order they state it.
-    wheel = plt.get_cmap(STRING_CMAP)
+    wheel = plt.get_cmap(_lanes.STRING_CMAP)
+    order = _lanes.WHEEL_ORDER
     for key in dict.fromkeys(map(str, keys)):
-        palette.setdefault(key, wheel(WHEEL_ORDER[len(palette) % len(WHEEL_ORDER)]))
+        palette.setdefault(key, wheel(order[len(palette) % len(order)]))
     seen = palette
     colors = [UNPLACED] * len(mid)
     for key, mask in zip(keys, masks, strict=True):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -185,6 +187,17 @@ class TestNamespace:
         assert tunnel.viz.path.__name__ == "path"
         assert tunnel.viz.map.__name__ == "map_path"
         assert tunnel.viz.timeline.__name__ == "timeline"
+
+    def test_declared_as_an_entry_point(self):
+        """An install must carry the namespace, not just an import of it.
+
+        Importing dascore.viz registers the namespace as a side effect, so
+        every other test here would pass with the entry point deleted.
+        """
+        text = (Path(dc.__file__).parent.parent / "pyproject.toml").read_text()
+        block = text.split('[project.entry-points."dascore.inventory_namespace"]')[1]
+        block = block.split("[")[0]
+        assert 'viz = "dascore.viz:VizInventoryNameSpace"' in block
 
     def test_namespace_call(self, tunnel):
         """Calling through the namespace passes the inventory."""
