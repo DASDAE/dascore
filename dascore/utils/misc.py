@@ -821,8 +821,8 @@ def _callable_name(func) -> str:
 
     A `functools.partial` is named for the function it wraps. A callable
     object and a `Task` have no `__name__`; a `Task` standing for more than
-    one operation names itself with `node_name` (see `pipe.default_key`),
-    and anything else falls back to its class name.
+    one operation names itself with `node_name`, and anything else falls
+    back to its class name.
     """
     while isinstance(func, functools.partial):
         func = func.func

@@ -3,10 +3,9 @@ Machinery for describing, identifying and composing DASCore operations.
 
 An operation is a [`Task`](`dascore.workflow.task.Task`): a frozen object
 whose fields are its parameters, which knows its own fingerprint and can be
-written to a document and read back. Several of them joined with ``|`` make
-a [`Pipe`](`dascore.workflow.pipe.Pipe`), which is one operation again, and
-a [`Provenance`](`dascore.workflow.provenance.Provenance`) records a pipe
-and the run which used it.
+written to a document and read back. Alongside them are the two ids a patch
+carries -- which data it is, and what was done to it -- which is how a
+result says where it came from without a record of the run beside it.
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ from dascore.workflow.identity import (
     new_patch_id,
     source_patch_id,
 )
-from dascore.workflow.pipe import Pipe
 from dascore.workflow.processor import (
     PatchOp,
     PatchProcessor,
@@ -34,5 +32,4 @@ from dascore.workflow.processor import (
     register_implementation,
     resolve_patch_function,
 )
-from dascore.workflow.provenance import Provenance, ProvenanceNode, SourceInfo
 from dascore.workflow.task import Task, intern, make_function_task_class, task

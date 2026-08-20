@@ -3,7 +3,9 @@ title: Workflow
 execute:
   warning: false
 ---
-A workflow is processing written down as an object rather than as a script. Its two pieces are a [Task](`dascore.workflow.task.Task`), which is one operation and the parameters it was given, and a [Pipe](`dascore.workflow.pipe.Pipe`), which is several tasks arranged into the shape of one. Both are immutable, both know their own fingerprint, and both can be written to a file and read back, so a processing chain can be compared, stored, shared, and run later against other data.
+A workflow is processing written down as an object rather than as a script. Its piece is a [Task](`dascore.workflow.task.Task`): one operation and the parameters it was given. A task is immutable, knows its own fingerprint, and can be written to a file and read back, so an operation can be compared, stored, shared, and run later against other data.
+
+DASCore stops there. Arranging tasks into a graph, scheduling them and streaming data through them is what Dask, Ray and friends already do; what DASCore adds is that each step names itself the same way every time, and that a patch carries two ids saying where it came from.
 
 ::: {.callout-note}
 The workflow module is new. Every patch function already builds one — see [Patch functions are tasks](#patch-functions-are-tasks) — but DASCore's own processing does not route through it yet.
@@ -117,11 +119,10 @@ from dascore.workflow import PatchOp
 PatchOp(name="pass_filter", kwargs={"time": (10, 100)})
 ```
 
-Because it is a task, it composes and it writes itself down:
+Because it is a task, it writes itself down:
 
 ```{python}
-pipe = dc.proc.detrend.op("time") | normalize
-print(pipe.to_mermaid())
+normalize.to_dict()
 ```
 
 A call has a fingerprint whether or not anyone builds an operation for it. `fingerprint_call` answers for a call written as arguments, and `PatchOp.fingerprint` asks it for the operation built from the same call, so the two agree by construction rather than by test. Nothing is fingerprinted while an ordinary call runs — the decorator does not hash your arguments behind your back:
@@ -146,145 +147,8 @@ The document also records which module the function came from. It is information
 normalize.to_dict()["params"]["module"]
 ```
 
-# Pipes
+# What a patch carries
 
-Tasks joined with `|` make a pipe, which runs them in order.
+A task says what an operation is; the two ids on `Patch.attrs` say what happened to a particular patch. `patch_id` names which data it is — derived from the file it was read out of — and `processing_id` folds each operation's fingerprint into the one before it, so a route through the data has a name of its own. Both are covered in [Patch identity](patch.qmd#patch-identity).
 
-```{python}
-from dascore.workflow import Task
-
-
-class AddValue(Task):
-    """Add a number."""
-
-    value: int = 1
-
-    def run(self, number):
-        """Add to a number."""
-        return number + self.value
-
-
-class TimesValue(Task):
-    """Multiply by a number."""
-
-    value: int = 2
-
-    def run(self, number):
-        """Multiply a number."""
-        return number * self.value
-
-
-pipe = AddValue(value=2) | TimesValue(value=3)
-pipe(1)
-```
-
-A pipe is a graph rather than a list, so several branches can feed one task. Each branch gets the input, and the task which joins them is given their outputs in the order they were wired.
-
-```{python}
-class JoinValues(Task):
-    """Add up everything it is given."""
-
-    def run(self, *numbers):
-        """Add up numbers."""
-        return sum(numbers)
-
-
-branched = (AddValue(value=1), TimesValue(value=5)) | JoinValues()
-branched(10)
-```
-
-`|` works the same way round: a tuple on the right fans out, and a pipe which fans out returns one result per branch.
-
-```{python}
-fanned = AddValue(value=1) | (TimesValue(value=2), TimesValue(value=3))
-fanned(10)
-```
-
-Putting the two together makes a diamond — one input, two branches, joined again:
-
-```{python}
-diamond = AddValue(value=1) | (TimesValue(value=2), TimesValue(value=3)) | JoinValues()
-diamond(10)
-```
-
-DASCore does not schedule or stream: running a pipe gives each task its inputs, in order, and nothing else. Running one over many patches is a loop, `spool.map`, or whatever else already does that work:
-
-```{python}
-[pipe(x) for x in [1, 2, 3]]
-```
-
-## Nodes
-
-Each task in a pipe is a node under a name of its own, taken from the class and numbered when the same task appears twice. Names are for reading and for referring to a node — `get` reads one, `update` changes its parameters and gives back a new pipe, and `relabel` gives it a name of your own.
-
-```{python}
-print(list(diamond.tasks))
-diamond.update("times_value", value=10)(10)
-```
-
-```{python}
-diamond.get("times_value_2")
-```
-
-A pipe has a fingerprint of its own, covering the tasks, how they are wired, the order its branches are fed and the order it returns its results. It is structural rather than nominal, so renaming a node leaves the pipe the pipe it was:
-
-```{python}
-assert diamond.relabel(times_value="left").fingerprint == diamond.fingerprint
-```
-
-A pipe also writes itself out as a mermaid flowchart, which anywhere that draws mermaid turns into a diagram:
-
-```{python}
-print(diamond.to_mermaid())
-```
-
-## Saving and loading
-
-A pipe can be written to JSON or YAML — `.yaml` and `.yml` write YAML, `.json` or a bare name write JSON, and any other suffix is refused rather than guessed at — and read back into the same pipe. It names each task by its registered tag rather than by an import path, so reading a pipe never imports whatever a file happens to name. The other side of that is that a task class has to live at module level, under a name no other class in its package claims, and that whatever defines it has to be imported before the pipe is loaded.
-
-<!--
-`execute: false` keeps the chunk below out of the generated doc tests
-(scripts/generate_doc_code_tests.py), which run a page's chunks inside a
-function, where a task class is a local one and no document could name it.
-Quarto ignores the option and still runs the chunk at build time.
--->
-
-```{python}
-#| execute: false
-import tempfile
-from pathlib import Path
-
-from dascore.workflow import Pipe
-
-path = Path(tempfile.mkdtemp()) / "run.yaml"
-pipe.save(path)
-assert Pipe.load(path) == pipe
-print(path.read_text()[:120])
-```
-
-# Provenance
-
-A [Provenance](`dascore.workflow.provenance.Provenance`) records a pipe together with the run which used it: the version of DASCore, the python, and the machine. It is the durable record — the thing worth writing next to results.
-
-```{python}
-provenance = pipe.get_provenance(operator="a tutorial")
-provenance.dascore_version, provenance.fingerprint
-```
-
-Alongside it is a [ProvenanceNode](`dascore.workflow.provenance.ProvenanceNode`), the live record: one immutable node per step, each pointing back at the nodes which fed it. A graph starts wide, at the files data was read from, and narrows as data is merged. `describe` reads it back as a listing, and `to_pipe` turns it into something runnable again.
-
-```{python}
-from dascore.workflow import ProvenanceNode, SourceInfo
-
-source = ProvenanceNode(source=SourceInfo(format="DASDAE", path="/data/patch.h5"))
-first = ProvenanceNode(task=AddValue(value=2), parents=(source,))
-second = ProvenanceNode(task=TimesValue(value=3), parents=(first,))
-
-print(second.describe())
-```
-
-```{python}
-second.to_pipe().run(1)
-```
-
-Building that graph as patches are processed comes in a later release, along with the two ids — `patch_id` for which data, `processing_id` for what was done — which the nodes carry.
+Nothing here schedules work. Composing tasks into a graph, running them over many patches and streaming results belong to the tools which already do that — `spool.map`, Dask, Ray — and DASCore's part is that each step, and each patch, names itself the same way every time.

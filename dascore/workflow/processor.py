@@ -4,7 +4,7 @@ A patch operation, as a task.
 Any function decorated with `dascore.patch_function` is one operation, and
 [`PatchOp`](`dascore.workflow.processor.PatchOp`) is that operation said as
 an object: the function's name and the arguments it was given, which can be
-compared, fingerprinted, written to a file and joined into a pipe.
+compared, fingerprinted, and written to a file.
 
 One class stands for every patch function, rather than one class each. What
 identifies an operation is its name and its arguments, and a name is a
@@ -200,10 +200,10 @@ class PatchOp(Task):
     @property
     def node_name(self) -> str:
         """
-        Return the name this operation takes as a node of a pipe.
+        Return the name this operation goes by where a task is labelled.
 
-        The operation, not the class: every `PatchOp` is a `PatchOp`, so
-        naming nodes after the class would call them all `patch_op`.
+        The operation, not the class: every `PatchOp` is a `PatchOp`, so a
+        label taken from the class would call them all `patch_op`.
         """
         return self.name.replace(_SEPARATOR, "_")
 
@@ -632,8 +632,8 @@ def _fingerprint(name: str, version: str, kwargs: dict) -> str:
     every ordinary call carrying, say, a numpy dtype, and hashing such a
     value by its type is all an id needs of it.
     """
-    # Spelled the way `Task.fingerprint_at` spells one, so a pipe holding a
-    # PatchOp hashes the same whichever built it.
+    # Spelled the way `Task.fingerprint_at` spells one, so a PatchOp hashes
+    # the same whichever route built it.
     with suppress_warnings(
         DASCoreWarning, message="A value of type .* has no encoding"
     ):

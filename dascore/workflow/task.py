@@ -51,8 +51,6 @@ from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 from dascore.workflow.serialize import (
     DOCUMENT,
-    PIPE_TAG,
-    TASK_TAG,
     decode,
     digest,
     encode,
@@ -74,9 +72,8 @@ class Task(DascoreBaseModel):
 
     What `run` takes is what the task is given when it runs, positionally
     and in the order its parameters are declared; everything the task was
-    *configured* with is a field. A pipe wires its edges by position for
-    the same reason: there is no name to bind them to, and the order the
-    inputs are given in is part of what the step did.
+    *configured* with is a field. Inputs go by position rather than by
+    name because the order they are given in is part of what the task did.
 
     An array given as a parameter is marked read-only in place, as a
     patch's data is, so that the fingerprint cannot come to describe values
@@ -228,19 +225,6 @@ class Task(DascoreBaseModel):
         """Hash a task the way it compares."""
         return hash(self.fingerprint)
 
-    def __or__(self, other) -> Any:
-        """Return the pipe which runs this task and then what follows it."""
-        # pipe.py imports this module, so it is named where it is used.
-        from dascore.workflow.pipe import join  # noqa: PLC0415
-
-        return join(self, other)
-
-    def __ror__(self, other) -> Any:
-        """Return the pipe which runs what precedes this task and then it."""
-        from dascore.workflow.pipe import join  # noqa: PLC0415
-
-        return join(other, self)
-
     def __reduce__(self):
         """
         Pickle a task by its tag, and its parameters as themselves.
@@ -279,68 +263,11 @@ def _check_nameable(task_class: type[Task], tag: str | None) -> None:
         raise ParameterError(msg)
 
 
-def holds_a_nested_version(document: Mapping) -> bool:
-    """
-    Return True when a task or pipe a document holds as a *parameter* was
-    written at another version.
-
-    The tasks a pipe is made of are not looked at: their fingerprints can
-    be recomputed at the version the document records, which says exactly
-    what they were. A nested one cannot, because the task holding it
-    fingerprints it at the version its class has now -- so a bump down
-    there is the one version difference which still cannot be told from an
-    edit, and is tolerated rather than reported as one.
-    """
-    return any(
-        _holds_another_version(nested)
-        for task in document.get("tasks", {}).values()
-        for nested in _nested_documents(task)
-    )
-
-
-def _holds_another_version(document: Mapping) -> bool:
-    """
-    Return True when a task document, or one it holds, moved on.
-
-    Only a nested task or pipe is followed, never a parameter's own
-    contents: a task may legitimately hold a mapping which spells a tag and
-    a version -- a stored attrs document does -- and reading that as a
-    version bump would let a parameter speak for the tasks around it.
-    """
-    return _task_moved_on(document) or any(
-        _holds_another_version(x) for x in _nested_documents(document)
-    )
-
-
-def _task_moved_on(document: Mapping) -> bool:
-    """Return True when a task document names a version its class does not."""
-    tag, version = document.get(TAG_FIELD), document.get(_VERSION_KEY)
-    if version is None or not isinstance(tag, str):
-        return False
-    model = resolve_model_tag(tag)
-    return getattr(model, "__version__", version) != version
-
-
-def _nested_documents(document: Mapping) -> list:
-    """Return the task and pipe documents one document holds directly."""
-    # A pipe writes its nodes under `tasks`; a task writes a nested task or
-    # pipe as the one tagged value the encoding gives it.
-    out = list(document.get("tasks", {}).values())
-    for value in document.get(_PARAMS_KEY, {}).values():
-        if isinstance(value, Mapping) and len(value) == 1:
-            nested = value.get(TASK_TAG, value.get(PIPE_TAG))
-            # A mapping, so a nested value written for a fingerprint -- a
-            # digest rather than a document -- is nothing to walk into.
-            if isinstance(nested, Mapping):
-                out.append(nested)
-    return out
-
-
 def _check_version(task_class: type[Task], version: object) -> None:
     """Say so when a document was written by another version of a task."""
-    # Not an error: an old pipe should still load and run. The version has
-    # already done its work by changing the fingerprint, and refusing the
-    # document would only hide what it was.
+    # Not an error: an old document should still load and run. The version
+    # has already done its work by changing the fingerprint, and refusing
+    # the document would only hide what it was.
     if version is not None and version != task_class.__version__:
         msg = (
             f"The document holds {task_class.__name__} version {version!r}, "
@@ -503,8 +430,8 @@ def task(func: Callable | None = None, *, version: str = "1.0", inputs: int = 1)
     inputs
         How many of the function's leading positional parameters are run
         time inputs rather than parameters. One by default, which is what a
-        step of a pipe takes; zero makes a task which is fed nothing and is
-        a source of its own.
+        task handed a patch takes; zero makes a task which is fed nothing
+        and is a source of its own.
 
     Examples
     --------
@@ -516,8 +443,6 @@ def task(func: Callable | None = None, *, version: str = "1.0", inputs: int = 1)
     ...     return number * factor
     >>>
     >>> assert scale_number_example(factor=2).run(3) == 6
-    >>> # A pipe step is a task of one input, so `|` works on them.
-    >>> assert (scale_number_example(factor=2) | scale_number_example(factor=3))(1) == 6
     >>>
     >>> @task(inputs=0)
     ... def source_number_example(value=1):

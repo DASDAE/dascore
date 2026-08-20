@@ -72,8 +72,6 @@ _FLOAT = "$float"
 _MODEL = "$model"
 _OPAQUE = "$opaque"
 _PARTIAL = "$partial"
-PIPE_TAG = "$pipe"
-_PIPE = PIPE_TAG
 _QUANTITY = "$quantity"
 _SLICE = "$slice"
 TASK_TAG = "$task"
@@ -266,11 +264,6 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         # Checked before the model branch below, which every task also
         # answers to: a task carries a version its fields do not show.
         return {_TASK: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
-    if isinstance(obj, _pipe_class()):
-        # A pipe is one operation too, and says so its own way: dumping its
-        # fields would name the tasks by class rather than by tag, and would
-        # hash a graph by the names of its nodes.
-        return {_PIPE: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
     if isinstance(obj, DascoreBaseModel):
         return _encode_model(obj, mode)
     if isinstance(obj, pd.DataFrame | pd.Series):
@@ -575,13 +568,6 @@ def _task_class() -> type:
     return Task
 
 
-def _pipe_class() -> type:
-    """Return the Pipe class; deferred for the reason `_task_class` is."""
-    from dascore.workflow.pipe import Pipe  # noqa: PLC0415
-
-    return Pipe
-
-
 def _decode_mapping(obj: Mapping) -> Any:
     """Decode a mapping, inverting whichever tag it carries."""
     if len(obj) == 1:
@@ -658,20 +644,6 @@ def _decode_task(value: Any) -> Any:
     return Task.from_dict(value)
 
 
-def _decode_pipe(value: Any) -> Any:
-    """Decode a pipe from its document."""
-    if not isinstance(value, Mapping):
-        msg = (
-            "A pipe encoded for a fingerprint holds only its digest, so the "
-            "pipe itself cannot be read back from it."
-        )
-        raise ParameterError(msg)
-    # Imported here rather than at module scope: pipe.py imports this module.
-    from dascore.workflow.pipe import Pipe  # noqa: PLC0415
-
-    return Pipe.from_dict(value)
-
-
 def _decode_dict(pairs: list) -> dict:
     """Decode a mapping whose keys are not strings."""
     # A key which was a tuple comes back as a list, which cannot be a key
@@ -711,7 +683,6 @@ _DECODERS: dict[str, Callable[[Any], Any]] = {
     _MODEL: _decode_model,
     _OPAQUE: _refuse("value"),
     _PARTIAL: _refuse("partial"),
-    _PIPE: _decode_pipe,
     _QUANTITY: _decode_quantity,
     _SLICE: _decode_slice,
     _TASK: _decode_task,

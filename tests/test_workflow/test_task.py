@@ -662,9 +662,6 @@ class TestTaskDecorator:
             return sum(numbers)
 
         assert merged().run(1, 2) == 3
-        # Which is what lets a decorated function join two branches: the
-        # two sources are handed one input each, and the join both results.
-        assert ((merged(), merged()) | merged()).run(1, 2) == 3
 
     def test_a_parameter_after_a_group(self):
         """

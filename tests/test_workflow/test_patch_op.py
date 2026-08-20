@@ -26,7 +26,6 @@ from dascore.units import get_quantity
 from dascore.workflow import (
     PatchOp,
     PatchProcessor,
-    Pipe,
     Task,
     fingerprint_call,
     register_implementation,
@@ -202,7 +201,7 @@ class TestEveryPatchFunction:
 
     @pytest.mark.parametrize("call", CALLS, ids=IDS)
     def test_the_op_pickles(self, call):
-        """A pipe handed to another process carries its operations."""
+        """An operation handed to another process carries what it is."""
         name, _, args, kwargs = call
         args = resolve(args)
         op = _function(name).op(*args, **kwargs)
@@ -395,17 +394,17 @@ class TestVersions:
         assert op.version == dc.proc.normalize.__version__
         assert op.to_dict()["params"]["version"] == op.version
 
-    def test_a_pipe_reads_back_as_what_was_written(self, monkeypatch):
+    def test_a_document_reads_back_as_what_was_written(self, monkeypatch):
         """
         A document says which version it was written at, so it reads back
         as the operation it recorded even after the function moved on.
         """
-        pipe = dc.proc.detrend.op("time") | dc.proc.normalize.op("time")
-        document = pipe.to_dict()
+        op = dc.proc.normalize.op("time")
+        document = op.to_dict()
         monkeypatch.setattr(dc.proc.normalize, "__version__", "2.0")
-        reloaded = Pipe.from_dict(document)
-        assert reloaded.get("normalize").version == "1.0"
-        assert reloaded.fingerprint == document["fingerprint"]
+        reloaded = PatchOp.from_dict(document)
+        assert reloaded.version == "1.0"
+        assert reloaded.fingerprint == op.fingerprint
 
     def test_a_bump_makes_a_new_operation(self, monkeypatch):
         """Which is what a version is for."""
@@ -581,19 +580,13 @@ class TestTheRegistry:
         assert register_patch_function(op_test_scaled) == tag
 
 
-class TestPipeNodeNames:
-    """A node is named for its operation, not for `PatchOp`."""
+class TestNodeNames:
+    """An operation is labelled for itself, not for `PatchOp`."""
 
-    def test_the_nodes_are_named_for_the_operations(self):
-        """Or every node in every pipe would be called `patch_op`."""
-        pipe = dc.proc.detrend.op("time") | dc.proc.normalize.op("time")
-        assert list(pipe.tasks) == ["detrend", "normalize"]
-        assert pipe.get("detrend").name == "detrend"
-
-    def test_the_same_operation_twice(self):
-        """The second copy is numbered, as any repeated task is."""
-        pipe = dc.proc.abs.op() | dc.proc.abs.op()
-        assert list(pipe.tasks) == ["abs", "abs_2"]
+    def test_the_label_is_the_operation(self):
+        """Or every operation would be labelled `patch_op`."""
+        assert dc.proc.detrend.op("time").node_name == "detrend"
+        assert dc.proc.normalize.op("time").node_name == "normalize"
 
     def test_a_namespaced_operation(self):
         """A package-qualified tag is spelled the way a node name can be."""
@@ -601,7 +594,7 @@ class TestPipeNodeNames:
 
 
 class TestDocuments:
-    """A saved pipe names one class, whatever the operation."""
+    """A saved operation names one class, whatever the operation."""
 
     def test_the_registry_gains_one_tag(self):
         """
@@ -624,26 +617,23 @@ class TestDocuments:
         assert document["params"]["name"] == "pass_filter"
         assert document["params"]["kwargs"]["time"] == [10, 100]
 
-    def test_a_node_which_cannot_be_read_names_itself(self):
-        """
-        A pipe of thirty should not leave the reader hunting for the node.
-
-        The message a missing function gives is worth nothing if it does
-        not say which step of the pipe wanted it.
-        """
-        pipe = dc.proc.detrend.op("time") | dc.proc.normalize.op("time")
-        document = pipe.to_dict()
-        broken = document["tasks"]["normalize"]["params"]
+    def test_a_document_which_cannot_be_read_says_what_to_import(self):
+        """The message is worth nothing if it does not name the function."""
+        document = dc.proc.normalize.op("time").to_dict()
+        broken = document["params"]
         broken["name"], broken["module"] = "nosuchpkg:denoise", "nosuchpkg.filters"
-        with pytest.raises(ParameterError, match="node 'normalize' could not be read"):
-            Pipe.from_dict(document)
+        with pytest.raises(ParameterError, match="nosuchpkg"):
+            PatchOp.from_dict(document)
 
-    def test_a_pipe_of_operations(self, patch):
+    def test_operations_run_in_turn(self, patch):
         """Which is what the operations are for."""
-        pipe = dc.proc.detrend.op("time") | dc.proc.normalize.op("time")
+        ops = [dc.proc.detrend.op("time"), dc.proc.normalize.op("time")]
         expected = patch.detrend("time").normalize("time")
-        assert _same_patch(pipe(patch), expected)
-        assert Pipe.from_dict(pipe.to_dict()) == pipe
+        out = patch
+        for op in ops:
+            out = op(out)
+        assert _same_patch(out, expected)
+        assert [PatchOp.from_dict(x.to_dict()) for x in ops] == ops
 
 
 class TestFingerprintCall:
