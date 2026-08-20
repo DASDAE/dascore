@@ -18,7 +18,14 @@ from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.intervals import interval_masks, normalize_value, value_kind
 from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
-from ._lanes import LANE_CMAP, STRING_CMAP, UNCOVERED_COLOR, WHEEL_ORDER, plot_lanes
+from ._lanes import (
+    LANE_CMAP,
+    STRING_CMAP,
+    UNCOVERED_COLOR,
+    WHEEL_ORDER,
+    _default_label,
+    plot_lanes,
+)
 
 if TYPE_CHECKING:
     from dascore.constants import timeable_types
@@ -234,23 +241,14 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
             }
         )
     for item in path.labels:
-        # A boolean states only membership, which the lane name already
-        # says; anything else is worth reading off the box.
-        value = item.value
-        text = (
-            ""
-            if isinstance(value, bool)
-            else f"{value:g}"
-            if isinstance(value, float)
-            else str(value)
-        )
         rows.append(
             {
                 "lane": item.group,
                 "start": item.start_distance,
                 "end": item.end_distance,
-                "value": value,
-                "label": text,
+                "value": item.value,
+                # The renderer's own rule for what a value reads as.
+                "label": _default_label(item.value),
             }
         )
     return pd.DataFrame(rows)
