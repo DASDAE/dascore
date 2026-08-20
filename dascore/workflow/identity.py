@@ -144,7 +144,14 @@ def new_patch_id() -> str:
     return uuid4().hex
 
 
-def source_patch_id(format_name: str, path: str, key: object = None) -> str:
+def source_patch_id(
+    format_name: str,
+    version: str,
+    path: str,
+    key: object = None,
+    size_bytes: int | None = None,
+    mtime_ns: int | None = None,
+) -> str:
     """
     Return the id of data read from a file.
 
@@ -156,20 +163,46 @@ def source_patch_id(format_name: str, path: str, key: object = None) -> str:
     ----------
     format_name
         The format the reader was using.
+    version
+        The version of that format the file was read at.
     path
-        The resolved path or URI the data came from.
+        The path or URI the data came from, as the archive spells it.
     key
         What names this patch within the file, when a file holds more than
         one. The reader's own key if it has one, else the ordinal.
+    size_bytes
+        The size of the source, when it can be had.
+    mtime_ns
+        When the source was last written, when it can be had.
 
     Notes
     -----
+    Every field is one the index already stores, so a spool can derive the
+    id of a row without going back to the filesystem.
+
+    `size_bytes` and `mtime_ns` are in the id for the reason the index
+    already uses them to decide whether a source changed: without them,
+    data written over a path would silently inherit the id of what it
+    replaced. The price is that a file re-copied to the same path is a new
+    datum, which is the safe way round -- a missed match rather than a
+    wrong one. They are `None` where a source cannot be stat-ed at all, so
+    a stream still hashes to one deterministic answer.
+
     An id derived this way is stable for a given archive laid out the same
     way; it is not stable across hosts, because the path is part of it. A
     format which stores an id -- DASDAE does -- keeps that one instead, and
     those are stable everywhere.
     """
-    return digest({"format": format_name, "path": path, "key": key})
+    return digest(
+        {
+            "format": format_name,
+            "version": version,
+            "path": path,
+            "key": key,
+            "size_bytes": size_bytes,
+            "mtime_ns": mtime_ns,
+        }
+    )
 
 
 def advance(processing_id: str, fingerprint: str) -> str:

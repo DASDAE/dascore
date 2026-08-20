@@ -108,7 +108,7 @@ class TestDirectorySpoolBasics:
         contents = new.get_contents()
         assert (contents["tag"] == "big_gaps").all()
 
-    def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
+    def test_sorted_multi_patch_uses_source_patch_key(self, tmp_path):
         """Sorted directory spool rows should reload the intended source patch."""
         path = tmp_path / "directory"
         path.mkdir()
@@ -186,8 +186,8 @@ class TestLoadPatchFastPath:
         self, one_directory_spool, random_patch, monkeypatch
     ):
         """Multi-patch reads resolve source identity from one dc.read call."""
-        patch_1 = random_patch.update_attrs(_source_patch_id="first")
-        patch_2 = random_patch.update_attrs(_source_patch_id="second")
+        patch_1 = random_patch.update_attrs(_source_patch_key="first")
+        patch_2 = random_patch.update_attrs(_source_patch_key="second")
         reads = []
 
         def _fake_read(**kwargs):
@@ -199,11 +199,11 @@ class TestLoadPatchFastPath:
             "source_path": "path",
             "source_format": "DASDAE",
             "source_version": "1",
-            "source_patch_id": "second",
+            "source_patch_key": "second",
         }
         resolver = one_directory_spool._catalog.resolver
         patch = resolver.resolve(row)
-        assert patch.attrs["_source_patch_id"] == "second"
+        assert patch.attrs["_source_patch_key"] == "second"
         assert len(reads) == 1  # the file is read exactly once
 
     def test_positional_id_reads_whole_source(
@@ -221,7 +221,7 @@ class TestLoadPatchFastPath:
             "source_path": "path",
             "source_format": "DASDAE",
             "source_version": "1",
-            "source_patch_id": "1",
+            "source_patch_key": "1",
         }
         resolver = one_directory_spool._catalog.resolver
         patch = resolver.resolve(row, time=(None, None))

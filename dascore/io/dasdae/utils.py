@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io.core import make_scan_payload
+from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
 from dascore.io.utils import get_exact_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
@@ -29,7 +29,7 @@ from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
-_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_id"}
+_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_key"}
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
 # Root marker set on files whose patch attr namespace holds only true attrs.
@@ -90,12 +90,11 @@ def _save_attrs_and_dims(patch, patch_group):
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
     attr_dict = patch.attrs.model_dump(exclude_unset=True)
-    # Not written yet. An older DASCore reading a file which carries them
-    # treats them as ordinary attrs, and then refuses to merge two patches
-    # whose ids differ -- which is every pair. Persisting them is for the
-    # format version which knows to fold them instead.
-    attr_dict.pop("patch_id", None)
-    attr_dict.pop("processing_id", None)
+    # The ids are written. An older DASCore reads them as ordinary attrs
+    # and then refuses to merge two patches whose ids differ -- which is
+    # every pair -- so chunking such a spool there needs conflict="drop".
+    # Worth it: a stored id is the only one which survives a move, and
+    # everything else DASCore does with a patch already folds them.
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
@@ -328,7 +327,11 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
     else:
         coords = _get_coords(patch_group, dims, {})
         attr_info = attrs
-    attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
+    attr_info["_source_patch_key"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
+    # An id the file carries is the one which survived the round trip;
+    # `read` prefers it to the one it would derive from the path.
+    if stored := attr_info.get("patch_id", ""):
+        attr_info[STORED_PATCH_ID] = stored
     attrs = _get_attrs_class(patch_group).from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
@@ -396,7 +399,7 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
         dims=dims,
         shape=shape,
         dtype=dtype,
-        source_patch_id=group.name.rsplit("/", maxsplit=1)[-1],
+        source_patch_key=group.name.rsplit("/", maxsplit=1)[-1],
     )
 
 

@@ -293,14 +293,14 @@ class TestInit:
         new = dc.Patch(random_patch)
         assert new == random_patch
 
-    def test_patch_summary_from_patch_copies_private_source_patch_id(
+    def test_patch_summary_from_patch_copies_private_source_patch_key(
         self, random_patch
     ):
         """Patch summaries built from patches should expose the private source id."""
-        patch = random_patch.update_attrs(_source_patch_id="node-3")
+        patch = random_patch.update_attrs(_source_patch_key="node-3")
         summary = PatchSummary.from_patch(patch)
-        assert summary.source_patch_id == "node-3"
-        assert summary.attrs["_source_patch_id"] == "node-3"
+        assert summary.source_patch_key == "node-3"
+        assert summary.attrs["_source_patch_key"] == "node-3"
 
     def test_non_time_distance_dims(self):
         """Ensure dimensions other than time/distance work."""
@@ -435,7 +435,7 @@ class TestPatchSummary:
         assert isinstance(step, np.timedelta64)
         assert pd.isnull(step)
 
-    def test_select_from_spool_by_integer_source_patch_id(self, random_patch):
+    def test_select_from_spool_by_integer_source_patch_key(self, random_patch):
         """Integer-like source ids should fall back to positional selection."""
         spool = dc.spool(
             [
@@ -443,7 +443,7 @@ class TestPatchSummary:
                 random_patch.update_attrs(tag="second"),
             ]
         )
-        out = _select_patch_from_spool(spool, source_patch_id="1")
+        out = _select_patch_from_spool(spool, source_patch_key="1")
         assert out.attrs.tag == "second"
 
     def test_select_from_spool_by_generated_name_raises(self, random_patch):
@@ -456,21 +456,21 @@ class TestPatchSummary:
         )
         patch_name = spool[1].get_patch_name()
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id=patch_name)
+            _select_patch_from_spool(spool, source_patch_key=patch_name)
 
-    def test_select_from_single_patch_spool_requires_matching_source_patch_id(
+    def test_select_from_single_patch_spool_requires_matching_source_patch_key(
         self, random_patch
     ):
         """A requested source id must not be ignored on a single-patch spool."""
         spool = dc.spool([random_patch])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="999")
+            _select_patch_from_spool(spool, source_patch_key="999")
 
     def test_select_from_spool_ambiguous_raises(self):
         """Ambiguous spool selection should raise a patch error."""
         spool = dc.examples.get_example_spool("random_das", length=2)
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="not-found")
+            _select_patch_from_spool(spool, source_patch_key="not-found")
 
     def test_flat_dump_excludes_summary_fields(self, random_patch):
         """Excluding a summary field should drop it from all coord outputs."""

@@ -18,7 +18,7 @@ from dascore.constants import ONE_BILLION
 from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
 from dascore.io.core import make_scan_payload
-from dascore.utils.io import LocalPath, _normalize_source_patch_ids, _read_file_header
+from dascore.utils.io import LocalPath, _normalize_source_patch_keys, _read_file_header
 from dascore.utils.time import to_datetime64, to_int
 
 _TimeLimits = tuple[int | None, int | None]
@@ -454,7 +454,7 @@ def _get_read_plan(path, pymseed, wanted_ids, channel):
     source_windows: _SourceWindows = {}
     groups = []
     for group_key, group in _group_segments(summaries):
-        patch_id = _source_patch_id(group_key)
+        patch_id = _source_patch_key(group_key)
         if wanted_ids and patch_id not in wanted_ids:
             continue
         group = [x for x in group if x.source_id in selected_source_ids]
@@ -468,7 +468,7 @@ def _get_read_plan(path, pymseed, wanted_ids, channel):
     return channel_map, groups, source_windows
 
 
-def _source_patch_id(group_key: _TraceGroupKey) -> str:
+def _source_patch_key(group_key: _TraceGroupKey) -> str:
     """Return a stable source patch ID for a MiniSEED group."""
     source_key = ".".join(
         (group_key.network, group_key.location, group_key.seed_channel)
@@ -521,7 +521,7 @@ def _prepare_group(
         "mseed_encoding": first.encoding,
         "mseed_publication_version": first.publication_version,
         "mseed_record_length": first.record_length,
-        "_source_patch_id": _source_patch_id(group_key),
+        "_source_patch_key": _source_patch_key(group_key),
     }
     return _PreparedGroup(segments, first, coords, attrs)
 
@@ -574,15 +574,15 @@ def _scan_payload_from_segments(
         attrs=prepared.attrs,
         coords=coords,
         dtype=prepared.first.dtype,
-        source_patch_id=prepared.attrs["_source_patch_id"],
+        source_patch_key=prepared.attrs["_source_patch_key"],
     )
 
 
 def _get_patches(
-    path, pymseed, time=None, channel=None, source_patch_id=()
+    path, pymseed, time=None, channel=None, source_patch_key=()
 ) -> list[dc.Patch]:
     """Read MiniSEED patches from a path."""
-    wanted_ids = _normalize_source_patch_ids(source_patch_id)
+    wanted_ids = _normalize_source_patch_keys(source_patch_key)
     patches = []
     use_scan_plan = bool(wanted_ids) or channel is not None
     if use_scan_plan:

@@ -304,50 +304,50 @@ class TestMiniSeedRead:
             (1,),
         ]
 
-    def test_read_source_patch_id(self, tmp_path):
-        """source_patch_id filters logical MiniSEED groups."""
+    def test_read_source_patch_key(self, tmp_path):
+        """source_patch_key filters logical MiniSEED groups."""
         path = _write_mseed(
             tmp_path / "mixed.mseed",
             format_version=3,
             sample_rates=[10.0, 20.0, 10.0],
         )
         summaries = dc.scan(path, file_format="MSEED", file_version="3")
-        target = summaries[0].source_patch_id
+        target = summaries[0].source_patch_key
         spool = dc.read(
-            path, file_format="MSEED", file_version="3", source_patch_id=target
+            path, file_format="MSEED", file_version="3", source_patch_key=target
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_id"] == target
+        assert spool[0].attrs["_source_patch_key"] == target
 
-    def test_read_source_patch_id_with_time(self, mseed_v3_path):
-        """source_patch_id from scan works with partial time reads."""
+    def test_read_source_patch_key_with_time(self, mseed_v3_path):
+        """source_patch_key from scan works with partial time reads."""
         target = dc.scan(mseed_v3_path, file_format="MSEED", file_version="3")[
             0
-        ].source_patch_id
+        ].source_patch_key
         time_min = np.datetime64("2024-01-01T00:00:00.200000000")
         time_max = np.datetime64("2024-01-01T00:00:00.500000000")
         spool = dc.read(
             mseed_v3_path,
             file_format="MSEED",
             file_version="3",
-            source_patch_id=target,
+            source_patch_key=target,
             time=(time_min, time_max),
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_id"] == target
+        assert spool[0].attrs["_source_patch_key"] == target
         assert spool[0].shape == (3, 4)
         assert spool[0].get_coord("time").min() == time_min
 
-    def test_read_source_patch_id_with_non_overlapping_time(self, mseed_v3_path):
-        """source_patch_id reads return empty spools for non-overlapping times."""
+    def test_read_source_patch_key_with_non_overlapping_time(self, mseed_v3_path):
+        """source_patch_key reads return empty spools for non-overlapping times."""
         target = dc.scan(mseed_v3_path, file_format="MSEED", file_version="3")[
             0
-        ].source_patch_id
+        ].source_patch_key
         spool = dc.read(
             mseed_v3_path,
             file_format="MSEED",
             file_version="3",
-            source_patch_id=target,
+            source_patch_key=target,
             time=(
                 np.datetime64("2024-01-01T01:00:00"),
                 np.datetime64("2024-01-01T01:00:01"),
@@ -355,8 +355,8 @@ class TestMiniSeedRead:
         )
         assert len(spool) == 0
 
-    def test_source_patch_id_skips_unselected_record_unpack(self):
-        """source_patch_id reads do not decode records outside selected groups."""
+    def test_source_patch_key_skips_unselected_record_unpack(self):
+        """source_patch_key reads do not decode records outside selected groups."""
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10.0),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20.0, fail_unpack=True),
@@ -365,10 +365,10 @@ class TestMiniSeedRead:
         patches = mseed_utils._get_patches(
             "unused",
             _pymseed_for_records(records),
-            source_patch_id=target,
+            source_patch_key=target,
         )
         assert len(patches) == 1
-        assert patches[0].attrs["_source_patch_id"] == target
+        assert patches[0].attrs["_source_patch_key"] == target
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
     def test_channel_filter_skips_unselected_record_unpack(self):
@@ -385,13 +385,13 @@ class TestMiniSeedRead:
         assert len(patches) == 1
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
-    def test_unmatched_source_patch_id_returns_no_patches(self):
+    def test_unmatched_source_patch_key_returns_no_patches(self):
         """Unknown source patch IDs produce no decoded patches."""
         records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
         patches = mseed_utils._get_patches(
             "unused",
             _pymseed_for_records(records),
-            source_patch_id="v3:XX..HSF:1:10:3",
+            source_patch_key="v3:XX..HSF:1:10:3",
         )
         assert patches == []
 
@@ -430,7 +430,7 @@ class TestMiniSeedScan:
         assert summary.dtype == "int32"
         assert summary.source_format == "MSEED"
         assert summary.source_version == "3"
-        assert summary.source_patch_id
+        assert summary.source_patch_key
 
     @pytest.mark.parametrize(
         ("fixture_name", "file_version"),
@@ -446,7 +446,7 @@ class TestMiniSeedScan:
         assert summary.dims == patch_summary.dims
         assert summary.shape == patch_summary.shape
         assert summary.dtype == patch_summary.dtype
-        assert summary.source_patch_id == patch_summary.source_patch_id
+        assert summary.source_patch_key == patch_summary.source_patch_key
         for dim in summary.dims:
             scan_coord = summary.get_coord_summary(dim)
             read_coord = patch_summary.get_coord_summary(dim)
@@ -461,7 +461,7 @@ class TestMiniSeedScan:
         assert summary.dtype == "int32"
         assert summary.source_format == "MSEED"
         assert summary.source_version == "2"
-        assert summary.source_patch_id.startswith("v2:")
+        assert summary.source_patch_key.startswith("v2:")
 
     def test_scan_does_not_unpack_records(self, monkeypatch):
         """Scan uses record headers without decoding sample payloads."""
@@ -656,7 +656,7 @@ class TestMiniSeedUtils:
         patch = mseed_utils._patch_from_segments(group_key, [segment])
         assert tuple(patch.get_coord("channel").values) == (0,)
 
-    def test_source_patch_id_uses_group_key_fields(self):
+    def test_source_patch_key_uses_group_key_fields(self):
         """Source patch IDs are built from the typed MiniSEED group key."""
         group_key = mseed_utils._TraceGroupKey(
             format_version="3",
@@ -667,7 +667,7 @@ class TestMiniSeedUtils:
             sample_rate=10.0,
             sample_count=12,
         )
-        assert mseed_utils._source_patch_id(group_key) == "v3:XX..HSF:10:10:12"
+        assert mseed_utils._source_patch_key(group_key) == "v3:XX..HSF:10:10:12"
 
     def test_detect_format_no_records(self, tmp_path):
         """Files with no records are not MiniSEED."""
@@ -730,11 +730,11 @@ class TestMiniSeedUtils:
         monkeypatch.setattr(mseed_utils, "unpack", _raise_unpack)
         assert not mseed_utils._detect_mseed_v2_header(_mseed_v2_header())
 
-    def test_close_sample_rates_have_distinct_source_patch_ids(self):
+    def test_close_sample_rates_have_distinct_source_patch_keys(self):
         """Full precision sample rates avoid source patch ID collisions."""
         group_a = mseed_utils._TraceGroupKey("3", "XX", "", "HSF", 0, 1.00000001, 10)
         group_b = mseed_utils._TraceGroupKey("3", "XX", "", "HSF", 0, 1.00000002, 10)
-        assert mseed_utils._source_patch_id(group_a) != mseed_utils._source_patch_id(
+        assert mseed_utils._source_patch_key(group_a) != mseed_utils._source_patch_key(
             group_b
         )
 

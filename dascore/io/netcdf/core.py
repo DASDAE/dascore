@@ -199,18 +199,18 @@ class NetCDFCFV18(FiberIO):
             dims = data_array.dims
             shape = data_array.shape
             dtype = str(data_array.dtype)
-            source_patch_id = self._get_source_patch_id(data_var_name)
+            source_patch_key = self._get_source_patch_key(data_var_name)
             coord_manager = self._coord_manager_from_data_array(
                 dataset, data_array, coords, dims, shape
             )
         return [
             make_scan_payload(
-                attrs=attrs | {"_source_patch_id": source_patch_id},
+                attrs=attrs | {"_source_patch_key": source_patch_key},
                 coords=coord_manager,
                 dims=dims,
                 shape=shape,
                 dtype=dtype,
-                source_patch_id=source_patch_id,
+                source_patch_key=source_patch_key,
             )
         ]
 
@@ -225,7 +225,7 @@ class NetCDFCFV18(FiberIO):
             return dc.core.get_coord(data=values, units=units)
         return get_exact_coord(values, units=units)
 
-    def _get_source_patch_id(self, data_var_name):
+    def _get_source_patch_key(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""
         return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
 
@@ -237,8 +237,8 @@ class NetCDFCFV18(FiberIO):
 
     def _patch_from_dataset(self, dataset, data_var_name, data_array):
         """Build one patch from an xarray dataset and selected data variable."""
-        source_patch_id = self._get_source_patch_id(data_var_name)
-        attrs = dict(data_array.attrs) | {"_source_patch_id": source_patch_id}
+        source_patch_key = self._get_source_patch_key(data_var_name)
+        attrs = dict(data_array.attrs) | {"_source_patch_key": source_patch_key}
         if data_array.coords:
             return xarray_to_patch(data_array).update(attrs=attrs)
         coords = self._coord_manager_from_data_array(

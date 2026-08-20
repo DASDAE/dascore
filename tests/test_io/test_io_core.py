@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import io
+import os
+import shutil
 import threading
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
@@ -29,6 +31,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.io.core import (
+    STORED_PATCH_ID,
     FiberIO,
     _FiberIOManager,
     _get_missing_install_name,
@@ -38,15 +41,19 @@ from dascore.io.core import (
     _resolve_read_spool,
     _scan_result_to_summary,
     _select_patch_from_spool,
+    _size_and_mtime,
+    _source_stats,
     _validate_scan_payload,
     is_directory_format,
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
+from dascore.utils.downloader import fetch
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
+from dascore.workflow.identity import source_patch_id
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -438,7 +445,7 @@ class TestScanResultToSummary:
             "dims": patch.dims,
             "shape": patch.shape,
             "dtype": str(patch.data.dtype),
-            "source_patch_id": "node-1",
+            "source_patch_key": "node-1",
         }
         out = _scan_result_to_summary(payload, source_path="some_path")
         assert isinstance(out, dc.PatchSummary)
@@ -446,7 +453,7 @@ class TestScanResultToSummary:
             out.get_coord_summary("time").fingerprint
             == patch.get_coord("time").fingerprint()
         )
-        assert out.source_patch_id == "node-1"
+        assert out.source_patch_key == "node-1"
         assert str(out.source_path) == "some_path"
 
     def test_scan_payload_missing_dtype_raises(self):
@@ -496,31 +503,31 @@ class TestScanResultToSummary:
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)
 
-    def test_summary_source_patch_id_sets_private_attr(self):
+    def test_summary_source_patch_key_sets_private_attr(self):
         """Summary source ids should be copied onto private attrs."""
         summary = dc.PatchSummary(
             attrs=dc.PatchAttrs(tag="x"),
-            source_patch_id="node-1",
+            source_patch_key="node-1",
         )
-        assert summary.source_patch_id == "node-1"
-        assert summary.attrs["_source_patch_id"] == "node-1"
+        assert summary.source_patch_key == "node-1"
+        assert summary.attrs["_source_patch_key"] == "node-1"
 
-    def test_private_attr_source_patch_id_sets_summary(self):
+    def test_private_attr_source_patch_key_sets_summary(self):
         """Private attr source ids should populate the summary field."""
         summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_id="node-2"),
+            attrs=dc.PatchAttrs(tag="x", _source_patch_key="node-2"),
         )
-        assert summary.source_patch_id == "node-2"
-        assert summary.attrs["_source_patch_id"] == "node-2"
+        assert summary.source_patch_key == "node-2"
+        assert summary.attrs["_source_patch_key"] == "node-2"
 
-    def test_summary_source_patch_id_wins_on_conflict(self):
+    def test_summary_source_patch_key_wins_on_conflict(self):
         """Conflicting ids should resolve in favor of the summary field."""
         summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_id="attrs-id"),
-            source_patch_id="summary-id",
+            attrs=dc.PatchAttrs(tag="x", _source_patch_key="attrs-id"),
+            source_patch_key="summary-id",
         )
-        assert summary.source_patch_id == "summary-id"
-        assert summary.attrs["_source_patch_id"] == "summary-id"
+        assert summary.source_patch_key == "summary-id"
+        assert summary.attrs["_source_patch_key"] == "summary-id"
 
 
 class TestFormatManager:
@@ -1058,7 +1065,7 @@ class TestScan:
         scanned = out[0]
         assert isinstance(scanned, dc.PatchSummary)
         assert scanned.dtype == str(random_patch.dtype)
-        assert not scanned.source_patch_id
+        assert not scanned.source_patch_key
 
     def test_scan_payloads_patch_returns_full_coords(self, random_patch):
         """Direct patch payload scans should retain full coordinate values."""
@@ -1083,14 +1090,14 @@ class TestScan:
         assert [payload["attrs"].tag for payload in out] == ["one", "two"]
         assert all(isinstance(payload["coords"], dc.CoordManager) for payload in out)
 
-    def test_scan_multi_patch_includes_source_patch_id(self, tmp_path):
+    def test_scan_multi_patch_includes_source_patch_key(self, tmp_path):
         """Multi-patch scan rows should include a stable source patch id."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "DASDAE", file_version="1")
         out = dc.scan_to_df(path)
-        assert "source_patch_id" in out.columns
-        assert out["source_patch_id"].astype(bool).all()
+        assert "source_patch_key" in out.columns
+        assert out["source_patch_key"].astype(bool).all()
 
     def test_scan_nested_directory(self, nested_directory_with_patches):
         """Ensure scan picks up files in nested directories."""
@@ -1334,7 +1341,7 @@ class TestReloadableSourcePath:
             ("shape", (1, -1)),
             ("dtype", np.dtype("float64")),
             ("dtype", "not-a-dtype"),
-            ("source_patch_id", 1),
+            ("source_patch_key", 1),
             ("source_path", 1),
             ("source_format", Path("format")),
             ("source_version", None),
@@ -1406,7 +1413,7 @@ class TestReloadableSourcePath:
         assert "source_path" not in out[0]
         assert "source_format" not in out[0]
         assert "source_version" not in out[0]
-        assert not out[0]["source_patch_id"]
+        assert not out[0]["source_patch_key"]
 
     def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
         """Default scans should forward exact-coordinate mode to read()."""
@@ -1509,7 +1516,7 @@ class TestReloadableSourcePath:
         assert out[0]["source_format"] == fiber_io.name
         assert out[0]["source_version"] == fiber_io.version
 
-    def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
+    def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_key(
         self, tmp_path, monkeypatch
     ):
         """Default scan should not invent source ids for multi-patch readers."""
@@ -1528,7 +1535,7 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 2
-        assert not any(summary["source_patch_id"] for summary in out)
+        assert not any(summary["source_patch_key"] for summary in out)
 
     @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
@@ -1731,16 +1738,16 @@ class TestIOCoreCoverageEdges:
         """A positional ID cannot resolve an anonymous trimmed singleton."""
         spool = dc.spool([dc.get_example_patch()])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _resolve_read_spool(spool, source_patch_id="1")
+            _resolve_read_spool(spool, source_patch_key="1")
 
     def test_non_unique_patch_resolution_raises(self):
         """An unresolvable source id in a multi-patch read raises clearly."""
         spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="neither-id-nor-index")
+            _select_patch_from_spool(spool, source_patch_key="neither-id-nor-index")
 
-    @pytest.mark.parametrize("source_patch_id", ["", "node-1"])
-    def test_empty_read_raises_missing_patch(self, source_patch_id):
+    @pytest.mark.parametrize("source_patch_key", ["", "node-1"])
+    def test_empty_read_raises_missing_patch(self, source_patch_key):
         """A read trimmed to nothing raises MissingPatchError, not IndexError.
 
         MissingPatchError subclasses IndexError so spool iteration can skip
@@ -1748,14 +1755,14 @@ class TestIOCoreCoverageEdges:
         with or without a requested source id.
         """
         with pytest.raises(MissingPatchError, match="No patch remained"):
-            _select_patch_from_spool(dc.spool([]), source_patch_id=source_patch_id)
+            _select_patch_from_spool(dc.spool([]), source_patch_key=source_patch_key)
 
     def test_single_patch_resolved_by_name(self):
         """A one-patch read resolves when the id matches the patch name."""
         patch = dc.get_example_patch()
         spool = dc.spool([patch])
         resolved = _select_patch_from_spool(
-            spool, source_patch_id=str(patch.get_patch_name())
+            spool, source_patch_key=str(patch.get_patch_name())
         )
         assert resolved == patch
 
@@ -1822,3 +1829,162 @@ class TestConvertAttrUnits:
         with pytest.warns(UserWarning, match="Dropping gauge_length"):
             out = convert_attr_units(attrs, "gauge_length", "m")
         assert "gauge_length" not in out
+
+
+class TestSourceIds:
+    """The id a patch gets from the file it was read out of."""
+
+    @pytest.fixture
+    def dasdae_path(self, random_patch, tmp_path):
+        """A written file, and the patch which was written to it."""
+        path = tmp_path / "one.h5"
+        random_patch.io.write(path, "dasdae")
+        return path
+
+    @pytest.fixture
+    def terra15_path(self):
+        """A file written by something other than DASCore."""
+        return fetch("terra15_das_1_trimmed.hdf5")
+
+    def test_reading_twice_is_the_same_data(self, terra15_path):
+        """Which is the whole point of deriving the id."""
+        first = dc.read(terra15_path)[0]
+        second = dc.read(terra15_path)[0]
+        assert first.attrs.patch_id
+        assert first.attrs.patch_id == second.attrs.patch_id
+
+    def test_the_id_names_the_source(self, terra15_path):
+        """Every field the index keeps, and nothing else."""
+        patch = dc.read(terra15_path)[0]
+        stat = Path(terra15_path).stat()
+        fmt, version = dc.get_format(terra15_path)
+        expected = source_patch_id(
+            fmt,
+            version,
+            str(terra15_path),
+            patch.attrs.get("_source_patch_key", "") or 0,
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
+        assert patch.attrs.patch_id == expected
+
+    def test_a_rewritten_file_is_new_data(self, terra15_path, tmp_path):
+        """Data written over a path does not inherit the id it replaced."""
+        path = tmp_path / "rewritten.hdf5"
+        shutil.copy(terra15_path, path)
+        before = dc.read(path)[0].attrs.patch_id
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        assert dc.read(path)[0].attrs.patch_id != before
+
+    def test_a_stored_id_beats_a_derived_one(self, dasdae_path, tmp_path):
+        """A DASDAE file carries its ids, so they survive being moved."""
+        patch = dc.read(dasdae_path)[0]
+        moved = tmp_path / "moved.h5"
+        patch.io.write(moved, "dasdae")
+        assert dc.read(moved)[0].attrs.patch_id == patch.attrs.patch_id
+
+    def test_the_marker_does_not_survive(self, dasdae_path):
+        """The stored id is consumed, not left lying on the attrs."""
+        patch = dc.read(dasdae_path)[0]
+        assert STORED_PATCH_ID not in dict(patch.attrs)
+
+    def test_an_open_file_is_the_file_it_was_opened_on(self, terra15_path):
+        """Reading by handle is reading the same data as reading by name."""
+        name, version = dc.get_format(terra15_path)
+        by_name = dc.read(terra15_path)[0]
+        with Path(terra15_path).open("rb") as fid:
+            by_handle = dc.read(fid, name, version)[0]
+        assert by_handle.attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_manager_names_what_it_was_built_around(self, terra15_path):
+        """A manager is a way of holding a source, not a source of its own."""
+        by_name = dc.read(terra15_path)[0]
+        with IOResourceManager(terra15_path) as man:
+            assert dc.read(man)[0].attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_source_with_no_path_keeps_its_own_id(self, terra15_path):
+        """Two streams must not derive one id out of having no path."""
+        name, version = dc.get_format(terra15_path)
+        data = Path(terra15_path).read_bytes()
+        streams = (io.BytesIO(data), io.BytesIO(data))
+        ids = {dc.read(x, name, version)[0].attrs.patch_id for x in streams}
+        assert all(ids) and len(ids) == 2
+
+    def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
+        """Or every patch asked for at once would answer to one id."""
+        spool = dc.read(idless_multi_patch)
+        keys = [x.attrs.get("_source_patch_key", "") for x in spool]
+        ids = {
+            x.attrs.patch_id for x in dc.read(idless_multi_patch, source_patch_key=keys)
+        }
+        assert len(ids) == len(keys)
+
+    def test_the_readers_spelling_of_its_format(self, terra15_path):
+        """Two spellings resolve to one reader, so they name one datum."""
+        name, version = dc.get_format(terra15_path)
+        spelled = dc.read(terra15_path, name.lower(), version)[0]
+        assert spelled.attrs.patch_id == dc.read(terra15_path)[0].attrs.patch_id
+
+    def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
+        """Including one under a hidden directory, which is hidden too."""
+        (tmp_path / "member.h5").write_bytes(b"data")
+        before = _source_stats(tmp_path)
+        (tmp_path / ".cache").mkdir()
+        (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
+        assert _source_stats(tmp_path) == before
+
+    def test_a_source_which_will_not_answer(self):
+        """Nothing said is better than fields which pretend to be equal."""
+        assert _source_stats(Path("no/such/file.h5")) == (None, None)
+
+    def test_a_stat_which_counts_in_seconds(self):
+        """Not every filesystem answers in nanoseconds."""
+
+        class _Stat:
+            st_size = 12
+            st_mtime = 1.5
+
+        assert _size_and_mtime(_Stat()) == (12, 1_500_000_000)
+
+    def test_a_directory_format_covers_its_members(self, tmp_path):
+        """A member rewritten in place is not the data which was there."""
+        directory = fetch("dispersion_event.h5").parent
+        stats = _source_stats(directory)
+        assert all(x is not None for x in stats)
+        # The directory's own stat says nothing about a rewritten member.
+        assert stats != _size_and_mtime(Path(directory).stat())
+
+    @pytest.fixture
+    def idless_multi_patch(self, tmp_path):
+        """
+        A multi-patch file whose patches carry no ids of their own.
+
+        Built with the ids turned off, which is what a file written
+        before they existed holds, so the reader has to derive them.
+        """
+        path = tmp_path / "multi.h5"
+        with config_context(patch_provenance="disabled"):
+            first = dc.get_example_patch().update_attrs(tag="first")
+            second = dc.get_example_patch().update_attrs(tag="second")
+            assert not first.attrs.patch_id
+            dc.write(dc.spool([first, second]), path, "dasdae")
+        return path
+
+    def test_each_patch_of_a_file_is_its_own_data(self, idless_multi_patch):
+        """Or every patch of a file would answer to one id."""
+        ids = {patch.attrs.patch_id for patch in dc.read(idless_multi_patch)}
+        assert len(ids) == 2
+
+    def test_one_patch_read_by_key(self, idless_multi_patch):
+        """Asking for one patch gives the id reading them all would."""
+        spool = dc.read(idless_multi_patch)
+        wanted = spool[1]
+        key = wanted.attrs.get("_source_patch_key", "")
+        alone = dc.read(idless_multi_patch, source_patch_key=key)[0]
+        assert alone.attrs.patch_id == wanted.attrs.patch_id
+
+    def test_disabled_mints_nothing(self, terra15_path):
+        """The config which turns the ids off turns this off too."""
+        with config_context(patch_provenance="disabled"):
+            assert dc.read(terra15_path)[0].attrs.patch_id == ""

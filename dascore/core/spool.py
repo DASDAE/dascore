@@ -184,7 +184,7 @@ class Spool(NamespaceOwner):
         "source_path",
         "source_format",
         "source_version",
-        "source_patch_id",
+        "source_patch_key",
     )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
@@ -1974,7 +1974,7 @@ class Spool(NamespaceOwner):
             drop = [
                 "source_path",
                 "_patch_id",
-                "source_patch_id",
+                "source_patch_key",
                 "source_format",
                 "source_version",
                 "_modified",

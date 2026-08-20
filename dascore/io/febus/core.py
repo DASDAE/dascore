@@ -22,7 +22,7 @@ from dascore.utils.io import TextReader
 
 from .a1utils import (
     _get_febus_version_str,
-    _get_source_patch_id,
+    _get_source_patch_key,
     _read_febus,
     _yield_attrs_coords,
 )
@@ -110,14 +110,14 @@ class Febus2(FiberIO):
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
             attrs = FebusPatchAttrs.from_dict(attr).update(
-                _source_patch_id=_get_source_patch_id(feb)
+                _source_patch_key=_get_source_patch_key(feb)
             )
             out.append(
                 make_scan_payload(
                     attrs=attrs,
                     coords=cm,
                     dtype=str(feb.zone[feb.data_name].dtype),
-                    source_patch_id=attrs["_source_patch_id"],
+                    source_patch_key=attrs["_source_patch_key"],
                 )
             )
         return out
@@ -127,7 +127,7 @@ class Febus2(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
-        source_patch_id=(),
+        source_patch_key=(),
         **kwargs,
     ) -> dc.Spool:
         """Read a febus spool of patches."""
@@ -135,7 +135,7 @@ class Febus2(FiberIO):
             resource,
             time=time,
             distance=distance,
-            source_patch_id=source_patch_id,
+            source_patch_key=source_patch_key,
             attr_cls=FebusPatchAttrs,
         )
         return dc.spool(patches)

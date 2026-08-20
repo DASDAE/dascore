@@ -585,7 +585,7 @@ class SQLiteIndexBackend:
                         (
                             patch_id,
                             source_id,
-                            patch.source_patch_id,
+                            patch.source_patch_key,
                             patch.dims,
                             patch.dtype,
                             patch.time_min,

@@ -47,31 +47,48 @@ class TestNewDataId:
         assert int(made, 16) >= 0
 
 
+# What a file's identity is made of, and one such identity.
+_FIELDS = ("format_name", "version", "path", "key", "size_bytes", "mtime_ns")
+_SOURCE = ("DASDAE", "1", "/data/one.h5", 0, 40, 12345)
+
+
 class TestSourceDataId:
     """Data read from a file."""
 
     def test_it_is_derived(self):
         """Reading the same file twice is reading the same data."""
-        first = source_patch_id("DASDAE", "/data/one.h5", 0)
-        assert first == source_patch_id("DASDAE", "/data/one.h5", 0)
+        first = source_patch_id(*_SOURCE)
+        assert first == source_patch_id(*_SOURCE)
 
     @pytest.mark.parametrize(
-        ("format_name", "path", "key"),
+        "changed",
         [
-            ("TERRA15", "/data/one.h5", 0),
-            ("DASDAE", "/data/two.h5", 0),
-            ("DASDAE", "/data/one.h5", 1),
-            ("DASDAE", "/data/one.h5", None),
+            {"format_name": "TERRA15"},
+            {"version": "2"},
+            {"path": "/data/two.h5"},
+            {"key": 1},
+            {"key": None},
+            {"size_bytes": 41},
+            {"mtime_ns": 999},
+            {"size_bytes": None},
+            {"mtime_ns": None},
         ],
     )
-    def test_every_part_counts(self, format_name, path, key):
-        """The format, the path and the key each name different data."""
-        base = source_patch_id("DASDAE", "/data/one.h5", 0)
-        assert source_patch_id(format_name, path, key) != base
+    def test_every_part_counts(self, changed):
+        """Each field names data the others would have called the same."""
+        fields = dict(zip(_FIELDS, _SOURCE, strict=True)) | changed
+        assert source_patch_id(**fields) != source_patch_id(*_SOURCE)
 
     def test_a_key_may_be_anything_encodable(self):
         """A reader names its patches however it likes."""
-        assert source_patch_id("X", "/a", "channel-3") != source_patch_id("X", "/a", 3)
+        named = source_patch_id("X", "1", "/a", "channel-3")
+        assert named != source_patch_id("X", "1", "/a", 3)
+
+    def test_a_source_which_cannot_be_stat_ed(self):
+        """Missing stats are a weaker id, not a different kind of one."""
+        made = source_patch_id("X", "1", "/a", 0)
+        assert made == source_patch_id("X", "1", "/a", 0, None, None)
+        assert len(made) == len(source_patch_id(*_SOURCE))
 
 
 class TestAdvance:

@@ -21,11 +21,11 @@ from dascore.models import DascoreBaseModel
 from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 
-def normalize_source_patch_id(value: Any) -> str:
+def normalize_source_patch_key(value: Any) -> str:
     """
-    Return a source patch id as a clean string ("" when missing).
+    Return a source patch key as a clean string ("" when missing).
 
-    Missing ids arrive as None, empty strings, pandas NaN/NaT, or numpy
+    Missing keys arrive as None, empty strings, pandas NaN/NaT, or numpy
     scalars. pandas NaN is truthy, so a plain ``value or ""`` does not
     normalize it — every conversion site must go through this helper to
     avoid the NaN-truthiness bug the catalog resolver already had to fix.
@@ -140,15 +140,17 @@ def _normalize_coord_summary_map(
     }
 
 
-def _normalize_source_patch_id(
-    attrs: PatchAttrs, source_patch_id: Any = ""
+def _normalize_source_patch_key(
+    attrs: PatchAttrs, source_patch_key: Any = ""
 ) -> tuple[PatchAttrs, str]:
     """Normalize summary and private attr source ids to one value."""
-    summary_source_patch_id = normalize_source_patch_id(source_patch_id)
-    attrs_source_patch_id = normalize_source_patch_id(attrs.get("_source_patch_id", ""))
-    normalized = summary_source_patch_id or attrs_source_patch_id
+    summary_source_patch_key = normalize_source_patch_key(source_patch_key)
+    attrs_source_patch_key = normalize_source_patch_key(
+        attrs.get("_source_patch_key", "")
+    )
+    normalized = summary_source_patch_key or attrs_source_patch_key
     if normalized:
-        attrs = attrs.update(_source_patch_id=normalized)
+        attrs = attrs.update(_source_patch_key=normalized)
     return attrs, normalized
 
 
@@ -162,10 +164,10 @@ def _build_patch_summary_payload(
     source_path="",
     source_format="",
     source_version="",
-    source_patch_id="",
+    source_patch_key="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
-    attrs, source_patch_id = _normalize_source_patch_id(attrs, source_patch_id)
+    attrs, source_patch_key = _normalize_source_patch_key(attrs, source_patch_key)
     dims = dims or _infer_dims_from_coords(coords)
     # Only preserve source metadata when the caller already supplied a cheap,
     # path-like reload target. Validation should not touch the filesystem.
@@ -193,7 +195,7 @@ def _build_patch_summary_payload(
         "source_path": normalized_source_path,
         "source_format": normalized_source_format,
         "source_version": normalized_source_version,
-        "source_patch_id": source_patch_id,
+        "source_patch_key": source_patch_key,
     }
 
 
@@ -210,7 +212,7 @@ class PatchSummary(DascoreBaseModel):
     source_path: path_types = ""
     source_format: str = ""
     source_version: str = ""
-    source_patch_id: str = ""
+    source_patch_key: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -235,7 +237,7 @@ class PatchSummary(DascoreBaseModel):
                 source_path=data.get("source_path", data.get("path", "")),
                 source_format=data.get("source_format", data.get("file_format", "")),
                 source_version=data.get("source_version", data.get("file_version", "")),
-                source_patch_id=data.get("source_patch_id", ""),
+                source_patch_key=data.get("source_patch_key", ""),
             )
         msg = (
             "PatchSummary requires structured `attrs`/`coords` input. "
@@ -259,7 +261,7 @@ class PatchSummary(DascoreBaseModel):
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.data.dtype)),
-            source_patch_id=patch.attrs.get("_source_patch_id", ""),
+            source_patch_key=patch.attrs.get("_source_patch_key", ""),
         )
 
     def dump_structured(self) -> dict[str, Any]:
@@ -282,7 +284,7 @@ class PatchSummary(DascoreBaseModel):
             "source_path": str(self.source_path) if self.source_path else "",
             "source_format": self.source_format,
             "source_version": self.source_version,
-            "source_patch_id": self.source_patch_id,
+            "source_patch_key": self.source_patch_key,
             "coord_names": ",".join(self.coords),
         }
         out.update(

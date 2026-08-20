@@ -359,7 +359,7 @@ def patch_function(
     >>>
     >>> # 7. Every patch function builds the operation it is with `.op`:
     >>> # the same call said as a task, which can be compared,
-    >>> # fingerprinted, written to a file and joined into a pipe.
+    >>> # fingerprinted, and written to a file.
     >>> patch = dc.get_example_patch()
     >>> op = dc.proc.normalize.op(dim="time")
     >>> assert op(patch).equals(patch.normalize(dim="time"))

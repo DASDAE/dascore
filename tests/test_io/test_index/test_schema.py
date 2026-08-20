@@ -59,7 +59,7 @@ class TestSchemaValidation:
         # on the NOT NULL check, which would pass with no FK declared.
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
                 "VALUES (1, 999, '0', 'time')"
             )
         backend.close()
@@ -74,7 +74,7 @@ class TestSchemaValidation:
         )
         with pytest.raises(sqlite3.IntegrityError, match="dims"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
                 "VALUES (1, 1, '0', NULL)"
             )
         backend.close()

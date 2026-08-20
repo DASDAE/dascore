@@ -31,7 +31,7 @@ from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
 # Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 9
+INDEX_VERSION = 10
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -102,7 +102,7 @@ class PatchRow(NamedTuple):
 
     patch_id: int
     source_id: int
-    source_patch_id: str
+    source_patch_key: str
     dims: str
     dtype: str  # the data array's dtype, eg "float64"
     time_min: int | None  # epoch ns; NULL for relative-time patches
@@ -230,7 +230,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             # today; it states the invariant where the schema states its
             # other invariants, for a writer which does not yet exist.
             "CHECK (dims IS NOT NULL)",
-            "UNIQUE (source_id, source_patch_id)",
+            "UNIQUE (source_id, source_patch_key)",
             "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
         ),
         "attrs": (
@@ -264,7 +264,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         # storage tables
         "patch_id",
         "source_id",
-        "source_patch_id",
+        "source_patch_key",
         "source_path",
         "source_format",
         "format_version",
@@ -324,7 +324,7 @@ SPOOL_PRIVATE_RENAMES = MappingProxyType({"patch_id": "_patch_id", "dtype": "_dt
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
 # coord_name), sources(base_uri, source_path), patches(source_id,
-# source_patch_id), coord_defs(def_key) — and duplicating them measured
+# source_patch_key), coord_defs(def_key) — and duplicating them measured
 # ~25% extra file size and slower writes for no query gain.
 INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
 
