@@ -1235,6 +1235,18 @@ class TestConcatenateKind:
         assert out.get_contents()["time_max"].iloc[0] == time.max()
         assert out[0].shape[1] == base.shape[1]
 
+    def test_selection_cannot_settle_auxiliary_coordinates(self, mixed_kind):
+        """A trimmed auxiliary coordinate has no envelope to decide by."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        other = other.update_coords(latitude=("distance", np.ones(n)))
+        selected = dc.spool([first, other]).select(distance=(5, 250))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = selected.concatenate(time=None)
+        assert out[0].shape[1] == first.shape[1]
+
     def test_each_output_has_its_own_baseline(self, mixed_kind):
         """Gates are applied per output against that output's first member."""
         first, other = mixed_kind

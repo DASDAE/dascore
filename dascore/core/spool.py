@@ -1800,9 +1800,7 @@ class Spool(NamespaceOwner):
             group_rows = _concat_compatible_rows(
                 rows.iloc[start : start + count], dim, check_behavior, stale
             )
-            if group_rows.empty:
-                continue
-            output_id += 1
+            output_id += 1  # a group's first row is always admitted
             members = pd.DataFrame(
                 {
                     "output_id": output_id,

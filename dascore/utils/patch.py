@@ -1379,8 +1379,6 @@ def _concat_compatible_rows(
     and a coordinate which cannot be decided that way is not admitted.
     """
     validate_warn_level(check_behavior)
-    if df.empty:
-        return df
     names = [x for x in get_config().patch_kind_attrs if x in df.columns]
     first = df.iloc[0]
     # every public coordinate other than the concatenated one must keep its
