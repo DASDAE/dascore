@@ -1,9 +1,10 @@
 """
 Tests for hive-style path attributes on directory spools.
 
-key=value path segments (directories and file names) become string
-attrs in the index, override file-declared attrs, stamp onto loaded
-patches, and survive directory renames without content rescans.
+key=value directory segments become string attrs in the index,
+override file-declared attrs, stamp onto loaded patches, and survive
+directory renames without content rescans. The source's own name --
+the last path segment -- is never parsed.
 """
 
 from __future__ import annotations
@@ -38,11 +39,11 @@ def scan_calls(monkeypatch):
 
 @pytest.fixture()
 def hive_dir(tmp_path):
-    """One patch under network=XX/station=A with filename attrs."""
-    sub = tmp_path / "network=XX" / "station=A"
+    """One patch under network=XX/station=A/cable=north__tag=raw."""
+    sub = tmp_path / "network=XX" / "station=A" / "cable=north__tag=raw"
     sub.mkdir(parents=True)
     patch = dc.get_example_patch()
-    patch.io.write(sub / "cable=north__tag=raw.h5", "dasdae")
+    patch.io.write(sub / "das_file.h5", "dasdae")
     return tmp_path
 
 
@@ -62,10 +63,25 @@ class TestParseHivePathAttrs:
         out = parse_hive_path_attrs("network=XX/station=A/file.h5")
         assert out == {"network": "XX", "station": "A"}
 
-    def test_filename_pairs(self):
-        """The file name participates, extension stripped, __ separated."""
-        out = parse_hive_path_attrs("cable=north__tag=raw.h5")
+    def test_several_pairs_in_one_segment(self):
+        """One directory can hold several __-separated pairs."""
+        out = parse_hive_path_attrs("cable=north__tag=raw/file.h5")
         assert out == {"cable": "north", "tag": "raw"}
+
+    def test_source_name_is_not_parsed(self):
+        """The last segment names the source, so it contributes nothing."""
+        assert parse_hive_path_attrs("cable=north.h5") == {}
+        assert parse_hive_path_attrs("dir/cable=north") == {}
+
+    def test_value_ending_in_an_extension_survives(self):
+        """
+        A directory value keeps a trailing dotted token.
+
+        Telling "XX.R2D1..RAW" from a file extension is the ambiguity
+        which keeps the source's own name out of the parse.
+        """
+        out = parse_hive_path_attrs("acquisition_key=XX.R2D1..RAW/f.h5")
+        assert out == {"acquisition_key": "XX.R2D1..RAW"}
 
     def test_percent_decoding(self):
         """Keys/values decode after splitting so %3D survives."""
@@ -97,16 +113,16 @@ class TestParseHivePathAttrs:
         assert parse_hive_path_attrs("a=b=c/f.h5") == {"a": "b=c"}
 
     def test_numeric_value_keeps_fraction(self):
-        """A trailing .5 is a value fragment, not an extension."""
+        """Nothing is stripped from a directory value."""
         assert parse_hive_path_attrs("depth=1.5/f.h5") == {"depth": "1.5"}
-        assert parse_hive_path_attrs("depth=1.5") == {"depth": "1.5"}
+        assert parse_hive_path_attrs("depth=1.5/deeper/f.h5") == {"depth": "1.5"}
 
 
 class TestHiveIndexing:
     """Hive attrs land in the index and drive selection."""
 
     def test_contents_columns(self, hive_spool):
-        """Directory and filename attrs appear as string columns."""
+        """Every directory segment appears as a string column."""
         df = hive_spool.get_contents()
         row = df.iloc[0]
         assert row["network"] == "XX"
@@ -263,18 +279,18 @@ class TestMoveDetection:
         assert list(df["_patch_id"]) == list(df_before["_patch_id"])
         assert updated[0].attrs.station == "Q"
 
-    def test_file_rename_adds_attr_no_rescan(self, hive_spool, hive_dir, scan_calls):
-        """Adding a key via the file name is also a pure move."""
-        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw.h5"
-        old.rename(old.with_name("cable=north__tag=raw__phase=2.h5"))
+    def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):
+        """Adding a key to an existing segment never re-reads contents."""
+        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
+        old.rename(old.with_name("cable=north__tag=raw__phase=2"))
         updated = hive_spool.update(progress=None)
         assert not scan_calls
         assert updated.get_contents()["phase"].iloc[0] == "2"
 
     def test_removed_key_triggers_rescan(self, hive_spool, hive_dir, scan_calls):
         """Dropping a hive key needs the file's own value back: rescan."""
-        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw.h5"
-        old.rename(old.with_name("cable=north.h5"))
+        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
+        old.rename(old.with_name("cable=north"))
         updated = hive_spool.update(progress=None)
         assert len(scan_calls) == 1
         df = updated.get_contents()

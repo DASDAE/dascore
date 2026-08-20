@@ -30,7 +30,7 @@ The current schema version is validated before any mutation. An unrelated or inc
 
 ## Hive-style path attributes
 
-Stored source paths are parsed for `key=value` pairs (each directory segment, and `__`-separated pairs in any segment including the extension-stripped file name). The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
+Stored source paths are parsed for `key=value` pairs (each directory segment containing the source, with `__`-separated pairs allowed in a segment). The last segment names the source itself and is never parsed: a file extension is indistinguishable from a value ending in one, and `acquisition_key=XX.R2D1..RAW` above is exactly that ambiguity. The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
 
 Renames are detected during a directory update by exact `(mtime_ns, size_bytes)` stat identity (the rename-invariant manifest signature for directory-format units) between a disappeared and a brand-new path, each unique on its side. A detected move rewrites the source path and its path-derived attr values in SQL without re-reading file contents, so renaming a partition directory over a large archive is cheap. A rename that *removes* a hive key falls back to a rescan — the file's own value for that attr is only recoverable by reading it — and ambiguous stat matches also rescan rather than guess.
 
@@ -43,11 +43,11 @@ import dascore as dc
 root = Path(tempfile.mkdtemp())
 (root / "acquisition_key=XX.R2D1..RAW" / "cable=A").mkdir(parents=True)
 sub = root / "acquisition_key=XX.R2D1..RAW" / "cable=A"
-dc.get_example_patch().io.write(sub / "tag=raw.h5", "DASDAE")
+dc.get_example_patch().io.write(sub / "das_file.h5", "DASDAE")
 
 spool = dc.spool(root).update()
 row = spool.get_contents().iloc[0]
-assert (row["acquisition_key"], row["cable"], row["tag"]) == ("XX.R2D1..RAW", "A", "raw")
+assert (row["acquisition_key"], row["cable"]) == ("XX.R2D1..RAW", "A")
 assert spool[0].attrs.get("cable") == "A"
 
 # a directory rename is a pure metadata rewrite

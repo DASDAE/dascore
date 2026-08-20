@@ -519,7 +519,8 @@ def summaries_to_records(
             store_path = posix_path[len(root_prefix) :].lstrip("/") or "."
             # Hive-style key=value directory segments become string attrs
             # that override same-named file attrs (renaming a directory is
-            # the user's way of correcting metadata).
+            # the user's way of correcting metadata). The source's own
+            # name never contributes; see parse_hive_path_attrs.
             path_attrs = hive_path_attrs(store_path) or None
             if path_attrs:
                 typed = hive_typed_attrs(path_attrs)

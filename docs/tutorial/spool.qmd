@@ -88,7 +88,7 @@ It is best not to delete files once added to a directory managed by DASCore.
 
 ### Path attributes (hive-style directories)
 
-Directory spools parse `key=value` pairs out of the paths inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`acquisition_key=XX.R2D1..RAW/`), and any segment — including the file name, whose extension is ignored — can hold several separated by `__` (the same separator DASCore's default patch names use). The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory (or file) is how you attach or correct metadata without rewriting data.
+Directory spools parse `key=value` pairs out of the directories inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`acquisition_key=XX.R2D1..RAW/`), or several separated by `__` (the same separator DASCore's default patch names use), as in `cable=north__tag=raw/`. The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory is how you attach or correct metadata without rewriting data.
 
 ```{python}
 import tempfile
@@ -99,7 +99,7 @@ import dascore as dc
 # Build a small hive-partitioned directory of DAS files.
 data_path = Path(tempfile.mkdtemp()) / "experiment=demo" / "cable=north"
 data_path.mkdir(parents=True)
-dc.get_example_patch().io.write(data_path / "tag=raw.h5", "DASDAE")
+dc.get_example_patch().io.write(data_path / "das_file.h5", "DASDAE")
 
 spool = dc.spool(data_path.parent.parent).update()
 df = spool.get_contents()
@@ -109,7 +109,7 @@ assert len(spool.select(cable="north")) == 1
 # The loaded patch carries the path attributes too.
 patch = spool[0]
 assert patch.attrs["experiment"] == "demo"
-assert patch.attrs.tag == "raw"
+assert patch.attrs["cable"] == "north"
 ```
 
 Renaming a partition directory and calling `update()` refreshes the affected attributes by rewriting index rows — file contents are not re-read, so this stays fast even for very large directories.
@@ -123,6 +123,7 @@ assert spool.get_contents()["experiment"].iloc[0] == "final"
 
 A few details worth knowing:
 
+- Only the directories *inside* the spool are parsed. The spool's own root contributes nothing, so `dc.spool(".../experiment=demo")` does not pick up `experiment`; point the spool at a parent to keep that partition. File names are not parsed either — an extension cannot be told apart from a value that ends in one, so a name like `acquisition_key=XX.R2D1..RAW` would be ambiguous.
 - Values are always strings; `select` supports equality, collections, unix-style globs, and regular expressions on them.
 - Removing a `key=value` pair from a path triggers a rescan of the affected files (the file's own value has to be recovered), while adding or changing pairs does not.
 - A path key that matches a coordinate name (e.g. `distance=...`) resolves attrs-first in bare `select` kwargs; use the `_coords` argument to target the coordinate explicitly.
