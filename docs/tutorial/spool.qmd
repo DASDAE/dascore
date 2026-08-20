@@ -132,6 +132,19 @@ index_array = np.array([2, 0])
 new = spool[index_array]
 ```
 
+A pandas Series or a list works the same way. Since the rows of [`get_contents`](`dascore.core.spool.Spool.get_contents`) line up with the patches, a filter on that dataframe is a boolean selector for the spool:
+
+```{python}
+import dascore as dc
+
+spool = dc.get_example_spool("diverse_das")
+df = spool.get_contents()
+
+# Keep the patches whose tag is "some_tag" (the same as a select).
+new = spool[df["tag"] == "some_tag"]
+assert len(new) == (df["tag"] == "some_tag").sum()
+```
+
 # get_contents
 
 The [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) method returns a dataframe listing the spool contents. This method may not be supported on all spools, especially those interfacing with large remote resources.

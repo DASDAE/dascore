@@ -323,6 +323,29 @@ class TestSpoolBoolArraySelect:
         df2 = random_spool.get_contents()[bool_array]
         assert df1.equals(df2)
 
+    def test_bool_series_from_contents(self, diverse_spool):
+        """A mask built from get_contents should select like a select."""
+        df = diverse_spool.get_contents()
+        mask = df["tag"] == "some_tag"
+        assert 0 < mask.sum() < len(mask)
+        out = diverse_spool[mask]
+        expected = diverse_spool.select(tag="some_tag")
+        assert len(out) == len(expected) == mask.sum()
+        for patch, expected_patch in zip(out, expected, strict=True):
+            assert patch.equals(expected_patch)
+
+    def test_bool_list(self, random_spool):
+        """A list of bools should work like a bool array."""
+        mask = [i != 1 for i in range(len(random_spool))]
+        out = random_spool[mask]
+        assert out == random_spool[np.array(mask)]
+
+    def test_wrong_length_raises(self, random_spool):
+        """A mask which doesn't have one value per patch is an error."""
+        mask = np.ones(len(random_spool) + 1, dtype=np.bool_)
+        with pytest.raises(ParameterError, match="one per patch"):
+            random_spool[mask]
+
 
 class TestSpoolIntArraySelect:
     """Tests for selecting patches using an integer array."""
@@ -352,6 +375,13 @@ class TestSpoolIntArraySelect:
         out = random_spool[array]
         assert out[0] == random_spool[-1]
         assert out[-1] == random_spool[0]
+
+    def test_int_series_and_list(self, random_spool):
+        """A pandas Series or list of ints should select by position."""
+        indices = [len(random_spool) - 1, 0]
+        expected = random_spool[np.array(indices)]
+        assert random_spool[indices] == expected
+        assert random_spool[pd.Series(indices)] == expected
 
 
 class TestSpoolIterable:
