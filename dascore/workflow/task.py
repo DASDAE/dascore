@@ -32,6 +32,7 @@ import warnings
 import weakref
 from collections.abc import Callable, Mapping
 from functools import cached_property
+from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from pydantic import ConfigDict, model_validator
@@ -55,6 +56,8 @@ from dascore.workflow.serialize import (
     digest,
     encode,
     model_values,
+    read_workflow,
+    write_workflow,
 )
 
 # The keys a task's document holds beside its parameters.
@@ -207,6 +210,27 @@ class Task(DascoreBaseModel):
             key: decode(value) for key, value in document.get(_PARAMS_KEY, {}).items()
         }
         return task_class(**params)
+
+    def save(self, path: str | Path) -> Path:
+        """
+        Write this task to a file, and return where it was written.
+
+        The suffix picks the format; see
+        [`write_workflow`](`dascore.workflow.serialize.write_workflow`).
+        """
+        return write_workflow(self.to_dict(), Path(path))
+
+    @classmethod
+    def load(cls, path: str | Path) -> Task:
+        """
+        Return the task a file holds; see
+        [`save`](`dascore.workflow.task.Task.save`).
+
+        The task is named by its registered tag, so reading a file never
+        imports whatever it happens to name -- which also means the class
+        has to be defined at module level and already imported.
+        """
+        return cls.from_dict(read_workflow(Path(path)))
 
     def _params(self) -> dict[str, Any]:
         """Return this task's parameters, as the objects they are."""

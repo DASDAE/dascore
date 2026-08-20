@@ -717,3 +717,35 @@ class TestTag:
     def test_task_tag(self):
         """A task outside dascore is namespaced by its package."""
         assert ScaleTask(factor=1).tag == "tests:ScaleTask"
+
+
+class TestSaveAndLoad:
+    """A task written to a file and read back."""
+
+    @pytest.fixture
+    def task(self):
+        """A task whose class a document can name."""
+        return ScaleTask(factor=2)
+
+    @pytest.mark.parametrize("name", ["run.yaml", "run.yml", "run.json", "run"])
+    def test_a_round_trip(self, task, tmp_path, name):
+        """The suffix picks the format; a bare name writes JSON."""
+        path = task.save(tmp_path / name)
+        assert Task.load(path) == task
+
+    def test_yaml_is_written_as_yaml(self, task, tmp_path):
+        """Or the suffix would be a lie about what the file holds."""
+        text = (task.save(tmp_path / "run.yaml")).read_text()
+        assert text.startswith("object_type:")
+
+    def test_a_suffix_which_names_no_format(self, task, tmp_path):
+        """Refused rather than guessed at."""
+        with pytest.raises(ParameterError, match="names no format"):
+            task.save(tmp_path / "run.txt")
+
+    def test_a_file_which_holds_no_task(self, tmp_path):
+        """A readable file which is not a document says so."""
+        path = tmp_path / "run.json"
+        path.write_text("[1, 2, 3]")
+        with pytest.raises(ParameterError):
+            Task.load(path)
