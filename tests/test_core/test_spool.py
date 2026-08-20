@@ -1291,6 +1291,23 @@ class TestConcatenateKind:
         assert out.get_contents()["time_max"].iloc[0] == metres.get_coord("time").max()
         assert out[0].shape == metres.shape
 
+    def test_plan_units_bind_to_the_first_known(self, mixed_kind):
+        """The plan's units baseline is the first known one, as assembly's is."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        time = other.get_coord("time")
+        third = other.update_coords(time_min=time.max() + time.step)
+        bare, metres, km = (
+            first.set_units(None),
+            other.set_units("m"),
+            third.set_units("km"),
+        )
+        with pytest.warns(UserWarning, match="data units"):
+            out = dc.spool([bare, metres, km]).concatenate(time=None)
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        assert out[0].shape[1] == 2 * first.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
+
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""
         first, other = mixed_kind

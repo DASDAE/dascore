@@ -1392,7 +1392,8 @@ def _concat_compatible_rows(
         for x in df.columns
         if x.endswith("_def_key") and not x.startswith("__") and x != f"_{dim}_def_key"
     ]
-    run, keep = _KindRun(), []
+    run, keep, units_run = _KindRun(), [], None
+    has_units = "data_units" in df.columns
     for _, row in df.iterrows():
         kind = {x: _kind_value(row[x]) for x in names}
         ok = run.admits(kind, check_behavior)
@@ -1404,7 +1405,7 @@ def _concat_compatible_rows(
             # as concatenate_patches: different dimensions are never skipped
             msg = "Cannot concatenate patches with different dimensions."
             raise PatchCoordinateError(msg)
-        if ok and (structure or "data_units" in df.columns):
+        if ok and (structure or has_units):
             # only coordinates both rows have are compared, as check_coords
             # compares the shared coordinates
             differing = [
@@ -1416,10 +1417,9 @@ def _concat_compatible_rows(
                     or _values_equal(row[x], first[x])
                 )
             ]
-            if not differing and "data_units" in df.columns:
-                pair = (row["data_units"], first["data_units"])
-                units = [get_quantity(x) for x in pair]
-                if None not in units and units[0] != units[1]:
+            if not differing and has_units:
+                units = get_quantity(row["data_units"])
+                if not _data_units_agree(units_run, units, "ignore"):
                     differing = ["data_units"]
             if differing:
                 msg = (
@@ -1441,6 +1441,8 @@ def _concat_compatible_rows(
         keep.append(ok)
         if ok:
             run.add(kind)
+            if has_units and units_run is None:
+                units_run = get_quantity(row["data_units"])
     return df if all(keep) else df[keep]
 
 
@@ -1467,10 +1469,15 @@ def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> b
     validate_warn_level(check_behavior)
     units1 = get_quantity(patch1.attrs.data_units)
     units2 = get_quantity(patch2.attrs.data_units)
-    if units1 is None or units2 is None or units1 == units2:
+    return _data_units_agree(units1, units2, check_behavior)
+
+
+def _data_units_agree(known, units, check_behavior) -> bool:
+    """Known, different units disagree; a missing one agrees with anything."""
+    if known is None or units is None or known == units:
         return True
     msg = (
-        f"Patches are not compatible: data units differ ({units1} and {units2}); "
+        f"Patches are not compatible: data units differ ({known} and {units}); "
         "convert one with Patch.convert_units first."
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
@@ -1777,6 +1784,8 @@ def concatenate_patches(
         # Different kinds are skipped before anything else is asked of them;
         # a patch binds the run's kind only once its coordinates pass too.
         run = _KindRun()
+        # the units the run has settled on: the first admitted member's known ones
+        units_run = None
         # Get dim name and such
         first_dims = first_patch.dims
         new_dim = dim not in first_dims
@@ -1796,9 +1805,11 @@ def concatenate_patches(
                 dim_to_ignore=dim,
                 ignore_dim_eq_shape=False,
             )
-            units_ok = coords_ok and check_data_units(first_patch, p, check_behavior)
+            units = get_quantity(p.attrs.data_units)
+            units_ok = coords_ok and _data_units_agree(units_run, units, check_behavior)
             if units_ok:
                 run.add(kind)
+                units_run = units_run if units_run is not None else units
                 compat_patches.append(p)
         return compat_patches, dims, new_dim
 
@@ -1887,7 +1898,7 @@ def stack_patches(
         raise PatchCoordinateError(msg)
 
     kept = []
-    run = _KindRun()
+    run, units_run = _KindRun(), None
     for p in patches:
         # check kind, then dimensions and coords of patch against init_patch;
         # a patch binds the run's kind only once everything passes.
@@ -1895,10 +1906,12 @@ def stack_patches(
         kind_ok = run.admits(kind, check_behavior)
         dims_ok = kind_ok and check_dims(init_patch, p, check_behavior)
         coords_ok = dims_ok and check_coords(init_patch, p, check_behavior, dim_vary)
-        units_ok = coords_ok and check_data_units(init_patch, p, check_behavior)
+        units = get_quantity(p.attrs.data_units)
+        units_ok = coords_ok and _data_units_agree(units_run, units, check_behavior)
         # actually do the stacking of data
         if units_ok:
             run.add(kind)
+            units_run = units_run if units_run is not None else units
             stack_arr = stack_arr + p.data
             kept.append(p.attrs)
 

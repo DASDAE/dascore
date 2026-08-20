@@ -374,6 +374,14 @@ class TestApplyUfunc:
         with pytest.raises(UnitError, match="failed with units"):
             warm + random_patch.set_units("m")
 
+    def test_boolean_fallback_on_a_foreign_backend(self, random_patch):
+        """A boolean result drops its units whichever array backend holds it."""
+        xp = pytest.importorskip("array_api_strict")
+        mask = xp.asarray(random_patch.data > 0)  # the strict backend wants bools
+        patch = random_patch.new(data=mask).set_units("m")
+        out = np.logical_and(patch, True)
+        assert out.attrs.data_units is None
+
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
         square = dc.get_example_patch(shape=(10, 10)).set_units("m")

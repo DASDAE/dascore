@@ -570,6 +570,19 @@ class TestChunkMerge:
         out = dc.spool([dup, p1]).chunk(time=None)
         assert out[0].attrs.foo == 2 * dc.get_quantity("m")
 
+    def test_attr_named_like_another_patches_coordinate(self):
+        """An attr is not suppressed because some other patch has such a coordinate."""
+        p1 = dc.get_example_patch().update_attrs(latitude="north")
+        p2 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        n = p1.shape[p1.get_axis("distance")]
+        elsewhere = dc.get_example_patch(
+            time_min=time.max() + 10 * time.step, tag="other"
+        ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([p2, p1, elsewhere]).chunk(time=None)
+        first = out.select(tag="random")[0]
+        assert first.attrs.latitude == "north"
+
     def test_attr_pair_named_like_an_envelope_is_stamped(self):
         """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
         p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")

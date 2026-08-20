@@ -550,11 +550,14 @@ class PlanResolver(PatchResolver):
         # every public attr column the row carries, extras included; the
         # coordinate envelope columns and the row's own bookkeeping are not attrs
         # the row may carry an envelope for a coordinate the assembled patch
-        # no longer has, so every coordinate the index knows counts
-        coords = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
-        coords |= self.coord_names
+        # no longer has, so every coordinate the index knows has its envelope
+        # columns set aside; only the patch's own coordinate names are
+        # reserved outright — an attr may share its name with a coordinate
+        # some other patch has
+        own = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
+        coords = own | self.coord_names
         envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
-        skip = {*_SOURCE_COLUMNS, *coords, *envelope, "dims", "output_id"}
+        skip = {*_SOURCE_COLUMNS, *own, *envelope, "dims", "output_id"}
         names = {x for x in row if not x.startswith("_") and x not in skip}
         # A number in a row may be a quantity the index stored as a base-SI
         # magnitude with its units kept in the attr metadata resolved at

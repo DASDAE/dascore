@@ -282,6 +282,17 @@ def _quantity(array, units):
     return type(units)(magnitude, units.units)
 
 
+def _is_boolean(data) -> bool:
+    """True when an array's dtype is boolean, whichever backend holds it."""
+    dtype = getattr(data, "dtype", None)
+    if dtype is None:
+        return isinstance(data, bool | np.bool_)
+    if is_numpy(data):
+        return dtype == np.bool_
+    xp = array_namespace(data)
+    return bool(xp.isdtype(dtype, "bool"))
+
+
 def _is_offset_unit(quantity) -> bool:
     """
     Return True for a unit with an offset (degC), which cannot be scaled.
@@ -398,9 +409,7 @@ def _apply_binary_ufunc(
 
     def _fallback_label(new_data, units):
         """The units a numpy-computed result keeps: none when boolean."""
-        if getattr(new_data, "dtype", None) == np.bool_:
-            return None
-        return _label(units)
+        return None if _is_boolean(new_data) else _label(units)
 
     def _label(quantity):
         """The data_units string for one unit of output."""
@@ -447,7 +456,7 @@ def _apply_binary_ufunc(
                 )
                 raise UnitError(msg)
             new_data = _apply_op(patch.data, other, operator, reversed)
-            if getattr(new_data, "dtype", None) == np.bool_:
+            if _is_boolean(new_data):
                 return new_data, attrs.update(data_units=None)
             return new_data, attrs.update(data_units=_label(known))
         is_power = operator in (np.power, np.float_power)
@@ -569,7 +578,7 @@ def _apply_binary_ufunc(
             # every offset unit is a temperature, so this always converts
             other_data = _quantity(other, other_units).to(data_units.units).magnitude
             new_data = _apply_op(patch.data, other_data, operator, reversed)
-            if getattr(new_data, "dtype", None) == np.bool_:
+            if _is_boolean(new_data):
                 return new_data, attrs.update(data_units=None)
             if operator is np.subtract:
                 one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)

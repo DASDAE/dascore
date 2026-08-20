@@ -796,6 +796,16 @@ class TestConcatenate:
         assert out[0].shape[1] == 2 * random_patch.shape[1]
         assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m/s")
 
+    def test_units_bind_to_the_first_known(self, random_patch):
+        """After a unitless first patch, the first known units set the bar."""
+        bare = random_patch.set_units(None)
+        metres = random_patch.set_units("m").update_attrs(history=bare.attrs.history)
+        km = random_patch.set_units("km").update_attrs(history=bare.attrs.history)
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([bare, metres, km], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
+
     def test_different_units_are_not_spliced(self, random_patch):
         """Known, different data units are skipped or raise, never mixed."""
         metres = random_patch.set_units("m")
@@ -1068,6 +1078,9 @@ class TestStackPatches:
         out = stack_patches([bare, metres])
         assert np.allclose(out.data, 2 * metres.data)
         assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("m")
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = stack_patches([bare, metres, km])
+        assert np.allclose(out.data, 2 * metres.data)
 
     def test_rejected_patch_binds_nothing(self, random_patch):
         """A patch dropped for its coordinates must not set the stack's kind."""
