@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import tempfile
 from pathlib import Path
 from urllib.parse import unquote
@@ -15,10 +14,6 @@ from dascore.exceptions import InvalidSpoolError
 # Hive's sentinel for a NULL partition value; means "no value", so the
 # key is treated as absent rather than set to the sentinel string.
 _HIVE_NULL = "__HIVE_DEFAULT_PARTITION__"
-# A trailing file extension: dot then a letter-led alphanumeric run, so
-# numeric values like "depth=1.5" keep their fractional part.
-_EXTENSION_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
-
 # Synthetic URI schemes for in-memory patch identities (see
 # dascore.io.index.catalog); such paths dispatch to in-memory registries
 # and are never treated as file names.
@@ -114,11 +109,12 @@ def parse_hive_path_attrs(rel_posix: str) -> dict[str, str]:
     """
     Parse hive-style ``key=value`` pairs from a relative path.
 
-    Every path segment participates, including the file name, whose
-    extension is first stripped. A segment holds one pair (Hive layout,
-    ``acquisition_key=XX.R2D1..RAW/``) or several separated by ``__`` —
-    the same separator DASCore's default patch names use — as in
-    ``cable=n__tag=raw.h5``.
+    Only the directories containing the source participate, as in Hive
+    partitioning; the source's own name — the last segment, whether that
+    is a file or a directory-format unit — is opaque. A segment holds one
+    pair (``acquisition_key=XX.R2D1..RAW/``) or several separated by
+    ``__``, the same separator DASCore's default patch names use, as in
+    ``cable=n__tag=raw/``.
     Keys and values are percent-decoded after splitting, so encoded
     ``=`` (``%3D``), ``__`` (``%5F%5F``), and ``.`` survive inside either
     part. When a key repeats, the deepest (then rightmost) one wins.
@@ -134,13 +130,14 @@ def parse_hive_path_attrs(rel_posix: str) -> dict[str, str]:
     Examples
     --------
     >>> from dascore.utils.paths import parse_hive_path_attrs
-    >>> parse_hive_path_attrs("acquisition_key=XX.R2D1..RAW/cable=n__tag=raw.h5")
-    {'acquisition_key': 'XX.R2D1..RAW', 'cable': 'n', 'tag': 'raw'}
+    >>> parse_hive_path_attrs("acquisition_key=XX.R2D1..RAW/cable=n/file.h5")
+    {'acquisition_key': 'XX.R2D1..RAW', 'cable': 'n'}
     """
     out: dict[str, str] = {}
-    segments = rel_posix.split("/")
-    segments[-1] = _EXTENSION_RE.sub("", segments[-1])
-    for segment in segments:
+    # The last segment names the source itself, so it is dropped: a file
+    # name cannot be told from a partition value once an extension is in
+    # play ("acquisition_key=XX.R2D1..RAW" ends in a plausible one).
+    for segment in rel_posix.split("/")[:-1]:
         for part in segment.split("__"):
             key, sep, value = part.partition("=")
             if not sep:
