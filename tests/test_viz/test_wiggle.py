@@ -136,11 +136,18 @@ class TestWiggle:
         with pytest.raises(ParameterError, match="after squeezing"):
             patch.viz.wiggle()
 
-    def test_empty_dim(self, random_patch):
-        """A patch with an empty dimension plots nothing but shouldn't raise."""
-        patch = random_patch.select(distance=(1e9, None))
-        assert len(patch.get_coord("distance")) == 0
-        assert isinstance(patch.viz.wiggle(), plt.Axes)
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_empty_dim(self, random_patch, dim):
+        """
+        A patch with an empty dimension, whether or not it is the connected
+        one, plots nothing but shouldn't raise.
+        """
+        coord = random_patch.get_coord(dim)
+        patch = random_patch.select(**{dim: (coord.max() + coord.step, None)})
+        assert len(patch.get_coord(dim)) == 0
+        ax = patch.viz.wiggle()
+        assert isinstance(ax, plt.Axes)
+        assert not ax.lines
 
     def test_no_figure_on_error(self, random_patch):
         """A rejected call shouldn't leave an empty figure behind."""

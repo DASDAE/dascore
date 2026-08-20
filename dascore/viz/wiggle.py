@@ -82,7 +82,7 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     if shade:
         _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
     _format_y_axis_ticks(ax, offsets, other_axis_ticks)
-    for dim, x in zip(patch.dims, ["x", "y"]):
+    for dim, x in zip(patch.dims, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         # format all dims which have time types.
         if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
@@ -170,6 +170,10 @@ def wiggle(
     # Create the axis only once the patch is known to be plottable so a
     # rejected call doesn't leak an empty figure.
     ax = _get_ax(ax)
+    # An empty dimension has nothing to draw; the offsets can't be computed
+    # from zero samples so just hand back the empty axis.
+    if 0 in patch.shape:
+        return ax
     if patch.ndim == 1:
         alpha = 1.0 if alpha is None else alpha
         _wiggle_1d(patch, ax, alpha, color, shade)
