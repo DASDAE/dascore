@@ -416,6 +416,13 @@ class TestSpoolIntArraySelect:
         assert random_spool[indices] == expected
         assert random_spool[pd.Series(indices)] == expected
         assert random_spool[pd.Series(indices, dtype="Int64")] == expected
+        assert random_spool[pd.Series(indices, dtype="UInt64")] == expected
+
+    def test_unsigned_out_of_bounds_raises(self, random_spool):
+        """A huge unsigned index must not wrap around to a valid position."""
+        series = pd.Series([2**63 + 1], dtype="UInt64")
+        with pytest.raises(IndexError):
+            random_spool[series]
 
 
 class TestSpoolIterable:

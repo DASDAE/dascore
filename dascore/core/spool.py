@@ -449,8 +449,10 @@ class DataFrameSpool(BaseSpool):
         # Other Series dtypes fall through to the array path and are
         # rejected there like any non bool/int array.
         if isinstance(item, pd.Series) and pd.api.types.is_integer_dtype(item):
-            # to_numpy(dtype) also unboxes nullable Int64 (NA raises).
-            return item.to_numpy(dtype=np.int64)
+            # Keep the Series' own integer width: nullable Int64/UInt64 unbox
+            # to it (NA raises) and unsigned values can't wrap negative.
+            dtype = getattr(item.dtype, "numpy_dtype", item.dtype)
+            return item.to_numpy(dtype=dtype)
         if isinstance(item, pd.Series) and pd.api.types.is_bool_dtype(item):
             # A mask is applied by position, so it must be in this spool's
             # order; one built from another spool's contents would otherwise
