@@ -12,11 +12,10 @@ import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Patch as PatchArtist
-from matplotlib.ticker import MaxNLocator
 
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.intervals import interval_masks, normalize_value, value_kind
-from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
+from dascore.utils.plotting import _format_time_axis, _get_ax
 
 from . import _lanes
 from ._lanes import UNCOVERED_COLOR, _default_label, plot_lanes
@@ -658,27 +657,31 @@ def map_path(
         values is not None and bool(np.isnan(values).any()) for _, values, _ in pieces
     )
     if unstated:
-        handles.setdefault(
-            "not stated", PatchArtist(facecolor=UNPLACED, label="not stated")
-        )
+        handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
     if drawn:
-        finite = [v[np.isfinite(v)] for _, v, _ in pieces if v is not None]
-        finite = [v for v in finite if len(v)]
-        norm = None
+        finite = _shown_values(pieces)
+        stated = [v[np.isfinite(v)] for _, v, _ in pieces if v is not None]
+        stated = [v for v in stated if len(v)]
+        norm, scale, ticks, beyond = None, None, None, "neither"
         if finite:
-            low = float(min(v.min() for v in finite))
-            high = float(max(v.max() for v in finite))
-            norm = plt.Normalize(low, high if high > low else low + 1.0)
+            # One scale for every path, stepped where the values are a
+            # handful of numbered categories rather than a quantity.
+            scale, norm, ticks = _lanes.numeric_scale(np.concatenate(finite), cmap)
+            scale = scale.with_extremes(bad=UNPLACED)
+            whole = np.concatenate(stated)
+            under = bool(whole.min() < norm.vmin)
+            over = bool(whole.max() > norm.vmax)
+            beyond = (
+                ("both" if under else "max")
+                if over
+                else ("min" if under else "neither")
+            )
         for segments, values, colors in pieces:
             collection = LineCollection(
                 list(segments),
                 linewidths=linewidth,
                 colors=colors,
-                cmap=(
-                    _get_cmap(cmap).with_extremes(bad=UNPLACED)
-                    if values is not None
-                    else None
-                ),
+                cmap=scale if values is not None else None,
                 norm=norm if values is not None else None,
                 capstyle="round",
             )
@@ -726,13 +729,13 @@ def map_path(
             pad=0.25 if flat else 0.02,
             aspect=45 if flat else 20,
             shrink=1.0 if flat else shrink,
+            # An arrow where fiber is drawn past the end of the scale.
+            extend=beyond,
         )
         bar.set_label("Optical distance [m]" if color == "distance" else color)
-        values = getattr(scalar, "get_array", lambda: None)()
-        if values is not None and np.allclose(values, np.round(values), equal_nan=True):
-            # Half a borehole is not a borehole.
-            bar.locator = MaxNLocator(integer=True)
-            bar.update_ticks()
+        if ticks is not None:
+            # A stepped scale reads at its steps; half a borehole is not one.
+            bar.set_ticks(list(ticks))
     if legend and handles:
         # A colorbar already occupies the strip beside the axes.
         offset = 1.12 if scalar is not None and shrink >= 0.45 else 1.01
@@ -748,6 +751,32 @@ def map_path(
     if show:
         plt.show()
     return ax
+
+
+def _shown_values(pieces) -> list:
+    """The colored values of segments this projection actually shows.
+
+    A borehole seen from above is a point: it is drawn, but it displays
+    no length, and letting it into the scale spends most of the colormap
+    on fiber the reader cannot see.
+    """
+    stated = [v[np.isfinite(v)] for _, v, _ in pieces if v is not None]
+    stated = [v for v in stated if len(v)]
+    if not stated:
+        return []
+    corners = np.concatenate([x.reshape(-1, 2) for x, _, _ in pieces])
+    floor = float(max(np.ptp(corners[:, 0]), np.ptp(corners[:, 1]))) * 1e-3
+    shown = []
+    for segments, values, _ in pieces:
+        if values is None:
+            continue
+        steps = segments[:, 1] - segments[:, 0]
+        drawn = np.hypot(steps[:, 0], steps[:, 1])
+        keep = values[np.isfinite(values) & (drawn > floor)]
+        if len(keep):
+            shown.append(keep)
+    # Every segment collapsed, so the projection shows no lengths at all.
+    return shown or stated
 
 
 def _axis_label(crs, name) -> str:
@@ -774,9 +803,7 @@ def _segment_colors(one, color, mid, crs, handles, palette):
         keys = [x.value for x in items]
         if not items:
             # This path states nothing under that name; another one does.
-            handles.setdefault(
-                "not stated", PatchArtist(facecolor=UNPLACED, label="not stated")
-            )
+            handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
             return None, [UNPLACED] * len(mid)
     masks = interval_masks(mid, [x.interval for x in items])
     kinds = {value_kind(normalize_value(k)) for k in keys}
@@ -805,9 +832,7 @@ def _segment_colors(one, color, mid, crs, handles, palette):
             str(key), PatchArtist(facecolor=seen[str(key)], label=str(key))
         )
     if any(c is UNPLACED for c in colors):
-        handles.setdefault(
-            "not stated", PatchArtist(facecolor=UNPLACED, label="not stated")
-        )
+        handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
     return None, colors
 
 

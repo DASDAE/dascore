@@ -649,6 +649,113 @@ class TestMap:
         ax = map_path(site, "DAS.L1.00", time="2026-06-10")
         assert "Optical distance" in _bar_label(ax)
 
+    def test_scale_covers_what_the_view_shows(self, tunnel):
+        """Fiber a projection collapses to a point spends no colormap."""
+        plan = map_path(tunnel, time="2024-07-01")
+        flat = next(x for x in plan.collections if isinstance(x, LineCollection))
+        plt.close("all")
+        section = map_path(tunnel, x="x", y="z", time="2024-07-01")
+        deep = next(x for x in section.collections if isinstance(x, LineCollection))
+        # Seen from above the boreholes are points, so the trench gets the
+        # whole scale; side-on they are 20 m of visible fiber and count.
+        assert flat.norm.vmax < deep.norm.vmax
+        drawn = np.asarray(deep.get_array())
+        assert flat.norm.vmax < drawn.max()
+
+    def test_a_view_which_shows_no_length(self):
+        """Where every segment collapses, the scale still spans the values."""
+        one = inv.OpticalPath(
+            name="hole",
+            location_code="00",
+            optical_components=(inv.FiberSegment(name="f", optical_length=40.0),),
+            geometry=(
+                inv.Geometry(
+                    name="down",
+                    distance=(0.0, 40.0),
+                    # Straight down: nothing to see in plan view at all.
+                    coordinates={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(one,))
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        ax = map_path(inventory)
+        line = next(x for x in ax.collections if isinstance(x, LineCollection))
+        assert line.norm.vmax > line.norm.vmin
+
+    def test_discrete_values_get_a_stepped_scale(self, tunnel):
+        """Three boreholes are three categories, not a ramp through 1.5."""
+        ax = map_path(tunnel, x="x", y="z", color="borehole", time="2024-07-01")
+        bar = ax.get_figure().axes[-1]
+        ticks = [x for x in bar.get_yticks() if x] or list(bar.get_xticks())
+        assert [round(float(x), 3) for x in ticks] == [1.0, 2.0, 3.0]
+
+    def test_one_number_is_not_a_scale(self):
+        """A column stating one value everywhere still draws."""
+
+        def build(location, value, group="reading"):
+            return inv.OpticalPath(
+                name=f"p{location}",
+                location_code=location,
+                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                geometry=(
+                    inv.Geometry(
+                        name="run",
+                        distance=(0.0, 200.0),
+                        coordinates={
+                            "x": (0.0, 100.0),
+                            "y": (float(location), float(location)),
+                            "z": (0.0, 0.0),
+                        },
+                    ),
+                ),
+                labels=(
+                    (
+                        inv.OpticalPathLabel(
+                            start_distance=0.0,
+                            end_distance=200.0,
+                            group=group,
+                            value=value,
+                        ),
+                    )
+                    if value is not None
+                    else ()
+                ),
+            )
+
+        def wrap(*paths):
+            array = inv.FiberArray(code="L1", optical_paths=paths)
+            return inv.Inventory(
+                coordinate_reference_system=inv.CoordinateReferenceSystem(
+                    authority="",
+                    code="",
+                    name="grid",
+                    coordinate_labels=("x", "y", "z"),
+                    units=("meter", "meter", "meter"),
+                ),
+                networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+            ).check()
+
+        ax = map_path(wrap(build("01", 7.0)), color="reading")
+        line = next(x for x in ax.collections if isinstance(x, LineCollection))
+        assert line.norm.vmax > line.norm.vmin
+
+        # One path states the number, the other says nothing under that
+        # name, so the drawn pieces are a mixture of scaled and unscaled.
+        plt.close("all")
+        ax = map_path(wrap(build("01", 7.0), build("02", None)), color="reading")
+        assert "n/a" in _legend_labels(ax)
+        assert len([x for x in ax.collections if isinstance(x, LineCollection)]) == 2
+
     def test_color_column(self, site):
         """A geometry column colors continuously, labelled by its name."""
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="chainage")
@@ -659,7 +766,7 @@ class TestMap:
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="zone")
         labels = _legend_labels(ax)
         assert labels[:2] == ["north", "south"]
-        assert "not stated" in labels
+        assert "n/a" in labels
         assert ax.get_legend().get_title().get_text() == "zone"
 
     def test_color_numeric_group(self, site):
@@ -681,7 +788,7 @@ class TestMap:
         assert np.ma.getmaskarray(collection.get_array()).any()
         bad = collection.get_cmap().get_bad()
         assert bad[3] == pytest.approx(1.0), "unstated fiber would be invisible"
-        assert "not stated" in _legend_labels(ax)
+        assert "n/a" in _legend_labels(ax)
 
     def test_one_palette_for_every_path(self):
         """A value is one color across the paths of one figure."""
@@ -801,9 +908,11 @@ class TestMap:
             if isinstance(x, LineCollection) and x.get_array() is not None
         ]
         assert len(lines) == 2
-        for line in lines:
-            assert line.norm.vmin == pytest.approx(0.0)
-            assert line.norm.vmax == pytest.approx(101.0)
+        # One scale object, spanning what both paths state.
+        assert lines[0].norm is lines[1].norm
+        norm = lines[0].norm
+        assert norm.vmin <= 0.0 and norm.vmax >= 101.0
+        assert norm(0.0) != norm(100.0)
 
     def test_a_path_without_the_color_is_unstated(self):
         """A placed path saying nothing under that name is drawn, not fatal."""
@@ -848,7 +957,7 @@ class TestMap:
         ).check()
         ax = map_path(inventory, color="zone")
         assert len([x for x in ax.collections if isinstance(x, LineCollection)]) == 2
-        assert _legend_labels(ax) == ["north", "not stated"]
+        assert _legend_labels(ax) == ["north", "n/a"]
 
     def test_map_needs_a_path_effective_then(self):
         """A time no path is effective at draws nothing, and says why."""

@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch as PatchArtist
 from matplotlib.patches import Rectangle
 
@@ -160,6 +161,35 @@ def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
     }
 
 
+def numeric_scale(values, cmap_name=NUMERIC_CMAP):
+    """Return (cmap, norm, ticks) for a column of numbers.
+
+    A handful of distinct values is a set of categories which happen to
+    be numbered, so it gets one color each and a stepped bar reading at
+    the values themselves. Anything more is a quantity, and ramps.
+    """
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    base = _get_cmap(cmap_name)
+    unique = np.unique(finite)
+    if len(unique) < 2:
+        low = float(unique[0]) if len(unique) else 0.0
+        return base, plt.Normalize(low, low + 1.0), None
+    if len(unique) <= _MAX_DISCRETE:
+        picks = np.linspace(0.12, 0.9, len(unique))
+        listed = ListedColormap([base(x) for x in picks])
+        middles = (unique[:-1] + unique[1:]) / 2
+        edges = np.concatenate(
+            [
+                [unique[0] - (middles[0] - unique[0])],
+                middles,
+                [unique[-1] + (unique[-1] - middles[-1])],
+            ]
+        )
+        return listed, BoundaryNorm(edges, listed.N), unique
+    return base, plt.Normalize(float(unique.min()), float(unique.max())), None
+
+
 def _resolve_colors(rows, kind, lane_index, string_map, color):
     """Return one color per row, and a legend/colorbar description."""
     if isinstance(color, Mapping) and any(
@@ -193,17 +223,17 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
                 return [color] * len(rows), None
         else:
             cmap = _get_cmap(NUMERIC_CMAP)
-        low, high = float(np.nanmin(values)), float(np.nanmax(values))
-        if high <= low:
+        if len(np.unique(values[np.isfinite(values)])) < 2:
             # One value is not a scale, so it gets a color and its number
             # rather than a colorbar reading from it to a value nothing has.
             return [cmap(0.5)] * len(rows), None
-        norm = plt.Normalize(low, high)
+        cmap, norm, ticks = numeric_scale(values, getattr(cmap, "name", NUMERIC_CMAP))
         # A value nothing states maps to a transparent color unless the
         # colormap is told otherwise, and the box would simply vanish.
         cmap = cmap.with_extremes(bad=UNCOVERED_COLOR)
         colors = [cmap(norm(x)) for x in values]
-        if len(set(values.tolist())) <= _MAX_DISCRETE:
+        if ticks is not None:
+            # Few enough to be read off the boxes they are printed in.
             return colors, None
         # Each numeric lane is its own scale, so each earns its own bar;
         # one bar for two lanes would read from a scale only one of them has.
@@ -264,7 +294,7 @@ def _fit_labels(ax, placements, max_labels):
             zorder=4,
             clip_on=True,
             # A dark fill would otherwise swallow the text sitting on it.
-            path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
+            path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
         )
         left = transform.transform((x_mid - width / 2, y_mid))[0]
         right = transform.transform((x_mid + width / 2, y_mid))[0]
