@@ -261,7 +261,7 @@ An id is the same on every read of the same file, so one written down today stil
 
 Two things do not carry an id. `processing_id` is not indexed at all: it advances whenever an operation runs, and a spool runs one as it loads, so what the index recorded would not be what came back. And a spool whose patches are built rather than read — a chunked one, most of all — has no `patch_id` column, because a merged patch folds its members' ids rather than inheriting any one of them; selecting by id there says the spool has no such attribute rather than quietly matching nothing.
 
-An id names a path, so an archive which is moved and re-indexed keeps the ids it was indexed with while the patches it loads derive new ones. Delete the index and rebuild it after moving an archive.
+An id names a path, so a file which moves — including the directory rename that attaches metadata to an archive — is no longer the row the index derived an id for. The index clears the id rather than keeping a stale one, so a moved source has an empty `patch_id` until the archive is scanned again; the patches themselves still carry theirs.
 
 # unselect
 

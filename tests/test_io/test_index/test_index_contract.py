@@ -621,6 +621,28 @@ class TestLineageIds:
         """An id which names nothing selects nothing, rather than raising."""
         assert len(written_spool.select(patch_id="0" * 16)) == 0
 
+    def test_a_renamed_source_forgets_its_id(self, tmp_path):
+        """
+        A derived id names the path it came from.
+
+        Renaming a file is how metadata is attached to an archive, and
+        the index rewrites the path without re-reading the file. The id
+        the row held is the id of where it used to be, so it is cleared
+        rather than left to select a patch which no longer carries it.
+        """
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        stale = spool.get_contents()["patch_id"].iloc[0]
+        assert stale
+        (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+        moved = dc.spool(tmp_path).update()
+        assert moved.get_contents()["patch_id"].iloc[0] == ""
+        assert len(moved.select(patch_id=stale)) == 0
+        # The patch itself still says which data it is; only the index
+        # stopped claiming to know without looking.
+        assert moved[0].attrs.patch_id
+
     def test_chunk_still_merges_across_ids(self, written_spool):
         """Every patch states a different id; none of them blocks a merge."""
         assert len(set(written_spool.get_contents()["patch_id"])) == 3

@@ -153,6 +153,10 @@ def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# The attr a moved source can no longer vouch for; see `_forget_lineage`.
+_LINEAGE_ATTR = "patch_id"
+
+
 class SQLiteIndexBackend:
     """
     The index backend: persists the schema and answers flat-relation queries.
@@ -806,6 +810,37 @@ class SQLiteIndexBackend:
                         f"WHERE source_id IN ({marks}))",
                         (*values, *chunk),
                     )
+            self._forget_lineage(list(ids.values()))
+
+    def _forget_lineage(self, source_ids: list[int]) -> None:
+        """
+        Clear the indexed `patch_id` of sources which have moved.
+
+        A derived id names the path it was derived from, so a moved
+        source's stored id is the id of where it used to be: selecting by
+        it would hand back a patch which no longer carries it. Cleared
+        rather than recomputed, because telling a derived id from one a
+        format stored means reading rows this path exists to avoid
+        reading; a rescan fills them back in.
+
+        A missing id is a missed lookup. A stale one is a wrong answer.
+        """
+        columns = [column for _, column in self._attr_kinds(_LINEAGE_ATTR)]
+        if not columns or not source_ids:
+            return
+        assignments = ", ".join(f"{quote(col)} = NULL" for col in columns)
+        for chunk, marks in self._iter_in_batches(source_ids):
+            self._execute(
+                f"UPDATE attrs SET {assignments} WHERE patch_id IN "
+                f"(SELECT patch_id FROM patches WHERE source_id IN ({marks}))",
+                chunk,
+            )
+
+    def _attr_kinds(self, name: str) -> list[tuple[str, str]]:
+        """Return the (kind, column) pairs an attr name is stored under."""
+        meta = self._attr_meta()
+        rows = meta[meta["attr_name"] == name]
+        return list(zip(rows["value_kind"], rows["column_name"], strict=True))
 
     # --- queries -----------------------------------------------------
 
