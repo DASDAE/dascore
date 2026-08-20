@@ -16,6 +16,9 @@ from dascore.constants import (
     enrich_on_missing_description,
 )
 from dascore.core._spool_inventory import (
+    COORD_REDUNDANT_ATTRS,
+    DATA_STATE_ATTRS,
+    VALID_ON_MISSING,
     attr_owner,
     get_coord_values,
     get_interrogator,
@@ -45,20 +48,7 @@ from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
-# Attrs describing the data as it now stands rather than the system which
-# recorded it. Processing functions maintain them, so blanket enrichment
-# leaves them alone; naming one explicitly restores the as-acquired value.
-_DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
-
-# Facts the patch's own coordinates already state: the time coordinate has
-# the sample rate and the distance coordinate the channel spacing, and
-# decimating changes both. Nothing should be redundant between coords and
-# attrs, so a blanket request leaves these alone; naming one restores the
-# as-acquired value.
-_COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
-
 OnMissing = Literal["raise", "warn", "ignore", "null"]
-_VALID_ON_MISSING = get_args(OnMissing)
 
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
@@ -163,9 +153,9 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
         return {}
     system = _get_system_attrs(inventory, context)
     if attrs is True:
-        return {i: v for i, v in system.items() if i not in _COORD_REDUNDANT_ATTRS}
+        return {i: v for i, v in system.items() if i not in COORD_REDUNDANT_ATTRS}
     available = dict(system)
-    for name in _DATA_STATE_ATTRS:
+    for name in DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
         if not is_unset(value):
             available[name] = value
@@ -468,8 +458,8 @@ def enrich(
     ... )
     """
     validate_conflict(conflict)
-    if on_missing not in _VALID_ON_MISSING:
-        msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
+    if on_missing not in VALID_ON_MISSING:
+        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
     validate_enrich_selection(attrs, coords)
     source_id = _get_acquisition_key(patch, acquisition_key)

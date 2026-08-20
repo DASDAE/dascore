@@ -43,6 +43,8 @@ from dascore.core._spool_inventory import (
     check_stampable,
     combine_inventories,
     drops_samples,
+    effective_matches,
+    enriched_attr_names,
     get_attr_values,
     glob_filter,
     match_resolved,
@@ -318,7 +320,10 @@ class Spool(NamespaceOwner):
         metadata: file-backed patches stay unloaded, in-memory patches
         are shared (not copied), and the same source appearing in both
         spools keeps a single entry. Selections on the inputs carry over
-        by row membership.
+        by row membership. An attached inventory, and any enrichment set
+        up from it, is spool-wide state: the union carries whichever
+        operand has one and applies it to every patch it yields, as
+        attaching and enriching the union would; two different ones raise.
 
         Examples
         --------
@@ -710,15 +715,27 @@ class Spool(NamespaceOwner):
         """
         Keep the rows whose inventory-backed values match.
 
-        Precedence is per row: a row which states the name is judged by
-        the index, exactly as it would be without an inventory, and only
-        the rows leaving it unstated are resolved. A spool whose headers
-        state everything therefore never touches the inventory, and one
-        which states nothing resolves once per epoch rather than per row.
-        A row the inventory has no answer for is not selected, as a patch
-        lacking the attr entirely is not. Straddling is decided against
-        the row as it now stands, so a range which has already trimmed a
-        row inside one epoch leaves it resolvable.
+        Precedence is per row, and is the precedence extraction applies.
+        A row which states the name is judged by the index, exactly as it
+        would be without an inventory, and only the rows leaving it
+        unstated are resolved. A spool whose headers state everything
+        therefore touches the inventory only when enrichment will rewrite
+        the name, and one which states nothing resolves once per epoch
+        rather than per row. A row the inventory has no answer for is not
+        selected, as a patch lacking the attr entirely is not. Straddling
+        is decided against the row as it now stands, so a range which has
+        already trimmed a row inside one epoch leaves it resolvable.
+
+        Pending enrichment changes what a stated row comes out holding,
+        so stated rows are resolved too where it would write the name:
+        `conflict="keep_first"` makes the inventory's answer the row's
+        value, `conflict="drop"` leaves a disagreeing row with none, and
+        `on_missing="null"` on named attrs blanks a resolved row the
+        inventory cannot answer. A row extraction refuses rather than
+        rewrites -- a disagreeing header under `conflict="raise"`, a dated
+        row under a pending `time`, a stated key disagreeing with a
+        pending `acquisition_key` -- is judged as it stands; the refusal
+        is extraction's to make.
         """
         ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
         if not len(ids):
@@ -727,10 +744,21 @@ class Spool(NamespaceOwner):
         known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
+        # How pending enrichment rewrites a stated header, if at all; the
+        # `raise` policy refuses rather than rewrites, and `on_missing`
+        # applies to named attrs only.
+        pending = self._enrich_kwargs or {}
+        conflict = pending.get("conflict")
+        rewritten = frozenset()
+        if conflict is not None and conflict != "raise":
+            rewritten = enriched_attr_names(pending["attrs"])
+        nulls_missing = (
+            pending.get("on_missing") == "null" and pending.get("attrs") is not True
+        )
         for name, selector in query.items():
             # Which rows state the name is asked of the index rather than
             # read off the relation, so a spool whose headers state it
-            # everywhere is never realized: the index alone answers.
+            # everywhere is realized only when enrichment will rewrite it.
             stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
             # A name no patch states is asked about rather than tried: the
             # index rejects it and the inventory answers for every row, and
@@ -746,16 +774,23 @@ class Spool(NamespaceOwner):
                 else np.empty(0, dtype=np.int64)
             )
             matched = np.isin(ids, index_ids)
-            if not stated.all():
+            # A stated row is resolved too when enrichment will rewrite it.
+            rewriting = name in rewritten
+            if not stated.all() or rewriting:
                 if contexts is None:
                     contexts = self._row_contexts(ids)
-                matched[~stated] = match_resolved(
-                    get_attr_values(
-                        self._resolved_inventory(), contexts[~stated], name
-                    ),
-                    name,
-                    selector,
-                    backend.attr_units(name),
+                answers = get_attr_values(self._resolved_inventory(), contexts, name)
+                resolved = None
+                if rewriting and nulls_missing:
+                    resolved = np.array([x is not None for x in contexts], dtype=bool)
+                matched = effective_matches(
+                    stated,
+                    matched,
+                    answers,
+                    match_resolved(answers, name, selector, backend.attr_units(name)),
+                    self._row_headers(ids, name) if rewriting else None,
+                    conflict if rewriting else None,
+                    resolved,
                 )
             mask &= matched
         return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
@@ -765,25 +800,42 @@ class Spool(NamespaceOwner):
         Resolve each presented row to its inventory context, or to None.
 
         This is where the relation is realized, which is why it is only
-        reached for a name the index does not state for every row.
+        reached for a name some row leaves unstated or pending enrichment
+        will rewrite. Rows resolve as extraction will, so pending
+        enrichment's own `acquisition_key` and `time` each stand in where
+        a row has none of its own.
         """
-        out = np.full(len(ids), None, dtype=object)
         df = self._df
-        columns = resolution_columns(df)
+        columns = resolution_columns(df, self._enrich_kwargs)
         if columns is None:
-            return out
-        # Aligned by id rather than by position: the relation is realized
-        # by a route of its own and need not present every row the id list
-        # does, and a row it leaves out is one nothing was resolved for.
-        resolved = dict(
-            zip(
-                df["_patch_id"].to_numpy(),
-                resolve_contexts(self._resolved_inventory(), *columns),
-                strict=True,
-            )
+            return np.full(len(ids), None, dtype=object)
+        return self._aligned(
+            ids, df, resolve_contexts(self._resolved_inventory(), *columns)
         )
+
+    def _row_headers(self, ids, name: str) -> np.ndarray:
+        """Each presented row's own value of a name, or None where unstated."""
+        df = self._df
+        values = (
+            df[name].to_numpy(dtype=object)
+            if name in df.columns
+            else np.full(len(df), None, dtype=object)
+        )
+        return self._aligned(ids, df, values)
+
+    @staticmethod
+    def _aligned(ids, df, values) -> np.ndarray:
+        """
+        Order per-relation-row values by the presented ids.
+
+        Aligned by id rather than by position: the relation is realized
+        by a route of its own and need not present every row the id list
+        does, and a row it leaves out is one nothing was resolved for.
+        """
+        by_id = dict(zip(df["_patch_id"].to_numpy(), values, strict=True))
+        out = np.full(len(ids), None, dtype=object)
         for position, patch_id in enumerate(ids):
-            out[position] = resolved.get(patch_id)
+            out[position] = by_id.get(patch_id)
         return out
 
     def attach_inventory(self, inventory=None) -> Self:
@@ -959,10 +1011,11 @@ class Spool(NamespaceOwner):
             Held and passed to
             [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
             extracted patch. The names accepted are read from its
-            signature, so the two cannot disagree, and only the names are
-            checked at this point — the values each patch's own enrichment
-            checks as it is extracted. Calling `enrich` again replaces
-            these rather than adding to them. They are:
+            signature, so the two cannot disagree. The names, the policies
+            and the shape of an `acquisition_key` are checked now — the
+            rest each patch's own enrichment checks as it is extracted.
+            Calling `enrich` again replaces these rather than adding to
+            them. They are:
 
         Other Parameters
         ----------------
@@ -998,6 +1051,8 @@ class Spool(NamespaceOwner):
         new = self.__class__(self)
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
+        # What this enrichment leaves unresolved is worth saying once more.
+        new._warned_unresolved = False
         return new
 
     def expand_by(
@@ -1096,7 +1151,7 @@ class Spool(NamespaceOwner):
 
     def _plan_contexts(self, working) -> np.ndarray:
         """Resolve each row of a planning frame to its inventory context."""
-        columns = resolution_columns(working)
+        columns = resolution_columns(working, self._enrich_kwargs)
         if columns is None:
             return np.full(len(working), None, dtype=object)
         return resolve_contexts(self._resolved_inventory(), *columns)
@@ -1130,7 +1185,8 @@ class Spool(NamespaceOwner):
         ----------
         on_unresolved
             What to do with a patch the inventory does not describe — one
-            carrying no `acquisition_key`, one carrying a key the
+            carrying no `acquisition_key` (and given none by a pending
+            `enrich`), one carrying a key the
             inventory does not resolve to exactly one entry, one reaching
             outside every matching epoch, or one with no instants to
             resolve at because its time axis is not physical. A patch is
@@ -1172,7 +1228,7 @@ class Spool(NamespaceOwner):
         # either is the same patch as the row beside it; the messages
         # below name files from one while judging the other.
         assert (source_rows["_patch_id"].to_numpy() == working["_patch_id"]).all()
-        columns = resolution_columns(working)
+        columns = resolution_columns(working, new._enrich_kwargs)
         epochs = (
             [NO_EPOCHS] * len(working)
             if columns is None

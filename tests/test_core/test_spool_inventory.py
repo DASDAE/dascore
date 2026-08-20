@@ -32,7 +32,7 @@ from dascore.constants import (
     enrich_coords_description,
     enrich_on_missing_description,
 )
-from dascore.core._spool_inventory import InventoryRef, resolve_row_epochs
+from dascore.core._spool_inventory import InventoryRef, is_unset, resolve_row_epochs
 from dascore.core.inventory import (
     _SYSTEM_FACT_NAMES,
     Acquisition,
@@ -652,6 +652,20 @@ class TestOnUnresolved:
             list(second.attach_inventory(inventory).enrich())
         assert len(caught) == 2
 
+    def test_a_new_attachment_says_it_again(self, patch, inventory):
+        """The warning is per spool, and a re-attached or re-enriched spool is
+        a new one: a different inventory covers a different part of it.
+        """
+        stranger = dc.spool([patch.update_attrs(acquisition_key="XX.A1..RAW")])
+        spool = stranger.attach_inventory(inventory).enrich()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            list(spool)
+            list(spool)
+            list(spool.attach_inventory(inventory).enrich())
+            list(spool.enrich(on_unresolved="warn"))
+        assert len(caught) == 3
+
     def test_ignore_is_silent(self, mixed, inventory):
         """The same, without saying so."""
         with warnings.catch_warnings():
@@ -691,13 +705,14 @@ class TestOnUnresolved:
             spool[0]
 
     def test_malformed_explicit_id_is_not_swallowed(self, patch, inventory):
-        """A caller getting the argument wrong is not the inventory's silence."""
-        bare = dc.spool(patch.update_attrs(acquisition_key=""))
-        spool = bare.attach_inventory(inventory).enrich(
-            acquisition_key="broken", on_unresolved="ignore"
+        """A caller getting the argument wrong is not the inventory's silence,
+        and is settled before any patch is pulled or selected.
+        """
+        bare = dc.spool(patch.update_attrs(acquisition_key="")).attach_inventory(
+            inventory
         )
         with pytest.raises(ValueError, match="Invalid acquisition_key"):
-            spool[0]
+            bare.enrich(acquisition_key="broken", on_unresolved="ignore")
 
     def test_bad_policy_raises(self, patch, inventory):
         """An unknown policy names no behavior."""
@@ -729,12 +744,11 @@ class TestOnUnresolved:
         long_key = "DAS." + "A" * 70 + "..RAW"
         with pytest.raises(InvalidInventoryError, match="characters"):
             inventory.resolve(long_key)
-        bare = dc.spool(patch.update_attrs(acquisition_key=""))
-        spool = bare.attach_inventory(inventory).enrich(
-            acquisition_key=long_key, on_unresolved="ignore"
+        bare = dc.spool(patch.update_attrs(acquisition_key="")).attach_inventory(
+            inventory
         )
         with pytest.raises(InvalidInventoryError, match="characters"):
-            spool[0]
+            bare.enrich(acquisition_key=long_key, on_unresolved="ignore")
 
 
 class TestInventoryQueryError:
@@ -1161,6 +1175,201 @@ class TestInventorySelect:
         for selector in (10.0 * meters, (5.0 * meters, 15.0 * meters), [10.0 * meters]):
             out = sorted(spool.select(gauge_length=selector).get_contents()["tag"])
             assert out == ["blank", "stated"], selector
+
+
+class TestSelectSeesPendingEnrichment:
+    """
+    Selection judges the patch extraction will yield, not only the header.
+
+    `enrich` defaults to `conflict="keep_first"`, under which the inventory
+    rewrites a stated header; a selection which read the header would keep
+    a patch that comes out not matching it.
+    """
+
+    @pytest.fixture(scope="class")
+    def disagreeing(self, patch, inventory):
+        """Two patches stating gauge lengths; the inventory contradicts one."""
+        return dc.spool(
+            [
+                patch.update_attrs(tag="wrong", gauge_length=20.0),
+                patch.update_attrs(tag="right", gauge_length=10.0),
+            ]
+        ).attach_inventory(inventory)
+
+    @pytest.fixture(scope="class")
+    def two_epochs(self, patch, inventory):
+        """The acquisition split at the patch's first sample; gauge 12 after."""
+        when = patch.get_coord("time").min()
+        return _split_epochs(
+            inventory, when, acquisitions=True, second={"gauge_length": 12.0}
+        )
+
+    def test_keep_first_judges_by_the_inventory(self, disagreeing):
+        """The inventory's value is what comes out, so it is what is matched."""
+        spool = disagreeing.enrich(coords=False)
+        assert len(spool.select(gauge_length=20.0)) == 0
+        selected = spool.select(gauge_length=10.0)
+        assert sorted(selected.get_contents()["tag"]) == ["right", "wrong"]
+        assert all(x.attrs.gauge_length == 10.0 for x in selected)
+        assert len(spool.unselect(gauge_length=10.0)) == 0
+
+    def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
+        """A dropped attr is no value at all, which no selector matches."""
+        spool = disagreeing.enrich(coords=False, conflict="drop")
+        assert len(spool.select(gauge_length=20.0)) == 0
+        # An agreeing header is not a conflict, and stays selectable.
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
+        assert spool.unselect(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "wrong"
+        ]
+
+    def test_raise_keeps_the_header(self, disagreeing):
+        """`raise` refuses the patch on extraction rather than rewriting it."""
+        spool = disagreeing.enrich(coords=False, conflict="raise")
+        wrong = spool.select(gauge_length=20.0)
+        assert wrong.get_contents()["tag"].tolist() == ["wrong"]
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
+        with pytest.raises(PatchError, match="inventory says"):
+            wrong[0]
+
+    @pytest.mark.parametrize("attrs", [("pulse_width",), False])
+    def test_a_name_enrichment_leaves_alone_keeps_the_header(self, disagreeing, attrs):
+        """Only the attrs enrichment writes change hands."""
+        spool = disagreeing.enrich(attrs=attrs, coords=False)
+        selected = spool.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+        assert selected[0].attrs.gauge_length == 20.0
+
+    def test_without_enrichment_the_header_stands(self, disagreeing):
+        """Attaching alone rewrites nothing, so nothing changes hands."""
+        selected = disagreeing.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_null_on_missing_blanks_a_stated_header(self, patch, inventory, conflict):
+        """
+        `on_missing="null"` answers with a missing marker, which disagrees
+        with a stated header: `keep_first` writes the marker over it and
+        `drop` removes it, and either way the row is not selected by what
+        it stated.
+        """
+        stated = dc.spool(patch.update_attrs(pulse_rate=1.25))
+        spool = stated.attach_inventory(inventory)
+        assert len(spool.select(pulse_rate=1.25)) == 1
+        nulled = spool.enrich(
+            attrs=("pulse_rate",), coords=False, on_missing="null", conflict=conflict
+        )
+        assert len(nulled.select(pulse_rate=1.25)) == 0
+        assert len(nulled.unselect(pulse_rate=1.25)) == 1
+        assert is_unset(dict(nulled[0].attrs).get("pulse_rate"))
+        # A blanket request never blanks anything.
+        blanket = spool.enrich(coords=False, on_missing="null", conflict=conflict)
+        assert len(blanket.select(pulse_rate=1.25)) == 1
+
+    @pytest.mark.parametrize(
+        "bad", [{"conflict": "keep_last"}, {"on_missing": "blank"}]
+    )
+    def test_a_bad_policy_is_refused_at_once(self, patch, inventory, bad):
+        """Selection reads the policies, so a typo cannot wait for extraction."""
+        with pytest.raises(ParameterError, match="must be one of"):
+            dc.spool(patch).attach_inventory(inventory).enrich(**bad)
+
+    @pytest.mark.parametrize("with_a_stated_row", [False, True])
+    def test_the_enrichment_key_resolves_a_bare_row(
+        self, patch, inventory, with_a_stated_row
+    ):
+        """
+        A row stating no key resolves by the one enrichment will use.
+
+        Both with and without a neighbour stating its own key: a relation
+        no row states the key in has no column for it at all.
+        """
+        patches = [patch.update_attrs(acquisition_key="", tag="bare")]
+        if with_a_stated_row:
+            patches.append(patch.update_attrs(tag="keyed"))
+        bare = dc.spool(patches)
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key=patch.attrs.acquisition_key
+        )
+        selected = spool.select(gauge_length=10.0)
+        assert len(selected) == len(patches)
+        assert all(x.attrs.gauge_length == 10.0 for x in selected)
+        # Attached alone, the bare row names no entry and is not selected.
+        attached = bare.attach_inventory(inventory).select(gauge_length=10.0)
+        assert attached.get_contents()["tag"].tolist() == (
+            ["keyed"] if with_a_stated_row else []
+        )
+
+    def test_a_stated_key_disagreeing_with_the_enrichment_key_stands(
+        self, patch, inventory
+    ):
+        """
+        Extraction refuses the disagreement rather than resolving either
+        key, so the row is judged by the key it states.
+        """
+        stranger = patch.update_attrs(acquisition_key="XX.A1..RAW", tag="stranger")
+        bare = patch.update_attrs(acquisition_key="", tag="bare")
+        spool = dc.spool([bare, stranger]).attach_inventory(inventory)
+        spool = spool.enrich(acquisition_key=patch.attrs.acquisition_key)
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "bare"
+        ]
+        with pytest.raises(PatchError, match="disagree"):
+            spool.select(tag="stranger")[0]
+
+    def test_the_enrichment_key_reaches_the_fiber_too(self, patch, inventory):
+        """
+        Channel selection, expansion and conformance resolve rows the same
+        way, so a bare row pending enrichment has a fiber to place on.
+        """
+        bare = dc.spool(patch.update_attrs(acquisition_key=""))
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key=patch.attrs.acquisition_key
+        )
+        assert len(spool.select(zone="north")) == 1
+        assert len(spool.expand_by("zone")) == 2
+        assert len(spool.conform_to_inventory(on_unresolved="raise")) == 1
+        attached = bare.attach_inventory(inventory)
+        assert len(attached.select(zone="north")) == 0
+        with pytest.raises(UnresolvedPatchError):
+            attached.conform_to_inventory(on_unresolved="raise")
+
+    def test_the_enrichment_time_resolves_a_lag_time_row(self, patch, two_epochs):
+        """A row without instants resolves at the instant enrichment will use."""
+        when = patch.get_coord("time").min()
+        lags = patch.get_coord("time").values - when
+        spool = dc.spool(patch.update_coords(time=lags)).attach_inventory(two_epochs)
+        assert len(spool.select(gauge_length=12.0)) == 0
+        before = spool.enrich(time=when - dc.to_timedelta64(1), coords=False)
+        assert len(before.select(gauge_length=12.0)) == 0
+        assert before.select(gauge_length=10.0)[0].attrs.gauge_length == 10.0
+        after = spool.enrich(time=when, coords=False)
+        assert len(after.select(gauge_length=10.0)) == 0
+        assert after.select(gauge_length=12.0)[0].attrs.gauge_length == 12.0
+
+    def test_a_dated_row_beside_a_lag_time_row_keeps_its_own_instants(
+        self, patch, two_epochs
+    ):
+        """
+        The pending time is for rows without instants; a dated row resolves
+        at its own, as it stands, and extraction is what refuses it.
+        """
+        when = patch.get_coord("time").min()
+        lags = patch.get_coord("time").values - when
+        lag = patch.update_coords(time=lags).update_attrs(tag="lag")
+        spool = dc.spool([patch, lag]).attach_inventory(two_epochs)
+        enriched = spool.enrich(time=when - dc.to_timedelta64(1), coords=False)
+        tags = enriched.select(gauge_length=10.0).get_contents()["tag"].tolist()
+        assert tags == ["lag"]
+        tags = enriched.select(gauge_length=12.0).get_contents()["tag"].tolist()
+        assert tags == ["random"]
+        assert enriched.select(tag="lag")[0].attrs.gauge_length == 10.0
+        with pytest.raises(PatchError, match="time coordinate"):
+            enriched.select(tag="random")[0]
 
 
 class TestInventoryUnselect:
@@ -3090,6 +3299,31 @@ class TestChannelSelectContracts:
             spool.expand_by("output_id")
         # Splitting on it is still legal; only recording the value is not.
         assert len(spool.expand_by("output_id", stamp=False)) == 1
+
+    def test_a_stamp_cannot_replace_the_acquisition_key(self, patch, inventory):
+        """
+        The key is the identity every later resolution goes by, and a
+        label value is not a valid one; stamping it would give a spool
+        whose contents look fine and whose patches cannot be built.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        clash = inventory.replace(
+            path,
+            path.new(
+                labels=(
+                    OpticalPathLabel(
+                        start_distance=100.0,
+                        end_distance=400.0,
+                        group="acquisition_key",
+                        value="bad",
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(clash)
+        with pytest.raises(InvalidSpoolQueryError, match="overwrite"):
+            spool.expand_by("acquisition_key")
+        assert len(spool.expand_by("acquisition_key", stamp=False)) == 1
 
     def test_a_no_op_channel_selector_does_not_veto_a_flag(self, patch, inventory):
         """
