@@ -1873,7 +1873,9 @@ class TestSummaryRoundTrip:
         summary = random_patch.summary.new(
             source_path=dumped, source_format="DASDAE", source_version="1"
         )
-        assert str(summary.source_path) == "/tmp/one.h5"
+        # Compared as paths, not as text: windows spells this one with
+        # backslashes, and what matters is that it is the same path.
+        assert summary.source_path == UPath("/tmp/one.h5")
         assert summary.source_format == "DASDAE"
 
     def test_a_mapping_naming_no_such_filesystem(self, random_patch):
