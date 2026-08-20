@@ -835,8 +835,9 @@ class TestBuildGapFrame:
         # the two rows are 15 samples apart, so one group would report a gap
         assert len(build_gap_frame(df, "time", group=[])) == 1
         assert build_gap_frame(df, "time", group="station").empty
-        coverage = build_gap_frame(df, "time", group="station")
-        assert coverage.empty
+        # the hole became the boundary between two cells, not a gap
+        coverage = build_coverage_frame(df, "time", group="station")
+        assert len(coverage) == 2
 
     def test_negative_step(self, contiguous_df, gapy_df):
         """A descending coordinate is measured by its step's magnitude.
