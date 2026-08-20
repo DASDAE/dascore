@@ -290,18 +290,32 @@ def _is_boolean(data) -> bool:
     return bool(xp.isdtype(data.dtype, "bool"))
 
 
+def _base_magnitudes(quantity):
+    """The base-unit magnitudes of 0, 1, and 2 of a unit quantity."""
+    return tuple((x * quantity).to_base_units().magnitude for x in (0.0, 1.0, 2.0))
+
+
 def _is_offset_unit(quantity) -> bool:
     """
-    Return True for a unit with an offset (degC), which cannot be scaled.
+    Return True for an affine unit with an offset (degC), a temperature.
 
-    Decided by behaviour rather than a registry attribute: doubling a
-    multiplicative quantity doubles its base-unit magnitude, an offset one
-    does not (dascore's registry converts offsets to base units rather
-    than refusing the product).
+    Decided by behaviour rather than a registry attribute: conversion to
+    base units is linear but does not send zero to zero (dascore's
+    registry converts offsets to base units rather than refusing).
     """
-    one = (1.0 * quantity).to_base_units().magnitude
-    two = (2.0 * quantity).to_base_units().magnitude
-    return not np.isclose(two, 2 * one)
+    zero, one, two = _base_magnitudes(quantity)
+    return np.isclose(two - one, one - zero) and not np.isclose(zero, 0)
+
+
+def _is_logarithmic_unit(quantity) -> bool:
+    """
+    Return True for a logarithmic unit (dB), whose base conversion is not linear.
+
+    A level may be scaled (2 dB times 2 is 4 dB) and compared, but adding a
+    bare number to it has no meaning the registry agrees on.
+    """
+    zero, one, two = _base_magnitudes(quantity)
+    return not np.isclose(two - one, one - zero)
 
 
 # The binary ufuncs which keep an offset unit (degC) meaningful beside a
@@ -456,19 +470,26 @@ def _apply_binary_ufunc(
             if _is_boolean(new_data):
                 return new_data, attrs.update(data_units=None)
             return new_data, attrs.update(data_units=_label(known))
+        if _is_logarithmic_unit(known) and operator in (np.add, np.subtract):
+            msg = (
+                f"{operator} is not defined between the logarithmic units {known} "
+                "and a value without units."
+            )
+            raise UnitError(msg)
         is_power = operator in (np.power, np.float_power)
         if is_power and np.ndim(other) > 0 and data_units is not None and not reversed:
             msg = f"{operator} with units {data_units} needs a scalar exponent."
             raise UnitError(msg)
         # The exponent's value decides the units of a power; for every other
-        # operation any value does, and 1.5 gives no bare result of zero.
+        # operation any value does, so a pair whose bare result is not zero
+        # is tried first (2 // 1.5 is 1, and reversed 1.5 // 2 is 0).
         probe_other = other if is_power and np.ndim(other) == 0 else 1.5
         dimensionless = get_quantity("dimensionless")
         assert dimensionless is not None
         patch_q = data_units if data_units is not None else dimensionless
         other_q = other_units if other_units is not None else dimensionless
 
-        def _probe(value):
+        def _probe(value, probe_other):
             pair = (value * patch_q, probe_other * other_q)
             try:
                 return operator(*(pair[::-1] if reversed else pair))
@@ -483,7 +504,16 @@ def _apply_binary_ufunc(
                     raise UnitError(msg) from er
 
         try:
-            probe = _probe(2.0)
+            probe, plain = None, 0.0
+            pairs = ((2.0, 1.5), (1.5, 2.0), (3.0, 2.0), (2.0, 3.0))
+            if is_power:
+                pairs = ((2.0, probe_other),)
+            for value, probe_other in pairs:
+                probe = _probe(value, probe_other)
+                pair = (value, probe_other)
+                plain = operator(*(pair[::-1] if reversed else pair))
+                if not hasattr(probe, "units") or (np.isfinite(plain) and plain != 0):
+                    break
         except UnitError:
             raise
         except (TypeError, ValueError):
@@ -498,9 +528,15 @@ def _apply_binary_ufunc(
         if not hasattr(probe, "units"):
             # a comparison: no units
             return new_data, attrs.update(data_units=None)
-        pair = (2.0, probe_other)
-        plain = operator(*(pair[::-1] if reversed else pair))
-        return new_data, attrs.update(data_units=_label(probe / plain))
+        if not (np.isfinite(plain) and plain != 0):
+            # no probe pair gave a usable bare result; keep the known units
+            return new_data, attrs.update(data_units=_label(known))
+        try:
+            return new_data, attrs.update(data_units=_label(probe / plain))
+        except TypeError:
+            # a logarithmic level cannot be divided by a number, but it has
+            # kept its unit through the operation
+            return new_data, attrs.update(data_units=str(probe.units))
 
     def _apply_op_both_unitful(
         patch, other, operator, attrs, data_units, other_units, reversed=False

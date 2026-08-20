@@ -330,6 +330,8 @@ class TestApplyUfunc:
         assert _is_offset_unit(get_quantity("degF"))
         assert not _is_offset_unit(get_quantity("kelvin"))
         assert not _is_offset_unit(get_quantity("100 cm"))
+        # a logarithmic unit is neither multiplicative nor an offset
+        assert not _is_offset_unit(get_quantity("dB"))
 
     def test_empty_unit_string_raises(self, random_patch):
         """A string operand must name units."""
@@ -386,6 +388,25 @@ class TestApplyUfunc:
         out = temp > 0.5
         assert out.attrs.data_units is None
         assert np.array_equal(np.asarray(out.data), random_patch.data > 0.5)
+
+    def test_reversed_floor_division(self, random_patch):
+        """A bare probe result of zero is sidestepped, not divided by."""
+        metres = random_patch.set_units("m") + 1  # keep away from zero
+        out = 3 // metres
+        assert np.allclose(out.data, 3 // metres.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("1/m")
+        out = metres // 3
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+
+    def test_logarithmic_units(self, random_patch):
+        """A level in dB scales and compares, but no bare number is added to it."""
+        level = random_patch.set_units("dB")
+        out = level * 2
+        assert np.allclose(out.data, 2 * random_patch.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+        assert (level > 0.5).attrs.data_units is None
+        with pytest.raises(UnitError, match="logarithmic"):
+            level + 1
 
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""

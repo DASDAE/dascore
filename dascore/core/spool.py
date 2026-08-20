@@ -1794,14 +1794,17 @@ class Spool(NamespaceOwner):
         working = _concat_compatible_rows(working, dim, check_behavior, stale)
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
-        rows = working.reset_index(drop=True)
+        remaining = working.reset_index(drop=True)
         member_frames = []
         output_rows = []
         output_id = -1
-        for start in range(0, len(rows), count):
-            group_rows = _concat_compatible_rows(
-                rows.iloc[start : start + count], dim, check_behavior, stale
-            )
+        while len(remaining):
+            # each output takes the next `count` rows admitted against its
+            # own first row; a row that first row rejects is out, not queued
+            admitted = _concat_compatible_rows(remaining, dim, check_behavior, stale)
+            group_rows = admitted.iloc[:count]
+            used = remaining.index.difference(admitted.index).union(group_rows.index)
+            remaining = remaining.loc[~remaining.index.isin(used)]
             output_id += 1  # a group's first row is always admitted
             members = pd.DataFrame(
                 {

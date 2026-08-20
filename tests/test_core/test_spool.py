@@ -1291,6 +1291,28 @@ class TestConcatenateKind:
         assert out.get_contents()["time_max"].iloc[0] == metres.get_coord("time").max()
         assert out[0].shape == metres.shape
 
+    def test_groups_refill_after_group_rejections(self, mixed_kind):
+        """A row a group's first member rejects does not hold one of its slots."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        time = other.get_coord("time")
+        n = first.shape[first.get_axis("distance")]
+        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        lat_b = other.update_coords(
+            time_min=time.max() + time.step, latitude=("distance", np.ones(n))
+        )
+        lat_a2 = other.update_coords(
+            time_min=time.max() + 2 * time.step,
+            latitude=("distance", np.arange(n, dtype=float)),
+        )
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, first.new(), lat_a, lat_b, lat_a2]).concatenate(
+                time=2
+            )
+        # [first, first] then [lat_a, lat_a2] with lat_b rejected by lat_a
+        assert len(out) == 2
+        assert out[1].shape[1] == 2 * first.shape[1]
+
     def test_plan_units_bind_to_the_first_known(self, mixed_kind):
         """The plan's units baseline is the first known one, as assembly's is."""
         first, other = mixed_kind
