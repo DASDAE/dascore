@@ -884,6 +884,30 @@ class TestBuildGapFrame:
         assert out["tag"].tolist() == ["sta1"]
         assert build_coverage_frame(df, "time")["tag"].tolist() == ["sta1"]
 
+    def test_integer_dimension_beyond_float_precision(self):
+        """A gap survives an integer coordinate too large for float64.
+
+        Past 2**53 a float margin makes `reach + step * tolerance` and
+        the next start round to the same value, so the gap disappears.
+        """
+        base = 10**18
+        df = pd.DataFrame(
+            {
+                "x_min": [base, base + 10],
+                "x_max": [base + 8, base + 18],
+                "x_step": [1, 1],
+            }
+        )
+        # the start clears the reach by 2 samples, over the 1.5 tolerance
+        out = build_gap_frame(df, "x")
+        assert len(out) == 1
+        assert out["gap_size"].iloc[0] == 2
+        # and chunk agrees the two rows cannot merge
+        assert len(build_chunk_plan(df, x=None).outputs) == 2
+        # one sample of separation is still under the tolerance
+        close = df.assign(x_min=[base, base + 9])
+        assert build_gap_frame(close, "x").empty
+
     def test_group_id_separates_cells(self, contiguous_df):
         """Cells invisible in the carried columns are still told apart."""
         # same envelopes, different sampling rate: one cell each

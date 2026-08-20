@@ -313,7 +313,11 @@ def _gap_boundaries(start, stop, step, tolerance):
     reach = np.empty_like(stops)
     reach[:1] = stops[:1]
     np.maximum.accumulate(stops[:-1], out=reach[1:])
-    has_gap = starts > reach + steps * tolerance
+    # Measure the distance from the reach rather than comparing against
+    # `reach + step * tolerance`: a float margin promotes that sum, and
+    # an integer coordinate past 2**53 rounds both endpoints together,
+    # hiding the gap. The distance itself is small enough to compare.
+    has_gap = (starts - reach) > steps * tolerance
     has_gap[:1] = False
     return order, reach, has_gap
 
