@@ -165,35 +165,66 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _geometry_panels(path, geometry, crs):
+TRACKS = ("channels", "components", "coupling")
+
+
+def _column_panels(path, columns, crs) -> list[str]:
     """Decide which geometry columns get their own line panel."""
-    stated = list(path.geometry_columns())
-    axes = [x for x in ("x", "y", "z") if x in stated]
-    others = [x for x in stated if x not in axes]
-    if geometry is True:
-        return others + axes
-    if geometry is False or geometry is None:
+    if not columns:
         return []
-    wanted = list(geometry)
-    unknown = [x for x in wanted if x not in stated]
-    if unknown:
-        msg = (
-            f"This optical path states no geometry column named {unknown[0]!r}; "
-            f"it states {tuple(stated)}."
-        )
-        raise ParameterError(msg)
+    axes = tuple(crs.coordinate_labels)
+    stated = [x for x in path.geometry_columns() if x not in axes]
+    wanted = [columns] if isinstance(columns, str) else list(columns)
+    for name in wanted:
+        if name in axes:
+            msg = (
+                f"{name!r} is a position axis of the CRS, which map() draws; "
+                f"path() draws the columns along the fiber, here {tuple(stated)}."
+            )
+            raise ParameterError(msg)
+        if name not in stated:
+            msg = (
+                f"This optical path states no geometry column named {name!r}; "
+                f"it states {tuple(stated)}."
+            )
+            raise ParameterError(msg)
     return wanted
 
 
-def _column_units(path, name, crs) -> str:
+def _column_units(path, name) -> str:
     """The units a geometry column is stated in, if any."""
-    if name in ("x", "y", "z"):
-        index = crs.axis_index(name)
-        return crs.units[index] if index < len(crs.units) else ""
     for segment in path.geometry:
         if name in segment.units:
             return segment.units[name]
     return ""
+
+
+def _select_tracks(frame, tracks, path):
+    """Keep only the lanes a caller asked for, in the order asked."""
+    if tracks is None:
+        return frame
+    groups = tuple(dict.fromkeys(x.group for x in path.labels))
+    wanted = [tracks] if isinstance(tracks, str) else list(tracks)
+    keep = []
+    for name in wanted:
+        if name == "channels":
+            keep.extend(
+                x for x in dict.fromkeys(frame["lane"]) if x.startswith("channels")
+            )
+        elif name in TRACKS or name in groups:
+            keep.append(name)
+        else:
+            msg = (
+                f"{name!r} is not a track of this optical path; the tracks are "
+                f"{TRACKS} and the label groups are {groups}."
+            )
+            raise ParameterError(msg)
+    out = frame[frame["lane"].isin(keep)]
+    if out.empty:
+        msg = f"This optical path has nothing to draw for tracks={tracks!r}."
+        raise ParameterError(msg)
+    order = {lane: index for index, lane in enumerate(keep)}
+    return out.sort_values("lane", key=lambda col: col.map(order), kind="stable")
 
 
 def path(
@@ -203,7 +234,8 @@ def path(
     acquisition_key: str | None = None,
     time=None,
     distance_limits: tuple[float, float] | None = None,
-    geometry: bool | Sequence[str] = True,
+    tracks: str | Sequence[str] | None = None,
+    columns: str | Sequence[str] | None = None,
     n_samples: int = 1000,
     color=None,
     max_labels: int = 200,
@@ -212,14 +244,15 @@ def path(
     show: bool = False,
 ) -> plt.Axes:
     """
-    Plot one optical path's tracks against optical distance.
+    Plot what lies along one optical path, against optical distance.
 
     Every track the path describes becomes a lane: the channels each
     acquisition places on it, the optical components which give it its
     length, how it is coupled to the ground, and one lane per label
-    group. The geometry's columns are drawn as line panels beneath,
-    sharing the distance axis, and break wherever the path states no
-    value rather than bridging the gap.
+    group. A geometry column such as chainage or depth can be drawn as a
+    line panel beneath, sharing the distance axis; it breaks wherever the
+    path states no value rather than bridging the gap. Where the fiber
+    physically is belongs to map().
 
     Parameters
     ----------
@@ -237,17 +270,21 @@ def path(
     distance_limits
         Optical distances to draw between. A long lead-in otherwise
         crushes the instrumented part of a path into a corner.
-    geometry
-        The geometry columns to draw beneath, or True for all of them.
+    tracks
+        Which lanes to draw, in order: any of "channels", "components",
+        "coupling", and the path's label group names. None draws all.
+    columns
+        Geometry columns to draw as line panels beneath the lanes. The
+        CRS's position axes are refused, since they belong on a map.
     n_samples
-        How finely the geometry columns are sampled.
+        How finely the columns are sampled.
     color
         Passed to the lane renderer to override its colors.
     max_labels
         Draw no lane text at all past this many intervals.
     ax
-        An Axes to draw the lanes on. Geometry panels need their own
-        figure, so passing this and naming geometry columns is refused.
+        An Axes to draw the lanes on. Column panels need their own
+        figure, so passing this and naming columns is refused.
     figsize
         Size of the figure built when ax is None.
     show
@@ -260,17 +297,18 @@ def path(
     >>>
     >>> inventory = dc.get_example_inventory("tunnel")
     >>> _ = path(inventory, time="2024-07-01", distance_limits=(1495, 1780))
+    >>> _ = path(inventory, time="2024-07-01", tracks=("coupling", "section"))
     """
     address, array, chosen = _select_path(
         inventory, optical_path, acquisition_key, time
     )
     crs = inventory.coordinate_reference_system
-    columns = _geometry_panels(chosen, geometry, crs)
+    columns = _column_panels(chosen, columns, crs)
     if ax is not None and columns:
         msg = (
-            "path draws its geometry columns in their own panels, so it "
-            "builds the figure and cannot add them to the axes passed as ax. "
-            "Pass ax with geometry=False, or leave ax unset."
+            "path draws its columns in their own panels, so it builds the "
+            "figure and cannot add them to the axes passed as ax. Pass ax "
+            "without columns, or leave ax unset."
         )
         raise ParameterError(msg)
     if chosen.optical_length <= 0:
@@ -280,6 +318,7 @@ def path(
         )
         raise ParameterError(msg)
     frame = _track_frame(chosen, _path_acquisitions(array, chosen, time))
+    frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
         height = 1.2 + 0.42 * len(lanes) + 1.1 * len(columns)
@@ -324,13 +363,9 @@ def path(
     ax.set_title(f"{address}  ·  {chosen.name or 'path'}  ·  {_epoch_label(chosen)}")
     distances = np.linspace(limits[0], limits[1], n_samples)
     for index, (panel, name) in enumerate(zip(panels, columns, strict=True)):
-        values = (
-            chosen.coordinates_at(distances, crs)[:, crs.axis_index(name)]
-            if name in ("x", "y", "z")
-            else chosen.column_at(name, distances)
-        )
+        values = chosen.column_at(name, distances)
         panel.plot(distances, values, color=plt.get_cmap(LANE_CMAP)(index % 10))
-        units = _column_units(chosen, name, crs)
+        units = _column_units(chosen, name)
         panel.set_ylabel(f"{name} [{units}]" if units else name)
         panel.grid(color="0.9", linewidth=0.5)
         panel.set_axisbelow(True)
@@ -431,8 +466,8 @@ def map_path(
         except Exception as error:  # the CRS explains itself better than we can
             msg = (
                 f"{name!r} is not an axis of this inventory's CRS, whose axes "
-                f"are {tuple(labels)}. A column which is not an axis is drawn "
-                "by path(), not on a map."
+                f"are {tuple(labels)}. A column which is not an axis is "
+                "drawn by path(), not on a map."
             )
             raise ParameterError(msg) from error
     if optical_path is None and acquisition_key is None:
