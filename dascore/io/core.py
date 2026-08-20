@@ -1142,12 +1142,13 @@ def _source_stats(source) -> tuple[int | None, int | None]:
             if is_local_path(source)
             else coerce_to_upath(source)
         )
-        stat = path.stat()
+        if path.is_dir():
+            return _directory_stats(path)
+        return _size_and_mtime(path.stat())
     except Exception:
+        # A source which will not answer is one with no size and no
+        # mtime, which is what the id then says of it.
         return None, None
-    if _is_dir(path):
-        return _directory_stats(path)
-    return _size_and_mtime(stat)
 
 
 def _size_and_mtime(stat) -> tuple[int | None, int | None]:
@@ -1159,38 +1160,28 @@ def _size_and_mtime(stat) -> tuple[int | None, int | None]:
     return (None if size is None else int(size), None if mtime is None else int(mtime))
 
 
-def _is_dir(path) -> bool:
-    """Return True when a path is a directory, and False when it cannot say."""
-    try:
-        return bool(path.is_dir())
-    except Exception:
-        return False
-
-
-def _directory_stats(path) -> tuple[int | None, int | None]:
+def _directory_stats(path) -> tuple[int, int]:
     """
     Return the total size and latest modification time of a directory.
 
     A directory-format source is one scan unit made of many files, and
     the two numbers stand for all of them: a member rewritten in place
     moves the latest mtime, and one which changes length moves the total
-    even if a clock does not.
+    even if a clock does not. A directory's own stat says neither, which
+    is why it is not used.
+
+    Hidden members are skipped, as they are in the index's own manifest
+    over a directory-format unit.
     """
-    total, latest = 0, 0
-    try:
-        members = sorted(x for x in path.rglob("*") if not x.name.startswith("."))
-    except Exception:
-        return None, None
-    for member in members:
-        try:
-            if member.is_dir():
-                continue
-            size, mtime = _size_and_mtime(member.stat())
-        except Exception:
-            return None, None
-        total += size or 0
-        latest = max(latest, mtime or 0)
-    return total, latest
+    stats = [
+        _size_and_mtime(x.stat())
+        for x in path.rglob("*")
+        if x.is_file() and not x.name.startswith(".")
+    ]
+    return (
+        sum(size or 0 for size, _ in stats),
+        max((mtime or 0 for _, mtime in stats), default=0),
+    )
 
 
 def _source_path_string(source) -> str:

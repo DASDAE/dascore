@@ -1920,6 +1920,19 @@ class TestSourceIds:
         }
         assert len(ids) == len(keys)
 
+    def test_a_source_which_will_not_answer(self):
+        """Nothing said is better than fields which pretend to be equal."""
+        assert _source_stats(Path("no/such/file.h5")) == (None, None)
+
+    def test_a_stat_which_counts_in_seconds(self):
+        """Not every filesystem answers in nanoseconds."""
+
+        class _Stat:
+            st_size = 12
+            st_mtime = 1.5
+
+        assert _size_and_mtime(_Stat()) == (12, 1_500_000_000)
+
     def test_a_directory_format_covers_its_members(self, tmp_path):
         """A member rewritten in place is not the data which was there."""
         directory = fetch("dispersion_event.h5").parent
