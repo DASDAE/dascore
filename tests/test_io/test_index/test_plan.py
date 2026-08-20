@@ -317,6 +317,36 @@ class TestGroupParameter:
         # The output carries the known value, not the first member's "".
         assert plan.outputs["acquisition_key"].iloc[0] == "XX1.R2D1..RAW"
 
+    def test_complementary_partial_kinds_combine(self, two_source_flat):
+        """Rows knowing different attrs, none conflicting, are one kind."""
+        df = two_source_flat[
+            two_source_flat["acquisition_key"] == "XX1.R2D1..RAW"
+        ].copy()
+        # first row knows only the tag, second only the key
+        df.loc[df.index[0], "acquisition_key"] = ""
+        df.loc[df.index[1], "tag"] = ""
+        plan = build_chunk_plan(df, time=None)
+        assert len(plan.outputs) == 1
+        out = plan.outputs.iloc[0]
+        assert out["acquisition_key"] == "XX1.R2D1..RAW"
+        assert out["tag"] == "random"
+
+    def test_identical_ambiguous_rows_share_a_kind(self):
+        """Un-keyed rows beside two acquisitions stay together, apart from both."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        p1 = dc.get_example_patch(time_min=t0)
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        keyed = [
+            p.update_attrs(acquisition_key=key)
+            for key in ("XX1.R2D1..RAW", "XX2.R2D1..RAW")
+            for p in (p1, p2)
+        ]
+        plan = build_chunk_plan(_flat([*keyed, p1, p2]), time=None)
+        assert len(plan.outputs) == 3
+        keys = sorted(plan.outputs["acquisition_key"].fillna(""))
+        assert keys == ["", "XX1.R2D1..RAW", "XX2.R2D1..RAW"]
+
     def test_missing_value_with_two_candidates_stays_apart(self, two_source_flat):
         """With conflicting candidates a missing value joins neither."""
         df = two_source_flat.copy()

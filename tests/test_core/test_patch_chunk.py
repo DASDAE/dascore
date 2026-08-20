@@ -544,6 +544,18 @@ class TestChunkMerge:
         assert out.get_contents()["data_type"].iloc[0] == "velocity"
         assert out[0].attrs.data_type == "velocity"
 
+    def test_surviving_member_takes_the_rows_attrs(self):
+        """Whichever duplicate survives overlap removal, patch and row agree."""
+        p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
+        p2 = dc.get_example_patch()  # same span, knows neither
+        for patches in ([p1, p2], [p2, p1]):
+            out = dc.spool(patches).chunk(time=None)
+            assert len(out) == 1
+            row = out.get_contents().iloc[0]
+            assert row["foo"] == "a" and row["data_type"] == "velocity"
+            assert out[0].attrs.foo == "a"
+            assert out[0].attrs.data_type == "velocity"
+
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
         p1 = dc.get_example_patch()

@@ -368,30 +368,44 @@ def _apply_binary_ufunc(
         probe_other = other if np.ndim(other) == 0 else 1.0
         dimensionless = get_quantity("dimensionless")
         assert dimensionless is not None
-        try:
-            patch_q, other_q = 1.0 * data_units, probe_other * dimensionless
+
+        def _probe(value):
+            """Operate on `value` of the patch's units and the probe other."""
+            patch_q, other_q = value * data_units, probe_other * dimensionless
             if reversed:
                 patch_q, other_q = other_q, patch_q
-            probe = operator(patch_q, other_q)
-        except DimensionalityError:
-            adopted = probe_other * data_units
-            pair = (
-                (adopted, 1.0 * data_units) if reversed else (1.0 * data_units, adopted)
-            )
             try:
-                probe = operator(*pair)
-            except DimensionalityError as er:
-                msg = f"{operator} failed with units {data_units} and none"
-                raise UnitError(msg) from er
+                return operator(patch_q, other_q)
+            except DimensionalityError:
+                adopted, own = probe_other * data_units, value * data_units
+                pair = (adopted, own) if reversed else (own, adopted)
+                try:
+                    return operator(*pair)
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and none"
+                    raise UnitError(msg) from er
+
+        # The units may carry a scale ("100 cm") and the data stay in them,
+        # so one unit of output is the probe's result over the bare result;
+        # a value which happens to give zero (2 - 2) is swapped for another.
+        try:
+            for value in (2.0, 3.0):
+                probe = _probe(value)
+                pair = (probe_other, value) if reversed else (value, probe_other)
+                plain = operator(*pair)
+                if not hasattr(probe, "units") or (np.isfinite(plain) and plain != 0):
+                    break
         except TypeError:
             # The unit registry does not implement this ufunc (or cannot
             # hold this scalar, a bool say); numpy does, and the units are
             # whatever they were.
             return _apply_op(patch.data, other, operator, reversed), attrs
         new_data = _apply_op(patch.data, other, operator, reversed)
-        if hasattr(probe, "units"):
-            return new_data, attrs.update(data_units=str(probe.units))
-        return new_data, attrs.update(data_units=None)
+        if not hasattr(probe, "units"):
+            return new_data, attrs.update(data_units=None)
+        unit = probe / plain
+        label = str(unit.units) if np.isclose(unit.magnitude, 1) else str(unit)
+        return new_data, attrs.update(data_units=label)
 
     def _apply_op_units(patch, other, operator, attrs, reversed=False):
         """
@@ -426,6 +440,17 @@ def _apply_binary_ufunc(
                 break
             except DimensionalityError as er:
                 error = er
+            except TypeError:
+                # The unit registry does not implement this ufunc; numpy
+                # does, on the magnitudes, with `other` expressed in the
+                # patch's units and the units left as they were.
+                try:
+                    in_patch_units = other.to(patch_q) if data_units else other
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and {other.units}"
+                    raise UnitError(msg) from er
+                other_mag = in_patch_units.magnitude
+                return _apply_op(patch.data, other_mag, operator, reversed), attrs
         else:
             msg = f"{operator} failed with units {data_units} and {other.units}"
             raise UnitError(msg) from error

@@ -97,32 +97,44 @@ def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
     """
     Label each row by kind: rows sharing a label hold no conflicting values.
 
-    A missing (null or "") value conflicts with nothing, so a row which
-    lacks some values joins the fully specified kind it is consistent
-    with — but only when there is exactly one; with none or several it
-    keeps a label of its own, shared with rows missing the same values
-    and agreeing on the rest. Deterministic and order-independent, which
-    the plan promises.
+    A missing (null or "") value conflicts with nothing, so rows are
+    gathered into runs the way `_KindRun` admits patches: a row joins the
+    one run it conflicts with nothing in, and the run takes on the values
+    the row knows. Fully specified rows seed the runs; the rest are taken
+    in a canonical order (so the labels are deterministic and independent
+    of row order), and a row consistent with *several* runs — an unlabelled
+    file between two acquisitions — starts a run of its own rather than
+    guessing. Rows spelled identically always share a label.
     """
     if not names or df.empty:
         return pd.Series(0, index=df.index, dtype=np.int64)
     values = known_only(df[list(names)].astype(object))
     values = values.where(values.notna(), None)
     rows = [tuple(x) for x in values.itertuples(index=False, name=None)]
-    full = {x for x in rows if None not in x}
-    labels: dict[tuple, int] = {x: i for i, x in enumerate(sorted(full, key=str))}
+    order = sorted(
+        range(len(rows)), key=lambda i: (None in rows[i], [str(x) for x in rows[i]])
+    )
+    runs: list[tuple] = []  # the accumulated kind of each label
+    seeded: dict[tuple, int] = {}  # the label a spelling started
     out = np.empty(len(rows), dtype=np.int64)
-    for i, row in enumerate(rows):
-        if row in labels:
-            out[i] = labels[row]
-            continue
-        candidates = [
-            x
-            for x in full
-            if all(a is None or a == b for a, b in zip(row, x, strict=True))
-        ]
-        key = candidates[0] if len(candidates) == 1 else row
-        out[i] = labels.setdefault(key, len(labels))
+    for i in order:
+        row = rows[i]
+        if (label := seeded.get(row)) is None:
+            candidates = [
+                j
+                for j, run in enumerate(runs)
+                if all(a is None or b is None or a == b for a, b in zip(row, run))
+            ]
+            if len(candidates) == 1:
+                (label,) = candidates
+                runs[label] = tuple(
+                    a if a is not None else b for a, b in zip(runs[label], row)
+                )
+            else:
+                label = len(runs)
+                runs.append(row)
+            seeded[row] = label
+        out[i] = label
     return pd.Series(out, index=df.index)
 
 

@@ -88,7 +88,7 @@ from dascore.utils.misc import (
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
-    _rows_of_one_kind,
+    _concat_compatible_rows,
     concatenate_patches,
     get_patch_names,
     stack_patches,
@@ -1778,8 +1778,8 @@ class Spool(NamespaceOwner):
         # can stack patches along a brand-new dimension
         has_envelope = f"{dim}_min" in working.columns
         # Decided here, from metadata, so the plan rows agree with the
-        # patches assembly later concatenates (which applies the same gate).
-        working = _rows_of_one_kind(working, check_behavior)
+        # patches assembly later concatenates (which applies the same gates).
+        working = _concat_compatible_rows(working, dim, check_behavior)
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
         rows = working.reset_index(drop=True)

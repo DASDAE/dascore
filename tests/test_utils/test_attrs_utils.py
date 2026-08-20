@@ -54,6 +54,11 @@ class TestMergeAttrs:
             assert dc.get_quantity(out.data_units) == dc.get_quantity("m/s")
             assert out.gauge == 10.0
 
+    def test_all_missing_is_omitted(self):
+        """An attr nobody knows is left out rather than carried as ""."""
+        out = combine_patch_attrs([PatchAttrs(foo=""), PatchAttrs(foo="")])
+        assert out.get("foo") is None
+
     def test_drop_keeps_known_beside_missing(self):
         """Drop only omits attrs whose known values conflict."""
         pa1 = PatchAttrs(data_type="velocity", foo="a")

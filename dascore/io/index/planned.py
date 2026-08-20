@@ -405,6 +405,9 @@ class PlanResolver(PatchResolver):
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
         self.check_behavior = check_behavior
+        # The kind rule which produced the plan decides assembly too,
+        # whatever the config says by the time a patch is asked for.
+        self.kind_attrs = dc.get_config().patch_kind_attrs
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
         # attrs the outputs state about themselves rather than inherit
@@ -489,6 +492,11 @@ class PlanResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
+        with dc.config_context(patch_kind_attrs=self.kind_attrs):
+            return self._resolve(row, **trim)
+
+    def _resolve(self, row: Mapping, **trim) -> dc.Patch:
+        """Assemble under the plan's own kind rule."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         assert len(members), "no plan members found for output row"
@@ -530,11 +538,22 @@ class PlanResolver(PatchResolver):
         # matches, and overlap removal may keep the member which lacked
         # it). Fill them so the patch agrees with the row.
         attrs = patch.attrs
-        names = set(dc.get_config().patch_kind_attrs) | set(attrs.model_fields)
+        # every public attr column the row carries, extras included; the
+        # coordinate envelope columns and the row's own bookkeeping are not attrs
+        coords = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
+        coord_prefixes = tuple(f"{x}_" for x in coords)
+        skip = {*_SOURCE_COLUMNS, *coords, "dims", "output_id"}
+        names = {
+            x
+            for x in row
+            if not x.startswith("_")
+            and x not in skip
+            and not x.startswith(coord_prefixes)
+        }
         fill = {
             x: row[x]
             for x in names
-            if x in row and not _is_missing(row[x]) and _is_missing(attrs.get(x))
+            if not _is_missing(row[x]) and _is_missing(attrs.get(x))
         }
         if fill:
             patch = patch.new(attrs=attrs.update(**fill))

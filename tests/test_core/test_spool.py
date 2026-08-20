@@ -1158,6 +1158,37 @@ class TestConcatenateKind:
         with pytest.raises(IncompatiblePatchError, match="not the same kind"):
             dc.spool(mixed_kind).concatenate(time=None, check_behavior="raise")
 
+    def test_structure_rejected_row_binds_nothing(self, mixed_kind):
+        """A row rejected for its coordinates must not set the plan's kind."""
+        first, _ = mixed_kind
+        blank = first.update_attrs(tag="")
+        bad = first.update_attrs(tag="a").update_coords(distance_min=5)
+        good = first.update_attrs(tag="b")
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([blank, bad, good]).concatenate(time=None)
+        assert len(out) == 1
+        assert out.get_contents()["tag"].iloc[0] == "b"
+        assert out[0].attrs.tag == "b"
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_plan_keeps_its_kind_rule(self, mixed_kind):
+        """A plan made under one kind rule assembles under it later."""
+        first, other = mixed_kind
+        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
+            out = dc.spool([first, other]).concatenate(time=None)
+            assert len(out) == 1
+        # tag is back in the default rule, but the plan was made without it
+        patch = out[0]
+        assert patch.shape[1] == 2 * first.shape[1]
+
+    def test_missing_kind_value_filled_in_rows_and_patch(self, mixed_kind):
+        """A first member lacking the key takes the others' in row and patch."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag, acquisition_key="XX.R2D1..RAW")
+        out = dc.spool([first, other]).concatenate(time=None)
+        assert out.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert out[0].attrs.acquisition_key == "XX.R2D1..RAW"
+
     def test_same_kind_concatenates(self, mixed_kind):
         """Same-kind patches with differing other attrs still concatenate."""
         first, other = mixed_kind

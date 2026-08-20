@@ -242,6 +242,37 @@ class TestApplyUfunc:
         assert np.array_equal(out.data, ints.data & 3)
         out = apply_ufunc(np.logical_and, random_patch.set_units("m"), True)
         assert out.data.dtype == np.bool_
+        # Two unitful operands take the same fallback, other in patch units.
+        out = apply_ufunc(np.bitwise_and, metres, metres)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.array_equal(out.data, ints.data & ints.data)
+        with pytest.raises(UnitError):
+            apply_ufunc(np.bitwise_and, metres, ints.set_units("s"))
+
+    def test_scaled_units_keep_their_scale(self, random_patch):
+        """Data in "100 cm" stay as they are; the scale rides on the units."""
+        scaled = random_patch.set_units("100 cm")
+        out = scaled * 2
+        assert np.allclose(out.data, 2 * random_patch.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = scaled - 1
+        assert np.allclose(out.data, random_patch.data - 1)
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = scaled**2
+        assert get_quantity(out.attrs.data_units) == get_quantity("10000 cm**2")
+
+    def test_unit_and_unit_string_operands(self, random_patch):
+        """A Unit or a unit string names units, unlike a bare number."""
+        patch = random_patch.set_units("m")
+        assert get_quantity((patch * m.units).attrs.data_units) == get_quantity("m**2")
+        assert get_quantity((patch / "s").attrs.data_units) == get_quantity("m/s")
+
+    def test_no_units_fit_raises(self, random_patch):
+        """An operation no assignment of units can satisfy raises UnitError."""
+        patch = random_patch.set_units("m")
+        # dimensionless ** metres and metres ** metres both fail
+        with pytest.raises(UnitError, match="failed with units"):
+            apply_ufunc(np.power, 2.0, patch)
 
     def test_scalar_units_need_no_array_wrapping(self, random_patch):
         """Scalars settle units on a probe; comparisons and powers behave."""

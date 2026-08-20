@@ -1353,22 +1353,52 @@ def _with_kind(attrs: dc.PatchAttrs, kind: Mapping) -> dc.PatchAttrs:
     return attrs.update(**fill) if fill else attrs
 
 
-def _rows_of_one_kind(df: pd.DataFrame, check_behavior: WARN_LEVELS) -> pd.DataFrame:
+def _concat_compatible_rows(
+    df: pd.DataFrame, dim: str, check_behavior: WARN_LEVELS
+) -> pd.DataFrame:
     """
-    Keep the patch-summary rows which do not conflict in kind.
+    Keep the patch-summary rows `concatenate_patches` would concatenate.
 
-    This is the `_KindRun` rule over a spool's metadata, so a plan decided
-    from metadata agrees with the patches later assembled from it. Kind
+    The same gates, from metadata, so a plan decided without loading data
+    agrees with the patches assembled from it: a row must not conflict in
+    kind with the rows admitted so far, and must share the first row's
+    dimensions and coordinate identity (def keys) on every dimension other
+    than the concatenated one. A row rejected for its structure binds no
+    kind, exactly as a patch rejected for its coordinates does not. Kind
     attrs absent from the columns are absent from every patch and ignored.
     """
     validate_warn_level(check_behavior)
-    names = [x for x in get_config().patch_kind_attrs if x in df.columns]
-    if not names or df.empty:
+    if df.empty:
         return df
+    names = [x for x in get_config().patch_kind_attrs if x in df.columns]
+    first = df.iloc[0]
+    # the first row's dimensions, other than the concatenated one, carry
+    # the coordinate identities every row must share
+    first_dims = str(first["dims"]).split(",") if "dims" in df.columns else []
+    structure = ["dims"] if "dims" in df.columns else []
+    structure += [
+        key for x in first_dims if x != dim and (key := f"_{x}_def_key") in df.columns
+    ]
     run, keep = _KindRun(), []
-    for row in df[names].itertuples(index=False, name=None):
-        kind = {x: _kind_value(y) for x, y in zip(names, row)}
+    for _, row in df.iterrows():
+        kind = {x: _kind_value(row[x]) for x in names}
         ok = run.admits(kind, check_behavior)
+        if ok and structure:
+            same = all(
+                (_is_missing(row[x]) and _is_missing(first[x]))
+                or _values_equal(row[x], first[x])
+                for x in structure
+            )
+            if not same:
+                msg = (
+                    "Patches are not compatible for concatenation: dimensions "
+                    "or coordinates other than the concatenated one differ "
+                    "from the first patch's."
+                )
+                warn_or_raise(
+                    msg, exception=IncompatiblePatchError, behavior=check_behavior
+                )
+                ok = False
         keep.append(ok)
         if ok:
             run.add(kind)
