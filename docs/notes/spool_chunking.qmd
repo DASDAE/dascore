@@ -31,7 +31,7 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 
 Patches may only combine when they agree on all of:
 
-1. **Group attributes** — the config option `groupby_attrs` by default (conventional categorical identity: acquisition key, data type/category, and tag), overridden per call with `group=`. Differing group values are never an error; the patches simply land in separate outputs. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
+1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Conflicting values are never an error; the patches simply land in separate outputs. A missing value conflicts with nothing: a patch lacking one joins the single fully specified kind consistent with it, or stays apart when there are several. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
@@ -40,9 +40,9 @@ Patches may only combine when they agree on all of:
 import numpy as np
 
 t0 = np.datetime64("2020-01-01", "ns")
-p1 = dc.get_example_patch(time_min=t0)
+p1 = dc.get_example_patch(time_min=t0, acquisition_key="XX1.R2D1..RAW")
 time = p1.get_coord("time")
-p2 = dc.get_example_patch(time_min=time.max() + time.step)
+p2 = dc.get_example_patch(time_min=time.max() + time.step, acquisition_key="XX1.R2D1..RAW")
 source = "XX2.R2D1..RAW"
 p3, p4 = p1.update_attrs(acquisition_key=source), p2.update_attrs(acquisition_key=source)
 
@@ -51,7 +51,15 @@ merged = dc.spool([p1, p2, p3, p4]).chunk(time=None)
 assert len(merged) == 2
 ```
 
-Remaining (non-group, non-dimensional) attributes must be single-valued within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`.
+Remaining (non-group, non-dimensional) attributes must hold no *conflicting* values within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`. A missing value (null or `""`) is an attribute nobody recorded, so it conflicts with nothing and the output carries the known value; only two differing known values are a conflict. History and the ids are never policed — the output carries the first member's — but merging members whose histories differ (processed beside unprocessed data) warns.
+
+```{python}
+typed = p1.update_attrs(data_type="velocity")
+merged = dc.spool([typed, p2]).chunk(time=None)
+assert len(merged) == 1
+assert merged.get_contents()["data_type"].iloc[0] == "velocity"
+assert merged[0].attrs.data_type == "velocity"
+```
 
 Chunking is defined on dimensions: a patch that lacks the chunked dimension — including one that carries the name only as a *non-dimensional coordinate*, which cannot be trimmed or merged along it — raises by default, and `missing_dim="drop"` excludes it instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
 

@@ -47,6 +47,13 @@ with config_context(patch_history="disabled"):
     ...
 ```
 
+Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with conflicting values for any of them are never combined; a missing value conflicts with nothing). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
+
+```python
+with config_context(patch_kind_attrs=("acquisition_key",)):
+    ...  # tag and data_category no longer separate patches
+```
+
 For remote IO settings such as `allow_remote_cache`,
 `allow_remote_cache_for_metadata`, `warn_on_remote_cache`,
 `remote_hdf5_block_size`, `remote_hdf5_max_blocks`, and `warn_on_gc_pause`,

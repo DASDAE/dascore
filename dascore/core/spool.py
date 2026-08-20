@@ -69,6 +69,7 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
+from dascore.utils.attrs import _is_missing, known_only
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -87,6 +88,7 @@ from dascore.utils.misc import (
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
+    _rows_of_one_kind,
     concatenate_patches,
     get_patch_names,
     stack_patches,
@@ -1677,11 +1679,13 @@ class Spool(NamespaceOwner):
         conflict
             {conflict_desc}
         group
-            Attributes which partition patches into separate outputs (their
-            values differing is never an error). Defaults to the config
-            option `groupby_attrs`; unlike the default, explicitly passed
-            names must exist on at least one patch. Dimensions and
-            coordinate identities always partition implicitly.
+            Attributes which partition patches into separate outputs:
+            conflicting values are never an error, the patches simply land
+            in different outputs, and a missing value (null or "") joins the
+            one group consistent with it. Defaults to the config option
+            `patch_kind_attrs`; unlike the default, explicitly passed names
+            must exist on at least one patch. Dimensions and coordinate
+            identities always partition implicitly.
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
@@ -1773,6 +1777,9 @@ class Spool(NamespaceOwner):
         # a dim absent from the metadata envelopes is legal: concatenate
         # can stack patches along a brand-new dimension
         has_envelope = f"{dim}_min" in working.columns
+        # Decided here, from metadata, so the plan rows agree with the
+        # patches assembly later concatenates (which applies the same gate).
+        working = _rows_of_one_kind(working, check_behavior)
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
         rows = working.reset_index(drop=True)
@@ -1789,6 +1796,12 @@ class Spool(NamespaceOwner):
             )
             member_frames.append(members)
             first = group_rows.iloc[0].to_dict()
+            # kind values the first member lacks come from the others
+            for col in dc.get_config().patch_kind_attrs:
+                if col in group_rows.columns and _is_missing(first.get(col)):
+                    known = known_only(group_rows[col]).dropna()
+                    if len(known):
+                        first[col] = known.iloc[0]
             if "_dtype" in group_rows.columns:
                 # concatenation upcasts like a merge does, so the group's
                 # dtype is what the members combine to, not the first row's

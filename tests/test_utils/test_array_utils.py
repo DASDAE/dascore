@@ -15,7 +15,12 @@ import dascore as dc
 import dascore.proc.coords
 import dascore.utils.array as array_utils
 from dascore import get_quantity
-from dascore.exceptions import ParameterError, UnitError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    ParameterError,
+    PatchCoordinateError,
+    UnitError,
+)
 from dascore.units import furlongs, m, s
 from dascore.utils.array import (
     UFUNC_NAMES,
@@ -108,15 +113,13 @@ class TestApplyUfunc:
         assert np.allclose(out1.data, random_patch.data + 1)
         assert np.allclose(out2.data, random_patch.data + 10)
 
-    def test_incompatible_coords(self, random_patch):
-        """Ensure un-alignable coords returns degenerate patch."""
+    def test_disjoint_coords_raise(self, random_patch):
+        """Un-alignable coords are a conflict, not an empty answer."""
         time = random_patch.get_coord("time")
         new_time = time.max() + time.step
         new = random_patch.update_coords(time_min=new_time)
-        out = apply_ufunc(np.multiply, new, random_patch)
-        assert 0 in set(out.shape)
-        assert out.data.size == 0
-        assert out.dims == random_patch.dims
+        with pytest.raises(PatchCoordinateError, match="share no values"):
+            apply_ufunc(np.multiply, new, random_patch)
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -191,6 +194,69 @@ class TestApplyUfunc:
         other = 10 * get_quantity("m")
         with pytest.raises(UnitError):
             apply_ufunc(np.add, pa1, other)
+
+    def test_different_kind_raises(self, random_patch):
+        """Patches of different kinds are never operated together."""
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            apply_ufunc(np.add, random_patch, other)
+
+    def test_units_take_part_rather_than_gate(self, random_patch):
+        """Differing data units go through the operator, not a kind check."""
+        pa1 = random_patch.set_units("m")
+        pa2 = random_patch.set_units("s")
+        out = apply_ufunc(np.multiply, pa1, pa2)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m * s")
+        with pytest.raises(UnitError):
+            apply_ufunc(np.add, pa1, pa2)
+        # Convertible units are converted to the first patch's.
+        pa3 = random_patch.set_units("km")
+        out = apply_ufunc(np.add, pa1, pa3)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.allclose(out.data, pa1.data + 1000 * pa3.data)
+
+    @pytest.mark.parametrize("kind", ["patch", "array", "scalar"])
+    def test_missing_units_conflict_with_nothing(self, random_patch, kind):
+        """A unitless operand: dimensionless for products, adopts for sums."""
+        metres = random_patch.set_units("m")
+        bare = {
+            "patch": random_patch.set_units(None),
+            "array": np.ones(random_patch.shape),
+            "scalar": 2,
+        }[kind]
+        m, per_m = get_quantity("m"), get_quantity("1/m")
+        assert get_quantity((metres + bare).attrs.data_units) == m
+        assert get_quantity((bare + metres).attrs.data_units) == m
+        assert get_quantity((metres * bare).attrs.data_units) == m
+        assert get_quantity((metres / bare).attrs.data_units) == m
+        assert get_quantity((bare / metres).attrs.data_units) == per_m
+        # Comparisons need equal units too, so they adopt rather than raise.
+        assert (metres > bare).data.dtype == np.bool_
+
+    def test_ufuncs_outside_the_unit_registry(self, random_patch):
+        """A ufunc the registry lacks still works; units are left as they were."""
+        ints = random_patch.new(data=(random_patch.data * 100).astype(np.int64))
+        metres = ints.set_units("m")
+        out = apply_ufunc(np.bitwise_and, metres, 3)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.array_equal(out.data, ints.data & 3)
+        out = apply_ufunc(np.logical_and, random_patch.set_units("m"), True)
+        assert out.data.dtype == np.bool_
+
+    def test_scalar_units_need_no_array_wrapping(self, random_patch):
+        """Scalars settle units on a probe; comparisons and powers behave."""
+        metres = random_patch.set_units("m")
+        assert (metres > 5).data.dtype == np.bool_
+        assert get_quantity((metres**2).attrs.data_units) == get_quantity("m**2")
+        with pytest.raises(UnitError, match="scalar exponent"):
+            metres ** np.ones(metres.shape)
+
+    def test_other_attrs_keep_first(self, random_patch):
+        """Attrs outside the kind keep the first patch's value."""
+        pa1 = random_patch.update_attrs(foo="a")
+        pa2 = random_patch.update_attrs(foo="b")
+        assert apply_ufunc(np.add, pa1, pa2).attrs.foo == "a"
+        assert apply_ufunc(np.add, pa2, pa1).attrs.foo == "b"
 
     def test_patches_non_coords_len_1(self, random_patch):
         """Ensure patches with non-coords also work."""

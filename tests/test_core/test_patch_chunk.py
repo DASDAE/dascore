@@ -533,11 +533,33 @@ class TestChunkMerge:
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
 
+    def test_missing_attr_merges_and_carries(self):
+        """A member lacking an attr merges; the output carries the known value."""
+        p1 = dc.get_example_patch().update_attrs(data_type="velocity")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        assert p2.attrs.data_type == ""
+        out = dc.spool([p1, p2]).chunk(time=None)
+        assert len(out) == 1
+        assert out.get_contents()["data_type"].iloc[0] == "velocity"
+        assert out[0].attrs.data_type == "velocity"
+
+    def test_history_warns_not_raises(self):
+        """Differing histories merge with a warning, carrying the first's."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.pass_filter(time=(None, 10))
+        with pytest.warns(UserWarning, match="histories differ"):
+            patch = dc.spool([p1, p2]).chunk(time=None)[0]
+        assert patch.shape[1] == 2 * p1.shape[1]
+        assert patch.attrs.history == p1.attrs.history
+
     def test_attrs_conflict(self, adjacent_spool_different_attrs):
         """Test various cases for specifying what to do when attrs conflict."""
         spool = adjacent_spool_different_attrs
         # when we don't specify to ignore or drop attrs this should raise.
-        match = "all values for my_attr"
+        match = "my_attr holds conflicting values"
         with pytest.raises(CoordMergeError, match=match):
             spool.chunk(time=...)
         # however, when we specify drop attrs this shouldn't.

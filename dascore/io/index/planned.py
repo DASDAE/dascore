@@ -42,6 +42,7 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.units import get_quantity
+from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_patches
@@ -483,7 +484,7 @@ class PlanResolver(PatchResolver):
             return patch
         # raw_function: the conversion serves the plan's own bookkeeping,
         # and a history entry on some members but not others would make
-        # otherwise-mergeable members conflict on attrs.
+        # the merge warn about histories differing.
         return dc.proc.units.convert_units.raw_function(patch, **{self.dim: plan_units})
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
@@ -522,9 +523,22 @@ class PlanResolver(PatchResolver):
         the patch which comes out agreeing with the row `get_contents`
         shows for it.
         """
-        if not self.stamped:
-            return patch
-        return patch.update_attrs(**{x: row[x] for x in self.stamped})
+        if self.stamped:
+            patch = patch.update_attrs(**{x: row[x] for x in self.stamped})
+        # A row carries its partition's known attr values; the members
+        # which survived into this output may lack some (a missing value
+        # matches, and overlap removal may keep the member which lacked
+        # it). Fill them so the patch agrees with the row.
+        attrs = patch.attrs
+        names = set(dc.get_config().patch_kind_attrs) | set(attrs.model_fields)
+        fill = {
+            x: row[x]
+            for x in names
+            if x in row and not _is_missing(row[x]) and _is_missing(attrs.get(x))
+        }
+        if fill:
+            patch = patch.new(attrs=attrs.update(**fill))
+        return patch
 
 
 def _residual_ranges(residuals) -> dict:

@@ -127,7 +127,8 @@ class TestMergePlan:
         )
         for col in ("acquisition_key", "tag"):
             src, out = merged[f"{col}_src"], merged[f"{col}_out"]
-            equal = (src == out) | (src.isnull() & out.isnull())
+            # a member missing the value matches any output value
+            equal = (src == out) | src.isnull() | (src == "")
             assert equal.all()
 
     def test_gap_splits_partition(self):
@@ -231,18 +232,29 @@ class TestConflict:
 
     @pytest.fixture(scope="class")
     def conflicted_patches(self):
-        """Two contiguous patches with a differing non-group attr."""
+        """Two contiguous patches with conflicting known values of an attr."""
         t0 = np.datetime64("2020-01-01", "ns")
-        p1 = dc.get_example_patch(time_min=t0)
+        p1 = dc.get_example_patch(time_min=t0).update_attrs(data_units="ft/s")
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
         p2 = p2.update_attrs(data_units="m/s")
         return [p1, p2]
 
     def test_raise(self, conflicted_patches):
-        """Differing non-group attrs raise by default."""
+        """Conflicting known values raise by default."""
         with pytest.raises(CoordMergeError, match="data_units"):
             build_chunk_plan(_flat(conflicted_patches), time=None)
+
+    def test_missing_value_is_not_a_conflict(self, conflicted_patches):
+        """A member lacking the attr merges; the output carries the known value."""
+        p1, p2 = conflicted_patches
+        df = _flat([p1.update_attrs(data_units=None), p2])
+        plan = build_chunk_plan(df, time=None)
+        assert len(plan.outputs) == 1
+        assert plan.outputs["data_units"].iloc[0] == "m / s"
+        # the same for drop, which only omits real conflicts
+        plan = build_chunk_plan(df, time=None, conflict="drop")
+        assert plan.outputs["data_units"].iloc[0] == "m / s"
 
     def test_keep_first(self, conflicted_patches):
         """keep_first carries the first member's value."""
@@ -251,6 +263,22 @@ class TestConflict:
         first_id = df.sort_values("time_min")["_patch_id"].iloc[0]
         expected = df.loc[df["_patch_id"] == first_id, "data_units"].iloc[0]
         assert plan.outputs["data_units"].iloc[0] == expected
+
+    def test_keep_first_known(self, conflicted_patches):
+        """keep_first skips a first member which lacks the value."""
+        p1, p2 = conflicted_patches
+        third = p2.update_coords(
+            time_min=p2.get_coord("time").max() + p2.get_coord("time").step
+        )
+        df = _flat(
+            [
+                p1.update_attrs(data_units=None),
+                p2,
+                third.update_attrs(data_units="ft/s"),
+            ]
+        )
+        plan = build_chunk_plan(df, time=None, conflict="keep_first")
+        assert plan.outputs["data_units"].iloc[0] == "m / s"
 
     def test_drop(self, conflicted_patches):
         """Drop omits the conflicting attr from outputs."""
@@ -273,9 +301,29 @@ class TestGroupParameter:
         p1 = dc.get_example_patch(time_min=t0)
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p1, p2 = (x.update_attrs(acquisition_key="XX1.R2D1..RAW") for x in (p1, p2))
         p3 = p1.update_attrs(acquisition_key="XX2.R2D1..RAW")
         p4 = p2.update_attrs(acquisition_key="XX2.R2D1..RAW")
         return _flat([p1, p2, p3, p4])
+
+    def test_missing_value_joins_the_one_candidate(self, two_source_flat):
+        """A row lacking a kind value joins the only kind consistent with it."""
+        df = two_source_flat
+        # Remove one acquisition entirely; the un-keyed row is unambiguous.
+        one = df[df["acquisition_key"] == "XX1.R2D1..RAW"].copy()
+        one.loc[one.index[-1], "acquisition_key"] = ""
+        plan = build_chunk_plan(one, time=None)
+        assert len(plan.outputs) == 1
+        # The output carries the known value, not the first member's "".
+        assert plan.outputs["acquisition_key"].iloc[0] == "XX1.R2D1..RAW"
+
+    def test_missing_value_with_two_candidates_stays_apart(self, two_source_flat):
+        """With conflicting candidates a missing value joins neither."""
+        df = two_source_flat.copy()
+        df.loc[df.index[0], "acquisition_key"] = ""
+        plan = build_chunk_plan(df, time=None)
+        # un-keyed first patch alone, the rest of XX1, and XX2
+        assert len(plan.outputs) == 3
 
     def test_source_partitions(self, two_source_flat):
         """Different data sources produce separate outputs, no error."""
@@ -290,8 +338,8 @@ class TestGroupParameter:
             build_chunk_plan(two_source_flat, time=None, group=())
 
     def test_config_group(self, two_source_flat):
-        """Config groupby_attrs drives the default partitioning."""
-        with dc.config_context(groupby_attrs=("tag",)):
+        """Config patch_kind_attrs drives the default partitioning."""
+        with dc.config_context(patch_kind_attrs=("tag",)):
             with pytest.raises(CoordMergeError, match="acquisition_key"):
                 build_chunk_plan(two_source_flat, time=None)
 
@@ -369,7 +417,15 @@ class TestChunkPlanAccessor:
         spool = dc.get_example_spool("diverse_das")
         plan = spool.chunk_plan(time=None)
         assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
-        assert len(plan.members) == len(spool)
+        # Three un-keyed patches and three keyed ones cover the same span
+        # with the same tag; a missing key matches, so they are one kind and
+        # overlap removal keeps one copy of each span.
+        assert len(plan.members) == len(spool) - 3
+        assert set(plan.members["_patch_id"]) <= set(spool.get_contents()["_patch_id"])
+        # The plan rows and the assembled patches agree on the key.
+        out = spool.chunk(time=None)
+        keys = out.get_contents()["acquisition_key"]
+        assert [x.attrs.acquisition_key for x in out] == list(keys)
 
     def test_directory_spool(self, tmp_path):
         """chunk_plan works on file-backed spools."""

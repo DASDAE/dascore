@@ -18,6 +18,7 @@ from __future__ import annotations
 import inspect
 import math
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +42,7 @@ from dascore.units import (
     get_quantity,
     is_data_size,
 )
-from dascore.utils.attrs import validate_conflict
+from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
 from dascore.utils.pd import get_interval_columns
@@ -92,6 +93,39 @@ class ChunkPlan:
         return self.value is None
 
 
+def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
+    """
+    Label each row by kind: rows sharing a label hold no conflicting values.
+
+    A missing (null or "") value conflicts with nothing, so a row which
+    lacks some values joins the fully specified kind it is consistent
+    with — but only when there is exactly one; with none or several it
+    keeps a label of its own, shared with rows missing the same values
+    and agreeing on the rest. Deterministic and order-independent, which
+    the plan promises.
+    """
+    if not names or df.empty:
+        return pd.Series(0, index=df.index, dtype=np.int64)
+    values = known_only(df[list(names)].astype(object))
+    values = values.where(values.notna(), None)
+    rows = [tuple(x) for x in values.itertuples(index=False, name=None)]
+    full = {x for x in rows if None not in x}
+    labels: dict[tuple, int] = {x: i for i, x in enumerate(sorted(full, key=str))}
+    out = np.empty(len(rows), dtype=np.int64)
+    for i, row in enumerate(rows):
+        if row in labels:
+            out[i] = labels[row]
+            continue
+        candidates = [
+            x
+            for x in full
+            if all(a is None or a == b for a, b in zip(row, x, strict=True))
+        ]
+        key = candidates[0] if len(candidates) == 1 else row
+        out[i] = labels.setdefault(key, len(labels))
+    return pd.Series(out, index=df.index)
+
+
 def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     """Resolve the group attrs: per-call > config; explicit names must exist."""
     if group is not None:
@@ -103,7 +137,7 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
             raise InvalidSpoolQueryError(msg)
         return group
     # Config (and default) names are best-effort.
-    return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
+    return tuple(x for x in dc.get_config().patch_kind_attrs if x in columns)
 
 
 def samples_adjusted_envelopes(
@@ -328,15 +362,17 @@ def _partition(
     Return (partition labels, forced_merge): rows sharing a label may
     combine (spec 2).
 
-    Components: group attrs, dims signature, structural def keys of
-    non-chunked coords, sampling group, and continuity group. Continuity
+    Components: kind labels (`_kind_codes` over the group attrs), dims
+    signature, structural def keys of non-chunked coords, sampling group,
+    and continuity group. Continuity
     is evaluated *within* each other-component cell so unrelated patches
     can never bridge a gap. `forced_merge` is True when a loosened
     tolerance merged patches the default would have kept apart (#662);
     the caller owns warning about it.
     """
     _start, _stop, step = get_interval_columns(df, name)
-    cols = [x for x in group_attrs if x in df.columns]
+    kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
+    cols: list = [kind]
     if "dims" in df.columns:
         cols.append("dims")
     # Structural identity: def keys of non-chunked *dimensions* only
@@ -352,11 +388,8 @@ def _partition(
     # coordinates either.
     if (unit_col := f"_{name}_units") in df.columns:
         cols.append(unit_col)
-    base = (
-        df.groupby(cols, dropna=False, sort=False).ngroup()
-        if cols
-        else pd.Series(0, index=df.index)
-    )
+    cols = [df[x] if isinstance(x, str) else x for x in cols]
+    base = df.groupby(cols, dropna=False, sort=False).ngroup()
     samp = _sampling_group(step, sampling_tolerance)
     cell = base.astype(str) + "_" + samp.astype(str)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
@@ -746,9 +779,11 @@ def _carried_columns(
     """
     Resolve every partition's carried columns at once (spec 2.5/6.4).
 
-    Group attrs, dims, and def keys are single-valued by construction.
-    Remaining public attrs must be single-valued per partition, policed
-    by `conflict`. Returns a mapping of column -> one carried value per
+    Dims and def keys are single-valued by construction. Public attrs
+    must hold no conflicting *known* values per partition, policed by
+    `conflict`: a missing value (null or "") is an attr nobody recorded,
+    so it conflicts with nothing and the partition carries the known
+    value. Returns a mapping of column -> one carried value per
     partition (null where a partition does not carry the column), in the
     order columns ride onto outputs. A conflict raises for the first
     active partition (in output order) and its first conflicting column,
@@ -783,46 +818,42 @@ def _carried_columns(
         # were never policed (their values may not even be hashable),
         # and their carried values are never published.
         rows = active[codes]
-        grouped = sorted_df.loc[rows, policed].groupby(codes[rows], sort=True)
-        group_size = grouped.size()
-        part_index = group_size.index.to_numpy()
-        sizes = np.zeros(n_parts, dtype=np.intp)
-        sizes[part_index] = group_size.to_numpy()
+        # "" is a value nobody recorded, like null; neither conflicts.
+        known = known_only(sorted_df.loc[rows, policed])
+        grouped = known.groupby(codes[rows], sort=True)
+        part_index = grouped.size().index.to_numpy()
         nunique = np.zeros((n_parts, len(policed)), dtype=np.intp)
         # An unhashable attr value in an active partition raises
         # TypeError here. Per-partition policing raised it too, though
         # partition-major rather than at aggregation; such values are
         # outside the relation's contract, so the eager error is fine.
         nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
-        counts = np.zeros_like(nunique)
-        counts[part_index] = grouped.count().to_numpy()
-        # single-valued: one distinct value with no nulls beside it, or
-        # all null (matching Series.unique length semantics; nunique
-        # with dropna=False would differ — it counts None and NaN in an
-        # object column as two, where unique-length logic calls a
-        # partition holding only nulls single-valued)
-        single = ((nunique == 1) & (counts == sizes[:, None])) | (counts == 0)
+        # no conflict: at most one distinct known value
+        single = nunique <= 1
         conflicted = ~single & active[:, None]
-        # Group attrs and dims are partition keys, so they are always
-        # single-valued and never reach the conflict policy here.
+        # the first known value of each partition, null where none
+        firsts = pd.DataFrame(index=range(n_parts), columns=policed, dtype=object)
+        firsts.loc[part_index] = grouped.first().to_numpy()
+        # Dims are a partition key and group attrs never conflict within
+        # one, so neither reaches the conflict policy here.
         raising = conflicted & (owned | (conflict == "raise"))
         if raising.any():
             part = int(np.argmax(raising.any(axis=1)))
             col = policed[int(np.argmax(raising[part]))]
             msg = (
-                f"Cannot merge on dim {name} because all values for "
-                f"{col} are not equal. Consider using the `conflict` "
-                "argument to loosen this restriction."
+                f"Cannot merge on dim {name} because {col} holds conflicting "
+                "values. Consider using the `conflict` argument to loosen "
+                "this restriction."
             )
             raise CoordMergeError(msg)
         keep_first = conflict == "keep_first"
         for index, col in enumerate(policed):
-            # keep_first carries the first member's value; drop omits the
+            # keep_first carries the first known value; drop omits the
             # column for that partition (null after assembly).
             keeps = single[:, index] | (conflicted[:, index] & keep_first)
             if not (keeps & active).any():
                 continue  # dropped by every active partition: omit entirely
-            values = first[col]
+            values = firsts[col]
             carried[col] = values if keeps.all() else values.where(keeps)
     # Structural (dimension) def keys carry — single-valued by
     # partitioning — and canonical units carry for every dimension, the

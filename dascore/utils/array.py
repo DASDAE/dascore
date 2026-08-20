@@ -14,7 +14,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.models import ArrayLike
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
@@ -274,7 +274,6 @@ def _apply_binary_ufunc(
     patch: PatchType | ArrayLike,
     other: PatchType | ArrayLike,
     *args: tuple[PatchType | ArrayLike, ...],
-    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
     **kwargs,
 ) -> PatchType:
     """
@@ -293,13 +292,20 @@ def _apply_binary_ufunc(
     other
         The other object to apply the operator element-wise. Must be either a
         non-patch which is broadcastable to the shape of the patch's data, or
-        a patch which has compatible coordinates. If units are provided they
-        must be compatible.
+        a patch of the same kind (see
+        [`check_kind`](`dascore.utils.patch.check_kind`)) sharing at least
+        one dimension; shared dimensions are aligned on the intersection
+        of their coordinate values. Data units take part in the operation,
+        so they need not match unless the operator requires it (adding
+        metres to seconds raises, multiplying them does not). An operand
+        without units — an array, a scalar, or a patch with no
+        `data_units` — conflicts with nothing: it is dimensionless where
+        that works (`metres * x` is metres, `x / metres` is 1/metres) and
+        takes the other operand's units where the operation needs equal
+        units (`metres + x` is metres).
     *args
         Arguments to pass to the operator, can include arrays, scalars,
         and patches.
-    attrs_to_ignore
-        Attributes to ignore when considering if patches are compatible.
     **kwargs
         Keyword arguments to pass to the operator.
 
@@ -314,11 +320,7 @@ def _apply_binary_ufunc(
         patch, other_patch = align_patch_coords(patch, other)
         coords = _merge_aligned_coords(patch.coords, other_patch.coords)
         # Get new attributes.
-        attrs = _merge_models(
-            patch.attrs,
-            other_patch.attrs,
-            attrs_to_ignore=attrs_to_ignore,
-        )
+        attrs = _merge_models(patch.attrs, other_patch.attrs)
         other = other_patch.data
         if other_units := get_quantity(other_patch.attrs.data_units):
             other = other * other_units
@@ -346,19 +348,87 @@ def _apply_binary_ufunc(
             array1, array2 = array2, array1
         return _apply_operator(operator, array1, array2, *args, **kwargs)
 
-    def _apply_op_units(patch, other, operator, attrs, reversed=False):
-        """Apply the operation handling units attached to array."""
+    def _apply_op_unitless_other(patch, other, operator, attrs, reversed=False):
+        """
+        Apply the operation when the patch has units and `other` has none.
+
+        `other` conflicts with nothing: the units of the result are
+        settled on scalars first — `other` as dimensionless, and if the
+        operator rejects that, as sharing the patch's units (sums and
+        comparisons need equal units) — then the arrays are operated on
+        bare. Nothing large is ever wrapped by the unit registry, and a
+        ufunc the registry does not implement falls through to numpy
+        with the units left as they were.
+        """
         data_units = get_quantity(attrs.data_units)
-        data = patch.data if data_units is None else patch.data * data_units
-        # other is not numpy array wrapped w/ quantity, convert to quant
-        if not hasattr(other, "shape"):
-            other = get_quantity(other)
+        assert data_units is not None, "caller guarantees the patch has units"
+        if operator in (np.power, np.float_power) and np.ndim(other) > 0:
+            msg = f"{operator} with units {data_units} needs a scalar exponent."
+            raise UnitError(msg)
+        probe_other = other if np.ndim(other) == 0 else 1.0
+        dimensionless = get_quantity("dimensionless")
+        assert dimensionless is not None
         try:
-            new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
-        except DimensionalityError as er:
-            other_units = getattr(other, "units", None)
-            msg = f"{operator} failed with units {data_units} and {other_units}"
-            raise UnitError(msg) from er
+            patch_q, other_q = 1.0 * data_units, probe_other * dimensionless
+            if reversed:
+                patch_q, other_q = other_q, patch_q
+            probe = operator(patch_q, other_q)
+        except DimensionalityError:
+            adopted = probe_other * data_units
+            pair = (
+                (adopted, 1.0 * data_units) if reversed else (1.0 * data_units, adopted)
+            )
+            try:
+                probe = operator(*pair)
+            except DimensionalityError as er:
+                msg = f"{operator} failed with units {data_units} and none"
+                raise UnitError(msg) from er
+        except TypeError:
+            # The unit registry does not implement this ufunc (or cannot
+            # hold this scalar, a bool say); numpy does, and the units are
+            # whatever they were.
+            return _apply_op(patch.data, other, operator, reversed), attrs
+        new_data = _apply_op(patch.data, other, operator, reversed)
+        if hasattr(probe, "units"):
+            return new_data, attrs.update(data_units=str(probe.units))
+        return new_data, attrs.update(data_units=None)
+
+    def _apply_op_units(patch, other, operator, attrs, reversed=False):
+        """
+        Apply the operation with units on at least one side.
+
+        Two known units are left to the unit registry to reconcile or
+        reject. A patch without units beside a unitful operand is
+        dimensionless first and, if the operator rejects that, adopts the
+        operand's units — the same rule `_apply_op_unitless_other` applies
+        the other way round.
+        """
+        data_units = get_quantity(attrs.data_units)
+        # A bare number or array is an operand without units; only a unit
+        # or a unit string names units.
+        if isinstance(other, Unit):
+            other = 1 * other
+        elif isinstance(other, str):
+            other = get_quantity(other)
+        if not isinstance(other, Quantity):
+            return _apply_op_unitless_other(patch, other, operator, attrs, reversed)
+        dimensionless = get_quantity("dimensionless")
+        patch_q = data_units if data_units is not None else dimensionless
+        attempts = [(patch_q, other)]
+        if data_units is None:
+            attempts.append((other.units, other))
+        error = None
+        for patch_q, other_q in attempts:
+            try:
+                new_data_w_units = _apply_op(
+                    patch.data * patch_q, other_q, operator, reversed
+                )
+                break
+            except DimensionalityError as er:
+                error = er
+        else:
+            msg = f"{operator} failed with units {data_units} and {other.units}"
+            raise UnitError(msg) from error
         # Check if result has units (comparison operators return plain arrays)
         if hasattr(new_data_w_units, "units"):
             attrs = attrs.update(data_units=str(new_data_w_units.units))
@@ -389,8 +459,8 @@ def _apply_binary_ufunc(
     else:
         patch = _ensure_array_compatible(patch, other)
         coords, attrs = patch.coords, patch.attrs
-    # Apply operation
-    if isinstance(other, Quantity | Unit):
+    # Apply operation; only two unitless operands skip the unit registry.
+    if isinstance(other, Quantity | Unit) or attrs.data_units is not None:
         new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)

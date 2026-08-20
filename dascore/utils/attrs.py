@@ -4,21 +4,18 @@ Utils for working with attributes.
 
 from __future__ import annotations
 
-from collections import ChainMap
+import warnings
 from collections.abc import Sequence
-from functools import reduce
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 import dascore as dc
 from dascore.constants import attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import (
-    _dict_list_diffs,
-    iterate,
-)
+from dascore.utils.misc import iterate
 from dascore.workflow.identity import _ID_FIELDS, fold_ids
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
@@ -86,54 +83,94 @@ def combine_patch_attrs(
             ]
         return model_dicts
 
-    def _replace_null_with_none(mod_dict_list):
-        """Because NaN != NaN we need to replace those values so == works."""
-        out = []
-        for mod in mod_dict_list:
-            out.append(
-                {
-                    i: (v if (isinstance(v, Sequence) or not pd.isnull(v)) else None)
-                    for i, v in mod.items()
-                }
-            )
-        return out
-
-    def _keep_eq(d1, d2):
-        """Keep only the values that are equal between d1/d2."""
-        out = {}
-        for i in set(d1) & set(d2):
-            if not d1[i] == d2[i]:
-                continue
-            out[i] = d1[i]
-        return out
-
     def _handle_other_attrs(mod_dict_list):
-        """Check the other attributes and handle based on conflict param."""
-        if conflict == "keep_first":
-            return [dict(ChainMap(*mod_dict_list))]
-        no_null_ = _replace_null_with_none(mod_dict_list)
-        all_eq = all(no_null_[0] == x for x in no_null_[1:])
-        if all_eq:
-            return mod_dict_list
-        if conflict == "raise":
-            # determine which keys are not equal to help debug.
-            uneq_keys = _dict_list_diffs(mod_dict_list)
+        """
+        Fold the attrs: a missing value never conflicts, known ones must agree.
+
+        Attrs are scalars, and an empty one (None, NaN, "") is an attr
+        nobody recorded rather than a recorded emptiness, so it is
+        satisfied by whatever another member knows. Only two differing
+        known values are a conflict, handled per `conflict`.
+        """
+        keys = list(dict.fromkeys(key for model in mod_dict_list for key in model))
+        out, conflicts = {}, []
+        for key in keys:
+            known = [x[key] for x in mod_dict_list if not _is_missing(x.get(key))]
+            if not known:
+                continue
+            first = known[0]
+            agree = all(_values_equal(first, x) for x in known[1:])
+            if agree or conflict == "keep_first":
+                out[key] = first
+            else:
+                conflicts.append(key)
+        if conflicts and conflict == "raise":
             msg = (
-                "Cannot merge models, the following non-dim attrs are not "
-                f"equal: {uneq_keys}. Consider setting the `conflict` or "
-                f"`attr_conflict` arguments for more flexibility in merging "
-                f"unequal coordinates."
+                "Cannot merge models, the following non-dim attrs hold "
+                f"conflicting values: {conflicts}. Consider setting the "
+                "`conflict` argument for more flexibility in merging "
+                "unequal attributes."
             )
             raise AttributeMergeError(msg)
-        final_dict = reduce(_keep_eq, mod_dict_list)
-        return [final_dict]
+        return [out]
 
     mod_dict_list = _get_model_dict_list(model_list)
     ids = fold_ids([_to_patch_attrs(x) for x in model_list])
+    # History is never compared (processing differing between members is
+    # what a merge is for); the first member's is carried, like the ids.
+    history = (
+        {"history": mod_dict_list[0]["history"]}
+        if "history" in mod_dict_list[0]
+        else {}
+    )
+    mod_dict_list = [
+        {i: v for i, v in x.items() if i != "history"} for x in mod_dict_list
+    ]
     mod_dict_list = _handle_other_attrs(mod_dict_list)
     first = model_list[0]
     first_class = (
         _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
-    return cls(**{**mod_dict_list[0], **ids})
+    return cls(**{**mod_dict_list[0], **history, **ids})
+
+
+def _is_missing(value) -> bool:
+    """
+    True for an attr nobody recorded: None, NaN/NaT, or an empty string.
+
+    The one spelling of "missing" for every rule which lets a missing
+    value match a known one (kind, the merge conflict policy, units).
+    """
+    return value is None or (np.ndim(value) == 0 and (pd.isnull(value) or value == ""))
+
+
+def known_only(values: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+    """Null out the missing values ("" or null) of a frame or series."""
+    return values.where(values.notna() & (values != ""))
+
+
+def _values_equal(value1, value2) -> bool:
+    """Compare two attr values; arrays compare as a whole."""
+    if isinstance(value1, np.ndarray) or isinstance(value2, np.ndarray):
+        return np.array_equal(value1, value2)
+    return bool(value1 == value2)
+
+
+def warn_if_histories_differ(attrs_list: Sequence[dc.PatchAttrs], operation: str):
+    """
+    Warn when members spliced into one array were processed differently.
+
+    History never decides whether patches combine, but a raw patch merged
+    beside a filtered one is usually a mistake, so say so. Used by the
+    operations which lay members side by side along a dimension (merge,
+    concatenate), not by elementwise ones, where mixing processing is the
+    point (a residual is filtered minus raw).
+    """
+    histories = {tuple(iterate(x.history)) for x in attrs_list}
+    if len(histories) > 1:
+        msg = (
+            f"{operation} patches whose histories differ; the output carries "
+            "the first patch's history."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=3)

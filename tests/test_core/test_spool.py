@@ -16,6 +16,7 @@ import dascore.utils.patch_assembly as assembly_mod
 from dascore.core.spool import _COPY_ON_WRITE_ALWAYS, BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
+    IncompatiblePatchError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
@@ -1128,6 +1129,42 @@ class TestSpoolCoverageEdges:
         assert len(empty) == 0
         assert list(empty) == []
         assert "Spool" in str(empty)
+
+
+class TestConcatenateKind:
+    """Spool.concatenate only concatenates patches of the first's kind."""
+
+    @pytest.fixture
+    def mixed_kind(self):
+        """Two contiguous patches which differ only in tag."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        other = first.update_coords(time_min=time.max() + time.step)
+        return first, other.update_attrs(tag="other")
+
+    def test_plan_agrees_with_patch(self, mixed_kind):
+        """The skipped patch is absent from the metadata too, not just the data."""
+        first, other = mixed_kind
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        contents = out.get_contents()
+        assert contents["time_max"].iloc[0] == first.get_coord("time").max()
+        assert out[0].shape == first.shape
+        assert out[0].attrs.tag == first.attrs.tag
+
+    def test_raise(self, mixed_kind):
+        """check_behavior='raise' refuses at planning time."""
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            dc.spool(mixed_kind).concatenate(time=None, check_behavior="raise")
+
+    def test_same_kind_concatenates(self, mixed_kind):
+        """Same-kind patches with differing other attrs still concatenate."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag, data_units="m/s")
+        out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
 
 
 class TestEmptyConcatenate:
