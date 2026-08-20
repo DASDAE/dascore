@@ -292,6 +292,8 @@ def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
         msg = f"Cannot drop dimensional coordinates: {dim_coords}"
         raise ParameterError(msg)
     new_coord, data = self.coords.drop_coords(*names, array=self.data)
+    if new_coord is self.coords:  # none of the named coords were here
+        return self
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
@@ -317,6 +319,8 @@ def drop_private_coords(self: PatchType) -> PatchType:
     >>> assert "_private" not in pa_no_private.coords.coord_map
     """
     new_coord, data = self.coords.drop_private_coords(array=self.data)
+    if new_coord is self.coords:  # there were no private coords
+        return self
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 

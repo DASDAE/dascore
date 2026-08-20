@@ -30,6 +30,7 @@ from dascore.units import (
     maybe_convert_percent_to_fraction,
     miles,
     quant_sequence_to_quant_array,
+    units_match,
 )
 from dascore.utils.time import to_float
 
@@ -605,3 +606,40 @@ class TestDataSize:
             assert to_float(quant) != get_byte_count(quant)
         except UnitError:
             pass
+
+
+class TestUnitsMatch:
+    """Tests for asking whether two specifications name the same units."""
+
+    def test_spellings_of_one_unit(self):
+        """The same unit spelled differently still matches."""
+        assert units_match("m", "meter")
+        assert units_match(get_quantity("m"), "m")
+        assert units_match("m/s", "meter / second")
+
+    def test_nothing_matches_nothing(self):
+        """The several ways of spelling "no units" all match each other."""
+        assert units_match(None, None)
+        assert units_match(None, "")
+        assert units_match("", None)
+
+    def test_unset_never_matches_set(self):
+        """Setting units on a coord which had none is a real change."""
+        assert not units_match(None, "m")
+        assert not units_match("m", None)
+
+    def test_equal_quantities_in_different_units(self):
+        """
+        Equal is not the same.
+
+        `1 m == 100 cm` is True for pint, but converting between them
+        rewrites the values and leaves different units behind, which is
+        exactly the work callers use this to decide whether to skip.
+        """
+        assert get_quantity("m") == get_quantity("100 cm")
+        assert not units_match("m", "100 cm")
+
+    def test_different_units(self):
+        """Plainly different units do not match."""
+        assert not units_match("m", "s")
+        assert not units_match("m", "km")

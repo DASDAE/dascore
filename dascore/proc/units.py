@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.units import Quantity, Unit, get_factor_and_unit
+from dascore.units import Quantity, Unit, get_factor_and_unit, units_match
 from dascore.units import convert_units as u_covert_units
 from dascore.utils.patch import patch_function
 
@@ -59,6 +59,8 @@ def set_units(
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
     new_coords = patch.coords.set_units(**kwargs)
+    if new_coords is patch.coords and units_match(patch.attrs.data_units, data_units):
+        return patch
     new_attrs = _replace_data_units(patch.attrs, data_units)
     return patch.new(attrs=new_attrs, coords=new_coords)
 
@@ -106,6 +108,13 @@ def convert_units(
     >>> # Convert coordinate units
     >>> converted_coords = patch_with_units.convert_units(distance="km")
     """
+    # Nothing to convert: the coords kept the units they had and the data
+    # units either were not named or are the ones already set.
+    coords = patch.coords.convert_units(**kwargs)
+    if coords is patch.coords and (
+        data_units is None or units_match(patch.attrs.data_units, data_units)
+    ):
+        return patch
     # convert data
     if data_units is not None:
         current_units = patch.attrs.data_units
@@ -115,8 +124,7 @@ def convert_units(
     else:
         data = patch.data
         attrs = None
-    # then update coords and attrs
-    coords = patch.coords.convert_units(**kwargs)
+    # then update attrs
     attrs = _replace_data_units(
         patch.attrs,
         attrs.get("data_units") if attrs else None,
@@ -152,5 +160,11 @@ def simplify_units(
     data = patch.data * d_factor if d_factor != 1 else patch.data
     # update coords and coord units in attrs
     coords = patch.coords.simplify_units()
+    if (
+        data is patch.data
+        and coords is patch.coords
+        and units_match(attrs.get("data_units"), d_units)
+    ):
+        return patch
     new_attrs = _replace_data_units(patch.attrs, d_units)
     return patch.new(data=data, coords=coords, attrs=new_attrs, dims=patch.dims)

@@ -181,6 +181,23 @@ class TestDropCoords:
         with pytest.raises(ParameterError, match=msg):
             random_patch.drop_coords(["time"])
 
+    def test_drop_nothing(self, random_patch_with_lat_lon):
+        """Dropping coords the patch does not have changes nothing."""
+        patch = random_patch_with_lat_lon
+        assert patch.drop_coords() is patch
+        assert patch.drop_coords("not_a_coord") is patch
+
+    def test_drop_private_when_none_are(self, random_patch):
+        """A patch with no private coords is handed back."""
+        assert random_patch.drop_private_coords() is random_patch
+
+    def test_drop_private_still_drops(self, random_patch):
+        """A patch which has one still loses it."""
+        patch = random_patch.update_coords(_private=(None, np.arange(3)))
+        out = patch.drop_private_coords()
+        assert out is not patch
+        assert "_private" not in out.coords.coord_map
+
 
 class TestCoordsFromDf:
     """Tests for attaching coordinate(s) to a patch."""

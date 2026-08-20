@@ -1419,6 +1419,29 @@ class TestConvertUnits:
         assert np.all(np.equal(time1.values, time2.values))
 
 
+class TestUnitNoOps:
+    """A coord manager hands itself back when no coord would change."""
+
+    def test_convert_to_current_units(self, cm_with_units):
+        """Converting to the units already carried changes nothing."""
+        assert cm_with_units.convert_units(distance="m") is cm_with_units
+
+    def test_set_current_units(self, cm_with_units):
+        """Setting the units already carried changes nothing."""
+        assert cm_with_units.set_units(distance="m") is cm_with_units
+
+    def test_simplify_already_simple(self, cm_with_units):
+        """Simplifying base units changes nothing."""
+        assert cm_with_units.simplify_units() is cm_with_units
+
+    def test_one_of_two_coords_changing(self, cm_with_units):
+        """A manager with one coord to convert converts only that one."""
+        out = cm_with_units.convert_units(distance="ft", time="s")
+        assert out is not cm_with_units
+        assert out.coord_map["time"] is cm_with_units.coord_map["time"]
+        assert out.coord_map["distance"] is not cm_with_units.coord_map["distance"]
+
+
 class TestDisassociate:
     """Ensure coordinates can be disassociated from coordinate manager."""
 

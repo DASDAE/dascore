@@ -833,29 +833,46 @@ class CoordManager(DascoreBaseModel):
             for name, (dims, coord) in self._get_dim_coord_dict().items()
         }
 
+    def _replace_coords(self, new_coords: dict) -> Self:
+        """
+        Return a manager with these coords replaced, or self if none are.
+
+        The coords report a request which would change nothing by handing
+        back the coord they were called on, and this passes that answer up.
+        """
+        if not new_coords:
+            return self
+        return self.new(coord_map={**self.coord_map, **new_coords})
+
     def set_units(self, **kwargs):
         """Set the units of the coordinate manager."""
-        new_coords = dict(self.coord_map)
+        cmap = self.coord_map
+        new = {}
         for name, units in kwargs.items():
-            new_coords[name] = new_coords[name].set_units(units)
-        return self.new(coord_map=new_coords)
+            if (coord := cmap[name].set_units(units)) is not cmap[name]:
+                new[name] = coord
+        return self._replace_coords(new)
 
     def convert_units(self, **kwargs):
         """
         Convert units in coords according to kwargs. Will raise if incompatible
         Coordinates are specified.
         """
-        new_coords = dict(self.coord_map)
+        cmap = self.coord_map
+        new = {}
         for name, units in kwargs.items():
-            new_coords[name] = new_coords[name].convert_units(units)
-        return self.new(coord_map=new_coords)
+            if (coord := cmap[name].convert_units(units)) is not cmap[name]:
+                new[name] = coord
+        return self._replace_coords(new)
 
     def simplify_units(self):
         """Simplify all units in the coordinates."""
-        new_coords = dict(self.coord_map)
-        for name, coord in new_coords.items():
-            new_coords[name] = coord.simplify_units()
-        return self.new(coord_map=new_coords)
+        cmap = self.coord_map
+        new = {}
+        for name, old_coord in cmap.items():
+            if (coord := old_coord.simplify_units()) is not old_coord:
+                new[name] = coord
+        return self._replace_coords(new)
 
     def transpose(self, *dims: str | EllipsisType) -> Self:
         """Transpose the coordinates."""

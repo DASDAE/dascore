@@ -2806,3 +2806,36 @@ class TestDimensionalityErrors:
         """Constructing a CoordRange with a 2D shape must be rejected."""
         with pytest.raises(ValidationError, match="only works for 1D coords"):
             CoordRange(start=0, step=1, shape=(2, 3))
+
+
+class TestUnitNoOps:
+    """A coord asked for the units it already has hands itself back."""
+
+    def test_convert_to_current_units(self, coord):
+        """Every coord class answers a conversion it has nothing to do."""
+        with_units = coord.set_units("m") if coord.units is None else coord
+        assert with_units.convert_units(with_units.units) is with_units
+
+    def test_set_current_units(self, coord):
+        """Every coord class answers a set which would change nothing."""
+        with_units = coord.set_units("m") if coord.units is None else coord
+        assert with_units.set_units(with_units.units) is with_units
+
+    def test_another_spelling_of_the_same_units(self, evenly_sampled_coord):
+        """The units already carried, named differently, are still those."""
+        coord = evenly_sampled_coord.set_units("m")
+        assert coord.convert_units("meter") is coord
+        assert coord.set_units("meter") is coord
+
+    def test_equal_quantities_still_convert(self, evenly_sampled_coord):
+        """1 m and 100 cm are equal quantities but not the same units."""
+        coord = evenly_sampled_coord.set_units("m")
+        out = coord.convert_units("100 cm")
+        assert out is not coord
+        assert out.units == get_quantity("100 cm")
+
+    def test_string_coord_still_rejects_units(self):
+        """The guard does not swallow the string coord's refusal."""
+        coord = get_coord(values=np.array(["a", "b", "c"]))
+        with pytest.raises(CoordError):
+            coord.convert_units("m")

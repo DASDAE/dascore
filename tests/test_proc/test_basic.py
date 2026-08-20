@@ -89,9 +89,9 @@ class TestReal:
         assert np.all(out1.data == np.real(out1.data))
 
     def test_real_does_nothing_on_float(self, random_patch):
-        """Read shouldn't do anything for float patches."""
+        """Real data is already only a real part, so the patch comes back."""
         pa1 = random_patch.real()
-        assert np.allclose(pa1.data, random_patch.data)
+        assert pa1 is random_patch
 
 
 class TestImag:
@@ -409,6 +409,11 @@ class TestDropNa:
         coord = patch.get_coord("time")
         assert len(coord) == 0
 
+    def test_no_nulls_returns_input(self, random_patch):
+        """A patch with nothing nullish to drop is handed back."""
+        assert random_patch.dropna("time") is random_patch
+        assert random_patch.dropna("time", include_inf=False) is random_patch
+
     def test_drop_time_all(self, patch_with_null):
         """Ensure we can drop NaN along time axis."""
         patch = patch_with_null.dropna("time", how="all")
@@ -469,6 +474,11 @@ class TestFillNa:
             patch.data[~pd.isnull(patch_with_null.data)]
             == patch_with_null.data[~pd.isnull(patch_with_null.data)]
         )
+
+    def test_no_nulls_returns_input(self, random_patch):
+        """A patch with nothing nullish to fill is handed back."""
+        assert random_patch.fillna(0) is random_patch
+        assert random_patch.fillna(0, include_inf=False) is random_patch
 
     def test_3d(self, patch_3d_with_null):
         """Ensure 3D patches can fillna and keep the other values the same."""
@@ -630,6 +640,10 @@ class TestConj:
         conj = random_dft_patch.conj()
         imag2 = np.imag(conj.data)
         assert np.allclose(imag1, -imag2)
+
+    def test_real_patch_is_its_own_conjugate(self, random_patch):
+        """Real data has nothing to conjugate, so the patch comes back."""
+        assert random_patch.conj() is random_patch
 
 
 class TestRoll:

@@ -518,6 +518,17 @@ class TestSortAndShift:
         """Time coords do not convert units."""
         assert time_gap_coord.convert_units("ft") is time_gap_coord
 
+    def test_set_current_units_noop(self, float_gap_coord):
+        """Setting the units already carried hands the coord back."""
+        coord = float_gap_coord.set_units("m")
+        assert coord.set_units("m") is coord
+        assert coord.set_units("meter") is coord
+
+    def test_convert_to_current_units_noop(self, float_gap_coord):
+        """Converting to the units already carried hands the coord back."""
+        coord = float_gap_coord.set_units("m")
+        assert coord.convert_units("m") is coord
+
 
 class TestSimplifyAndSnap:
     """Tests for tolerance-bounded simplification and snapping."""

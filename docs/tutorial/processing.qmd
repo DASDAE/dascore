@@ -6,6 +6,24 @@ execute:
 The following shows some simple examples of patch processing. See the
 [proc module](`dascore.proc`) for a list of all processing functions.
 
+# Operations which have nothing to do
+
+Patches are immutable, so a processing function normally returns a new patch. When the function is asked for something the patch already is, though, it hands back the patch it was given rather than building a copy:
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch().set_units(distance="m")
+
+# Converting to the units already set is not work, so nothing is done.
+assert patch.convert_units(distance="m") is patch
+
+# Neither is transposing to the dimension order already in place.
+assert patch.transpose(*patch.dims) is patch
+```
+
+Not every function can tell cheaply, and those which cannot still return a new patch: the test has to cost less than the copy it saves, so it is made from metadata (units, dimension names, a mask already computed) and never from comparing two data arrays. Treat the identity as an optimization to benefit from, not a check to write logic against.
+
 # Basic
 
 There are several "basic" processing functions which manipulate the patch metadata, shape, etc. Many of these are covered in the [patch tutorial](patch.qmd), but here are a few that aren't:

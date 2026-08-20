@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -48,6 +48,7 @@ from dascore.units import (
     get_quantity,
     get_quantity_str,
     percent,
+    units_match,
 )
 from dascore.utils.array import (
     _coerce_text_array,
@@ -375,9 +376,21 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # This also allows shape to be an int.
         return tuple(iterate(value))
 
-    @abc.abstractmethod
     def convert_units(self, units) -> Self:
-        """Convert from one unit to another. Set units if None are set."""
+        """
+        Convert from one unit to another. Set units if None are set.
+
+        A coordinate already carrying these units returns itself, so a
+        caller can tell a conversion which did something from one which
+        had nothing to do.
+        """
+        if units_match(self.units, units):
+            return self
+        return self._convert_units(units)
+
+    @abc.abstractmethod
+    def _convert_units(self, units) -> Self:
+        """Perform the conversion, knowing the requested units differ."""
 
     def _get_value_index(self, coord_array, values_to_find):
         """Get the indices were values occur in array, account for duplicates."""
@@ -595,7 +608,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return a coordinate normalized for stable fingerprinting."""
         if self.units is None or dtype_time_like(self.dtype):
             return self
-        return self.simplify_units()
+        # The unguarded conversion, deliberately: a coord already in base
+        # units is not normalized by being handed back, and the numeric
+        # form the conversion produces is half of what makes two
+        # equivalent coords fingerprint alike.
+        _, units = get_factor_and_unit(self.units, simplify=True)
+        return self._convert_units(units)
 
     @staticmethod
     def _hash_scalar(value) -> tuple[str, str | None]:
@@ -699,6 +717,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
+        if units_match(self.units, units):
+            return self
         new = dict(self)
         new["units"] = units
         return self.__class__(**new)
@@ -1291,7 +1311,7 @@ class CoordPartial(BaseCoord):
         passed = {i: v for i, v in limits.items() if v is not None}
         return self.update(**passed, **kwargs)
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert scalar metadata units, or set units if none exist."""
         out = self.model_dump(exclude_unset=True, exclude_defaults=True)
         out["units"] = units
@@ -1563,7 +1583,7 @@ class CoordRange(BaseCoord):
     def __len__(self):
         return self.shape[0]
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         # cant convert time units
         if dtype_time_like(self.dtype):
@@ -1786,7 +1806,7 @@ class CoordArray(BaseCoord):
         values["shape"] = values["values"].shape
         return values
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         is_time = np.issubdtype(self.dtype, np.datetime64)
         is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
@@ -2285,10 +2305,12 @@ class CoordSegmented(BaseCoord):
 
     def set_units(self, units) -> Self:
         """Set new units on the coordinate and all segments."""
+        if units_match(self.units, units):
+            return self
         segments = tuple(x.set_units(units) for x in self.segments)
         return self.__class__(segments=segments)
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         if dtype_time_like(self.dtype):
             return self
@@ -2730,7 +2752,7 @@ def _get_coord_kind(
     return "array"
 
 
-def _raise_string_coord_error(operation: str) -> None:
+def _raise_string_coord_error(operation: str) -> NoReturn:
     """Raise a consistent error for unsupported string coord operations."""
     msg = f"String coordinates do not support {operation}."
     raise CoordError(msg)
@@ -2775,11 +2797,15 @@ class CoordString(BaseCoord):
         values["step"] = None
         return values
 
-    def convert_units(self, units) -> Self:
-        """String coordinates cannot be converted between units."""
-        if units not in (None, ""):
-            _raise_string_coord_error("unit conversion")
-        return self
+    def _convert_units(self, units) -> Self:
+        """
+        String coordinates cannot be converted between units.
+
+        A string coord never carries units, so the only request which
+        reaches here is one asking for some -- the null request matched
+        and was handed back before this was called.
+        """
+        _raise_string_coord_error("unit conversion")
 
     def set_units(self, units) -> Self:
         """Reject setting units on string coordinates."""
