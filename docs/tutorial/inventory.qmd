@@ -182,6 +182,30 @@ assert "gauge_length" in names.attrs
 
 Listing a name is not promising a value for it. This example's geometry states chainage and no position, so the spatial names resolve to nothing until some segment states them.
 
+# Seeing an inventory
+
+An inventory draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
+
+[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track the path describes becomes a lane, so the channels an acquisition places, the components, the coupling, and each label group line up against the same axis:
+
+```{python}
+inventory.viz.path(show=True);
+```
+
+A geometry column is a curve rather than a set of intervals, so it is drawn as a panel beneath. Here the chainage stands still through the slack coil while ten meters of fiber goes by:
+
+```{python}
+inventory.viz.path(columns="chainage", show=True);
+```
+
+`tracks=` picks the lanes, in the order given, when the whole picture is more than the question needs:
+
+```{python}
+inventory.viz.path(tracks=("coupling", "zone"), show=True);
+```
+
+The other two plots need something this small example does not have. [`Inventory.viz.map`](`dascore.viz.inventory.map_path`) looks along **space**, and needs geometry which states the CRS's axes; this path states chainage and no position. [`Inventory.viz.timeline`](`dascore.viz.inventory.timeline`) looks along **time**, and is worth reading where the epochs are real. The [tunnel recipe](../recipes/tunnel_inventory.qmd) has both.
+
 # Attaching an inventory to a spool
 
 [`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and touches no data. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for. Attaching a *different* inventory does clear any enrichment set up from the old one, since applying the old instructions to new metadata would rewrite every patch behind your back.

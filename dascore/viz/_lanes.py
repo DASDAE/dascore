@@ -9,6 +9,7 @@ one of those objects, and the columns it reads are named by the caller.
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping, Sequence
 
 import matplotlib.dates as mdates
@@ -21,7 +22,6 @@ from matplotlib.patches import Rectangle
 
 from dascore.exceptions import ParameterError
 from dascore.utils.intervals import normalize_value, value_kind
-from dascore.utils.misc import suppress_warnings
 from dascore.utils.plotting import _get_ax, _get_cmap
 
 # Palettes are module level so that two figures of one inventory agree.
@@ -42,13 +42,17 @@ _MAX_DISCRETE = 6
 def _as_numeric(values):
     """Return values as floats, converting datetimes to matplotlib dates."""
     array = np.asarray(values)
-    if np.issubdtype(array.dtype, np.datetime64) or isinstance(
-        getattr(array, "dtype", None), pd.DatetimeTZDtype
-    ):
+    dated = pd.api.types.is_datetime64_any_dtype(values) or (
+        array.dtype == object
+        and len(array)
+        and isinstance(array.flat[0], datetime.datetime | np.datetime64)
+    )
+    if dated:
         # Losing nanosecond precision is fine; this is a picture.
-        with suppress_warnings(UserWarning):
-            stamps = pd.to_datetime(pd.Series(array.ravel()))
-            return mdates.date2num(stamps.dt.to_pydatetime()).reshape(array.shape)
+        stamps = pd.DatetimeIndex(array.ravel())
+        if stamps.tz is not None:
+            stamps = stamps.tz_convert("UTC").tz_localize(None)
+        return mdates.date2num(stamps.to_numpy()).reshape(array.shape)
     return array.astype(float)
 
 
@@ -82,8 +86,8 @@ def _read_frame(intervals, start, end, lane, value, label):
             )
             raise ParameterError(msg)
     out = pd.DataFrame(index=intervals.index)
-    out["start"] = _as_numeric(intervals[start].to_numpy())
-    out["end"] = _as_numeric(intervals[end].to_numpy())
+    out["start"] = _as_numeric(intervals[start])
+    out["end"] = _as_numeric(intervals[end])
     out["lane"] = intervals[lane].astype(str) if lane else ""
     out["value"] = intervals[value] if value else None
     if label:

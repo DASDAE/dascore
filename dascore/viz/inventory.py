@@ -227,13 +227,36 @@ def _select_tracks(frame, tracks, path):
     return out.sort_values("lane", key=lambda col: col.map(order), kind="stable")
 
 
+def _distance_window(asked, span):
+    """Resolve a (low, high) distance selection against a path's span."""
+    if asked is None:
+        return span
+    try:
+        low, high = asked
+    except (TypeError, ValueError):
+        msg = f"distance={asked!r} must be a (low, high) pair."
+        raise ParameterError(msg) from None
+    low = span[0] if low is None or low is ... else float(low)
+    high = span[1] if high is None or high is ... else float(high)
+    if high <= low:
+        msg = f"distance={asked!r} must be increasing."
+        raise ParameterError(msg)
+    if high <= span[0] or low >= span[1]:
+        msg = (
+            f"distance={asked!r} lies outside the path's span {span}, so it "
+            "clips everything away."
+        )
+        raise ParameterError(msg)
+    return (low, high)
+
+
 def path(
     inventory,
     optical_path=None,
     *,
     acquisition_key: str | None = None,
     time=None,
-    distance_limits: tuple[float, float] | None = None,
+    distance: tuple | None = None,
     tracks: str | Sequence[str] | None = None,
     columns: str | Sequence[str] | None = None,
     n_samples: int = 1000,
@@ -267,8 +290,9 @@ def path(
     time
         The instant to resolve at, which is how one epoch of a repaired
         path is chosen.
-    distance_limits
-        Optical distances to draw between. A long lead-in otherwise
+    distance
+        The optical distances to draw between, as (low, high); either
+        may be None to run to the path's end. A long lead-in otherwise
         crushes the instrumented part of a path into a corner.
     tracks
         Which lanes to draw, in order: any of "channels", "components",
@@ -296,7 +320,7 @@ def path(
     >>> from dascore.viz.inventory import path
     >>>
     >>> inventory = dc.get_example_inventory("tunnel")
-    >>> _ = path(inventory, time="2024-07-01", distance_limits=(1495, 1780))
+    >>> _ = path(inventory, time="2024-07-01", distance=(1495, 1780))
     >>> _ = path(inventory, time="2024-07-01", tracks=("coupling", "section"))
     """
     address, array, chosen = _select_path(
@@ -334,19 +358,7 @@ def path(
         ax, panels = all_axes[0], all_axes[1:]
     else:
         figure, panels = None, []
-    limits = (chosen.start_distance, chosen.end_distance)
-    if distance_limits is not None:
-        low, high = (float(x) for x in distance_limits)
-        if high <= low:
-            msg = f"distance_limits {distance_limits} must be increasing."
-            raise ParameterError(msg)
-        if high <= limits[0] or low >= limits[1]:
-            msg = (
-                f"distance_limits {distance_limits} lies outside the path's "
-                f"span {limits}, so it clips everything away."
-            )
-            raise ParameterError(msg)
-        limits = (low, high)
+    limits = _distance_window(distance, (chosen.start_distance, chosen.end_distance))
     pad = 0.02 * (limits[1] - limits[0])
     plot_lanes(
         frame,
@@ -628,7 +640,7 @@ def timeline(
     *,
     kind: str = "both",
     color: str = "interrogator",
-    time_limits: tuple | None = None,
+    time: tuple | None = None,
     ax: plt.Axes | None = None,
     legend: bool = True,
     show: bool = False,
@@ -648,8 +660,8 @@ def timeline(
         "both", "acquisition", or "optical_path".
     color
         "interrogator", "data_type", or "kind".
-    time_limits
-        Limits for the time axis.
+    time
+        The times to draw between, as (start, end).
     ax
         An Axes to draw on.
     legend
@@ -718,10 +730,8 @@ def timeline(
         lanes = len(dict.fromkeys(frame["lane"]))
         _, ax = plt.subplots(1, figsize=(9.0, 1.0 + 0.55 * lanes))
 
-    if time_limits is not None:
-        low, high = (
-            mdates.date2num(pd.Timestamp(x).to_pydatetime()) for x in time_limits
-        )
+    if time is not None:
+        low, high = (mdates.date2num(pd.Timestamp(x).to_pydatetime()) for x in time)
         dated = True
     elif len(known):
         low = mdates.date2num(pd.Timestamp(known.min()).to_pydatetime())
@@ -743,6 +753,12 @@ def timeline(
         high if pd.isnull(x) else mdates.date2num(pd.Timestamp(x).to_pydatetime())
         for x in frame["end"]
     ]
+    # An epoch outside the window is left out rather than clipped to a
+    # sliver at the edge, which would read as an epoch which ended there.
+    frame = frame[(frame["start"] <= high) & (frame["end"] >= low)]
+    if frame.empty:
+        msg = f"No epoch in this inventory falls within time={time!r}."
+        raise ParameterError(msg)
     plot_lanes(
         frame,
         ax=ax,
