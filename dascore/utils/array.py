@@ -528,9 +528,9 @@ def _apply_binary_ufunc(
         if not hasattr(probe, "units"):
             # a comparison: no units
             return new_data, attrs.update(data_units=None)
-        if not (np.isfinite(plain) and plain != 0):
-            # no probe pair gave a usable bare result; keep the known units
-            return new_data, attrs.update(data_units=_label(known))
+        # one of the pairs always gives a usable bare result for a ufunc
+        # which returns units at all
+        assert np.isfinite(plain) and plain != 0, f"no usable probe for {operator}"
         try:
             return new_data, attrs.update(data_units=_label(probe / plain))
         except TypeError:
