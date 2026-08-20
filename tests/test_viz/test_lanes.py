@@ -12,14 +12,7 @@ import pytest
 from matplotlib.collections import PatchCollection
 
 from dascore.exceptions import ParameterError
-from dascore.viz._lanes import (
-    GAP_COLOR,
-    UNCOVERED_COLOR,
-    _gap_rows,
-    _pack_rows,
-    lane_gaps,
-    plot_lanes,
-)
+from dascore.viz._lanes import UNCOVERED_COLOR, _pack_rows, plot_lanes
 
 
 def _collections(ax):
@@ -431,89 +424,3 @@ class TestColors:
         """legend=False draws none."""
         ax = plot_lanes(string_frame, lane="group", value="value", legend=False)
         assert ax.get_legend() is None
-
-
-class TestGaps:
-    """The complement of what a lane covers."""
-
-    def test_gap_rows(self):
-        """Gaps are found between, before, and after merged spans."""
-        rows = pd.DataFrame({"start": [10.0, 15.0, 40.0], "end": [20.0, 25.0, 50.0]})
-        assert _gap_rows(rows, (0.0, 60.0)) == [(0.0, 10.0), (25.0, 40.0), (50.0, 60.0)]
-
-    def test_gap_rows_points_ignored(self):
-        """A point marker covers nothing, so it does not split a gap."""
-        rows = pd.DataFrame({"start": [5.0], "end": [5.0]})
-        assert _gap_rows(rows, (0.0, 10.0)) == [(0.0, 10.0)]
-
-    def test_gaps_drawn(self):
-        """gaps=True adds a muted collection and a legend entry."""
-        frame = pd.DataFrame(
-            {"start": [0.0, 20.0], "end": [10.0, 30.0], "v": ["a", "b"]}
-        )
-        ax = plot_lanes(frame, value="v", gaps=True, x_limits=(0, 30))
-        gap = _collections(ax)[0]
-        assert np.allclose(
-            gap.get_facecolors()[0][:3], plt.matplotlib.colors.to_rgb(GAP_COLOR)
-        )
-        assert _extents(gap) == [(10.0, 10.0)]
-        labels = [x.get_text() for x in ax.get_legend().get_texts()]
-        assert labels[-1] == "not covered"
-
-    def test_padding_is_not_a_gap(self):
-        """The margin the figure draws around the data is not a hole in it."""
-        frame = pd.DataFrame({"start": [0.0, 20.0], "end": [10.0, 30.0]})
-        ax = plot_lanes(frame, gaps=True)
-        gap = _collections(ax)[0]
-        # Only the real 10-20 hole, not slivers at either end.
-        assert _extents(gap) == [(10.0, 10.0)]
-
-    def test_gaps_none_to_draw(self):
-        """A fully covered lane adds no gap collection."""
-        frame = pd.DataFrame({"start": [0.0], "end": [10.0]})
-        ax = plot_lanes(frame, gaps=True, x_limits=(0, 10))
-        assert len(_collections(ax)) == 1
-
-    def test_lane_gaps(self):
-        """lane_gaps answers per lane, within limits or the lane's own span."""
-        frame = pd.DataFrame(
-            {
-                "lane": ["a", "a", "b"],
-                "start": [0.0, 20.0, 5.0],
-                "end": [10.0, 30.0, 6.0],
-            }
-        )
-        out = lane_gaps(frame, lane="lane")
-        assert out.to_dict("records") == [{"lane": "a", "start": 10.0, "end": 20.0}]
-        out = lane_gaps(frame, lane="lane", limits=(0.0, 40.0))
-        assert len(out[out["lane"] == "b"]) == 2
-
-    def test_lane_gaps_dated(self):
-        """A dated frame is answered in times, not ordinals."""
-        frame = pd.DataFrame(
-            {
-                "start": pd.to_datetime(["2024-01-01", "2024-01-20"]),
-                "end": pd.to_datetime(["2024-01-10", "2024-01-30"]),
-            }
-        )
-        out = lane_gaps(frame)
-        assert len(out) == 1
-        assert out["start"].iloc[0] == pd.Timestamp("2024-01-10")
-        assert out["end"].iloc[0] == pd.Timestamp("2024-01-20")
-
-    def test_lane_gaps_dated_limits(self):
-        """Datetime limits are accepted, as the frame's own bounds are."""
-        frame = pd.DataFrame(
-            {
-                "start": pd.to_datetime(["2024-01-05"]),
-                "end": pd.to_datetime(["2024-01-10"]),
-            }
-        )
-        out = lane_gaps(frame, limits=pd.to_datetime(["2024-01-01", "2024-01-10"]))
-        assert out["end"].iloc[0] == pd.Timestamp("2024-01-05")
-
-    def test_lane_gaps_empty(self):
-        """Nothing uncovered gives an empty frame with the right columns."""
-        out = lane_gaps({"start": [0.0], "end": [1.0]})
-        assert list(out.columns) == ["lane", "start", "end"]
-        assert out.empty

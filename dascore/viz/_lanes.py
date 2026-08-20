@@ -1,10 +1,10 @@
 """
 A general renderer for intervals laid out in horizontal lanes.
 
-The inventory draws its tracks with this, a spool can draw what it covers
-and where its gaps are, and an annotation set is the same shape over a
-patch dimension. So the input is a dataframe of intervals rather than any
-one of those objects, and the columns it reads are named by the caller.
+The inventory draws its tracks with this, a spool can draw what it
+covers, and an annotation set is the same shape over a patch dimension.
+So the input is a dataframe of intervals rather than any one of those
+objects, and the columns it reads are named by the caller.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ STRING_CMAP = "tab20"
 WHEEL_ORDER = (0, 2, 4, 6, 8, 10, 12, 16, 18, 1, 3, 5, 7, 9, 11, 13, 17, 19)
 LANE_CMAP = "tab10"
 NUMERIC_CMAP = "viridis"
-GAP_COLOR = "0.88"
 UNCOVERED_COLOR = "0.7"
 
 # The fraction of the x axis hatched where a bar runs off the end of it.
@@ -273,28 +272,6 @@ def _fit_labels(ax, placements, max_labels):
             artist.remove()
 
 
-def _gap_rows(rows, limits):
-    """Return the intervals a lane does not cover, inside limits."""
-    spans = sorted(
-        (a, b) for a, b in zip(rows["start"], rows["end"], strict=True) if b > a
-    )
-    merged: list[list[float]] = []
-    for lo, hi in spans:
-        if merged and lo <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], hi)
-        else:
-            merged.append([lo, hi])
-    low, high = limits
-    out, position = [], low
-    for lo, hi in merged:
-        if lo > position:
-            out.append((position, min(lo, high)))
-        position = max(position, hi)
-    if position < high:
-        out.append((position, high))
-    return [x for x in out if x[1] > x[0]]
-
-
 def plot_lanes(
     intervals,
     ax: plt.Axes | None = None,
@@ -307,7 +284,6 @@ def plot_lanes(
     lanes: Sequence[str] | None = None,
     color=None,
     vocabulary: Sequence | None = None,
-    gaps: bool = False,
     pack: bool = True,
     legend: bool | str = "auto",
     max_labels: int = 200,
@@ -350,8 +326,6 @@ def plot_lanes(
     vocabulary
         Values to reserve colors for beyond those this frame holds, so a
         figure of part of a subject colors it as a figure of all of it.
-    gaps
-        Whether to also draw what each lane does not cover.
     pack
         Whether overlapping intervals are packed into sub-rows.
     legend
@@ -416,11 +390,9 @@ def plot_lanes(
         low = float(np.nanmin(frame["start"]))
         high = float(np.nanmax(frame["end"]))
         pad = (high - low) * 0.02 or 0.5
-        # Gaps are asked of the data, not of the margin drawn around it.
-        gap_limits, x_limits = (low, high), (low - pad, high + pad)
+        x_limits = (low - pad, high + pad)
     else:
         x_limits = tuple(float(x) for x in _as_numeric(np.asarray(x_limits)))
-        gap_limits = x_limits
     ax.set_xlim(*x_limits)
     span = x_limits[1] - x_limits[0]
 
@@ -448,24 +420,6 @@ def plot_lanes(
             legend_entries.update(described[1])
         elif described and described[0] == "colorbar":
             colorbars.append(described[1])
-        if gaps:
-            gap_spans = _gap_rows(rows, gap_limits)
-            if gap_spans:
-                ax.add_collection(
-                    PatchCollection(
-                        [
-                            Rectangle(
-                                (lo, y_centre - lane_height / 2),
-                                hi - lo,
-                                lane_height,
-                            )
-                            for lo, hi in gap_spans
-                        ],
-                        facecolors=GAP_COLOR,
-                        edgecolor="none",
-                        zorder=1,
-                    )
-                )
         boxes, box_colors, points, point_colors = [], [], [], []
         for (_, row), row_color, sub in zip(
             rows.iterrows(), colors, sub_rows, strict=True
@@ -533,8 +487,6 @@ def plot_lanes(
             PatchArtist(facecolor=color, label=name)
             for name, color in legend_entries.items()
         ]
-        if gaps:
-            handles.append(PatchArtist(facecolor=GAP_COLOR, label="not covered"))
         # A colorbar already occupies the strip beside the axes.
         offset = 1.01 + 0.17 * len(colorbars)
         ax.legend(
@@ -547,44 +499,3 @@ def plot_lanes(
     if show:
         plt.show()
     return ax
-
-
-def lane_gaps(intervals, *, start="start", end="end", lane=None, limits=None):
-    """
-    Return what a frame of intervals does not cover, lane by lane.
-
-    This is the derivation behind ``plot_lanes(..., gaps=True)``, kept
-    separate because "where are the holes" is worth asking without a
-    figure attached to the answer.
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> from dascore.viz._lanes import lane_gaps
-    >>>
-    >>> frame = pd.DataFrame({"start": [0.0, 20.0], "end": [10.0, 30.0]})
-    >>> lane_gaps(frame)[["start", "end"]].to_numpy().tolist()
-    [[10.0, 20.0]]
-    """
-    frame, dated = _read_frame(intervals, start, end, lane, None, None)
-    out = []
-    for name in dict.fromkeys(frame["lane"]):
-        rows = frame[frame["lane"] == name]
-        span = (
-            _as_numeric(np.asarray(limits))
-            if limits is not None
-            else (
-                rows["start"].min(),
-                rows["end"].max(),
-            )
-        )
-        for low, high in _gap_rows(rows, tuple(float(x) for x in span)):
-            out.append({"lane": name, "start": low, "end": high})
-    frame_out = pd.DataFrame(out, columns=["lane", "start", "end"])
-    if dated and len(frame_out):
-        # Answer in the units the question was asked in.
-        for column in ("start", "end"):
-            frame_out[column] = pd.to_datetime(
-                mdates.num2date(frame_out[column])
-            ).tz_localize(None)
-    return frame_out
