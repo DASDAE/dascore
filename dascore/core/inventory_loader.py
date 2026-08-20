@@ -980,26 +980,31 @@ def _parse_labels(rows: list[dict], path: Path) -> None:
 
     A group's kind is decided by its values, and the model makes the kind
     decide the group's shape, so a group which mixes kinds would be two
-    tracks sharing a name.
+    tracks sharing a name. An empty cell is left unset: the label states
+    membership.
     """
     kinds: dict[str, tuple[str, int]] = {}
     for number, row in enumerate(rows, start=2):
-        if (text := row.get("value")) is None:
-            continue
-        row["value"] = value = parse_cell(text)
-        # A boolean is asked about first because a bool IS an int, which
-        # would otherwise let true and 1 share a group whose shape they do
-        # not share. An int and a float, by contrast, are ONE kind: the
-        # model reads them alike, so telling them apart here would make
-        # the order the rows were written in decide whether a group loads.
-        kind = (
-            "a boolean"
-            if isinstance(value, bool)
-            else "a number"
-            if isinstance(value, int | float)
-            else "text"
-        )
         group = str(row.get("group", ""))
+        text = row.get("value")
+        if text is None or not str(text).strip():
+            # A blank cell, spaces included, is the spelling of membership.
+            row.pop("value", None)
+            kind = "membership"
+        else:
+            row["value"] = value = parse_cell(text)
+            if isinstance(value, bool):
+                msg = (
+                    f"{_quote(path)} row {number}: group {group!r} states "
+                    f"{text!r}, but true and false are not values; state "
+                    "membership by leaving the cell empty, and an interval "
+                    "outside the group by giving it no row."
+                )
+                raise InvalidInventoryError(msg)
+            # An int and a float are ONE kind: the model reads them alike,
+            # so telling them apart here would make the order the rows were
+            # written in decide whether a group loads.
+            kind = "a number" if isinstance(value, int | float) else "text"
         first, where = kinds.setdefault(group, (kind, number))
         if first != kind:
             msg = (

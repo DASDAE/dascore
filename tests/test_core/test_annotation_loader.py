@@ -286,6 +286,44 @@ class TestWhatATableCannotSay:
         annotations = dc.AnnotationSet(frame, dims=("distance",))
         assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
 
+    def test_an_int_beside_a_membership_row_stays_an_int(self, tmp_path):
+        """
+        An unset cell must not make the writer spell an int as a float.
+
+        An object column, as a table reads one: pandas itself turns
+        `[None, 5]` into floats when it infers the dtype of a plain list.
+        """
+        frame = pd.DataFrame(
+            {
+                "group": ["noisy", "hole"],
+                "value": pd.Series([None, 5], dtype=object),
+                "distance": [1.0, 2.0],
+            }
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        text = annotations.io.to_csv()
+        assert ",5," in text and "5.0" not in text
+        loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
+        assert [x.value for x in loaded] == [None, 5]
+
+    def test_a_membership_only_set_round_trips(self, tmp_path):
+        """A value column no row states reloads equal to what was saved."""
+        frame = pd.DataFrame(
+            {"group": ["noisy", "noisy"], "value": [None, None], "distance": [1.0, 2.0]}
+        )
+        annotations = dc.AnnotationSet(frame, dims=("distance",))
+        assert dc.annotations(annotations.io.save(tmp_path / "picks")) == annotations
+
+    def test_a_boolean_cell_is_refused_at_the_read(self, tmp_path):
+        """A cell reading true is not a value, and the refusal names the group."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "annotations.csv").write_text(
+            "group,value,distance\nnoisy,true,1.0\n"
+        )
+        with pytest.raises(InvalidAnnotationError, match=r"'noisy'.*not values"):
+            dc.annotations(directory, dims=("distance",))
+
     def test_a_non_finite_looking_extra_stays_text(self, tmp_path):
         """A cell reading 'nan' is text, not a value which then vanishes."""
         frame = pd.DataFrame({"group": ["a"], "distance": [1.0], "note": ["nan"]})
@@ -1431,7 +1469,7 @@ class TestParquet:
             {
                 "id": ["r1", "r2"],
                 "group": ["noise", "quiet"],
-                "value": ["car", True],
+                "value": ["car", 3],
                 "tags": [("road", "car"), None],
                 "time_start": [
                     np.datetime64("2020-01-01T00:00:10"),
@@ -1468,10 +1506,7 @@ class TestParquet:
     def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
         """A column with no one type is written as documents, not as text."""
         loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
-        assert [type(x).__name__ for x in loaded.io.to_dataframe()["value"]] == [
-            "str",
-            "bool",
-        ]
+        assert [type(x.value).__name__ for x in loaded] == ["str", "int"]
         assert loaded[0].extra["meta"] == {"a": 1}
         assert loaded[0].tags == ("road", "car")
 

@@ -1077,7 +1077,7 @@ TRACKS = {
     "fiber_arrays/DAS.L001/path/labels.csv": (
         "start_distance,end_distance,group,value\n"
         "0,340,rock_type,granite\n"
-        "0,120,noisy,true\n"
+        "0,120,noisy,\n"
         "120,340,frost_depth,1.2\n"
     ),
     "fiber_arrays/DAS.L001/path/geometry.csv": (
@@ -1121,8 +1121,6 @@ class TestTrackTables:
         ("text", "expected"),
         [
             ("granite", "granite"),
-            ("true", True),
-            ("false", False),
             ("1.2", 1.2),
             ("2", 2),
             # Integral, and how a spreadsheet writes a large one. Read from
@@ -1150,10 +1148,25 @@ class TestTrackTables:
             "fiber_arrays/DAS.L001/path/labels.csv": (
                 "start_distance,end_distance,group,value\n"
                 "0,120,zone,north\n"
-                "120,340,zone,true\n"
+                "120,340,zone,\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="one group holds one kind"):
+            make_inventory(files)
+
+    def test_a_group_holding_a_number_and_text(self, make_inventory):
+        """The loader names the two rows which disagree."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/labels.csv": (
+                "start_distance,end_distance,group,value\n"
+                "0,120,hole,3\n"
+                "120,340,hole,deep\n"
+            ),
+        }
+        match = "row 3.*states text where row 2 states a number"
+        with pytest.raises(InvalidInventoryError, match=match):
             make_inventory(files)
 
     def test_an_empty_cell_is_unset(self, make_inventory):
@@ -1707,7 +1720,7 @@ class TestUnreadableTables:
         assert acquisition.distance_map.instrument_distance is None
 
     def test_a_label_stating_no_value(self, make_inventory):
-        """A membership group's value is its default, not a parsed cell."""
+        """An empty value cell states membership: the value stays unset."""
         files = {
             **MINIMAL,
             **TRACKS,
@@ -1716,7 +1729,21 @@ class TestUnreadableTables:
             ),
         }
         label = one_path(make_inventory(files)).labels[0]
-        assert label.value is True
+        assert label.value is None
+
+    def test_a_whitespace_cell_states_no_value(self, make_inventory):
+        """A cell holding only spaces is as blank as an empty one."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/labels.csv": (
+                "start_distance,end_distance,group,value\n"
+                "0,120,noisy,  \n"
+                "120,340,noisy,\n"
+            ),
+        }
+        labels = one_path(make_inventory(files)).labels
+        assert [x.value for x in labels] == [None, None]
 
     def test_a_path_restating_a_start_which_disagrees(self, make_inventory):
         """A path directory's name is a restated address like any other."""
@@ -2024,9 +2051,11 @@ class TestGapsMutationTestingFound:
         values = [x.value for x in one_path(make_inventory(files)).labels]
         assert sorted(values) == [1, 1.5]
 
-    @pytest.mark.parametrize("text", ["TRUE", "True", " true "])
-    def test_a_boolean_however_a_spreadsheet_writes_it(self, make_inventory, text):
-        """Excel writes TRUE; the cell is stripped and folded before reading."""
+    @pytest.mark.parametrize("text", ["TRUE", "True", " true ", "false"])
+    def test_a_boolean_is_refused_however_a_spreadsheet_writes_it(
+        self, make_inventory, text
+    ):
+        """Excel writes TRUE; however spelled, membership is an empty cell."""
         files = {
             **MINIMAL,
             **TRACKS,
@@ -2034,7 +2063,8 @@ class TestGapsMutationTestingFound:
                 f"start_distance,end_distance,group,value\n0,120,noisy,{text}\n"
             ),
         }
-        assert one_path(make_inventory(files)).labels[0].value is True
+        with pytest.raises(InvalidInventoryError, match=r"row 2.*not values"):
+            make_inventory(files)
 
     def test_a_decimal_point_keeps_a_value_a_float(self, make_inventory):
         """1.0 is written as a float and stays one, unlike 1."""

@@ -116,7 +116,7 @@ files = {
         "start_distance,end_distance,group,value\n"
         "100,250,zone,north\n"
         "250,400,zone,south\n"
-        "150,300,noisy,true\n"
+        "150,300,noisy,\n"
     ),
 }
 
@@ -139,6 +139,22 @@ A few rules make that directory readable without a schema in front of you:
 Two tracks can hold something that varies along the fiber, and which one to use is decided by how a value behaves between the points which state it. **A quantity which interpolates goes in `geometry.csv`**, one column per quantity, read as a curve through its control points; a column may name its units in its header, `chainage (m)`. **A value which holds over a stretch and then stops goes in `labels.csv`**, a set of intervals rather than a curve — a zone name has no meaning between two of them, and neither does a borehole number. Labels are usually words, then, but a number which identifies rather than measures is a label too. A column of text in a geometry table is refused, and says so.
 
 Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The `segment` names themselves are for humans; what a channel gets is the columns.
+
+# The shape of a track
+
+Every track is a set of intervals of optical distance, and the rules a track is checked against follow from which of three shapes it has:
+
+| shape | tracks | coverage | overlap | an uncovered channel gets |
+|---|---|---|---|---|
+| tiling | `optical_components` | the whole path | none | — |
+| function | geometry columns, `coupling`, label groups with values | partial | none | `""` for text, `NaN` for numbers |
+| membership | label groups without values | partial | free: a channel belongs if any interval includes it | `False` |
+
+A label states membership by leaving its `value` empty, as `noisy` does above, and states a function by giving one. `true` and `false` are refused as values, since membership already has a spelling. A group holds one kind of value throughout — text or numbers — and a group which states membership in one row cannot hold a value in another. Because a numeric group spells absence as `NaN`, it projects onto a patch as floats, so a borehole numbered `3` reads back as `3.0`; a number which must stay exact is text, `BH3`.
+
+A group, a geometry column, and a typed track each become a coordinate under their own name, so one name is one coordinate: a group may not take the name of a structural coordinate (`time`, `distance`, `channel`, `instrument_distance`, `acquisition_key`), of a track (`optical_components`, `geometry`, `coupling`, or `labels` itself), or of any recognised coordinate label, whether or not this inventory's coordinate reference system declares it; the full set is `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. A group and a geometry column cannot share a name either.
+
+Intervals are half-open, `[start, end)`, which is what lets adjacent intervals tile without overlapping. When a track is projected onto channels, the end of each run of coverage belongs to the interval ending there, so the last channel of a run is not left out by an interval which ends exactly on it.
 
 Loading checks the document, so a directory that is not a valid inventory says so at the point it is read:
 

@@ -120,11 +120,10 @@ def _annotation_value(value):
     return normalize_value(value, error=ParameterError)
 
 
-# The value kind decides a group's shape, so it must be exact: a bool is
-# membership and an int is a number, and 1 must not become True.
-AnnotationValue = Annotated[
-    str | bool | int | float, BeforeValidator(_annotation_value)
-]
+# An annotation states membership by carrying no value, so a value, when
+# there is one, is text or a number; its Python type must survive
+# validation, so 1 must not become 1.0.
+AnnotationValue = Annotated[str | int | float, BeforeValidator(_annotation_value)]
 
 
 # Spelled as PatchAttrs spells them, so a set and the data it describes
@@ -509,8 +508,12 @@ class Annotation(_AnnotationModel):
     geometry: Geometry = Field(description="Where this annotation is.")
     id: str = Field(default="", description="Producer-supplied stable identifier.")
     group: str = Field(default="", description="Name of the annotated variable.")
-    value: AnnotationValue = Field(
-        default=True, description="Value of the variable over this geometry."
+    value: AnnotationValue | None = Field(
+        default=None,
+        description=(
+            "Value of the variable over this geometry; unset for an "
+            "annotation which states membership."
+        ),
     )
     tags: tuple[str, ...] = Field(
         default=(), description="Free labels; an annotation may carry many."
@@ -776,7 +779,7 @@ class AnnotationSet(NamespaceOwner):
             geometry=self._geometry(row),
             id=_text(row.get("id")),
             group=_text(row.get("group")),
-            value=row["value"] if _stated(row.get("value")) else True,
+            value=row["value"] if _stated(row.get("value")) else None,
             tags=_read_tags(row.get("tags")),
             parent=_text(row.get("parent")),
             acquisition_key=self._acquisition_key(row, label),
@@ -1050,10 +1053,12 @@ def _check_values(frame: pd.DataFrame) -> None:
     """
     Refuse a group whose values are not all one kind.
 
-    A group's kind decides its shape -- boolean groups state membership and
-    may overlap, others are single valued -- so a group holding both is two
-    variables sharing a name. Overlap itself is not checked here: it only
-    means anything where the set is projected onto a coordinate.
+    A group's kind decides its shape -- a group whose annotations carry no
+    value states membership and may overlap, others are single valued --
+    so a group holding both is two variables sharing a name. Overlap itself
+    is not checked here: it only means anything where the set is projected
+    onto a coordinate. A boolean never reaches this check: `normalize_value`
+    refuses it.
     """
     if "value" not in frame.columns:
         return
@@ -1065,12 +1070,17 @@ def _check_values(frame: pd.DataFrame) -> None:
         else pd.Series([""] * len(frame))
     )
     for name, index in frame.groupby(groups.values, sort=True).groups.items():
-        values = [x for x in frame.loc[index, "value"] if _stated(x)]
-        kinds = {value_kind(_annotation_value(x)) for x in values}
+        values = [x if _stated(x) else None for x in frame.loc[index, "value"]]
+        try:
+            kinds = {value_kind(_annotation_value(x)) for x in values}
+        except ParameterError as error:
+            msg = f"The annotation group {str(name)!r}: {error}"
+            raise ParameterError(msg) from error
         if len(kinds) > 1:
             msg = (
                 f"The annotation group {str(name)!r} mixes {sorted(kinds)} values; "
-                "a group holds one kind of value."
+                "a group states membership or holds one kind of value, and a "
+                "blank cell states membership."
             )
             raise ParameterError(msg)
 
@@ -1432,6 +1442,14 @@ def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
         blank = series.map(lambda x: isinstance(x, str) and not x)
         if blank.any():
             changed[name] = series.where(~blank, None)
+    # An all-blank value column is how a membership-only set is spelled,
+    # and it arrives as whatever dtype the reader inferred from nothing;
+    # one dtype keeps a saved set equal to its reload.
+    if "value" in frame.columns and frame["value"].dtype != object:
+        if not frame["value"].map(_stated).any():
+            changed["value"] = pd.Series(
+                [None] * len(frame), index=frame.index, dtype=object
+            )
     if not changed:
         return frame
     out = frame.copy()
@@ -1484,10 +1502,10 @@ def _refuse_ambiguous_values(frame: pd.DataFrame) -> None:
     Refuse a value a table would read back as a different kind.
 
     An extra losing its type is a documented cost of a format with none,
-    but `value` is a column the set models and checks -- a group holds one
-    kind of value -- so a string reading back as a boolean or a number can
-    make a group mix kinds, leaving a directory this library wrote and
-    then refuses to read. Better to refuse the write.
+    but `value` is a column the set models and checks: a string reading
+    back as a number can make a group mix kinds, and one reading back as
+    true or false is refused outright, leaving a directory this library
+    wrote and then refuses to read. Better to refuse the write.
     """
     if "value" not in frame.columns:
         return
@@ -1498,7 +1516,7 @@ def _refuse_ambiguous_values(frame: pd.DataFrame) -> None:
         listed = ", ".join(repr(x) for x in ambiguous)
         msg = (
             f"The value(s) {listed} are text a table would read back as a "
-            "boolean or a number, and a group holds one kind of value. A "
+            "boolean or a number, neither of which is the value written. A "
             "table has no way to mark a cell as text; spell the value as "
             "something only text can be."
         )
@@ -1558,8 +1576,15 @@ def _write_text(text: str, path) -> None:
 
 
 def _writable(series: pd.Series) -> pd.Series:
-    """Return one column as the text a table states it with."""
-    return series.map(_writable_cell)
+    """
+    Return one column as the text a table states it with.
+
+    Built as an object column rather than mapped: pandas would infer a
+    float column from an int beside an unset cell and write the int as
+    `5.0`, which reads back as a float.
+    """
+    cells = [_writable_cell(x) for x in series]
+    return pd.Series(cells, index=series.index, dtype=object)
 
 
 def _json_default(value):

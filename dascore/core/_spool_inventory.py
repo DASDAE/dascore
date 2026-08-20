@@ -682,7 +682,7 @@ def _fill_from_intervals(distances, intervals, values, kind):
     coverage run included so the last channel of a run is not silently
     uncovered, and point markers covering nothing.
     """
-    fill = {"boolean": False, "numeric": np.nan}.get(kind, None)
+    fill = {"membership": False, "numeric": np.nan}.get(kind, None)
     out = np.full(len(distances), fill, dtype=object)
     for value, covered in zip(
         values, interval_masks(distances, intervals), strict=True
@@ -699,15 +699,13 @@ def _fill_from_intervals(distances, intervals, values, kind):
                 "a coordinate holds one value per channel."
             )
             raise PatchError(msg)
-        if kind == "boolean":
+        if kind == "membership":
             # Membership groups may overlap, so a channel belongs when any
-            # covering interval says it does: the group is the union of its
-            # true intervals.
-            if value:
-                out[covered] = True
+            # interval includes it: the group is the union of its intervals.
+            out[covered] = True
         else:
             out[covered] = value
-    if kind == "boolean":
+    if kind == "membership":
         return out.astype(bool)
     if kind == "numeric":
         return np.asarray([np.nan if x is None else x for x in out], dtype=float)
