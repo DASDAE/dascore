@@ -267,6 +267,51 @@ assert out.attrs.history == old_history
 
 `Patch.attrs` only stores non-coordinate metadata. This includes things like the acquisition key, data units, and observing-system fields such as `gauge_length` or `pulse_width`.
 
+### Patch identity
+
+Two ids answer two different questions, and they move independently.
+
+`patch_id` says **which data** this is. It survives every operation which does not change what the data is *of* — filtering, decimating, transposing, changing units — and changes only when data from more than one source is combined.
+
+`processing_id` says **what was done**. It advances on every operation, by folding that operation's fingerprint into the id the input carried.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+filtered = patch.pass_filter(time=(1, 10))
+
+# Same data, so the same patch_id.
+assert filtered.attrs.patch_id == patch.attrs.patch_id
+# Something was done to it, so a new processing_id.
+assert filtered.attrs.processing_id != patch.attrs.processing_id
+```
+
+Neither is a random number after the first, so the same data processed the same way arrives at the same `processing_id` — in another process, on another machine, next year:
+
+```{python}
+one = patch.pass_filter(time=(1, 10)).decimate(time=2)
+two = patch.pass_filter(time=(1, 10)).decimate(time=2)
+assert one.attrs.processing_id == two.attrs.processing_id
+
+# And a different route is a different answer, order included.
+other = patch.decimate(time=2).pass_filter(time=(1, 10))
+assert other.attrs.processing_id != one.attrs.processing_id
+```
+
+That reproducibility is `processing_id`'s today. `patch_id` is minted fresh for each patch built in memory, so two processes reading the same file currently give it two different answers; it becomes reproducible everywhere once patches read from a file derive their id from what they were read from, which is the next piece of this work.
+
+An operation which hands the patch straight back did nothing, and records nothing. Neither id is part of `Patch.equals`: two patches holding the same data are equal however they were made.
+
+Set `patch_provenance="disabled"` to stop maintaining them:
+
+```{python}
+with config_context(patch_provenance="disabled"):
+    plain = dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
+
+assert plain.attrs.patch_id == ""
+```
+
 ## Summary
 
 `Patch.summary` provides a read-only combined view of:

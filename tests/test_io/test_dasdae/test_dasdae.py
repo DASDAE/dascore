@@ -310,7 +310,16 @@ class TestScanDASDAE:
         """Ensure scanning returns expected values."""
         info1 = dc.scan(written_dascore_v1_random)[0].attrs.model_dump()
         info2 = random_patch.attrs.model_dump()
-        common_keys = set(info1) & set(info2) - {"history"}
+        # The lineage ids are excluded for the same reason history is:
+        # they say where a patch came from and what was done to it, not
+        # what data a file holds, and files do not carry them yet.
+        managed = {"history", "patch_id", "processing_id"}
+        common_keys = set(info1) & set(info2) - managed
+        # Asserted, not merely ignored: the ids are deliberately not
+        # written, because an older DASCore reading a file which carried
+        # them refuses to merge any two patches.
+        assert not info1.get("patch_id")
+        assert not info1.get("processing_id")
         for key in common_keys:
             assert info1[key] == info2[key]
 

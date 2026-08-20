@@ -19,6 +19,7 @@ from dascore.utils.misc import (
     _dict_list_diffs,
     iterate,
 )
+from dascore.workflow.identity import _ID_FIELDS, fold_ids
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 
@@ -71,6 +72,13 @@ def combine_patch_attrs(
             _drop_private_keys(_to_patch_attrs(x).model_dump(exclude_defaults=True))
             for x in mod_list
         ]
+        # Taken out before anything compares them: two patches which are
+        # different data, or which were processed differently, are exactly
+        # what a merge is for, so an id must never make one raise. The fold
+        # below decides what the result carries instead.
+        model_dicts = [
+            {i: v for i, v in x.items() if i not in _ID_FIELDS} for x in model_dicts
+        ]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
             model_dicts = [
@@ -121,10 +129,11 @@ def combine_patch_attrs(
         return [final_dict]
 
     mod_dict_list = _get_model_dict_list(model_list)
+    ids = fold_ids([_to_patch_attrs(x) for x in model_list])
     mod_dict_list = _handle_other_attrs(mod_dict_list)
     first = model_list[0]
     first_class = (
         _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
-    return cls(**mod_dict_list[0])
+    return cls(**{**mod_dict_list[0], **ids})

@@ -56,6 +56,14 @@ class DascoreConfig(BaseModel):
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
     )
+    patch_provenance: Literal["ids", "disabled"] = Field(
+        default="ids",
+        description=(
+            "Controls whether DASCore maintains the patch_id and "
+            "processing_id which say which data a patch is and what was "
+            "done to it."
+        ),
+    )
     sampling_group_tolerance: float = Field(
         default=0.05,
         gt=0,

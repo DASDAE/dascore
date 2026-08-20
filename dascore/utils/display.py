@@ -136,6 +136,9 @@ def attrs_to_text(attrs) -> Text:
     attrs = dc.PatchAttrs.from_dict(attrs).model_dump(exclude_defaults=True)
     # pop coords and dims since they show up in other places.
     attrs.pop("coords", None), attrs.pop("dims", None)
+    # The lineage ids are not metadata a reader is looking at a patch to
+    # read; they would put a line of hex on every patch anyone prints.
+    attrs.pop("patch_id", None), attrs.pop("processing_id", None)
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():

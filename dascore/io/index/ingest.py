@@ -43,7 +43,9 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
 # Attrs handled structurally or intentionally excluded from the index.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
+# The ids are not indexed until the schema version which adds columns for
+# them; an index is for finding data, and an id is not a search term.
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "patch_id", "processing_id"})
 
 
 @dataclass(frozen=True)

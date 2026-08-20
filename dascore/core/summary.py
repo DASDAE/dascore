@@ -245,9 +245,16 @@ class PatchSummary(DascoreBaseModel):
 
     @classmethod
     def from_patch(cls, patch: dc.Patch) -> PatchSummary:
-        """Create a summary from a loaded patch."""
+        """
+        Create a summary from a loaded patch.
+
+        The lineage ids are dropped. A summary describes what data a file
+        holds, and the index does not store an id -- so a summary which
+        carried one would make scanning a file and reading it disagree
+        about the same data, for a field neither of them indexes.
+        """
         return cls(
-            attrs=patch.attrs,
+            attrs=patch.attrs.drop("patch_id", "processing_id"),
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,

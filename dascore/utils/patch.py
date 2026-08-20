@@ -56,8 +56,22 @@ from dascore.utils.misc import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
-from dascore.workflow.processor import PatchOp, register_patch_function
+from dascore.workflow.identity import (
+    advance,
+    fold_patch_ids,
+    fold_processing_ids,
+    ids_enabled,
+    patch_id_of,
+    processing_id_of,
+    stamp_combination,
+)
+from dascore.workflow.processor import (
+    PatchOp,
+    fingerprint_call,
+    register_patch_function,
+)
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -173,6 +187,37 @@ class _PatchFunction(Protocol):
     __wrapped__: Callable
 
     def __call__(self, patch, *args, **kwargs): ...
+
+
+def _stamp(patch, attrs, patch_func, args, kwargs):
+    """
+    Return attrs saying which data this is and what was just done to it.
+
+    Every patch given to the call counts towards which data the result is
+    -- `where(cond_patch, other_patch)` uses all three -- so their ids are
+    folded rather than the first one being copied across. The ids are read
+    with `getattr`, because attrs unpickled from before these fields
+    existed have neither.
+    """
+    members = [patch.attrs]
+    members += [x.attrs for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    try:
+        fingerprint = fingerprint_call(patch_func, args, kwargs)
+    except Exception:
+        # Provenance is metadata about the work, not the work. An argument
+        # the serializer cannot encode is a reason to say nothing about
+        # this call, never a reason to fail a call which otherwise worked.
+        return attrs
+    return attrs.update(
+        # Carried from the inputs rather than from whatever the body
+        # returned: filtering data does not make it other data, and a
+        # function building its result from scratch would otherwise mint a
+        # new id and claim it had.
+        patch_id=fold_patch_ids([patch_id_of(x) for x in members]),
+        processing_id=advance(
+            fold_processing_ids([processing_id_of(x) for x in members]), fingerprint
+        ),
+    )
 
 
 def _op_from_call(patch_func, *args, **kwargs):
@@ -366,6 +411,15 @@ def patch_function(
                     patch, func, *args, _history=history, **kwargs
                 )
                 attrs = _maybe_add_history_str(out.attrs, hist_str)
+                # What was done, folded into what the input carried, into
+                # the same attrs object the history went into: an operation
+                # should cost one new patch, not one per thing it stamps.
+                #
+                # Only when something new came back: an operation which
+                # handed the patch straight through did nothing, and nothing
+                # is what it records.
+                if ids_enabled():
+                    attrs = _stamp(patch, attrs, patch_func, args, kwargs)
                 if attrs is not out.attrs:
                     out = out.update(attrs=attrs)
             if attr_updates and hasattr(out, "attrs"):
@@ -1485,6 +1539,16 @@ def concatenate_patches(
     for patch_list in yield_sub_sequences(patches, val):
         ar = get_output_array(patch_list, dims.index(dim), new_dim)
         attrs = _maybe_add_history_str(patch_list[0].attrs, "concatenate")
+        # Which data this now is: every member which went in, in order.
+        # Taking the first patch's id would claim the result was only the
+        # first source.
+        attrs = stamp_combination(
+            attrs,
+            [x.attrs for x in patch_list],
+            Concatenate.from_kwargs(
+                check_behavior=check_behavior, **kwargs
+            ).fingerprint,
+        )
         coords = _get_new_coords(patch_list, dim, new_dim)
         out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
     return out
@@ -1523,6 +1587,7 @@ def stack_patches(
         msg = f"Dimension {dim_vary} is not in first patch."
         raise PatchCoordinateError(msg)
 
+    kept = []
     for p in patches:
         # check dimensions of patch compared to init_patch
         dims_ok = check_dims(init_patch, p, check_behavior)
@@ -1530,9 +1595,17 @@ def stack_patches(
         # actually do the stacking of data
         if dims_ok and coords_ok:
             stack_arr = stack_arr + p.data
+            kept.append(p.attrs)
 
     # create attributes for the stack with adjusted history
     stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
+    # The kept members only: one dropped for being incompatible did not
+    # contribute its data, so it is not part of what this data is.
+    stack_attrs = stamp_combination(
+        stack_attrs,
+        kept,
+        Stack(dim_vary=dim_vary, check_behavior=check_behavior).fingerprint,
+    )
 
     # create coords array for the stack
     stack_coords = init_patch.coords

@@ -7,7 +7,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -25,7 +25,7 @@ from dascore.utils.array_api import (
     is_numpy,
     nan_reduce,
 )
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, suppress_warnings
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
@@ -34,6 +34,10 @@ from dascore.utils.patch import (
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import DASCoreWarning
+from dascore.workflow.builtin import ArrayFunc, Ufunc
+from dascore.workflow.identity import ids_enabled, stamp_combination
+from dascore.workflow.processor import _PATCH_ARGUMENT
 
 # Numpy reductions which skip nans, and the name they are known by in
 # dascore.utils.array_api.nan_reduce.
@@ -254,7 +258,15 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     We assume the shape of the array won't change.
     """
     out = _apply_operator(operator, patch.data, *args, **kwargs)
-    return patch.new(data=out)
+    # As for the binary case: a ufunc has no patch function to name it, so
+    # `np.abs(patch)` would otherwise record that nothing happened.
+    task = Ufunc(
+        name=getattr(operator, "__name__", str(operator)),
+        operands=tuple(args),
+        kwargs=_without_patch_values(kwargs),
+    )
+    attrs = stamp_combination(patch.attrs, [patch.attrs], task.fingerprint)
+    return patch.new(data=out, attrs=attrs)
 
 
 def _apply_binary_ufunc(
@@ -369,6 +381,9 @@ def _apply_binary_ufunc(
         patch, other = other, patch
         reversed = True
 
+    # Taken before the operands are aligned and possibly replaced below:
+    # what went in is what decides which data comes out.
+    members = [x.attrs for x in (patch, other) if isinstance(x, dc.Patch)]
     if patch_count > 1:
         patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
     else:
@@ -379,6 +394,22 @@ def _apply_binary_ufunc(
         new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
+    # A ufunc is not a patch function, so nothing else names it. Without
+    # this, `patch + 1` and `patch - (-1)` produce the same data and the
+    # same id, though they are different operations. Guarded, so that a
+    # process which has turned the ids off does not hash operands for a
+    # value nothing will read.
+    if ids_enabled():
+        rest = () if other_is_patch else (other,)
+        task = Ufunc(
+            name=getattr(operator, "__name__", str(operator)),
+            reversed=reversed,
+            # `args` reaches the operator too, so two calls which differ
+            # only in those are two operations.
+            operands=_without_patch_values((*rest, *args)),
+            kwargs=_without_patch_values(kwargs),
+        )
+        attrs = stamp_combination(attrs, members, _fingerprint_of(task))
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -657,7 +688,72 @@ def _apply_array_func(func, *args, **kwargs):
     patch = _reassemble_patch(
         result, first_patch, func, converted_args, converted_kwargs
     )
+    # An array function is not a patch function either, so nothing else
+    # names it: without this `np.mean(patch, axis=0)` leaves the ids where
+    # they were and claims nothing was done.
+    if ids_enabled():
+        task = ArrayFunc(
+            name=_array_func_name(func),
+            # The positional arguments say which reduction it was:
+            # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
+            args=_without_patch_values(converted_args),
+            kwargs=_without_patch_values(converted_kwargs),
+        )
+        attrs = stamp_combination(
+            patch.attrs, [x.attrs for x in patches], _fingerprint_of(task)
+        )
+        patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
+
+
+def _array_func_name(func) -> str:
+    """
+    Return the name an array function is recorded under.
+
+    A ufunc method arrives here as the bound `np.add.reduce`, whose
+    `__name__` is only "reduce" -- so `np.add.reduce` and
+    `np.multiply.reduce` would be one operation without the ufunc it
+    belongs to.
+    """
+    name = getattr(func, "__name__", str(func))
+    owner = getattr(getattr(func, "__self__", None), "__name__", None)
+    return f"{owner}.{name}" if owner else name
+
+
+def _fingerprint_of(task) -> str:
+    """
+    Return a task's fingerprint without complaining about the patch marker.
+
+    The marker is a singleton, so hashing it by its type -- which is what
+    the warning is about -- loses nothing. The warning is worth hearing
+    for a value where it would.
+    """
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return task.fingerprint
+
+
+def _without_patch_values(values):
+    """
+    Return arguments with anything the fingerprint should not hold replaced.
+
+    A patch is an *input*, not a parameter -- which one it was is said by
+    the ids folded from the operands. A numpy dtype has no encoding of its
+    own, so it is spelled out rather than hashed by its class, which would
+    give every dtype one fingerprint and warn on every call.
+    """
+
+    def _plain(value):
+        if isinstance(value, dc.Patch):
+            return _PATCH_ARGUMENT
+        if isinstance(value, np.dtype):
+            return str(value)
+        return value
+
+    if isinstance(values, Mapping):
+        return {key: _plain(value) for key, value in values.items()}
+    return tuple(_plain(x) for x in values)
 
 
 # Mapping of ufunc dispatches. Keys are method name or num input/num output.

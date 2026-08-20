@@ -34,14 +34,17 @@ from __future__ import annotations
 import inspect
 import re
 import warnings
+from collections.abc import Mapping
 from contextlib import suppress
-from functools import cached_property
+from functools import cached_property, lru_cache
 from typing import Any, ClassVar
 
 from pydantic import Field
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.serialize import digest
 from dascore.workflow.task import Task, _resolve_default
@@ -74,6 +77,11 @@ _DEFERRED_MODULES = ("dascore.viz",)
 
 # Set once the install has been swept looking for an unregistered tag.
 _swept = False
+
+# Fingerprints of calls already made, so a loop over a spool pays for the
+# digest of one call rather than of every one.
+_FINGERPRINTS: dict[Any, str] = {}
+_FINGERPRINT_LIMIT = 4096
 
 
 class PatchProcessor(Task):
@@ -475,23 +483,186 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     >>> called = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
     >>> assert called == dc.proc.normalize.op(dim="time").fingerprint
     """
-    name = op_name(func)
     version = getattr(func, "__version__", "1.0")
-    return _fingerprint(name, version, _bind(func, args, kwargs or {}))
+    name = _call_name(func)
+    bound = _without_patches(_bind(func, args, kwargs or {}))
+    # Answered from the cache when the same call has been made before,
+    # which in a loop over a spool is every call after the first. Hashing
+    # the bound arguments costs a few microseconds; the digest of their
+    # canonical JSON costs several times that.
+    try:
+        # The function itself is in the key, not just its name. For one
+        # which has no tag the name ends in `id(func)`, and CPython reuses
+        # an address once the function is collected -- so a factory making
+        # one patch function per call could hand a later one the earlier
+        # one's fingerprint. Holding the function here makes the key exact
+        # and keeps the address from being reused underneath it.
+        key = (func, name, version, _as_key(bound))
+    except TypeError:
+        # Something unhashable -- an array argument, most often. Its
+        # digest is the honest cost of saying which array it was.
+        return _fingerprint(name, version, bound)
+    if (found := _FINGERPRINTS.get(key)) is None:
+        found = _fingerprint(name, version, bound)
+        # Bounded, and simply stops growing rather than evicting: the
+        # entries are one small string each, and a process which has made
+        # four thousand distinct calls is not one this is hot for.
+        if len(_FINGERPRINTS) < _FINGERPRINT_LIMIT:
+            _FINGERPRINTS[key] = found
+    return found
+
+
+# The only leaves a cache key may be built from. The rule is not "hashable":
+# it is "two of these are the same argument exactly when Python says they are
+# equal". A pint quantity fails that -- `1 * m == 100 * cm` and the two hash
+# alike, while the serializer encodes them differently -- so caching on it
+# would give one call two answers depending on what ran first.
+_KEYABLE = (str, bytes, int, float, bool, type(None))
+
+# Beyond this many elements, working the key out costs more than the digest
+# it saves.
+_KEY_LIMIT = 32
+
+
+class _PatchArgument:
+    """
+    Stands for a patch handed to an operation as an argument.
+
+    A class rather than a string: a caller is free to pass the string
+    `"$patch"`, and a marker it could be mistaken for would make that call
+    and a call with an actual patch one operation.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        """Say what it is, which is what the digest records."""
+        return "<patch argument>"
+
+
+_PATCH_ARGUMENT = _PatchArgument()
+
+
+def _without_patches(kwargs: dict) -> dict:
+    """
+    Return the bound arguments with any patch replaced by a marker.
+
+    A patch given as an argument is not a *parameter* of the operation, it
+    is another input to it: `where(cond_patch)` is the same operation
+    whichever patch it was handed, and which one it was is said by the ids
+    folded from the operands. Encoding it here would also hash a whole
+    patch on every call, and warn that it has no encoding of its own.
+    """
+    # Imported here rather than at module scope: this module is imported
+    # while `dascore.utils.patch` is still being imported.
+    import dascore as dc  # noqa: PLC0415
+
+    if not any(isinstance(x, dc.Patch) for x in kwargs.values()):
+        return kwargs
+    return {
+        key: _PATCH_ARGUMENT if isinstance(value, dc.Patch) else value
+        for key, value in kwargs.items()
+    }
+
+
+def _as_key(value, budget: int = _KEY_LIMIT):
+    """
+    Return a hashable stand-in a different value cannot share.
+
+    Raises `TypeError` for anything it cannot key safely or cheaply, which
+    is the caller's signal to compute the digest instead of caching it.
+    """
+    if isinstance(value, Mapping):
+        if len(value) > budget:
+            raise TypeError(value)
+        # The keys are typed too: `{1: "x"}` and `{True: "x"}` are equal
+        # mappings to Python and different calls to the serializer.
+        return (
+            dict,
+            tuple(
+                (_as_key(k, budget - len(value)), _as_key(v, budget - len(value)))
+                for k, v in value.items()
+            ),
+        )
+    if isinstance(value, (list, tuple)):
+        if len(value) > budget:
+            raise TypeError(value)
+        return (
+            type(value),
+            tuple(_as_key(x, budget - len(value)) for x in value),
+        )
+    # `type(value) in`, not `isinstance`: a subclass may compare equal to
+    # its base and encode differently, which is the trap this exists for.
+    if type(value) not in _KEYABLE:
+        raise TypeError(value)
+    if type(value) is float:
+        # `0.0 == -0.0` and the two hash alike, while the encoder keeps
+        # the sign; `repr` tells them apart, and NaN from NaN.
+        return (float, repr(value))
+    return (type(value), value)
+
+
+def _call_name(func) -> str:
+    """
+    Return the name a call is fingerprinted under.
+
+    The registry tag when the function has one. When it does not -- a patch
+    function defined inside another call -- something was still done to the
+    patch, and a `processing_id` which did not move would claim it was not.
+    So the call is named by where it was written instead: enough to tell it
+    from another operation, and honestly not resolvable, which is why
+    `op_name` still refuses it and no `PatchOp` can be built.
+    """
+    if (tag := patch_function_tag(func)) is not None:
+        return tag
+    # Where it was written, and *which* one: a factory making patch
+    # functions gives every one of them the same module and qualname, and
+    # two closures over different values are two operations. The identity
+    # is process-local, which is honest -- so is the function.
+    return f"{_spell(func)}#{id(func):x}"
 
 
 def _fingerprint(name: str, version: str, kwargs: dict) -> str:
-    """Return the digest a name, a version and bound arguments make."""
+    """
+    Return the digest a name, a version and bound arguments make.
+
+    The serializer's warning about a value it has no encoding for is
+    suppressed. It is worth hearing when a *task* is being written to a
+    document, which is what it was written for; here it would fire on
+    every ordinary call carrying, say, a numpy dtype, and hashing such a
+    value by its type is all an id needs of it.
+    """
     # Spelled the way `Task.fingerprint_at` spells one, so a pipe holding a
     # PatchOp hashes the same whichever built it.
-    return digest(
-        {"task": "dascore:PatchOp", "version": version, "params": {name: kwargs}}
-    )
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return digest(
+            {"task": "dascore:PatchOp", "version": version, "params": {name: kwargs}}
+        )
+
+
+# Bounded, and it holds function references: a process which builds patch
+# functions in a loop should not keep every one of them, and the closures
+# they captured, alive for its lifetime.
+@lru_cache(maxsize=2048)
+def _signature_of(func) -> inspect.Signature:
+    """Return a function's signature, worked out once."""
+    return inspect.signature(func)
 
 
 def _signature(func) -> inspect.Signature:
-    """Return the signature of the function inside a patch function."""
-    return inspect.signature(getattr(func, "raw_function", func))
+    """
+    Return the signature of the function inside a patch function.
+
+    Cached on the function: `inspect.signature` is not cheap, a signature
+    cannot change, and every call which is fingerprinted asks for one.
+    """
+    inner = getattr(func, "raw_function", func)
+    try:
+        return _signature_of(inner)
+    except TypeError:  # something unhashable; ask the slow way
+        return inspect.signature(inner)
 
 
 def _canonical(value):

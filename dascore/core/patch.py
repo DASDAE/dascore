@@ -30,6 +30,7 @@ from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
+from dascore.workflow.identity import with_patch_id
 
 
 class Patch(NamespaceOwner):
@@ -102,6 +103,9 @@ class Patch(NamespaceOwner):
         shape = data.shape
         coords = get_coord_manager(coords, dims=dims, shape=shape)
         attrs = dc.PatchAttrs.from_dict(attrs)
+        # Data which names no source still says which data it is, so that
+        # everything downstream has something to carry forward.
+        attrs = with_patch_id(attrs)
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
@@ -176,7 +180,9 @@ class Patch(NamespaceOwner):
         return apply_ufunc(np.mod, other, self)
 
     def __neg__(self):
-        return self.update(data=-self.data)
+        # Through the ufunc, not `update`: `-patch` and `np.negative(patch)`
+        # are one operation, and `update` records nothing.
+        return apply_ufunc(np.negative, self)
 
     # Numpy Compatibility things
     __array_ufunc__ = patch_array_ufunc

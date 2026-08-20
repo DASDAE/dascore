@@ -727,10 +727,13 @@ class TestWhere:
         # Check that dimensions are preserved
         assert result.dims == random_patch.dims
 
-        # Check that attributes are preserved (except history)
-        assert result.attrs.model_dump(
-            exclude={"history"}
-        ) == random_patch.attrs.model_dump(exclude={"history"})
+        # Check that attributes are preserved (except the ones the
+        # decorator maintains: history, and the ids which say what was
+        # done to the data).
+        managed = {"history", "processing_id"}
+        assert result.attrs.model_dump(exclude=managed) == (
+            random_patch.attrs.model_dump(exclude=managed)
+        )
 
     def test_where_non_boolean_condition_raises(self, random_patch):
         """Test that non-boolean condition raises ValueError."""
