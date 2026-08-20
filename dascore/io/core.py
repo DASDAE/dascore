@@ -1151,6 +1151,11 @@ def _source_stats(source) -> tuple[int | None, int | None]:
         return None, None
 
 
+def _is_hidden(relative) -> bool:
+    """Return True when a path, or any directory above it, is hidden."""
+    return any(part.startswith(".") for part in relative.parts)
+
+
 def _size_and_mtime(stat) -> tuple[int | None, int | None]:
     """Return one stat result's size and modification time in nanoseconds."""
     size = getattr(stat, "st_size", None)
@@ -1171,12 +1176,13 @@ def _directory_stats(path) -> tuple[int, int]:
     is why it is not used.
 
     Hidden members are skipped, as they are in the index's own manifest
-    over a directory-format unit.
+    over a directory-format unit -- and so is anything under a hidden
+    directory, which is hidden for the same reason its parent is.
     """
     stats = [
         _size_and_mtime(x.stat())
         for x in path.rglob("*")
-        if x.is_file() and not x.name.startswith(".")
+        if x.is_file() and not _is_hidden(x.relative_to(path))
     ]
     return (
         sum(size or 0 for size, _ in stats),
@@ -1343,10 +1349,13 @@ def read(
             )
             # if resource has a seek go back to 0 so this stream can be re-used.
             getattr(path, "seek", lambda x: None)(0)
+            # The reader's own spelling of its format, not the caller's:
+            # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
+            # resolve to one FiberIO and must name one datum.
             return _stamp_source_ids(
                 out,
-                file_format,
-                file_version,
+                fiber_io.name,
+                fiber_io.version,
                 source,
                 kwargs.get("source_patch_key", ""),
             )

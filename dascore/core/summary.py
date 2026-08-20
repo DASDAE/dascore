@@ -23,9 +23,9 @@ from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 def normalize_source_patch_key(value: Any) -> str:
     """
-    Return a source patch id as a clean string ("" when missing).
+    Return a source patch key as a clean string ("" when missing).
 
-    Missing ids arrive as None, empty strings, pandas NaN/NaT, or numpy
+    Missing keys arrive as None, empty strings, pandas NaN/NaT, or numpy
     scalars. pandas NaN is truthy, so a plain ``value or ""`` does not
     normalize it — every conversion site must go through this helper to
     avoid the NaN-truthiness bug the catalog resolver already had to fix.

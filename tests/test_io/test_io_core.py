@@ -1920,6 +1920,20 @@ class TestSourceIds:
         }
         assert len(ids) == len(keys)
 
+    def test_the_readers_spelling_of_its_format(self, terra15_path):
+        """Two spellings resolve to one reader, so they name one datum."""
+        name, version = dc.get_format(terra15_path)
+        spelled = dc.read(terra15_path, name.lower(), version)[0]
+        assert spelled.attrs.patch_id == dc.read(terra15_path)[0].attrs.patch_id
+
+    def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
+        """Including one under a hidden directory, which is hidden too."""
+        (tmp_path / "member.h5").write_bytes(b"data")
+        before = _source_stats(tmp_path)
+        (tmp_path / ".cache").mkdir()
+        (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
+        assert _source_stats(tmp_path) == before
+
     def test_a_source_which_will_not_answer(self):
         """Nothing said is better than fields which pretend to be equal."""
         assert _source_stats(Path("no/such/file.h5")) == (None, None)
