@@ -47,10 +47,10 @@ dependencies = [
      "array-api-compat>=1.9",
      "h5py",
      "matplotlib>=3.10",
-     # 2.0 is the first numpy with native array API support; older numpy
-     # works only through array-api-compat shims, which we would rather not
-     # write dascore against.
-     "numpy>=2.0",
+     # 2.0 is the first numpy with native array API support, which is what
+     # dascore is written against; 2.3.3 is the first pandas 3 accepts on
+     # python 3.14, and a floor below what the matrix installs is untested.
+     "numpy>=2.3.3",
      "packaging",
      # 3.0 is where copy-on-write and the `str` dtype became the only
      # behavior; dascore is written against those rather than around them.

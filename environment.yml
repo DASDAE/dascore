@@ -4,7 +4,7 @@ channels:
 dependencies:
   - pytest
   - pytest-timeout
-  - numpy>=2.0
+  - numpy>=2.3.3
   - pydantic>=2.1
   - pip
   - pandas>=3.0
