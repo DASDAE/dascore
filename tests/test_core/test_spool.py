@@ -1218,7 +1218,6 @@ class TestConcatenateKind:
         assert out[0].shape[1] == base.shape[1]
         assert out.get_contents()["time_max"].iloc[0] == time.max()
         # the same selection after concatenating works
-        patch = dc.spool([base, shifted]).select(distance=(5, 299))  # noqa: F841
         whole = dc.spool([base, shifted]).concatenate(
             time=None, check_behavior="ignore"
         )
