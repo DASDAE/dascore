@@ -444,8 +444,33 @@ class DataFrameSpool(BaseSpool):
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
+    def _as_selector_array(self, item) -> np.ndarray:
+        """Convert a Series or list selector to an array which fits the spool."""
+        if isinstance(item, pd.Series):
+            if not pd.api.types.is_bool_dtype(item.dtype):
+                return item.to_numpy()
+            # A mask is applied by position, so it must be in this spool's
+            # order; one built from another spool's contents would otherwise
+            # silently select the wrong patches.
+            if not item.index.equals(self._df.index):
+                msg = (
+                    "The index of a boolean Series selector must match this "
+                    "spool's get_contents; build the mask from it, or pass a "
+                    "numpy array to select by position."
+                )
+                raise ParameterError(msg)
+            # to_numpy handles nullable boolean dtypes; NA counts as False.
+            return item.to_numpy(dtype=bool, na_value=False)
+        array = np.asarray(item)
+        if array.size == 0:  # an empty list selects nothing
+            array = array.astype(np.int64)
+        return array
+
     def _select_from_array(self, array) -> Self:
         """Create new spool with contents changed from array input."""
+        if array.ndim != 1:
+            msg = f"Spool selectors must be one dimensional, got {array.ndim}D."
+            raise ParameterError(msg)
         if np.issubdtype(array.dtype, np.bool_):  # boolean select
             if len(array) != len(self._df):
                 msg = (
@@ -485,7 +510,7 @@ class DataFrameSpool(BaseSpool):
         elif is_array(item) or isinstance(item, pd.Series | list):
             # An array (or something which converts to one, such as a mask
             # built from get_contents) was passed; use np type selection.
-            return self._select_from_array(np.asarray(item))
+            return self._select_from_array(self._as_selector_array(item))
         else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
         return out

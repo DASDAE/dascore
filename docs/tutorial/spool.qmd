@@ -132,7 +132,7 @@ index_array = np.array([2, 0])
 new = spool[index_array]
 ```
 
-A pandas Series or a list works the same way. Since the rows of [`get_contents`](`dascore.core.spool.Spool.get_contents`) line up with the patches, a filter on that dataframe is a boolean selector for the spool:
+A pandas Series or a list works the same way. Since the rows of [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) line up with the patches, a filter on that dataframe is a boolean selector for the spool:
 
 ```{python}
 import dascore as dc

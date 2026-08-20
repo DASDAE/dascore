@@ -346,6 +346,33 @@ class TestSpoolBoolArraySelect:
         with pytest.raises(ParameterError, match="one per patch"):
             random_spool[mask]
 
+    def test_series_from_other_spool_raises(self, diverse_spool):
+        """A mask built from a different spool's contents must not be applied."""
+        mask = diverse_spool.get_contents()["tag"] == "some_tag"
+        reversed_spool = diverse_spool[::-1]
+        with pytest.raises(ParameterError, match="match this spool"):
+            reversed_spool[mask]
+        # but by position it is allowed, and the caller owns the alignment.
+        assert len(reversed_spool[mask.to_numpy()]) == mask.sum()
+
+    def test_nullable_bool_series(self, diverse_spool):
+        """Missing values in a nullable boolean mask count as False."""
+        df = diverse_spool.get_contents()
+        mask = (df["tag"] == "some_tag").astype("boolean")
+        mask.iloc[0] = pd.NA
+        out = diverse_spool[mask]
+        assert len(out) == mask.fillna(False).sum()
+
+    def test_empty_list(self, random_spool):
+        """An empty list selects no patches."""
+        assert len(random_spool[[]]) == 0
+
+    def test_two_dimensional_raises(self, random_spool):
+        """Selectors must be one dimensional."""
+        mask = np.ones((len(random_spool), 1), dtype=np.bool_)
+        with pytest.raises(ParameterError, match="one dimensional"):
+            random_spool[mask]
+
 
 class TestSpoolIntArraySelect:
     """Tests for selecting patches using an integer array."""
