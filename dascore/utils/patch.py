@@ -1437,9 +1437,8 @@ def _trimmed_envelopes_agree(row, first, def_key: str) -> bool:
     """
     coord = def_key[1 : -len("_def_key")]
     columns = [f"{coord}_{x}" for x in ("min", "max", "step")]
-    if any(x not in row.index for x in columns):
-        return False
-    if _is_missing(row[columns[2]]) or _is_missing(first[columns[2]]):
+    step = columns[2]
+    if step not in row.index or _is_missing(row[step]) or _is_missing(first[step]):
         return False
     return all(_values_equal(row[x], first[x]) for x in columns)
 
