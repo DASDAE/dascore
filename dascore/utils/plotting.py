@@ -24,6 +24,18 @@ def _get_dim_label(patch, dim):
     return dim_str + unit_str
 
 
+def _get_data_label(patch, default=""):
+    """
+    Create a label for the patch data (its type and units).
+
+    Returns default if the patch has neither a data_type nor data_units.
+    """
+    data_type = str(patch.attrs.get("data_type", ""))
+    data_units = get_quantity_str(patch.attrs.data_units) or ""
+    dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
+    return f"{data_type}{dunits}" or default
+
+
 def _get_cmap(cmap):
     """Return a color map from a colormap or string."""
     if isinstance(cmap, str):  # get color map if a string was passed

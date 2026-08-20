@@ -6,10 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
     _get_ax,
+    _get_data_label,
     _get_dim_label,
 )
 from dascore.utils.time import dtype_time_like
@@ -27,7 +29,7 @@ def _get_offsets_factor(patch, dim, scale, other_labels):
 
 
 def _shade(offsets, ax, data_scaled, color, wiggle_labels):
-    """Shades the part of the waveforms under the offset line."""
+    """Shades the part of each waveform above its offset line."""
     for i in range(len(offsets)):
         ax.fill_between(
             wiggle_labels,
@@ -50,12 +52,51 @@ def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
     plt.locator_params(axis="y", nbins=min_bins)
 
 
+def _wiggle_1d(patch, ax, alpha, color, shade):
+    """Plot a 1D patch as a single trace against its only coordinate."""
+    dim = patch.dims[0]
+    x_values = patch.coords.get_array(dim)
+    ax.plot(x_values, patch.data, color=color, alpha=alpha)
+    if shade:
+        _shade(np.array([0]), ax, patch.data[:, None], color, x_values)
+    ax.set_xlabel(_get_dim_label(patch, dim))
+    ax.set_ylabel(_get_data_label(patch, default="amplitude"))
+    if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
+        _format_time_axis(ax, dim, "x")
+    return ax
+
+
+def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
+    """Plot each trace of a 2D patch offset from the others."""
+    # After transpose selected dim must be axis 0 and other axis 1
+    patch = patch.transpose(dim, ...)
+    other_dim = next(iter(set(patch.dims) - {dim}))
+    # values for axis which is connected
+    connect_axis_ticks = patch.coords.get_array(dim)
+    # values for y axis (not connected)
+    other_axis_ticks = patch.coords.get_array(other_dim)
+    offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
+    # now plot, add labels, etc.
+    ax.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
+    # shade the part of each wiggle above its offset if desired
+    if shade:
+        _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
+    _format_y_axis_ticks(ax, offsets, other_axis_ticks)
+    for dim, x in zip(patch.dims, ["x", "y"], strict=True):
+        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
+        # format all dims which have time types.
+        if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
+            _format_time_axis(ax, dim, x)
+    ax.invert_yaxis()  # invert y so it's consistent with waterfall
+    return ax
+
+
 @patch_function()
 def wiggle(
     patch: PatchType,
     dim: str = "time",
     scale: float = 1,
-    alpha: float = 0.2,
+    alpha: float | None = None,
     color: str = "black",
     shade: bool = False,
     ax: plt.Axes | None = None,
@@ -64,22 +105,30 @@ def wiggle(
     """
     Create a wiggle plot of patch data.
 
+    Length one dimensions are squeezed out first. A patch left with a single
+    dimension (e.g., an OTDR trace stored as ``(time: 1, distance: N)``) is
+    drawn as one line against that dimension, with the data type and units
+    (or "amplitude" if the patch has neither) on the y axis. A patch left with
+    two dimensions is drawn as one wiggle per trace.
+
     Parameters
     ----------
     patch
         The Patch object.
     dim
-        The dimension along which samples are connected.
+        The dimension along which samples are connected. Ignored if only
+        one dimension remains after squeezing.
     scale
         The scale (or gain) of the waveforms. A value of 1 indicates waveform
         centroids are separated by the average total waveform excursion.
     alpha
-        Opacity of the wiggle lines.
+        Opacity of the wiggle lines. Defaults to 0.2 for 2D patches, where
+        neighboring wiggles overlap, and 1.0 for a single trace.
     color
         Color of wiggles
     shade
-        If True, shade all values of each trace which are less than the mean
-        trace value.
+        If True, shade all values of each trace which are greater than the
+        trace offset (zero for a single trace).
     ax
         A matplotlib object, if None ne will be created.
     show
@@ -91,45 +140,46 @@ def wiggle(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> _ = patch.viz.wiggle()
+    >>>
+    >>> # A single trace plots as one line
+    >>> trace = patch.select(distance=0, samples=True)
+    >>> _ = trace.viz.wiggle()
     """
+    # A length one dimension has nothing to connect, so drop it rather than
+    # drawing a separate (one-sample) wiggle for every sample along the other.
+    # Only exactly length one dims are dropped; Patch.squeeze can't remove
+    # empty dims and those just plot nothing.
+    squeezable = [x for x in patch.dims if len(patch.get_coord(x)) == 1]
+    if len(squeezable) == patch.ndim:
+        msg = "Cannot make wiggle plot of a Patch with a single sample."
+        raise ParameterError(msg)
+    if squeezable:
+        patch = patch.squeeze(squeezable)
+    if patch.ndim == 2 and dim not in patch.dims:
+        msg = (
+            f"dim {dim!r} is not a dimension of the patch after squeezing "
+            f"length one dimensions; it must be one of {patch.dims}."
+        )
+        raise ParameterError(msg)
+    if patch.ndim > 2:
+        msg = (
+            "Can only make wiggle plot of a 1D or 2D Patch, but after "
+            f"squeezing length one dimensions patch has dims {patch.dims}."
+        )
+        raise ParameterError(msg)
+    # Create the axis only once the patch is known to be plottable so a
+    # rejected call doesn't leak an empty figure.
     ax = _get_ax(ax)
-
-    # Handle 1D patches (issue #462)
-    if len(patch.dims) == 1:
-        plot_dim = patch.dims[0]
-        x_values = patch.coords.get_array(plot_dim)
-        y_values = patch.data
-        ax.plot(x_values, y_values, color=color, alpha=alpha)
-        ax.set_xlabel(_get_dim_label(patch, plot_dim))
-        ax.set_ylabel("amplitude")
-        # Format time axis if applicable
-        if np.issubdtype(patch.get_coord(plot_dim).dtype, np.datetime64):
-            _format_time_axis(ax, plot_dim, "x")
-        if show:
-            plt.show()
+    # An empty dimension has nothing to draw; the offsets can't be computed
+    # from zero samples so just hand back the empty axis.
+    if 0 in patch.shape:
         return ax
-
-    assert len(patch.dims) == 2, "Can only make wiggle plot of 2D Patch"
-    # After transpose selected dim must be axis 0 and other axis 1
-    patch = patch.transpose(dim, ...)
-    other_dim = next(iter(set(patch.dims) - {dim}))
-    # values for axis which is connected
-    connect_axis_ticks = patch.coords.get_array(dim)
-    # values for y axis (not connected)
-    other_axis_ticks = patch.coords.get_array(other_dim)
-    offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
-    # now plot, add labels, etc.
-    ax.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
-    # shade negative part of waveforms if desired
-    if shade:
-        _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
-    _format_y_axis_ticks(ax, offsets, other_axis_ticks)
-    for dim, x in zip(patch.dims, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        # format all dims which have time types.
-        if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
-            _format_time_axis(ax, dim, x)
+    if patch.ndim == 1:
+        alpha = 1.0 if alpha is None else alpha
+        _wiggle_1d(patch, ax, alpha, color, shade)
+    else:
+        alpha = 0.2 if alpha is None else alpha
+        _wiggle_2d(patch, ax, dim, scale, alpha, color, shade)
     if show:
         plt.show()
-    ax.invert_yaxis()  # invert y so its consistent with waterfall
     return ax
