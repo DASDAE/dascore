@@ -9,9 +9,11 @@ the last path segment -- is never parsed.
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import sqlite3
+import sys
 import warnings
 
 import numpy as np
@@ -20,7 +22,34 @@ import pytest
 import dascore as dc
 from dascore.core.spool import Spool
 from dascore.examples import spool_to_directory
+from dascore.io.index import ingest
+from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
+
+# The literal version stamped on indexes built while file names still
+# contributed attrs. Spelled out rather than derived from INDEX_VERSION,
+# so that retiring the parse without moving the version is a failure.
+_SOURCE_NAME_INDEX_VERSION = 10
+
+
+def _parse_including_name(rel_posix):
+    """The parser as it was when file names counted."""
+    out = parse_hive_path_attrs(rel_posix)
+    name = rel_posix.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return out | parse_hive_path_attrs(f"{name}/x")
+
+
+def _stamp_index_version(directory, version):
+    """Write an index version onto a directory's index, then let go."""
+    # close explicitly: sqlite3's context manager only wraps the
+    # transaction, and a lingering handle blocks the rebuild's
+    # unlink on Windows.
+    con = sqlite3.connect(directory / ".dascore_index.sqlite3")
+    try:
+        con.execute("UPDATE meta_data SET index_version = ?", (version,))
+        con.commit()
+    finally:
+        con.close()
 
 
 @pytest.fixture()
@@ -377,21 +406,70 @@ class TestEdgeCases:
         """An index stamped with an older version rebuilds transparently."""
         spool = Spool.from_directory(hive_dir).update(progress=None)
         spool.indexer.close()
-        index_path = hive_dir / ".dascore_index.sqlite3"
-        # close explicitly: sqlite3's context manager only wraps the
-        # transaction, and a lingering handle blocks the rebuild's
-        # unlink on Windows.
-        con = sqlite3.connect(index_path)
-        try:
-            con.execute("UPDATE meta_data SET index_version = 3")
-            con.commit()
-        finally:
-            con.close()
+        _stamp_index_version(hive_dir, 3)
         reopened = Spool.from_directory(hive_dir).update(progress=None)
         try:
             assert reopened.get_contents()["station"].iloc[0] == "A"
         finally:
             reopened.indexer.close()
+
+    def test_rebuild_drops_source_name_attrs(self, tmp_path, monkeypatch):
+        """
+        An index built when file names counted loses those attrs.
+
+        The rebuild is what retires them, so the index version has to
+        move with the parse: an index left at its old number would keep
+        serving attrs the current parser would never produce.
+        """
+        assert INDEX_VERSION > _SOURCE_NAME_INDEX_VERSION
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
+        monkeypatch.setattr(ingest, "parse_hive_path_attrs", _parse_including_name)
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert spool.get_contents()["cable"].iloc[0] == "north"
+        spool.indexer.close()
+        monkeypatch.undo()
+        _stamp_index_version(tmp_path, _SOURCE_NAME_INDEX_VERSION)
+        reopened = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            df = reopened.get_contents()
+            assert "cable" not in df.columns
+            assert json.loads(df["_path_attrs"].iloc[0]) == {"station": "A"}
+        finally:
+            reopened.indexer.close()
+
+    def test_source_file_name_is_not_indexed(self, tmp_path):
+        """A key=value file name under a partition contributes nothing."""
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            df = spool.get_contents()
+            assert df["station"].iloc[0] == "A"
+            assert "cable" not in df.columns
+            assert spool[0].attrs.get("cable") is None
+        finally:
+            spool.indexer.close()
+
+    def test_directory_format_unit_name_is_not_indexed(self, tmp_path):
+        """A directory-format source is named, not partitioned, by its dir."""
+        sys.path.insert(0, "tests/test_io/test_xml_binary")
+        from test_xml_binary import metadata  # noqa: PLC0415
+
+        unit = tmp_path / "cable=north" / "tag=ignored"
+        unit.mkdir(parents=True)
+        (unit / "metadata.xml").write_text(metadata)
+        rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
+        for name in ("DAS_20240530T011500_000000Z.raw",):
+            (unit / name).write_bytes(rand.tobytes())
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            stored = spool.get_contents()["_path_attrs"].iloc[0]
+            assert json.loads(stored) == {"cable": "north"}
+        finally:
+            spool.indexer.close()
 
 
 class TestHiveAcquisitionKey:

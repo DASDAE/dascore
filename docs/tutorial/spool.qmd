@@ -123,7 +123,7 @@ assert spool.get_contents()["experiment"].iloc[0] == "final"
 
 A few details worth knowing:
 
-- Only the directories *inside* the spool are parsed. The spool's own root contributes nothing, so `dc.spool(".../experiment=demo")` does not pick up `experiment`; point the spool at a parent to keep that partition. File names are not parsed either — an extension cannot be told apart from a value that ends in one, so a name like `acquisition_key=XX.R2D1..RAW` would be ambiguous.
+- Only the directories *containing* a source are parsed. The source's own name is opaque, whether it names a file or a directory-format unit: an extension cannot be told apart from a value ending in one, so `acquisition_key=XX.R2D1..RAW` would be ambiguous. The spool's own root is outside the spool and contributes nothing either, so `dc.spool(".../experiment=demo")` does not pick up `experiment` — point the spool at a parent to keep that partition.
 - Values are always strings; `select` supports equality, collections, unix-style globs, and regular expressions on them.
 - Removing a `key=value` pair from a path triggers a rescan of the affected files (the file's own value has to be recovered), while adding or changing pairs does not.
 - A path key that matches a coordinate name (e.g. `distance=...`) resolves attrs-first in bare `select` kwargs; use the `_coords` argument to target the coordinate explicitly.
