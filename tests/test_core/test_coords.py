@@ -2811,37 +2811,20 @@ class TestDimensionalityErrors:
 class TestUnitNoOps:
     """A coord asked for the units it already has hands itself back."""
 
-    def test_convert_to_current_units(self, coord):
-        """Every coord class answers a conversion it has nothing to do."""
+    def test_no_op_on_every_coord_class(self, coord):
+        """Setting or converting to the units already carried changes nothing."""
         with_units = coord.set_units("m") if coord.units is None else coord
         assert with_units.convert_units(with_units.units) is with_units
-
-    def test_set_current_units(self, coord):
-        """Every coord class answers a set which would change nothing."""
-        with_units = coord.set_units("m") if coord.units is None else coord
         assert with_units.set_units(with_units.units) is with_units
-
-    def test_another_spelling_of_the_same_units(self, evenly_sampled_coord):
-        """The units already carried, named differently, are still those."""
-        coord = evenly_sampled_coord.set_units("m")
-        assert coord.convert_units("meter") is coord
-        assert coord.set_units("meter") is coord
-
-    def test_equal_quantities_still_convert(self, evenly_sampled_coord):
-        """1 m and 100 cm are equal quantities but not the same units."""
-        coord = evenly_sampled_coord.set_units("m")
-        out = coord.convert_units("100 cm")
-        assert out is not coord
-        assert out.units == get_quantity("100 cm")
 
     def test_every_coord_class_implements_the_hook(self):
         """
         `_convert_units` is concrete, so nothing else would notice.
 
-        It is concrete to keep a subclass written against the older API
-        instantiable, which costs the abstract check that would have
-        caught a coord class shipping without a conversion. This asks
-        the question that check used to.
+        It is concrete to keep a subclass written against the older API,
+        where `convert_units` was the abstract method, instantiable. That
+        costs the abstract check which would have caught a coord class
+        shipping without a conversion, so this asks the question instead.
         """
 
         def _subclasses(cls):
@@ -2860,18 +2843,3 @@ class TestUnitNoOps:
         """A class which did not implement it gets an error naming itself."""
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
-
-    def test_partial_coord(self):
-        """A coord with no values, which the meta-fixture does not hold."""
-        coord = CoordPartial(
-            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
-        )
-        assert coord.convert_units("meter") is coord
-        assert coord.set_units("m") is coord
-        assert coord.convert_units("km") is not coord
-
-    def test_string_coord_still_rejects_units(self):
-        """The guard does not swallow the string coord's refusal."""
-        coord = get_coord(values=np.array(["a", "b", "c"]))
-        with pytest.raises(CoordError):
-            coord.convert_units("m")

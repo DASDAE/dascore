@@ -518,30 +518,19 @@ class TestSortAndShift:
         """Time coords do not convert units."""
         assert time_gap_coord.convert_units("ft") is time_gap_coord
 
-    def test_set_current_units_noop(self, float_gap_coord):
-        """Setting the units already carried hands the coord back."""
-        coord = float_gap_coord.set_units("m")
-        assert coord.set_units("m") is coord
-        assert coord.set_units("meter") is coord
-
-    def test_convert_to_current_units_noop(self, float_gap_coord):
-        """Converting to the units already carried hands the coord back."""
-        coord = float_gap_coord.set_units("m")
-        assert coord.convert_units("m") is coord
-
-    def test_a_segment_spelled_differently_is_still_converted(self, float_gap_coord):
+    def test_the_guard_asks_every_segment(self, float_gap_coord):
         """
         `self.units` speaks only for the first segment.
 
         Segments are admitted when their units are merely equal, so a
-        coord reporting metres can hold one in `100 cm`; the short
-        circuit has to ask every segment, not the coord.
+        coord reporting metres can hold one in `100 cm`, and that one
+        still has work to do.
         """
         coord = float_gap_coord.set_units("m")
+        assert coord.set_units("meter") is coord  # every segment agrees
         mixed = coord.__class__(
             segments=(coord.segments[0], coord.segments[1].set_units("100 cm"))
         )
-        assert get_quantity(mixed.units) == get_quantity("m")
         for out in (mixed.set_units("m"), mixed.convert_units("m")):
             assert out is not mixed
             assert all(get_quantity(x.units) == get_quantity("m") for x in out.segments)

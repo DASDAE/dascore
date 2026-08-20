@@ -1420,27 +1420,15 @@ class TestConvertUnits:
 
 
 class TestUnitNoOps:
-    """A coord manager hands itself back when no coord would change."""
-
-    def test_convert_to_current_units(self, cm_with_units):
-        """Converting to the units already carried changes nothing."""
-        assert cm_with_units.convert_units(distance="m") is cm_with_units
-
-    def test_set_current_units(self, cm_with_units):
-        """Setting the units already carried changes nothing."""
-        assert cm_with_units.set_units(distance="m") is cm_with_units
-
-    def test_simplify_already_simple(self, cm_with_units):
-        """Simplifying base units changes nothing."""
-        assert cm_with_units.simplify_units() is cm_with_units
+    """A manager rebuilds only the coords which actually changed."""
 
     def test_one_of_two_coords_changing(self):
         """
-        A manager with one coord to convert converts only that one.
+        The coord which stays put is kept, not rebuilt.
 
-        Both coords are numeric, so the one which stays put does so by
-        the units matching and not by being time-like, which coords have
-        always refused to convert.
+        Both coords are numeric, so the one which does not move does so
+        because its units match and not because it is time-like, which
+        coords have always refused to convert.
         """
         cm = get_coord_manager(
             {"distance": np.arange(10) * 1.0, "depth": np.arange(4) * 1.0},

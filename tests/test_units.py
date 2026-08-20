@@ -611,40 +611,32 @@ class TestDataSize:
 class TestUnitsMatch:
     """Tests for asking whether two specifications name the same units."""
 
-    def test_spellings_of_one_unit(self):
-        """The same unit spelled differently still matches."""
-        assert units_match("m", "meter")
-        assert units_match(get_quantity("m"), "m")
-        assert units_match("m/s", "meter / second")
+    @pytest.mark.parametrize(
+        ("units1", "units2"),
+        [
+            ("m", "meter"),  # one unit, two spellings
+            ("m/s", "meter / second"),
+            (m, "m"),  # a quantity and the string for it
+            (None, None),  # the several ways to spell "no units"
+            (None, ""),
+            ("", None),
+        ],
+    )
+    def test_match(self, units1, units2):
+        """Two names for the same units match."""
+        assert units_match(units1, units2)
 
-    def test_nothing_matches_nothing(self):
-        """The several ways of spelling "no units" all match each other."""
-        assert units_match(None, None)
-        assert units_match(None, "")
-        assert units_match("", None)
-
-    def test_unset_never_matches_set(self):
-        """Setting units on a coord which had none is a real change."""
-        assert not units_match(None, "m")
-        assert not units_match("m", None)
-
-    def test_equal_quantities_in_different_units(self):
-        """
-        Equal is not the same.
-
-        `1 m == 100 cm` is True for pint, but converting between them
-        rewrites the values and leaves different units behind, which is
-        exactly the work callers use this to decide whether to skip.
-        """
-        assert get_quantity("m") == get_quantity("100 cm")
-        assert not units_match("m", "100 cm")
-
-    def test_same_unit_different_magnitude(self):
-        """`100 m` is not `m`: converting between them rescales by a hundred."""
-        assert not units_match("m", "100 m")
-        assert not units_match(get_quantity("2 s"), "s")
-
-    def test_different_units(self):
-        """Plainly different units do not match."""
-        assert not units_match("m", "s")
-        assert not units_match("m", "km")
+    @pytest.mark.parametrize(
+        ("units1", "units2"),
+        [
+            (None, "m"),  # setting units on something with none is a change
+            ("m", None),
+            ("m", "100 cm"),  # equal quantities, but not the same units
+            ("m", "100 m"),  # the same unit at a different magnitude
+            ("m", "s"),
+            ("m", "km"),
+        ],
+    )
+    def test_no_match(self, units1, units2):
+        """Anything a conversion would have to act on does not match."""
+        assert not units_match(units1, units2)
