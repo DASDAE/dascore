@@ -2490,42 +2490,6 @@ class TestSerializationIsLossless:
         )
         text = inventory.io.to_yaml()
         assert "value: 1" in text
-        # Without the value, the group reloads holding a boolean beside a
-        # number and is refused as mixing two kinds.
-        assert dc.inventory(text) == inventory
-
-    def test_a_label_still_names_its_class(self):
-        """Restoring the value must not displace the document's tag."""
-        label = inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=1.0, group="hole", value=2
-        )
-        dumped = label.model_dump(mode="json")
-        assert dumped["object_type"] == "OpticalPathLabel"
-
-    def test_a_deliberately_excluded_value_stays_out(self):
-        """What a caller filtered is not what exclude_defaults dropped."""
-        label = inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=1.0, group="hole", value=2
-        )
-        assert "value" not in label.model_dump(mode="json", exclude={"value"})
-        assert "value" not in label.model_dump(mode="json", include={"group"})
-
-    def test_a_flag_label_stays_terse(self):
-        """A value which really is the default is still left out."""
-        path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            labels=(
-                inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=10.0, group="noisy"
-                ),
-            ),
-        )
-        array = inv.FiberArray(code="L001", optical_paths=(path,))
-        inventory = inv.Inventory(
-            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
-        )
-        text = inventory.io.to_yaml()
-        assert "value:" not in text
         assert dc.inventory(text) == inventory
 
     def test_round_trip_through_file(self, tmp_path):

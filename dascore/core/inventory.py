@@ -699,12 +699,11 @@ class OpticalPathLabel(_IntervalModel):
     Label attached to an interval of an optical path.
 
     ``group`` names the variable and ``value`` is its state over the
-    interval. A label with no value states membership of its group, and
-    membership groups may overlap freely; a label with a value says what
-    the group holds there, so string and numeric groups are single valued
-    and their intervals may not overlap. A group states membership or
-    holds one kind of value, never both. Point markers (equal start and
-    end) cover nothing, so they are exempt from the overlap rule.
+    interval. A label with no value states membership, and membership
+    groups may overlap freely; a label with a value makes its group single
+    valued, so string and numeric groups may not overlap. A group states
+    membership or holds one kind of value, never both. Point markers (equal
+    start and end) cover nothing and are exempt from the overlap rule.
     """
 
     group: str = Field(default="", description="Name of the labelled variable.")

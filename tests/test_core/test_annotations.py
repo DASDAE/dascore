@@ -366,14 +366,21 @@ class TestValues:
         assert len(AnnotationSet(frame, dims=DIMS)) == 2
 
     def test_no_value_states_membership(self):
-        """An annotation with no value is a bare flag, and stays unset."""
+        """An annotation with no value states membership, and the value stays unset."""
         assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].value is None
 
     @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
     def test_boolean_refused(self, value):
         """Membership has a spelling already, so true and false state nothing."""
         frame = pd.DataFrame({"group": ["a"], "value": [value]})
-        with pytest.raises(ParameterError, match="true and false are not values"):
+        with pytest.raises(ParameterError, match=r"group 'a'.*true and false are not"):
+            AnnotationSet(frame, dims=DIMS)
+
+    @pytest.mark.parametrize("blank", [None, np.nan])
+    def test_a_blank_cell_in_a_valued_group_is_refused(self, blank):
+        """A blank cell states membership, which a valued group cannot hold."""
+        frame = pd.DataFrame({"group": ["amp", "amp"], "value": [3.0, blank]})
+        with pytest.raises(ParameterError, match="blank cell states membership"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_non_finite_value_refused(self):

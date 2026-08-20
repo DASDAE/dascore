@@ -1154,6 +1154,21 @@ class TestTrackTables:
         with pytest.raises(InvalidInventoryError, match="one group holds one kind"):
             make_inventory(files)
 
+    def test_a_group_holding_a_number_and_text(self, make_inventory):
+        """The loader names the two rows which disagree."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/labels.csv": (
+                "start_distance,end_distance,group,value\n"
+                "0,120,hole,3\n"
+                "120,340,hole,deep\n"
+            ),
+        }
+        match = "row 3.*states text where row 2 states a number"
+        with pytest.raises(InvalidInventoryError, match=match):
+            make_inventory(files)
+
     def test_an_empty_cell_is_unset(self, make_inventory):
         """An empty cell means unset, never an empty string."""
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
@@ -1715,6 +1730,20 @@ class TestUnreadableTables:
         }
         label = one_path(make_inventory(files)).labels[0]
         assert label.value is None
+
+    def test_a_whitespace_cell_states_no_value(self, make_inventory):
+        """A cell holding only spaces is as blank as an empty one."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/labels.csv": (
+                "start_distance,end_distance,group,value\n"
+                "0,120,noisy,  \n"
+                "120,340,noisy,\n"
+            ),
+        }
+        labels = one_path(make_inventory(files)).labels
+        assert [x.value for x in labels] == [None, None]
 
     def test_a_path_restating_a_start_which_disagrees(self, make_inventory):
         """A path directory's name is a restated address like any other."""

@@ -986,15 +986,19 @@ def _parse_labels(rows: list[dict], path: Path) -> None:
     kinds: dict[str, tuple[str, int]] = {}
     for number, row in enumerate(rows, start=2):
         group = str(row.get("group", ""))
-        if (text := row.get("value")) is None:
+        text = row.get("value")
+        if text is None or not str(text).strip():
+            # A blank cell, spaces included, is the spelling of membership.
+            row.pop("value", None)
             kind = "membership"
         else:
             row["value"] = value = parse_cell(text)
             if isinstance(value, bool):
                 msg = (
                     f"{_quote(path)} row {number}: group {group!r} states "
-                    f"{text!r} as a value; a label states membership by "
-                    "leaving its value empty, and true and false are not values."
+                    f"{text!r}, but true and false are not values; state "
+                    "membership by leaving the cell empty, and an interval "
+                    "outside the group by giving it no row."
                 )
                 raise InvalidInventoryError(msg)
             # An int and a float are ONE kind: the model reads them alike,

@@ -166,9 +166,9 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     Normalize an interval's value so its Python type survives validation.
 
     Numpy scalars are unwrapped: pydantic's smart union resolves every numpy
-    scalar to float, which would turn an identifier into a measurement. A
-    boolean is refused: membership is stated by carrying no value at all,
-    so true and false are not values.
+    scalar to float, which would write a numpy 3 back as 3.0. A boolean is
+    refused: membership is stated by carrying no value, so true and false
+    are not values.
 
     Parameters
     ----------
@@ -188,8 +188,9 @@ def normalize_value(value, error: type[Exception] = ParameterError):
         value = value.item()
     if isinstance(value, bool):
         msg = (
-            f"A value may not be {value}; membership is stated by leaving "
-            "the value unset, and true and false are not values."
+            f"Got {value}, but true and false are not values. State "
+            "membership by leaving the value unset, and an interval outside "
+            "the group by giving it no row at all."
         )
         raise error(msg)
     if isinstance(value, float) and not np.isfinite(value):
