@@ -264,7 +264,8 @@ RESERVED_ATTR_COLUMNS = frozenset(
         # storage tables. `patch_id` is deliberately absent: the row id it
         # names here is renamed private (SPOOL_EARLY_RENAMES) before attr
         # columns are applied, so a patch's own `patch_id` claims the
-        # public spelling rather than colliding with it.
+        # public spelling rather than colliding with it. A path may still
+        # not claim it; see `_UNCLAIMABLE_BY_PATH`.
         "source_id",
         "source_patch_key",
         "source_path",

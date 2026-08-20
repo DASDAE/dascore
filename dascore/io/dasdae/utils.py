@@ -389,6 +389,11 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     else:
         coords = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
+    # Marked here as it is when the patch is read: an id the file carries
+    # is the one which survived the round trip, and `scan` prefers it to
+    # the one it would derive only when a format says it stored one.
+    if stored := attr_info.get("patch_id", ""):
+        attr_info[STORED_PATCH_ID] = stored
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
     dtype = str(data_node.dtype) if data_node is not None else ""

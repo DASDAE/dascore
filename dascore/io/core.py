@@ -87,7 +87,6 @@ from dascore.utils.remote_io import (
 )
 from dascore.workflow.identity import (
     ids_enabled,
-    patch_id_of,
     source_patch_id,
 )
 
@@ -1231,7 +1230,11 @@ def _canonical_path(path) -> str:
     if not is_local_path(text):
         return text
     try:
-        return str(Path(text).resolve())
+        # `coerce_to_local_path` rather than `Path`: a local file may be
+        # spelled as a `file://` URI, which `Path` would read as a
+        # relative directory called `file:` and resolve against the
+        # working directory.
+        return str(coerce_to_local_path(text).resolve())
     except Exception:
         # A path the filesystem will not answer for is still a path, and
         # a spelling nothing can canonicalize is better than none.
@@ -1589,9 +1592,17 @@ def _iter_scan_results(
     *,
     snap: bool | None = None,
     payloads: bool = False,
-) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any]], None, None]:
-    """Yield raw scan results with dispatcher-owned source information."""
+) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any], int], None, None]:
+    """
+    Yield raw scan results with dispatcher-owned source information.
+
+    Each result is tagged with the index of the input it came from, which
+    is the only thing that tells a file's second patch apart from the same
+    file scanned twice: both spell one source path and, for a format which
+    names no patch within a file, one key.
+    """
     output_count = 0
+    input_index = -1
     fiber_io_hint: dict[str, FiberIO] = {}
     # A dict for keeping track of missing optional dependencies.
     missing_optional_deps = defaultdict(lambda: 0)
@@ -1619,6 +1630,7 @@ def _iter_scan_results(
     try:
         with remote_cache_scope("metadata"):
             for patch_source in tracker:
+                input_index += 1
                 # Normalize direct patch inputs to summary objects.
                 if isinstance(patch_source, dc.Patch):
                     if payloads:
@@ -1640,7 +1652,7 @@ def _iter_scan_results(
                             ),
                         )
                     output_count += 1
-                    yield result, source_info
+                    yield result, source_info, input_index
                     continue
                 with IOResourceManager(patch_source) as man:
                     try:
@@ -1705,7 +1717,7 @@ def _iter_scan_results(
                     }
                     for result in source:
                         output_count += 1
-                        yield result, source_info
+                        yield result, source_info, input_index
     # Ensure ctl + c exists scan.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
@@ -1769,7 +1781,7 @@ def scan_payloads(
         snap=snap,
         payloads=True,
     )
-    for result, source_info in iterator:
+    for result, source_info, _ in iterator:
         _validate_scan_payload(result, require_coord_manager=True)
         # dict() erases a TypedDict's value types; the validation above has
         # already raised unless every key holds what ScanPayload declares.
@@ -1842,12 +1854,16 @@ def scan(
         timestamp=timestamp,
         progress=progress,
     )
-    for result, source_info in iterator:
+    inputs = []
+    for result, source_info, input_index in iterator:
         out.append(_scan_result_to_summary(result, **source_info))
-    return _stamp_summary_ids(out)
+        inputs.append(input_index)
+    return _stamp_summary_ids(out, inputs)
 
 
-def _stamp_summary_ids(summaries: list[PatchSummary]) -> list[PatchSummary]:
+def _stamp_summary_ids(
+    summaries: list[PatchSummary], inputs: list[int]
+) -> list[PatchSummary]:
     """
     Say which data each scanned patch is, without reading any of it.
 
@@ -1860,28 +1876,49 @@ def _stamp_summary_ids(summaries: list[PatchSummary]) -> list[PatchSummary]:
     A source is stat-ed once however many patches it holds, and one which
     names no path is left alone -- an id derived from the format alone
     would make every such summary the same datum.
+
+    Parameters
+    ----------
+    summaries
+        What the scan produced.
+    inputs
+        Which scan input each summary came from. Ordinals count within
+        one input, so a file's second patch and the same file scanned
+        twice are told apart -- they are otherwise identical, both
+        spelling one path and, absent a key, one key.
     """
     if not ids_enabled():
         return summaries
     identities: dict[str, tuple[str, int | None, int | None]] = {}
-    ordinals: dict[str, int] = {}
     out = []
-    for summary in summaries:
+    ordinals: dict[tuple[int, str], int] = {}
+    for index, summary in enumerate(summaries):
         attrs = summary.attrs
         source = str(summary.source_path or "")
-        # The ordinal counts within a source, as the reader's own position
-        # does; a file's second patch is not every source's second patch.
-        ordinal = ordinals.get(source, 0)
-        ordinals[source] = ordinal + 1
-        if patch_id_of(attrs) or not source:
+        # Keyed by the input as well as the source: the ordinal is the
+        # reader's own position within one reading of one file, so
+        # scanning a file twice reads the same data twice rather than
+        # making the second copy that file's second patch.
+        key = (inputs[index], source)
+        ordinal = ordinals.get(key, 0)
+        ordinals[key] = ordinal + 1
+        # The marker, not the field: a patch pickled to a file carries the
+        # id it was minted with in some other process, and reading it back
+        # derives one from the file. Only a format which says it stored an
+        # id -- which is what the marker says -- is believed here, so the
+        # two routes cannot disagree.
+        if not source:
             out.append(summary)
+            continue
+        if stored := attrs.get(STORED_PATCH_ID, ""):
+            out.append(_summary_with_id(summary, attrs, stored))
             continue
         if (identity := identities.get(source)) is None:
             identity = identities[source] = source_identity(summary.source_path)
         path, size_bytes, mtime_ns = identity
-        if not path:
-            out.append(summary)
-            continue
+        # A summary which names a source names a path: `source` is that
+        # path, and canonicalizing one never empties it.
+        assert path, f"{source!r} named a source but no path"
         patch_id = source_patch_id(
             summary.source_format,
             summary.source_version,
@@ -1890,12 +1927,21 @@ def _stamp_summary_ids(summaries: list[PatchSummary]) -> list[PatchSummary]:
             size_bytes,
             mtime_ns,
         )
-        # `model_copy` rather than `new`: nothing here needs revalidating,
-        # and a scan of a large archive would pay for it once per patch.
-        out.append(
-            summary.model_copy(update={"attrs": attrs.update(patch_id=patch_id)})
-        )
+        out.append(_summary_with_id(summary, attrs, patch_id))
     return out
+
+
+def _summary_with_id(summary: PatchSummary, attrs, patch_id: str) -> PatchSummary:
+    """
+    Return a summary which says which data it is.
+
+    `model_copy` rather than `new`: nothing here needs revalidating, and a
+    scan of a large archive would pay for it once per patch. The marker a
+    reader left is consumed rather than carried, as it is when a patch is
+    read.
+    """
+    updated = attrs.update(patch_id=patch_id).drop(STORED_PATCH_ID)
+    return summary.model_copy(update={"attrs": updated})
 
 
 def get_format(

@@ -33,6 +33,7 @@ from dascore.exceptions import (
 from dascore.io.core import (
     STORED_PATCH_ID,
     FiberIO,
+    _canonical_path,
     _FiberIOManager,
     _get_missing_install_name,
     _get_reloadable_source_path,
@@ -1866,6 +1867,22 @@ class TestSummaryRoundTrip:
         assert str(rebuilt.source_path) == str(summary.source_path)
         assert rebuilt.source_format == "DASDAE"
 
+    def test_a_mapping_naming_no_filesystem(self, random_patch):
+        """The parts of a local path, which is the form with no protocol."""
+        dumped = {"path": "/tmp/one.h5", "protocol": "", "storage_options": {}}
+        summary = random_patch.summary.new(
+            source_path=dumped, source_format="DASDAE", source_version="1"
+        )
+        assert str(summary.source_path) == "/tmp/one.h5"
+        assert summary.source_format == "DASDAE"
+
+    def test_a_mapping_naming_no_such_filesystem(self, random_patch):
+        """A protocol nothing implements is not a path either."""
+        dumped = {"path": "/one.h5", "protocol": "nosuchfs", "storage_options": {}}
+        summary = random_patch.summary.new(source_path=dumped, source_format="DASDAE")
+        assert str(summary.source_path) == ""
+        assert summary.source_format == ""
+
     def test_a_mapping_which_is_not_a_path(self, random_patch):
         """Something else shaped like one is not one, and is dropped."""
         summary = random_patch.summary.new(
@@ -1985,6 +2002,16 @@ class TestSourceIds:
             dc.read(relative)[0].attrs.patch_id
             == dc.read(terra15_path)[0].attrs.patch_id
         )
+
+    def test_a_path_which_cannot_be_canonicalized(self):
+        """A spelling nothing can resolve is still the spelling given."""
+        unresolvable = "one\x00two.h5"
+        assert _canonical_path(unresolvable) == unresolvable
+
+    def test_scanning_with_the_ids_disabled(self, terra15_path):
+        """The config which turns the ids off turns scanning off too."""
+        with config_context(patch_provenance="disabled"):
+            assert dc.scan(terra15_path)[0].attrs.patch_id == ""
 
     def test_a_source_which_will_not_answer(self):
         """Nothing said is better than fields which pretend to be equal."""

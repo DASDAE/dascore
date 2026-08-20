@@ -927,7 +927,7 @@ class TestIngestEdges:
             records = s2r([summary])
         assert "source_id" not in records[0].patches[0].attrs
 
-    @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
+    @pytest.mark.parametrize("name", ["patch_id"])
     def test_the_ids_are_indexed_silently(self, name):
         """
         An id is a search term: it is how a result finds its data again.

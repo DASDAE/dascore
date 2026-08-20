@@ -313,7 +313,7 @@ assert dc.read(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
 
 Those fields are the ones the spool index already keeps, and they are the ones it already uses to decide whether a file changed: data written over a path is a new datum rather than the old one wearing its id. The price is the other way round — the same bytes copied to a second path, or re-fetched over the first, are a new datum too. A missed match is the safe failure; two different data claiming to be one is not.
 
-Both ids are indexed by the spool, so a spool hands back the patch an id names without loading anything to look for it — see [Finding a patch by its id](spool.qmd#finding-a-patch-by-its-id).
+`patch_id` is indexed by the spool, so a spool hands back the patch an id names without loading anything to look for it — see [Finding a patch by its id](spool.qmd#finding-a-patch-by-its-id). `processing_id` is not: it advances on every operation, including the ones a spool runs as it loads.
 
 The path is part of the id, so a derived id is not stable across machines. A stored one is: DASDAE writes both ids into the file, and a patch read back from it keeps the id it was written with rather than deriving a new one. A patch built in memory names no source, so its `patch_id` is minted, and stable only within the process which built it.
 

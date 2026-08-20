@@ -591,12 +591,24 @@ class TestLineageIds:
         assert len(selected) == 1
         assert selected[0].attrs.patch_id == wanted
 
-    def test_selecting_by_processing_id(self, tmp_path):
-        """What was done is queryable the same way which data is."""
+    def test_what_was_done_is_not_indexed(self, tmp_path):
+        """
+        `processing_id` advances whenever an operation runs, and a spool
+        runs one as it loads: a residual trim is a real `select` on the
+        patch. What the index recorded would not be what came back, so it
+        is not recorded. `patch_id` survives those same operations, which
+        is what makes it the one worth indexing.
+        """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        assert len(spool.select(processing_id=patch.attrs.processing_id)) == 1
+        assert "processing_id" not in spool.get_contents().columns
+
+    def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
+        """The index and the patch which loads must not disagree."""
+        trimmed = written_spool.select(time=(10, 20), samples=True)
+        indexed = trimmed.get_contents()["patch_id"].iloc[0]
+        assert trimmed[0].attrs.patch_id == indexed
 
     def test_a_memory_spool_too(self):
         """A summary carries the ids, so a patch never written is findable."""
