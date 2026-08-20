@@ -90,6 +90,19 @@ def _payload_to_summary(payload):
     return _scan_payload_to_summary(payload)
 
 
+def _without_ids(summary):
+    """
+    Return a summary with the lineage ids cleared.
+
+    A FiberIO is not where an id is decided: `dc.read` and `dc.scan` stamp
+    one between them, so a patch built straight off a reader carries the
+    one minted for any in-memory patch and a scan payload carries none.
+    Comparing the two at this level would compare that, not the metadata.
+    """
+    attrs = summary.attrs.update(patch_id="", processing_id="")
+    return summary.model_copy(update={"attrs": attrs})
+
+
 @cache
 def _get_test_proto_messages():
     """Build local protobuf classes for Sintela synthetic test payloads."""
@@ -352,7 +365,7 @@ class TestSintelaProtobuf:
         """Scan metadata should match the loaded patch summary."""
         summary = _payload_to_summary(fiber_io.scan(sintela_protobuf_path)[0])
         patch_summary = fiber_io.read(sintela_protobuf_path)[0].summary
-        assert summary == patch_summary
+        assert _without_ids(summary) == _without_ids(patch_summary)
 
     def test_ts_read_promotes_selected_meta_attrs(
         self, fiber_io, write_sintela_file, ts_records
@@ -429,7 +442,8 @@ class TestSintelaProtobuf:
         """Band scan should exercise the metadata-only summary path."""
         path = write_sintela_file("band.pb", band_records)
         scan_summary = _payload_to_summary(fiber_io.scan(path)[0])
-        assert scan_summary == fiber_io.read(path)[0].summary
+        read_summary = fiber_io.read(path)[0].summary
+        assert _without_ids(scan_summary) == _without_ids(read_summary)
 
     def test_fft_scan_matches_read_summary(
         self, fiber_io, write_sintela_file, complex_fft_records
@@ -437,7 +451,8 @@ class TestSintelaProtobuf:
         """FFT scan should exercise the metadata-only summary path."""
         path = write_sintela_file("fft.pb", complex_fft_records)
         scan_summary = _payload_to_summary(fiber_io.scan(path)[0])
-        assert scan_summary == fiber_io.read(path)[0].summary
+        read_summary = fiber_io.read(path)[0].summary
+        assert _without_ids(scan_summary) == _without_ids(read_summary)
 
     def test_complex_fft_not_labeled_power_spectral_density(
         self, fiber_io, write_sintela_file, complex_fft_records, fft_records

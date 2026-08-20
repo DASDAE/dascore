@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
@@ -557,3 +558,58 @@ class TestCoordPivot:
         df = backend.query(Query(attrs={"tag": "corr"}))
         assert df["lag_time_min"].notna().all()
         assert "frequency_min" not in df.columns or df["frequency_min"].isna().all()
+
+
+class TestLineageIds:
+    """A patch can be found by the id it carries, without loading it."""
+
+    @pytest.fixture
+    def written_spool(self, tmp_path):
+        """Three patches on disk, each its own datum."""
+        with config_context(patch_provenance="disabled"):
+            for index, patch in enumerate(dc.get_example_spool("random_das")):
+                patch.io.write(tmp_path / f"{index}.h5", "dasdae")
+        return dc.spool(tmp_path).update()
+
+    def test_the_two_ids_are_different_columns(self, written_spool):
+        """The row's id is private; the patch's owns the public name."""
+        df = written_spool.get_contents()
+        assert {"_patch_id", "patch_id"}.issubset(df.columns)
+        assert df["_patch_id"].tolist() != df["patch_id"].tolist()
+
+    def test_scanning_and_reading_agree(self, tmp_path):
+        """Or an id found in the index would not name the patch it loads."""
+        path = tmp_path / "one.h5"
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(path, "dasdae")
+        assert dc.scan(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
+
+    def test_selecting_by_id_finds_that_patch(self, written_spool):
+        """Which is what indexing the id is for."""
+        wanted = written_spool.get_contents()["patch_id"].iloc[1]
+        selected = written_spool.select(patch_id=wanted)
+        assert len(selected) == 1
+        assert selected[0].attrs.patch_id == wanted
+
+    def test_selecting_by_processing_id(self, tmp_path):
+        """What was done is queryable the same way which data is."""
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        assert len(spool.select(processing_id=patch.attrs.processing_id)) == 1
+
+    def test_a_memory_spool_too(self):
+        """A summary carries the ids, so a patch never written is findable."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(patches)
+        wanted = patches[1].attrs.patch_id
+        assert spool.select(patch_id=wanted)[0].attrs.patch_id == wanted
+
+    def test_an_id_no_patch_carries(self, written_spool):
+        """An id which names nothing selects nothing, rather than raising."""
+        assert len(written_spool.select(patch_id="0" * 16)) == 0
+
+    def test_chunk_still_merges_across_ids(self, written_spool):
+        """Every patch states a different id; none of them blocks a merge."""
+        assert len(set(written_spool.get_contents()["patch_id"])) == 3
+        assert len(written_spool.chunk(time=None)) == 1

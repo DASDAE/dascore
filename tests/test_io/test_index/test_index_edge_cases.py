@@ -928,12 +928,12 @@ class TestIngestEdges:
         assert "source_id" not in records[0].patches[0].attrs
 
     @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
-    def test_the_ids_are_skipped_silently(self, name):
+    def test_the_ids_are_indexed_silently(self, name):
         """
-        Every patch carries them, so a warning would fire on every patch.
+        An id is a search term: it is how a result finds its data again.
 
-        They are not indexed: an index is for finding data, and an id is
-        not a search term.
+        Every patch carries one, so a reserved-name warning would fire on
+        every patch; indexing them is quiet.
         """
         summary = PatchSummary(
             attrs={name: "0123456789abcdef", "tag": "x"},
@@ -956,7 +956,7 @@ class TestIngestEdges:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             records = s2r([summary])
-        assert name not in records[0].patches[0].attrs
+        assert records[0].patches[0].attrs[name].value == "0123456789abcdef"
 
     @pytest.mark.parametrize("name", ["shape", "n_dims", "sample_count_total"])
     def test_dropped_columns_stay_reserved(self, random_patch, name):

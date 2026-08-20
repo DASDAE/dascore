@@ -85,7 +85,11 @@ from dascore.utils.remote_io import (
     remote_cache_scope,
     suppress_gc_pause_warning,
 )
-from dascore.workflow.identity import ids_enabled, source_patch_id
+from dascore.workflow.identity import (
+    ids_enabled,
+    patch_id_of,
+    source_patch_id,
+)
 
 # What the scan dispatchers accept: one resource or patch, or an
 # iterable of them (`_iterate_scan_inputs` flattens its input with
@@ -1201,14 +1205,50 @@ def _source_path_string(source) -> str:
     if isinstance(source, IOResourceManager):
         source = source.source
     if isinstance(source, str | Path | UPath):
-        return str(source)
+        return _canonical_path(source)
     for attribute in ("_dascore_source_path", "name", "filename"):
         if value := getattr(source, attribute, ""):
             # A file object opened on a descriptor names an int, which is
             # not a path and is not the same one twice.
             if isinstance(value, str | Path | UPath):
-                return str(value)
+                return _canonical_path(value)
     return ""
+
+
+def _canonical_path(path) -> str:
+    """
+    Return the one spelling of a path an id is derived from.
+
+    A local path resolves, so a relative spelling, an absolute one and the
+    one a spool absolutizes out of its index all name a single datum --
+    which is what lets a patch scanned through a spool and the same patch
+    read straight off disk agree about which data they are.
+
+    A URI is left alone: it is already absolute, and resolving one would
+    only mangle it.
+    """
+    text = str(path)
+    if not is_local_path(text):
+        return text
+    try:
+        return str(Path(text).resolve())
+    except Exception:
+        # A path the filesystem will not answer for is still a path, and
+        # a spelling nothing can canonicalize is better than none.
+        return text
+
+
+def source_identity(source) -> tuple[str, int | None, int | None]:
+    """
+    Return what a source is: its canonical path, its size and its mtime.
+
+    The three fields of a derived id which come from the source rather
+    than from the reader; see
+    [`source_patch_id`](`dascore.workflow.identity.source_patch_id`).
+    """
+    if not (path := _source_path_string(source)):
+        return "", None, None
+    return path, *_source_stats(path)
 
 
 def _stamp_source_ids(
@@ -1245,13 +1285,9 @@ def _stamp_source_ids(
     """
     # A FiberIO is free to hand back whatever its format means; only a
     # spool of patches has ids to stamp.
-    path = _source_path_string(source)
+    path, size_bytes, mtime_ns = source_identity(source)
     if not path or not isinstance(spool, Spool) or not ids_enabled():
         return spool
-    # Stat-ed by the path rather than by the source, so a file read
-    # through a handle or a manager is stat-ed at all, and is stat-ed the
-    # same way reading it by name would be.
-    size_bytes, mtime_ns = _source_stats(path)
     # The key the caller asked for stands in for a patch's own only when
     # it named exactly this patch: a key naming several says which patches
     # were wanted, not which one any of them is.
@@ -1808,6 +1844,57 @@ def scan(
     )
     for result, source_info in iterator:
         out.append(_scan_result_to_summary(result, **source_info))
+    return _stamp_summary_ids(out)
+
+
+def _stamp_summary_ids(summaries: list[PatchSummary]) -> list[PatchSummary]:
+    """
+    Say which data each scanned patch is, without reading any of it.
+
+    The same id `read` stamps, derived the same way from the same fields,
+    so a patch found through a spool's index and the same patch read
+    straight off disk agree about which data they are. A summary whose
+    attrs already name an id keeps it: a format which stores one has
+    already answered the question.
+
+    A source is stat-ed once however many patches it holds, and one which
+    names no path is left alone -- an id derived from the format alone
+    would make every such summary the same datum.
+    """
+    if not ids_enabled():
+        return summaries
+    identities: dict[str, tuple[str, int | None, int | None]] = {}
+    ordinals: dict[str, int] = {}
+    out = []
+    for summary in summaries:
+        attrs = summary.attrs
+        source = str(summary.source_path or "")
+        # The ordinal counts within a source, as the reader's own position
+        # does; a file's second patch is not every source's second patch.
+        ordinal = ordinals.get(source, 0)
+        ordinals[source] = ordinal + 1
+        if patch_id_of(attrs) or not source:
+            out.append(summary)
+            continue
+        if (identity := identities.get(source)) is None:
+            identity = identities[source] = source_identity(summary.source_path)
+        path, size_bytes, mtime_ns = identity
+        if not path:
+            out.append(summary)
+            continue
+        patch_id = source_patch_id(
+            summary.source_format,
+            summary.source_version,
+            path,
+            summary.source_patch_key or ordinal,
+            size_bytes,
+            mtime_ns,
+        )
+        # `model_copy` rather than `new`: nothing here needs revalidating,
+        # and a scan of a large archive would pay for it once per patch.
+        out.append(
+            summary.model_copy(update={"attrs": attrs.update(patch_id=patch_id)})
+        )
     return out
 
 

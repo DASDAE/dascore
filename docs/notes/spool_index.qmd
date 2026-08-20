@@ -65,7 +65,11 @@ SQLite permits concurrent readers and serializes writers. Initialization and upd
 
 ## The flat relation
 
-Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` original unit spellings, presented publicly as `{name}_units` by `get_contents` and normalized per dimensionality by the chunk planner before partitioning), the `dims` signature, and one column per attribute. Attrs and coords are independent namespaces, so an attr may share a name with a coordinate envelope column (e.g. an attr `channel_step` alongside a `channel` coordinate); in that rare genuine collision the envelope column owns the flat name, the attr column is omitted with a warning, and the attr remains queryable through the `_attrs` namespace. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
+Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` original unit spellings, presented publicly as `{name}_units` by `get_contents` and normalized per dimensionality by the chunk planner before partitioning), the `dims` signature, and one column per attribute. Attrs and coords are independent namespaces, so an attr may share a name with a coordinate envelope column (e.g. an attr `channel_step` alongside a `channel` coordinate); in that rare genuine collision the envelope column owns the flat name, the attr column is omitted with a warning, and the attr remains queryable through the `_attrs` namespace. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes).
+
+A patch's own `patch_id` and `processing_id` are ordinary indexed attrs, so a patch can be found by the id it carries without loading anything. `patch_id` is the one name the storage schema and a patch both claim — a row id there, a datum here — so the row's is renamed `_patch_id` before attr columns are applied and the patch's keeps the public spelling. Neither id takes part in chunk's merge compatibility: every patch states a different one, and a merged patch folds its members' ids rather than inheriting any one of them.
+
+The cell below runs against the real catalog so this description cannot silently drift.
 
 ```{python}
 import dascore as dc
@@ -75,6 +79,7 @@ catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
 df = catalog.to_df()
 required = {
     "_patch_id",
+    "patch_id",
     "_time_def_key",
     "_time_units",
     "dims",

@@ -367,14 +367,15 @@ class TestTheRulesOnRealPatches:
             assert made.attrs.patch_id == ""
             assert made.normalize("time").attrs.processing_id == ""
 
-    def test_a_summary_does_not_carry_them(self, patch):
+    def test_a_summary_carries_them(self, patch):
         """
-        An index does not store an id, so a summary holding one would make
-        scanning a file and reading it disagree about the same data.
+        The index stores them, so a summary which left them behind would
+        make scanning a patch and reading it disagree about which data it
+        is -- and would leave the spool nothing to find a patch by.
         """
         summary = patch.summary
-        assert summary.attrs.patch_id == ""
-        assert summary.attrs.processing_id == ""
+        assert summary.attrs.patch_id == patch.attrs.patch_id
+        assert summary.attrs.processing_id == patch.attrs.processing_id
 
 
 class TestTheAwkwardCases:

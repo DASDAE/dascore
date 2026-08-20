@@ -45,7 +45,11 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # Attrs handled structurally or intentionally excluded from the index.
 # The ids are not indexed until the schema version which adds columns for
 # them; an index is for finding data, and an id is not a search term.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "patch_id", "processing_id"})
+# Attrs which are structure rather than metadata, and are never indexed.
+# The two lineage ids are not here: they are ordinary strings, one per
+# patch, and indexing them is what lets a spool find a patch by the id it
+# carries rather than by loading every patch to look.
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
 
 @dataclass(frozen=True)

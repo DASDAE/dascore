@@ -45,6 +45,7 @@ from dascore.io.index.schema import (
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
+    SPOOL_EARLY_RENAMES,
     TABLE_CONSTRAINTS,
     TABLES,
     WHAT_IS_THIS,
@@ -838,6 +839,10 @@ class SQLiteIndexBackend:
         df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
+        # Renamed before the attrs land, not after: `patch_id` names a
+        # row here and a datum on a patch, and the attr must find the
+        # public spelling free rather than collide with the row's.
+        df = df.rename(columns=dict(SPOOL_EARLY_RENAMES))
         df = self._apply_attr_columns(df, attr_columns)
         if residuals:
             # Residuals only ever come from attr predicates, so they must
@@ -860,7 +865,7 @@ class SQLiteIndexBackend:
         if residuals:
             # regex residuals need string values; realize the relation
             df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
-            return [int(x) for x in df["patch_id"]]
+            return [int(x) for x in df["_patch_id"]]
         return [int(x) for x in self._fetch_df(sql, params)["patch_id"]]
 
     def count(self, query=None, patch_ids=None) -> int:
