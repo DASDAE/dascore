@@ -1374,9 +1374,9 @@ def _concat_compatible_rows(
 
     `inconclusive` names def-key columns a selection still to be applied at
     load makes stale: equal stale keys are still equal after the same trim,
-    but differing ones are decided from the trimmed envelope instead — equal
-    min, max, and a known step say the evenly sampled coordinates agree —
-    and a coordinate which cannot be decided that way is not admitted.
+    but differing ones cannot be decided from metadata (a def key is a hash,
+    and the trimmed envelope is clamped to the query, not to the samples
+    kept), so such a row is not admitted and the message says why.
     """
     validate_warn_level(check_behavior)
     names = [x for x in get_config().patch_kind_attrs if x in df.columns]
@@ -1404,19 +1404,27 @@ def _concat_compatible_rows(
         if ok and structure:
             # only coordinates both rows have are compared, as check_coords
             # compares the shared coordinates
-            same = all(
-                _is_missing(row[x])
-                or _is_missing(first[x])
-                or _values_equal(row[x], first[x])
-                or (x in inconclusive and _trimmed_envelopes_agree(row, first, x))
+            differing = [
+                x
                 for x in structure
-            )
-            if not same:
+                if not (
+                    _is_missing(row[x])
+                    or _is_missing(first[x])
+                    or _values_equal(row[x], first[x])
+                )
+            ]
+            if differing:
                 msg = (
                     "Patches are not compatible for concatenation: coordinates "
                     "other than the concatenated one differ from the first "
                     "patch's."
                 )
+                if any(x in inconclusive for x in differing):
+                    msg += (
+                        " A selection still to be applied when the patches load "
+                        "may or may not reconcile them, which cannot be decided "
+                        "from metadata; concatenate before selecting."
+                    )
                 warn_or_raise(
                     msg, exception=IncompatiblePatchError, behavior=check_behavior
                 )
@@ -1425,22 +1433,6 @@ def _concat_compatible_rows(
         if ok:
             run.add(kind)
     return df if all(keep) else df[keep]
-
-
-def _trimmed_envelopes_agree(row, first, def_key: str) -> bool:
-    """
-    Decide from trimmed envelopes whether a stale def key's coordinate agrees.
-
-    Evenly sampled coordinates with equal min, max, and step are equal; a
-    coordinate without a step (irregular) or without an envelope cannot be
-    decided from metadata, and is not admitted.
-    """
-    coord = def_key[1 : -len("_def_key")]
-    columns = [f"{coord}_{x}" for x in ("min", "max", "step")]
-    step = columns[2]
-    if step not in row.index or _is_missing(row[step]) or _is_missing(first[step]):
-        return False
-    return all(_values_equal(row[x], first[x]) for x in columns)
 
 
 def check_dims(

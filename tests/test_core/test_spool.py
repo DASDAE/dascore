@@ -1203,22 +1203,29 @@ class TestConcatenateKind:
         with pytest.raises(PatchCoordinateError, match="different dimensions"):
             dc.spool([first, other]).concatenate(time=None, check_behavior="ignore")
 
-    def test_selection_before_concatenate(self):
-        """Coordinates which agree once a selection is applied concatenate."""
+    def test_selection_before_concatenate_is_undecidable(self):
+        """Coordinates a pending selection might reconcile stay apart, and say why."""
         base = dc.get_example_patch()
         time = base.get_coord("time")
         later = base.update_coords(time_min=time.max() + time.step)
-        # distance 0..299 and 5..304: they agree on 5..299 only
+        # distance 0..299 and 5..304 agree on 5..299 once selected, but a
+        # phase-shifted grid would not, and metadata cannot tell the two apart
         shifted = later.update_coords(distance_min=5)
         selected = dc.spool([base, shifted]).select(distance=(5, 299))
-        out = selected.concatenate(time=None)
+        with pytest.warns(UserWarning, match="concatenate before selecting"):
+            out = selected.concatenate(time=None)
         assert len(out) == 1
-        patch = out[0]
-        assert patch.shape[1] == 2 * base.shape[1]
-        assert patch.get_coord("distance").min() == 5
+        assert out[0].shape[1] == base.shape[1]
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        # the same selection after concatenating works
+        patch = dc.spool([base, shifted]).select(distance=(5, 299))  # noqa: F841
+        whole = dc.spool([base, shifted]).concatenate(
+            time=None, check_behavior="ignore"
+        )
+        assert whole.select(distance=(5, 299))[0].get_coord("distance").min() == 5
 
     def test_selection_cannot_settle_irregular_coordinates(self):
-        """Irregular coordinates a selection may or may not reconcile stay apart."""
+        """Irregular coordinates under a pending selection stay apart too."""
         base = dc.get_example_patch()
         time = base.get_coord("time")
         n = base.shape[base.get_axis("distance")]
