@@ -22,11 +22,12 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
+    PatchCoordinateError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import deep_equality_check
+from dascore.utils.misc import deep_equality_check, suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -1183,6 +1184,24 @@ class TestConcatenateKind:
         # the plan row and the patch agree: only the first patch
         assert out.get_contents()["time_max"].iloc[0] == first.get_coord("time").max()
         assert out[0].shape == first.shape
+
+    def test_coordinate_only_one_patch_has_is_fine(self, mixed_kind):
+        """An auxiliary coordinate absent from one patch is not a conflict."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        with suppress_warnings(action="error"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_different_dims_raise_at_planning(self, mixed_kind):
+        """Different dimensions raise for the spool as for the patches."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag).rename_coords(time="money")
+        with pytest.raises(PatchCoordinateError, match="different dimensions"):
+            dc.spool([first, other]).concatenate(time=None, check_behavior="ignore")
 
     def test_plan_keeps_its_kind_rule(self, mixed_kind):
         """A plan made under one kind rule assembles under it later."""

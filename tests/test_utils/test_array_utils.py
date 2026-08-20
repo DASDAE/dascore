@@ -308,12 +308,20 @@ class TestApplyUfunc:
         assert (temp > 20).attrs.data_units is None
         out = random_patch.set_units(None) + temp
         assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        # a reciprocal or a power of a temperature has no offset unit
+        for bad in (lambda: 1 / temp, lambda: temp**2, lambda: temp * 2):
+            with pytest.raises(UnitError, match="offset units"):
+                bad()
 
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
         square = dc.get_example_patch(shape=(10, 10)).set_units("m")
         out = np.matmul(square, np.eye(10))
         assert np.allclose(out.data, square.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        # the units are kept from whichever side had them
+        bare = square.set_units(None)
+        out = np.matmul(bare, square)
         assert get_quantity(out.attrs.data_units) == get_quantity("m")
 
     def test_scalar_units_need_no_array_wrapping(self, random_patch):

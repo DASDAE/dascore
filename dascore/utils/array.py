@@ -269,6 +269,26 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     return patch.new(data=out, attrs=attrs)
 
 
+# The binary ufuncs which keep an offset unit (degC) meaningful: sums,
+# differences, extrema, and comparisons. Anything else needs an absolute unit.
+_OFFSET_UNIT_OPERATORS = frozenset(
+    {
+        np.add,
+        np.subtract,
+        np.maximum,
+        np.minimum,
+        np.fmax,
+        np.fmin,
+        np.greater,
+        np.greater_equal,
+        np.less,
+        np.less_equal,
+        np.equal,
+        np.not_equal,
+    }
+)
+
+
 def _apply_binary_ufunc(
     operator: np.ufunc,
     patch: PatchType | ArrayLike,
@@ -374,8 +394,16 @@ def _apply_binary_ufunc(
         """
         known = data_units if data_units is not None else other_units
         if not known._is_multiplicative:
-            # An offset unit (degC) cannot be probed by scaling; the data
-            # keep their units unless the result is a comparison.
+            # An offset unit (degC) cannot be probed by scaling, and only
+            # the operations which keep a temperature a temperature are
+            # meaningful on one: the data keep their units for those, and a
+            # comparison drops them.
+            if operator not in _OFFSET_UNIT_OPERATORS:
+                msg = (
+                    f"{operator} is not defined for the offset units {known}; "
+                    "convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
             new_data = _apply_op(patch.data, other, operator, reversed)
             if getattr(new_data, "dtype", None) == np.bool_:
                 return new_data, attrs.update(data_units=None)
@@ -414,8 +442,9 @@ def _apply_binary_ufunc(
             # The unit registry does not implement this ufunc, or cannot
             # hold this scalar (a bool), or the ufunc wants dimensioned
             # operands (matmul); numpy does the work, and the units are
-            # whatever they were.
-            return _apply_op(patch.data, other, operator, reversed), attrs
+            # whatever they were, on whichever side had them.
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            return new_data, attrs.update(data_units=_label(known))
         new_data = _apply_op(patch.data, other, operator, reversed)
         if not hasattr(probe, "units"):
             # a comparison: no units

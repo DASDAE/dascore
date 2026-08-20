@@ -1361,11 +1361,13 @@ def _concat_compatible_rows(
 
     The same gates, from metadata, so a plan decided without loading data
     agrees with the patches assembled from it: a row must not conflict in
-    kind with the rows admitted so far, and must share the first row's
-    dimensions and coordinate identity (def keys) on every public coordinate
-    other than the concatenated one. A row rejected for its structure binds no
-    kind, exactly as a patch rejected for its coordinates does not. Kind
-    attrs absent from the columns are absent from every patch and ignored.
+    kind with the rows admitted so far, must have the first row's dimensions
+    (anything else raises, as it does for patches), and must share the first
+    row's coordinate identity (def keys) on every public coordinate both
+    rows have, other than the concatenated one. A row rejected for its
+    coordinates binds no kind, exactly as a patch rejected for its
+    coordinates does not. Kind attrs absent from the columns are absent from
+    every patch and ignored.
     """
     validate_warn_level(check_behavior)
     if df.empty:
@@ -1375,8 +1377,7 @@ def _concat_compatible_rows(
     # every public coordinate other than the concatenated one must keep its
     # identity across rows, as check_coords asks of the patches; private
     # coordinates (def keys starting "__") are dropped before concatenation
-    structure = ["dims"] if "dims" in df.columns else []
-    structure += [
+    structure = [
         x
         for x in df.columns
         if x.endswith("_def_key") and not x.startswith("__") and x != f"_{dim}_def_key"
@@ -1385,17 +1386,28 @@ def _concat_compatible_rows(
     for _, row in df.iterrows():
         kind = {x: _kind_value(row[x]) for x in names}
         ok = run.admits(kind, check_behavior)
+        if (
+            ok
+            and "dims" in df.columns
+            and not _values_equal(row["dims"], first["dims"])
+        ):
+            # as concatenate_patches: different dimensions are never skipped
+            msg = "Cannot concatenate patches with different dimensions."
+            raise PatchCoordinateError(msg)
         if ok and structure:
+            # only coordinates both rows have are compared, as check_coords
+            # compares the shared coordinates
             same = all(
-                (_is_missing(row[x]) and _is_missing(first[x]))
+                _is_missing(row[x])
+                or _is_missing(first[x])
                 or _values_equal(row[x], first[x])
                 for x in structure
             )
             if not same:
                 msg = (
-                    "Patches are not compatible for concatenation: dimensions "
-                    "or coordinates other than the concatenated one differ "
-                    "from the first patch's."
+                    "Patches are not compatible for concatenation: coordinates "
+                    "other than the concatenated one differ from the first "
+                    "patch's."
                 )
                 warn_or_raise(
                     msg, exception=IncompatiblePatchError, behavior=check_behavior
