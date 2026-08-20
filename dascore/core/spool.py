@@ -447,6 +447,9 @@ class DataFrameSpool(BaseSpool):
     def _as_selector_array(self, item) -> np.ndarray:
         """Convert a Series or list selector to an array which fits the spool."""
         if isinstance(item, pd.Series):
+            if pd.api.types.is_integer_dtype(item.dtype):
+                # to_numpy(dtype) also unboxes nullable Int64 (NA raises).
+                return item.to_numpy(dtype=np.int64)
             if not pd.api.types.is_bool_dtype(item.dtype):
                 return item.to_numpy()
             # A mask is applied by position, so it must be in this spool's

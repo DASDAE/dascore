@@ -409,6 +409,7 @@ class TestSpoolIntArraySelect:
         expected = random_spool[np.array(indices)]
         assert random_spool[indices] == expected
         assert random_spool[pd.Series(indices)] == expected
+        assert random_spool[pd.Series(indices, dtype="Int64")] == expected
 
 
 class TestSpoolIterable:
