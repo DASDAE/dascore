@@ -26,6 +26,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     align_patch_coords,
+    check_data_units,
     check_dims,
     check_kind,
     concatenate_patches,
@@ -606,6 +607,20 @@ class TestCheckKind:
         """The behavior argument is validated up front."""
         with pytest.raises(ParameterError, match="behavior must be one of"):
             check_kind(random_patch, random_patch, check_behavior=None)
+
+
+class TestCheckDataUnits:
+    """Tests for the data-units gate shared by concatenate and stack."""
+
+    def test_missing_agrees_known_differ(self, random_patch):
+        """A missing unit agrees with anything; known, different units do not."""
+        bare, metres, km = (random_patch.set_units(x) for x in (None, "m", "km"))
+        assert check_data_units(bare, metres)
+        assert check_data_units(metres, metres.set_units("meter"))
+        with pytest.raises(IncompatiblePatchError, match="data units differ"):
+            check_data_units(metres, km)
+        with pytest.warns(UserWarning, match="convert_units"):
+            assert not check_data_units(metres, km, check_behavior="warn")
 
 
 class TestMergeCompatibleCoordsAttrs:

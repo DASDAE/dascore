@@ -284,13 +284,10 @@ def _quantity(array, units):
 
 def _is_boolean(data) -> bool:
     """True when an array's dtype is boolean, whichever backend holds it."""
-    dtype = getattr(data, "dtype", None)
-    if dtype is None:
-        return isinstance(data, bool | np.bool_)
     if is_numpy(data):
-        return dtype == np.bool_
+        return data.dtype == np.bool_
     xp = array_namespace(data)
-    return bool(xp.isdtype(dtype, "bool"))
+    return bool(xp.isdtype(data.dtype, "bool"))
 
 
 def _is_offset_unit(quantity) -> bool:

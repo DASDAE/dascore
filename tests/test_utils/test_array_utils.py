@@ -381,6 +381,11 @@ class TestApplyUfunc:
         patch = random_patch.new(data=mask).set_units("m")
         out = np.logical_and(patch, True)
         assert out.attrs.data_units is None
+        # a comparison the backend implements itself, on an offset unit
+        temp = random_patch.new(data=xp.asarray(random_patch.data)).set_units("degC")
+        out = temp > 0.5
+        assert out.attrs.data_units is None
+        assert np.array_equal(np.asarray(out.data), random_patch.data > 0.5)
 
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
