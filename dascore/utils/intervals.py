@@ -143,17 +143,19 @@ def value_kind(value) -> str:
     """
     Return the value kind which decides an interval group's shape.
 
-    Boolean groups state membership and may overlap; string and numeric
-    groups are single valued where they project onto a coordinate.
+    An item with no value states membership, and membership groups may
+    overlap; string and numeric groups are single valued where they
+    project onto a coordinate. Booleans never arrive here: `normalize_value`
+    refuses them.
 
     Examples
     --------
     >>> from dascore.utils.intervals import value_kind
-    >>> value_kind(True), value_kind("car"), value_kind(1)
-    ('boolean', 'string', 'numeric')
+    >>> value_kind(None), value_kind("car"), value_kind(1)
+    ('membership', 'string', 'numeric')
     """
-    if isinstance(value, bool):  # bool before int; bool is an int subclass
-        return "boolean"
+    if value is None:
+        return "membership"
     if isinstance(value, str):
         return "string"
     return "numeric"
@@ -164,7 +166,9 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     Normalize an interval's value so its Python type survives validation.
 
     Numpy scalars are unwrapped: pydantic's smart union resolves every numpy
-    scalar to float, which would turn a mask element into a numeric group.
+    scalar to float, which would turn an identifier into a measurement. A
+    boolean is refused: membership is stated by carrying no value at all,
+    so true and false are not values.
 
     Parameters
     ----------
@@ -177,11 +181,17 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     --------
     >>> import numpy as np
     >>> from dascore.utils.intervals import normalize_value
-    >>> normalize_value(np.bool_(True)) is True
-    True
+    >>> normalize_value(np.int64(3))
+    3
     """
     if isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, bool):
+        msg = (
+            f"A value may not be {value}; membership is stated by leaving "
+            "the value unset, and true and false are not values."
+        )
+        raise error(msg)
     if isinstance(value, float) and not np.isfinite(value):
         msg = f"A value must be finite; got {value}."
         raise error(msg)

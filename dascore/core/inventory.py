@@ -125,8 +125,9 @@ def _label_value(value):
     return normalize_value(value, error=InvalidInventoryError)
 
 
-# The value kind decides a label group's shape, so it must be exact.
-LabelValue = Annotated[str | bool | int | float, BeforeValidator(_label_value)]
+# A label states membership by carrying no value, so a value, when there is
+# one, is text or a number; its kind decides the group's shape.
+LabelValue = Annotated[str | int | float, BeforeValidator(_label_value)]
 
 
 def _object_type_tag(name: str):
@@ -693,28 +694,26 @@ class CouplingCondition(_IntervalModel):
     )
 
 
-def _wanted(field: str, info) -> bool:
-    """Whether a serialization's own include/exclude asked for a field."""
-    if (exclude := getattr(info, "exclude", None)) and field in exclude:
-        return False
-    include = getattr(info, "include", None)
-    return not include or field in include
-
-
 class OpticalPathLabel(_IntervalModel):
     """
-    Key/value label attached to an interval of an optical path.
+    Label attached to an interval of an optical path.
 
     ``group`` names the variable and ``value`` is its state over the
-    interval, so a bare flag is simply a boolean value. String and numeric
-    groups are single valued and their intervals may not overlap; boolean
-    groups state membership and may overlap freely. Point markers (equal
-    start and end) cover nothing, so they are exempt from that rule.
+    interval. A label with no value states membership of its group, and
+    membership groups may overlap freely; a label with a value says what
+    the group holds there, so string and numeric groups are single valued
+    and their intervals may not overlap. A group states membership or
+    holds one kind of value, never both. Point markers (equal start and
+    end) cover nothing, so they are exempt from the overlap rule.
     """
 
     group: str = Field(default="", description="Name of the labelled variable.")
-    value: LabelValue = Field(
-        default=True, description="Value of the variable over this interval."
+    value: LabelValue | None = Field(
+        default=None,
+        description=(
+            "Value of the variable over this interval; unset for a label "
+            "which states membership."
+        ),
     )
 
     @field_validator("value")
@@ -732,29 +731,6 @@ class OpticalPathLabel(_IntervalModel):
             )
             raise ValueError(msg)
         return value
-
-    def _write_object_type(self, handler, info):
-        """
-        Tag the document as every model does, and keep the value with it.
-
-        Overridden rather than added beside: pydantic runs one model
-        serializer per class, so a second one here would take the base's
-        place and drop the ``object_type`` every document is dispatched by.
-
-        The value itself needs putting back because ``exclude_defaults``
-        compares with ``==`` and ``1 == True``, the default. A group
-        numbered from one would otherwise lose every ``1`` on the way out
-        and reload holding a boolean, which then mixes kinds with the
-        numbers beside it and is refused. Identity is what "still its
-        default" means for a field admitting both. A caller who asked for
-        the value to be left out is obeyed: this restores what
-        exclude_defaults dropped, not what anyone chose to filter.
-        """
-        out = super()._write_object_type(handler, info)
-        if "value" in out or self.value is True or not _wanted("value", info):
-            return out
-        out["value"] = self.value
-        return out
 
 
 # The coordinates a DistanceMap may be written in, in preference order.
@@ -1410,17 +1386,17 @@ class OpticalPath(TimeRangedModel):
             if len(kinds) > 1:
                 errors.append(
                     f"Label group {group!r} mixes {sorted(kinds)} values; "
-                    "a group holds one kind of value."
+                    "a group states membership or holds one kind of value."
                 )
                 continue
-            if kinds == {"boolean"}:  # membership groups may overlap
+            if kinds == {"membership"}:  # membership groups may overlap
                 continue
             overlap = intervals_overlap([x.interval for x in items])
             if overlap is not None:
                 errors.append(
                     f"Overlapping intervals {overlap[0]} and {overlap[1]} in "
-                    f"label group {group!r}; only boolean groups, which "
-                    "state membership, may overlap."
+                    f"label group {group!r}; only membership groups, whose "
+                    "labels carry no value, may overlap."
                 )
         return errors
 

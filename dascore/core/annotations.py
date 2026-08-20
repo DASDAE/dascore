@@ -120,11 +120,10 @@ def _annotation_value(value):
     return normalize_value(value, error=ParameterError)
 
 
-# The value kind decides a group's shape, so it must be exact: a bool is
-# membership and an int is a number, and 1 must not become True.
-AnnotationValue = Annotated[
-    str | bool | int | float, BeforeValidator(_annotation_value)
-]
+# An annotation states membership by carrying no value, so a value, when
+# there is one, is text or a number; its kind decides the group's shape and
+# must be exact, so 1 must not become 1.0.
+AnnotationValue = Annotated[str | int | float, BeforeValidator(_annotation_value)]
 
 
 # Spelled as PatchAttrs spells them, so a set and the data it describes
@@ -509,8 +508,12 @@ class Annotation(_AnnotationModel):
     geometry: Geometry = Field(description="Where this annotation is.")
     id: str = Field(default="", description="Producer-supplied stable identifier.")
     group: str = Field(default="", description="Name of the annotated variable.")
-    value: AnnotationValue = Field(
-        default=True, description="Value of the variable over this geometry."
+    value: AnnotationValue | None = Field(
+        default=None,
+        description=(
+            "Value of the variable over this geometry; unset for an "
+            "annotation which states membership."
+        ),
     )
     tags: tuple[str, ...] = Field(
         default=(), description="Free labels; an annotation may carry many."
@@ -776,7 +779,7 @@ class AnnotationSet(NamespaceOwner):
             geometry=self._geometry(row),
             id=_text(row.get("id")),
             group=_text(row.get("group")),
-            value=row["value"] if _stated(row.get("value")) else True,
+            value=row["value"] if _stated(row.get("value")) else None,
             tags=_read_tags(row.get("tags")),
             parent=_text(row.get("parent")),
             acquisition_key=self._acquisition_key(row, label),
@@ -1050,10 +1053,12 @@ def _check_values(frame: pd.DataFrame) -> None:
     """
     Refuse a group whose values are not all one kind.
 
-    A group's kind decides its shape -- boolean groups state membership and
-    may overlap, others are single valued -- so a group holding both is two
-    variables sharing a name. Overlap itself is not checked here: it only
-    means anything where the set is projected onto a coordinate.
+    A group's kind decides its shape -- a group whose annotations carry no
+    value states membership and may overlap, others are single valued --
+    so a group holding both is two variables sharing a name. Overlap itself
+    is not checked here: it only means anything where the set is projected
+    onto a coordinate. A boolean is refused by the value normalizer: true
+    and false are not values, since membership is stated by having none.
     """
     if "value" not in frame.columns:
         return
@@ -1065,7 +1070,7 @@ def _check_values(frame: pd.DataFrame) -> None:
         else pd.Series([""] * len(frame))
     )
     for name, index in frame.groupby(groups.values, sort=True).groups.items():
-        values = [x for x in frame.loc[index, "value"] if _stated(x)]
+        values = [x if _stated(x) else None for x in frame.loc[index, "value"]]
         kinds = {value_kind(_annotation_value(x)) for x in values}
         if len(kinds) > 1:
             msg = (

@@ -119,10 +119,7 @@ def build_full_inventory() -> inv.Inventory:
                 start_distance=100.0, end_distance=200.0, group="zone", value="north"
             ),
             inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="noisy", value=True
-            ),
-            inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="quiet", value=False
+                start_distance=150.0, end_distance=300.0, group="noisy"
             ),
             inv.OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="count", value=0
@@ -578,7 +575,7 @@ class TestPathTracks:
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="only boolean groups"):
+        with pytest.raises(InvalidInventoryError, match="only membership groups"):
             path.check()
 
     def test_label_group_holds_one_kind_of_value(self):
@@ -590,7 +587,7 @@ class TestPathTracks:
                     start_distance=0.0, end_distance=10.0, group="zone", value="east"
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=20.0, end_distance=30.0, group="zone", value=True
+                    start_distance=20.0, end_distance=30.0, group="zone"
                 ),
             ),
         )
@@ -2269,15 +2266,19 @@ class TestConstraintsMatchDescriptions:
             )
 
     def test_label_value_keeps_numpy_type(self):
-        """A mask element is a flag, not the number one."""
-        label = inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=1.0, group="noisy", value=np.bool_(True)
-        )
-        assert label.value is True
+        """A numpy int is an identifier, not a measurement."""
         counted = inv.OpticalPathLabel(
             start_distance=0.0, end_distance=1.0, group="shots", value=np.int64(5)
         )
         assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
+
+    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
+    def test_boolean_label_value_refused(self, value):
+        """Membership is stated by having no value, so a boolean states nothing."""
+        with pytest.raises(ValidationError, match="true and false are not"):
+            inv.OpticalPathLabel(
+                start_distance=0.0, end_distance=1.0, group="noisy", value=value
+            )
 
     def test_physical_quantities_must_be_finite(self):
         """A nan quantity is not a measurement."""
@@ -2310,12 +2311,7 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
         inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="zone", value="east"
         ),
-        inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=50.0, group="noisy", value=True
-        ),
-        inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=50.0, group="masked", value=False
-        ),
+        inv.OpticalPathLabel(start_distance=0.0, end_distance=50.0, group="noisy"),
         inv.OpticalPathLabel(
             start_distance=0.0, end_distance=50.0, group="shots", value=0
         ),
@@ -2476,7 +2472,7 @@ class TestSerializationIsLossless:
         assert dc.inventory(inventory.io.to_yaml()) == inventory
 
     def test_a_label_value_of_one_survives(self):
-        """`1 == True`, and the value's default is True, so it was dropped."""
+        """`1 == True`; when the default was True, pruning defaults dropped it."""
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(

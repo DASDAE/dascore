@@ -1431,7 +1431,7 @@ class TestParquet:
             {
                 "id": ["r1", "r2"],
                 "group": ["noise", "quiet"],
-                "value": ["car", True],
+                "value": ["car", None],
                 "tags": [("road", "car"), None],
                 "time_start": [
                     np.datetime64("2020-01-01T00:00:10"),
@@ -1468,10 +1468,7 @@ class TestParquet:
     def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
         """A column with no one type is written as documents, not as text."""
         loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
-        assert [type(x).__name__ for x in loaded.io.to_dataframe()["value"]] == [
-            "str",
-            "bool",
-        ]
+        assert [x.value for x in loaded] == ["car", None]
         assert loaded[0].extra["meta"] == {"a": 1}
         assert loaded[0].tags == ("road", "car")
 

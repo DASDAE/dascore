@@ -441,7 +441,7 @@ class TestCoords:
         assert values[0] == "north" and values[-1] == "south"
 
     def test_membership_group(self, patch, inventory):
-        """A boolean group is False where uncovered, never null."""
+        """A membership group is False where uncovered, never null."""
         out = patch.enrich(inventory, attrs=False, coords=("noisy",))
         values = out.get_coord("noisy").values
         assert values.dtype == bool
@@ -857,21 +857,15 @@ class TestEnrichContracts:
     def test_reserved_label_group_raises(self, inventory):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        label = OpticalPathLabel(
-            start_distance=100.0, end_distance=200.0, group="time", value=True
-        )
+        label = OpticalPathLabel(start_distance=100.0, end_distance=200.0, group="time")
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             path.new(labels=(label,)).check()
 
-    def test_boolean_group_is_a_union(self, patch, inventory):
-        """Membership groups overlap, so any covering true interval wins."""
+    def test_membership_group_is_a_union(self, patch, inventory):
+        """Membership groups overlap; a channel belongs if any interval has it."""
         labels = (
-            OpticalPathLabel(
-                start_distance=100.0, end_distance=400.0, group="wet", value=True
-            ),
-            OpticalPathLabel(
-                start_distance=200.0, end_distance=300.0, group="wet", value=False
-            ),
+            OpticalPathLabel(start_distance=100.0, end_distance=250.0, group="wet"),
+            OpticalPathLabel(start_distance=200.0, end_distance=400.0, group="wet"),
         )
         inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("wet",))

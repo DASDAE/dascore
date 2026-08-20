@@ -36,7 +36,7 @@ def region_set():
     frame = pd.DataFrame(
         {
             "group": ["event", "event", "noisy"],
-            "value": ["car", "truck", True],
+            "value": ["car", "truck", None],
             "distance_start": [10.0, 30.0, 0.0],
             "distance_end": [80.0, 90.0, 100.0],
         }
@@ -332,14 +332,14 @@ class TestValues:
     """A group holds one kind of value."""
 
     def test_mixed_kinds_refused(self):
-        """A boolean and a number in one group are two variables."""
-        frame = pd.DataFrame({"group": ["g", "g"], "value": [True, 3]})
+        """A membership and a number in one group are two variables."""
+        frame = pd.DataFrame({"group": ["g", "g"], "value": [None, 3]})
         with pytest.raises(ParameterError, match="mixes"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_unnamed_group_is_still_a_group(self):
         """Pandas drops a null grouping key; the unnamed group is checked anyway."""
-        frame = pd.DataFrame({"group": [None, None], "value": [True, 1]})
+        frame = pd.DataFrame({"group": [None, None], "value": [None, 1]})
         with pytest.raises(ParameterError, match="mixes"):
             AnnotationSet(frame, dims=DIMS)
 
@@ -350,7 +350,7 @@ class TestValues:
 
     def test_groups_are_independent(self):
         """Two groups may hold different kinds."""
-        frame = pd.DataFrame({"group": ["a", "b"], "value": [True, "car"]})
+        frame = pd.DataFrame({"group": ["a", "b"], "value": [None, "car"]})
         assert len(AnnotationSet(frame, dims=DIMS)) == 2
 
     def test_overlap_is_not_checked(self):
@@ -365,14 +365,16 @@ class TestValues:
         )
         assert len(AnnotationSet(frame, dims=DIMS)) == 2
 
-    def test_value_defaults_to_true(self):
-        """An annotation with no value is a bare flag."""
-        assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].value is True
+    def test_no_value_states_membership(self):
+        """An annotation with no value is a bare flag, and stays unset."""
+        assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].value is None
 
-    def test_numpy_bool_stays_a_flag(self):
-        """A mask element is membership, not the number one."""
-        frame = pd.DataFrame({"group": ["a"], "value": [np.bool_(True)]})
-        assert AnnotationSet(frame, dims=DIMS)[0].value is True
+    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
+    def test_boolean_refused(self, value):
+        """Membership has a spelling already, so true and false state nothing."""
+        frame = pd.DataFrame({"group": ["a"], "value": [value]})
+        with pytest.raises(ParameterError, match="true and false are not values"):
+            AnnotationSet(frame, dims=DIMS)
 
     def test_non_finite_value_refused(self):
         """A value which cannot survive a round trip is not a value."""

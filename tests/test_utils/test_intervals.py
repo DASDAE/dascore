@@ -125,9 +125,9 @@ class TestClipIntervals:
 class TestValueKind:
     """The kind decides the shape of the group a value belongs to."""
 
-    def test_bool_before_int(self):
-        """A bool is a boolean even though it is also an int."""
-        assert value_kind(True) == "boolean"
+    def test_none_is_membership(self):
+        """No value at all is how membership is stated."""
+        assert value_kind(None) == "membership"
 
     def test_string(self):
         """Text is a string kind."""
@@ -142,9 +142,11 @@ class TestValueKind:
 class TestNormalizeValue:
     """Values keep their python type and must be finite."""
 
-    def test_numpy_bool_unwrapped(self):
-        """A numpy bool becomes a python bool, not a number."""
-        assert normalize_value(np.bool_(True)) is True
+    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
+    def test_bool_refused(self, value):
+        """Membership is stated by having no value, so a boolean is not one."""
+        with pytest.raises(ParameterError, match="true and false are not values"):
+            normalize_value(value)
 
     def test_numpy_int_unwrapped(self):
         """A numpy int becomes a python int, not a float."""
