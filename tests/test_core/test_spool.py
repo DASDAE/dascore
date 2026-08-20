@@ -396,6 +396,12 @@ class TestSpoolIntArraySelect:
         with pytest.raises(ValueError, match="Only bool or int dtypes"):
             random_spool[array]
 
+    def test_bad_series_type(self, random_spool):
+        """A Series which is neither bool nor int raises the same way."""
+        series = pd.Series(np.arange(len(random_spool)) + 0.01)
+        with pytest.raises(ValueError, match="Only bool or int dtypes"):
+            random_spool[series]
+
     def test_rearrange(self, random_spool):
         """Ensure patch order can be changed."""
         array = np.array([len(random_spool) - 1, 0])

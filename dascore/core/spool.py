@@ -446,12 +446,12 @@ class DataFrameSpool(BaseSpool):
 
     def _as_selector_array(self, item) -> np.ndarray:
         """Convert a Series or list selector to an array which fits the spool."""
-        if isinstance(item, pd.Series):
-            if pd.api.types.is_integer_dtype(item.dtype):
-                # to_numpy(dtype) also unboxes nullable Int64 (NA raises).
-                return item.to_numpy(dtype=np.int64)
-            if not pd.api.types.is_bool_dtype(item.dtype):
-                return item.to_numpy()
+        # Other Series dtypes fall through to the array path and are
+        # rejected there like any non bool/int array.
+        if isinstance(item, pd.Series) and pd.api.types.is_integer_dtype(item):
+            # to_numpy(dtype) also unboxes nullable Int64 (NA raises).
+            return item.to_numpy(dtype=np.int64)
+        if isinstance(item, pd.Series) and pd.api.types.is_bool_dtype(item):
             # A mask is applied by position, so it must be in this spool's
             # order; one built from another spool's contents would otherwise
             # silently select the wrong patches.
