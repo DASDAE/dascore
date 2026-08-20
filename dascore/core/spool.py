@@ -76,6 +76,8 @@ from dascore.utils.chunk_plan import (
     _combined_dtype,
     _ensure_patch_id,
     build_chunk_plan,
+    build_coverage_frame,
+    build_gap_frame,
     build_subdivision_plan,
     samples_adjusted_envelopes,
     subdivision_pieces,
@@ -1628,6 +1630,166 @@ class Spool(NamespaceOwner):
             missing_dim=missing_dim,
             **kwargs,
         )
+
+    def _report_relation(self, dim: str) -> pd.DataFrame:
+        """
+        Return the relation a gap report reads: the rows the spool presents.
+
+        Unlike [`_plan_frames`](`dascore.core.spool.Spool._plan_frames`)
+        a plan-backed spool is never collapsed to its members. Chunk
+        collapses because re-planning a dimension replaces the plan; a
+        report describes the patches the spool actually holds, so a
+        merged spool has nothing left to report. Samples residuals still
+        adjust the envelopes, since they change what loads.
+        """
+        base = _ensure_patch_id(self._df.reset_index(drop=True))
+        working = base.drop(columns=list(self._drop_columns), errors="ignore")
+        return samples_adjusted_envelopes(working, self._catalog.residuals)
+
+    def get_gaps(
+        self,
+        dim: str = "time",
+        *,
+        tolerance: float = 1.5,
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "drop",
+    ) -> pd.DataFrame:
+        """
+        Return a dataframe with one row per gap along a dimension.
+
+        Gaps are found with the rules
+        [`chunk`](`dascore.Spool.chunk`) merges by, so every row is
+        exactly a boundary that `chunk` would refuse to close.
+
+        Parameters
+        ----------
+        dim
+            The dimension to look for gaps along.
+        tolerance
+            The maximum number of samples patches can be spaced and still
+            count as contiguous. Same meaning as chunk's `tolerance`.
+        group
+            Attributes which separate patches into unrelated partitions; a
+            gap is never reported between two partitions. Defaults to the
+            config option `patch_kind_attrs`. Sampling rate and coordinate
+            structure split partitions too, exactly as they do for
+            `chunk`, so one group value can span several partitions.
+        missing_dim
+            What to do with patches lacking `dim`: "drop" (the default)
+            excludes them, "raise" refuses. Chunk defaults to "raise"
+            because it must produce those patches; a report need not.
+
+        Notes
+        -----
+        `{dim}_min` is the last sample before the gap and `{dim}_max` the
+        first sample after it, so `gap_size` is their difference — one
+        step wider than the missing extent. Subtract the returned
+        `{dim}_step` column for the extent itself.
+
+        `group_id` names the partition each gap belongs to, and is the
+        column to join against
+        [`get_coverage`](`dascore.core.spool.Spool.get_coverage`).
+
+        Overlapping and fully-nested patches never open a gap: each
+        boundary is measured against the furthest point reached so far,
+        not the previous row.
+
+        Patches whose step is unknown report no gaps, since the tolerance
+        has no sample to scale.
+
+        See Also
+        --------
+        [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`)
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.examples import random_spool
+        >>>
+        >>> spool = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+        >>> gaps = spool.get_gaps()
+        >>> assert len(gaps) == 2
+        >>> # A contiguous spool has none.
+        >>> assert random_spool().get_gaps().empty
+        """
+        out = build_gap_frame(
+            self._report_relation(dim),
+            dim,
+            tolerance=tolerance,
+            group=group,
+            missing_dim=missing_dim,
+        )
+        return present_units_columns(out)
+
+    def get_coverage(
+        self,
+        dim: str = "time",
+        *,
+        tolerance: float = 1.5,
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "drop",
+    ) -> pd.DataFrame:
+        """
+        Return a dataframe summarizing how complete the spool is.
+
+        One row per partition, reporting the extent it spans along `dim`
+        and how much of that extent holds data. Patches divide on the
+        group attributes and, exactly as `chunk` divides them, on dims
+        signature, coordinate identity, units, and sampling rate.
+
+        Parameters
+        ----------
+        dim
+            The dimension to measure along.
+        tolerance
+            The maximum number of samples patches can be spaced and still
+            count as contiguous. Same meaning as chunk's `tolerance`.
+        group
+            Attributes which separate patches into unrelated partitions.
+            Defaults to the config option `patch_kind_attrs`; sampling and
+            structural differences split partitions too, so one group
+            value can span several rows.
+        missing_dim
+            What to do with patches lacking `dim`: "drop" (the default)
+            excludes them, "raise" refuses.
+
+        Notes
+        -----
+        `span` is `{dim}_max - {dim}_min`, `gap_total` is the sum of the
+        partition's gaps as
+        [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports them,
+        `covered` is the rest, and `coverage` is `covered / span` (1.0
+        when the span is zero, meaning a single sample). `group_id`
+        matches the gap frame's, so the two join on it.
+
+        A partition whose step is unknown reports no gaps, and so counts
+        as fully covered. That is what `chunk` would do with it — it
+        would merge the patches — but it means `coverage` of 1.0 there
+        says "nothing chunk would refuse to merge", not "nothing
+        missing".
+
+        See Also
+        --------
+        [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`)
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.examples import random_spool
+        >>>
+        >>> spool = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+        >>> coverage = spool.get_coverage()
+        >>> assert (coverage["coverage"] < 1).all()
+        >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
+        """
+        out = build_coverage_frame(
+            self._report_relation(dim),
+            dim,
+            tolerance=tolerance,
+            group=group,
+            missing_dim=missing_dim,
+        )
+        return present_units_columns(out)
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(

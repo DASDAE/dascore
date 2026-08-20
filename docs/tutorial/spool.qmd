@@ -311,6 +311,34 @@ size_chunked = spool.chunk(time=1 * megabytes)
 
 A data size measures the data array only; coordinates, attrs, and any copies made later during processing are extra, so the patch as a whole is somewhat larger. The sample count is rounded down, so the patch's data never exceeds the requested size, and `MB` is 10^6^ bytes while `MiB` is 2^20^. `overlap` accepts the same forms.
 
+# get_gaps
+
+Merging tells you what a spool *has*; [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) tells you what it is missing. It applies the same rules `chunk` merges by, so every row it returns is a boundary `chunk` refuses to close.
+
+```{python}
+import numpy as np
+from dascore.examples import random_spool
+
+# Three patches separated by one second holes.
+gappy = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+
+gappy.get_gaps()
+```
+
+`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole smaller than `tolerance` samples — the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
+
+Pass another dimension to ask about it instead; `time` is only the default.
+
+# get_coverage
+
+[`get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same partitions, one row each, which is the quicker way to see whether an archive is worth loading at all.
+
+```{python}
+gappy.get_coverage()
+```
+
+`gap_total` is the sum of that partition's `get_gaps` rows, `span` is the extent it covers end to end, and `coverage` is the fraction of that span holding data. Patches divide into partitions the way `chunk` divides them — on the group attributes, but also on sampling rate and coordinate structure — so a single tag can span several rows. `group_id` names the partition in both frames, which is how a gap is traced back to the row that counts it.
+
 # concatenate
 Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it produces a lazy, plan-backed result.
 

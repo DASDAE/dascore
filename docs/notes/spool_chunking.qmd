@@ -36,6 +36,8 @@ Patches may only combine when they agree on all of:
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
 
+[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close. So the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so merging a spool and then reporting on it finds nothing left to close.
+
 ```{python}
 import numpy as np
 
@@ -47,8 +49,12 @@ source = "XX2.R2D1..RAW"
 p3, p4 = p1.update_attrs(acquisition_key=source), p2.update_attrs(acquisition_key=source)
 
 # Two data sources, each with two contiguous patches: two outputs, no error.
-merged = dc.spool([p1, p2, p3, p4]).chunk(time=None)
+spool = dc.spool([p1, p2, p3, p4])
+merged = spool.chunk(time=None)
 assert len(merged) == 2
+
+# The reports partition the same way, so the counts tie.
+assert len(merged) == len(spool.get_gaps()) + len(spool.get_coverage())
 ```
 
 Remaining (non-group, non-dimensional) attributes must hold no *conflicting* values within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`. A missing value (null or `""`) is an attribute nobody recorded, so it conflicts with nothing and the output carries the known value; only two differing known values are a conflict. History and the ids are never policed — the output carries the first member's — but merging members whose histories differ (processed beside unprocessed data) warns.
