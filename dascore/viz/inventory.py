@@ -2,27 +2,36 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Patch as PatchArtist
+from matplotlib.ticker import MaxNLocator
 
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.utils.intervals import interval_masks, normalize_value, value_kind
 from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
-from ._lanes import LANE_CMAP, plot_lanes
+from ._lanes import LANE_CMAP, STRING_CMAP, UNCOVERED_COLOR, WHEEL_ORDER, plot_lanes
+
+if TYPE_CHECKING:
+    from dascore.constants import timeable_types
+    from dascore.core.inventory import Inventory, OpticalPath
 
 # Components are a closed set, so their colors can be too.
+# Okabe-Ito, so the components stay apart from each other under color
+# blindness and off the hue grid the label groups are drawn from.
 COMPONENT_COLORS = {
-    "FiberSegment": "#4c72b0",
-    "Splice": "#dd8452",
-    "Connector": "#55a868",
-    "Terminator": "#c44e52",
+    "FiberSegment": "#0072B2",
+    "Splice": "#E69F00",
+    "Connector": "#009E73",
+    "Terminator": "#CC79A7",
 }
 
 
@@ -33,6 +42,57 @@ def _iter_paths(inventory):
             for path in array.optical_paths:
                 address = f"{network.code}.{array.code}.{path.location_code}"
                 yield address, network, array, path
+
+
+def _effective_epoch(*models):
+    """The epoch a model is really valid over, clipped by its containers."""
+    start, end = pd.NaT, pd.NaT
+    for model in models:
+        low, high = model.start_time, model.end_time
+        if not pd.isnull(low):
+            start = low if pd.isnull(start) else max(start, low)
+        if not pd.isnull(high):
+            end = high if pd.isnull(end) else min(end, high)
+    return start, end
+
+
+def _effective_at(time, *models) -> bool:
+    """Whether a time falls inside every one of these epochs.
+
+    A child which states no bound defers to its container, so asking the
+    path alone would call it valid whenever the path is, which is every
+    time it states nothing.
+    """
+    if time is None:
+        return True
+    return all(x.is_effective_at(time) for x in models)
+
+
+def _sample_distances(path, low: float, high: float, count: int) -> np.ndarray:
+    """Distances to read a path's geometry at, between low and high.
+
+    A uniform grid can step straight over an unsurveyed stretch shorter
+    than its spacing, and the picture would then bridge fiber nobody
+    placed. Every gap contributes a sample, so every gap is seen.
+    """
+    spans = sorted(
+        (float(min(x.distance)), float(max(x.distance))) for x in path.geometry
+    )
+    covered: list[list[float]] = []
+    for start, end in spans:
+        if covered and start <= covered[-1][1]:
+            covered[-1][1] = max(covered[-1][1], end)
+        else:
+            covered.append([start, end])
+    holes = [
+        0.5 * (covered[index][1] + covered[index + 1][0])
+        for index in range(len(covered) - 1)
+    ]
+    inside = [x for x in holes if low < x < high]
+    grid = np.linspace(low, high, count)
+    if not inside:
+        return grid
+    return np.unique(np.concatenate([grid, np.asarray(inside, dtype=float)]))
 
 
 def _epoch_label(path) -> str:
@@ -52,10 +112,16 @@ def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
         try:
             context = inventory.resolve(acquisition_key, time)
         except InvalidInventoryError as error:
+            # Keep what resolve said; a key can fail for reasons no time
+            # fixes, and claiming ambiguity would hide them.
+            hint = (
+                ""
+                if time is not None
+                else " Pass a time as well, if the key names several epochs."
+            )
             msg = (
-                f"Acquisition key {acquisition_key!r} names more than one "
-                "acquisition, which happens where it was reconfigured. Pass a "
-                "time as well, to say which of its epochs to draw."
+                f"Acquisition key {acquisition_key!r} does not resolve to one "
+                f"acquisition: {error}{hint}"
             )
             raise ParameterError(msg) from error
         if context.optical_path is None:
@@ -75,7 +141,15 @@ def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
         raise ParameterError(msg)
     candidates = found
     if time is not None:
-        candidates = [x for x in found if x[3].is_effective_at(time)]
+        candidates = [x for x in found if _effective_at(time, x[1], x[2], x[3])]
+        if not candidates:
+            stated = sorted({f"{x[0]} ({_epoch_label(x[3])})" for x in found})
+            msg = (
+                f"No optical path is effective at {time}. The paths are: "
+                + ", ".join(stated)
+                + "."
+            )
+            raise ParameterError(msg)
     if optical_path is not None:
         matched = [x for x in candidates if x[0] == optical_path]
         if not matched:
@@ -268,16 +342,16 @@ def _distance_window(asked, span):
 
 
 def path(
-    inventory,
-    optical_path=None,
+    inventory: Inventory,
+    optical_path: str | OpticalPath | None = None,
     *,
     acquisition_key: str | None = None,
-    time=None,
+    time: timeable_types | None = None,
     distance: tuple | None = None,
     tracks: str | Sequence[str] | None = None,
     columns: str | Sequence[str] | None = None,
     n_samples: int = 1000,
-    color=None,
+    color: str | Mapping | None = None,
     max_labels: int = 200,
     ax: plt.Axes | None = None,
     figsize: tuple[float, float] | None = None,
@@ -308,9 +382,9 @@ def path(
         The instant to resolve at, which is how one epoch of a repaired
         path is chosen.
     distance
-        The optical distances to draw between, as (low, high); either
-        may be None to run to the path's end. A long lead-in otherwise
-        crushes the instrumented part of a path into a corner.
+        The optical distances to draw between, as (low, high). Either
+        end may be None, or ..., to run to the path's own bound. A long
+        lead-in otherwise crushes the instrumented part into a corner.
     tracks
         Which lanes to draw, in order: any of "channels", "components",
         "coupling", and the path's label group names. None draws all.
@@ -358,11 +432,16 @@ def path(
             "state none, so there is no distance axis to draw."
         )
         raise ParameterError(msg)
+    limits = _distance_window(distance, (chosen.start_distance, chosen.end_distance))
     frame = _track_frame(chosen, _path_acquisitions(array, chosen, time))
+    # The palette is the path's, not this figure's, so drawing some of the
+    # tracks colors them as drawing all of them does.
+    vocabulary = list(frame.loc[frame["lane"] != "components", "value"])
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
-        height = 1.2 + 0.42 * len(lanes) + 1.1 * len(columns)
+        # Capped: a figure taller than a page is not more readable.
+        height = min(1.2 + 0.42 * len(lanes) + 1.1 * len(columns), 14.0)
         figure, all_axes = plt.subplots(
             1 + len(columns),
             1,
@@ -370,12 +449,12 @@ def path(
             sharex=True,
             height_ratios=[max(2.0, 0.5 * len(lanes))] + [1] * len(columns),
             squeeze=False,
+            layout="constrained",
         )
         all_axes = all_axes[:, 0]
         ax, panels = all_axes[0], all_axes[1:]
     else:
         figure, panels = None, []
-    limits = _distance_window(distance, (chosen.start_distance, chosen.end_distance))
     pad = 0.02 * (limits[1] - limits[0])
     plot_lanes(
         frame,
@@ -385,12 +464,15 @@ def path(
         label="label",
         lanes=lanes,
         color=_lane_colors(color),
+        vocabulary=vocabulary,
         max_labels=max_labels,
         x_limits=(limits[0] - pad, limits[1] + pad),
         x_label="" if len(panels) else "Optical distance [m]",
+        colorbar_axes=[ax, *panels] if len(panels) else None,
     )
-    ax.set_title(f"{address}  ·  {chosen.name or 'path'}  ·  {_epoch_label(chosen)}")
-    distances = np.linspace(limits[0], limits[1], n_samples)
+    named = [address, *([chosen.name] if chosen.name else []), _epoch_label(chosen)]
+    ax.set_title(" · ".join(named), loc="left", fontsize="medium")
+    distances = _sample_distances(chosen, limits[0], limits[1], n_samples)
     for index, (panel, name) in enumerate(zip(panels, columns, strict=True)):
         values = chosen.column_at(name, distances)
         panel.plot(distances, values, color=plt.get_cmap(LANE_CMAP)(index % 10))
@@ -408,6 +490,36 @@ def path(
     return ax
 
 
+def _time_window(asked):
+    """Resolve a (start, end) time selection to matplotlib dates."""
+    if asked is None:
+        return None, None
+    try:
+        low, high = asked
+    except (TypeError, ValueError):
+        msg = f"time={asked!r} must be a (start, end) pair."
+        raise ParameterError(msg) from None
+
+    def one(value):
+        if value is None or value is ...:
+            return None
+        try:
+            stamp = pd.Timestamp(value)
+        except (ValueError, TypeError) as error:
+            msg = f"time={asked!r} states a bound which is not a time."
+            raise ParameterError(msg) from error
+        if pd.isnull(stamp):
+            msg = f"time={asked!r} states a bound which is not a time."
+            raise ParameterError(msg)
+        return mdates.date2num(stamp.to_pydatetime())
+
+    low, high = one(low), one(high)
+    if low is not None and high is not None and high <= low:
+        msg = f"time={asked!r} must be increasing."
+        raise ParameterError(msg)
+    return low, high
+
+
 def _lane_colors(color):
     """Pin the tracks whose vocabulary is closed, honoring an override."""
     if color is not None:
@@ -416,18 +528,18 @@ def _lane_colors(color):
 
 
 def map_path(
-    inventory,
-    optical_path=None,
+    inventory: Inventory,
+    optical_path: str | OpticalPath | None = None,
     *,
     acquisition_key: str | None = None,
-    time=None,
+    time: timeable_types | None = None,
     x: str | None = None,
     y: str | None = None,
     color: str = "distance",
     n_samples: int = 1000,
-    cmap: str = "cividis_r",
+    cmap: str = "viridis",
     linewidth: float = 2.5,
-    aspect=None,
+    aspect: str | float | None = None,
     ax: plt.Axes | None = None,
     legend: bool = True,
     show: bool = False,
@@ -454,8 +566,8 @@ def map_path(
     time
         The instant to resolve at.
     x, y
-        The CRS axes to draw. They default to the first two the CRS
-        declares, which a borehole may need overriding: a hole runs
+        The CRS axes to draw, defaulting to the first two the CRS
+        declares. A borehole needs that default overridden: a hole runs
         straight down, so a plan view collapses it to a point.
     color
         "distance", a geometry column, a label group, or "coupling".
@@ -500,9 +612,14 @@ def map_path(
             )
             raise ParameterError(msg) from error
     if optical_path is None and acquisition_key is None:
-        chosen = [(a, arr, p) for a, _, arr, p in _iter_paths(inventory)]
-        if time is not None:
-            chosen = [x_ for x_ in chosen if x_[2].is_effective_at(time)]
+        chosen = [
+            (a, arr, p)
+            for a, net, arr, p in _iter_paths(inventory)
+            if _effective_at(time, net, arr, p)
+        ]
+        if not chosen:
+            msg = f"No optical path in this inventory is effective at {time}."
+            raise ParameterError(msg)
     else:
         chosen = [_select_path(inventory, optical_path, acquisition_key, time)]
     own_figure = ax is None
@@ -510,11 +627,27 @@ def map_path(
     x_axis, y_axis = crs.axis_index(x), crs.axis_index(y)
     handles: dict = {}
     palette: dict = {}
+    if color != "distance":
+        # Checked over every path drawn: one path saying nothing about a
+        # group is fiber with no value, which the map already draws.
+        stated = {"coupling"}
+        for _, _, one in chosen:
+            stated |= set(one.geometry_columns())
+            stated |= {x.group for x in one.labels}
+        if color not in stated:
+            msg = (
+                f"color={color!r} names neither optical distance, a geometry "
+                f"column, a label group, nor 'coupling'. This inventory "
+                f"states {tuple(sorted(stated))}."
+            )
+            raise ParameterError(msg)
     # Two passes: every path is measured before any is drawn, so that one
     # color scale spans them all rather than the last one drawn winning.
     pieces = []
     for address, _, one in chosen:
-        distances = np.linspace(one.start_distance, one.end_distance, n_samples)
+        distances = _sample_distances(
+            one, one.start_distance, one.end_distance, n_samples
+        )
         coords = one.coordinates_at(distances, crs)
         points = np.column_stack([coords[:, x_axis], coords[:, y_axis]])
         segments = np.stack([points[:-1], points[1:]], axis=1)
@@ -585,25 +718,40 @@ def map_path(
         figure = ax.get_figure()
         ratio = abs(high_y - low_y) / (abs(high_x - low_x) or 1.0)
         drawn = figure.get_figwidth() * ratio
-        figure.set_figheight(float(np.clip(drawn + 1.2, 2.4, 9.0)))
+        figure.set_figheight(float(np.clip(drawn + 1.2, 1.6, 9.0)))
         shrink = float(np.clip(drawn / figure.get_figheight(), 0.25, 1.0))
     ax.grid(color="0.9", linewidth=0.5)
     ax.set_axisbelow(True)
     if legend and scalar is not None:
+        # A tall label beside a short strip of axes clips; lay the bar out
+        # the way the data is laid out instead.
+        flat = shrink < 0.45
         bar = ax.get_figure().colorbar(
-            scalar, ax=ax, fraction=0.05, pad=0.02, shrink=shrink
+            scalar,
+            ax=ax,
+            location="bottom" if flat else "right",
+            fraction=0.12 if flat else 0.05,
+            pad=0.25 if flat else 0.02,
+            aspect=45 if flat else 20,
+            shrink=1.0 if flat else shrink,
         )
         bar.set_label("Optical distance [m]" if color == "distance" else color)
+        values = getattr(scalar, "get_array", lambda: None)()
+        if values is not None and np.allclose(values, np.round(values), equal_nan=True):
+            # Half a borehole is not a borehole.
+            bar.locator = MaxNLocator(integer=True)
+            bar.update_ticks()
     if legend and handles:
         # A colorbar already occupies the strip beside the axes.
-        offset = 1.18 if scalar is not None else 1.01
+        offset = 1.12 if scalar is not None and shrink >= 0.45 else 1.01
         ax.legend(
             handles=list(handles.values()),
             loc="upper left",
             bbox_to_anchor=(offset, 1.0),
             frameon=False,
             fontsize="small",
-            title=color,
+            # The colorbar beside it already carries the name.
+            title=None if scalar is not None else color,
         )
     if show:
         plt.show()
@@ -617,7 +765,7 @@ def _axis_label(crs, name) -> str:
     return f"{name} [{units}]" if units else str(name)
 
 
-UNPLACED = (0.8, 0.8, 0.8, 1.0)
+UNPLACED = mcolors.to_rgba(UNCOVERED_COLOR)
 
 
 def _segment_colors(one, color, mid, crs, handles, palette):
@@ -633,13 +781,11 @@ def _segment_colors(one, color, mid, crs, handles, palette):
         items = [x for x in one.labels if x.group == color]
         keys = [x.value for x in items]
         if not items:
-            groups = tuple(dict.fromkeys(x.group for x in one.labels))
-            msg = (
-                f"color={color!r} names neither optical distance, a geometry "
-                f"column ({one.geometry_columns()}), a label group ({groups}), "
-                "nor 'coupling'."
+            # This path states nothing under that name; another one does.
+            handles.setdefault(
+                "not stated", PatchArtist(facecolor=UNPLACED, label="not stated")
             )
-            raise ParameterError(msg)
+            return None, [UNPLACED] * len(mid)
     masks = interval_masks(mid, [x.interval for x in items])
     kinds = {value_kind(normalize_value(k)) for k in keys}
     if kinds == {"numeric"}:
@@ -649,9 +795,9 @@ def _segment_colors(one, color, mid, crs, handles, palette):
         return values, None
     # The palette is the figure's, not this path's, so one value is one
     # color however many paths are drawn and whatever order they state it.
-    wheel = plt.get_cmap("tab20")
+    wheel = plt.get_cmap(STRING_CMAP)
     for key in dict.fromkeys(map(str, keys)):
-        palette.setdefault(key, wheel(len(palette) % 20))
+        palette.setdefault(key, wheel(WHEEL_ORDER[len(palette) % len(WHEEL_ORDER)]))
     seen = palette
     colors = [UNPLACED] * len(mid)
     for key, mask in zip(keys, masks, strict=True):
@@ -673,7 +819,7 @@ def _segment_colors(one, color, mid, crs, handles, palette):
 
 
 def timeline(
-    inventory,
+    inventory: Inventory,
     *,
     kind: str = "both",
     color: str = "interrogator",
@@ -698,7 +844,8 @@ def timeline(
     color
         "interrogator", "data_type", or "kind".
     time
-        The times to draw between, as (start, end).
+        The times to draw between, as (start, end). Either end may be
+        None, or ..., to run to what the epochs themselves state.
     ax
         An Axes to draw on.
     legend
@@ -731,24 +878,26 @@ def timeline(
         for array in network.fiber_arrays:
             if kind in {"both", "optical_path"}:
                 for one in array.optical_paths:
+                    start, end = _effective_epoch(network, array, one)
                     rows.append(
                         {
                             "lane": f"{network.code}.{array.code}."
                             f"{one.location_code} [path]",
-                            "start": one.start_time,
-                            "end": one.end_time,
+                            "start": start,
+                            "end": end,
                             "value": "optical path",
                             "label": one.name,
                         }
                     )
             if kind in {"both", "acquisition"}:
                 for acquisition in array.acquisitions:
+                    start, end = _effective_epoch(network, array, acquisition)
                     rows.append(
                         {
                             "lane": f"{network.code}.{array.code}."
                             f"{acquisition.location_code}.{acquisition.code}",
-                            "start": acquisition.start_time,
-                            "end": acquisition.end_time,
+                            "start": start,
+                            "end": end,
                             "value": _acquisition_color_value(
                                 inventory, acquisition, color
                             ),
@@ -763,12 +912,31 @@ def timeline(
         raise ParameterError(msg)
     frame = pd.DataFrame(rows)
     known = pd.concat([frame["start"], frame["end"]]).dropna()
+    asked_low, asked_high = _time_window(time)
     if ax is None:
         lanes = len(dict.fromkeys(frame["lane"]))
-        _, ax = plt.subplots(1, figsize=(9.0, 1.0 + 0.55 * lanes))
+        _, ax = plt.subplots(
+            1, figsize=(9.0, min(1.0 + 0.55 * lanes, 14.0)), layout="constrained"
+        )
 
-    if time is not None:
-        low, high = (mdates.date2num(pd.Timestamp(x).to_pydatetime()) for x in time)
+    if asked_low is not None or asked_high is not None:
+        # A month is an arbitrary width, and only reached where one end is
+        # asked for and nothing states a time to take the other from.
+        month, stated = (
+            30.0,
+            [
+                mdates.date2num(pd.Timestamp(x).to_pydatetime())
+                for x in (known.min(), known.max())
+            ]
+            if len(known)
+            else [None, None],
+        )
+        low = asked_low if asked_low is not None else stated[0]
+        high = asked_high if asked_high is not None else stated[1]
+        if low is None:
+            low = high - month
+        if high is None or high <= low:
+            high = low + month
         dated = True
     elif len(known):
         low = mdates.date2num(pd.Timestamp(known.min()).to_pydatetime())

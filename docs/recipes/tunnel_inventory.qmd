@@ -210,13 +210,13 @@ The inventory can now draw the deployment it describes. Along the fiber, past th
 inventory.viz.path(distance=(1495, 1780), show=True);
 ```
 
-And in the tunnel's own survey grid, as a section — the pair of views the [drawing above](#what-the-drawing-says) shows by hand:
+And in the tunnel's own survey grid, looking side-on — the second of the two views the [hand-drawn figure](#what-the-drawing-says) pairs:
 
 ```{python}
 inventory.viz.map(x="x", y="z", color="section", show=True);
 ```
 
-The three holes go to 20 m, the trench runs along the floor, and the gap in it is the slack coil: ten meters of fiber in a box nobody surveyed.
+The three holes go to 20 m, the trench runs along the floor, and the break in it is the slack coil: ten meters of fiber wound into a one-meter loop, which the geometry table deliberately leaves unplaced.
 
 # What the data gets out of it
 

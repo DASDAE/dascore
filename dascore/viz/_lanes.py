@@ -13,6 +13,7 @@ import datetime
 from collections.abc import Mapping, Sequence
 
 import matplotlib.dates as mdates
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -26,12 +27,16 @@ from dascore.utils.plotting import _format_time_axis, _get_ax, _get_cmap
 
 # Palettes are module level so that two figures of one inventory agree.
 STRING_CMAP = "tab20"
+# tab20 runs dark, light, dark, light, so consecutive categories come out
+# as two shades of one hue and read as one variable. Take the dark half
+# first, and skip its two greys, which the uncovered colors already use.
+WHEEL_ORDER = (0, 2, 4, 6, 8, 10, 12, 16, 18, 1, 3, 5, 7, 9, 11, 13, 17, 19)
 LANE_CMAP = "tab10"
 NUMERIC_CMAP = "viridis"
 GAP_COLOR = "0.88"
 UNCOVERED_COLOR = "0.7"
 
-# The fraction of a bar overdrawn with hatching where it runs off the axis.
+# The fraction of the x axis hatched where a bar runs off the end of it.
 _OPEN_FRACTION = 0.02
 _MAX_SUB_ROWS = 8
 # Past this many distinct numbers a lane earns a colorbar rather than
@@ -141,13 +146,19 @@ def _pack_rows(frame) -> np.ndarray:
     return np.minimum(rows, _MAX_SUB_ROWS - 1)
 
 
-def _string_colors(frame, cmap_name=STRING_CMAP) -> dict:
-    """Map every string value in the frame to a stable color."""
-    values = sorted(
-        {x for x in frame["value"].tolist() if isinstance(x, str) and x != ""}
-    )
+def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
+    """Map every string value to a stable color.
+
+    The vocabulary widens the palette beyond what this frame holds, so a
+    figure of part of a subject colors it as a figure of all of it does.
+    """
+    seen = list(frame["value"].tolist()) + list(vocabulary or [])
+    values = sorted({x for x in seen if isinstance(x, str) and x != ""})
     cmap = plt.get_cmap(cmap_name)
-    return {value: cmap(index % cmap.N) for index, value in enumerate(values)}
+    return {
+        value: cmap(WHEEL_ORDER[index % len(WHEEL_ORDER)])
+        for index, value in enumerate(values)
+    }
 
 
 def _resolve_colors(rows, kind, lane_index, string_map, color):
@@ -174,13 +185,24 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         values = np.asarray(
             [float(normalize_value(x)) for x in rows["value"]], dtype=float
         )
-        cmap = _get_cmap(color if isinstance(color, str) else NUMERIC_CMAP)
+        if isinstance(color, str):
+            try:
+                cmap = _get_cmap(color)
+            except (ValueError, KeyError):
+                # A color name, not a colormap: one color for the lane, as
+                # a lane of any other kind would take it.
+                return [color] * len(rows), None
+        else:
+            cmap = _get_cmap(NUMERIC_CMAP)
         low, high = float(np.nanmin(values)), float(np.nanmax(values))
         if high <= low:
             # One value is not a scale, so it gets a color and its number
             # rather than a colorbar reading from it to a value nothing has.
             return [cmap(0.5)] * len(rows), None
         norm = plt.Normalize(low, high)
+        # A value nothing states maps to a transparent color unless the
+        # colormap is told otherwise, and the box would simply vanish.
+        cmap = cmap.with_extremes(bad=UNCOVERED_COLOR)
         colors = [cmap(norm(x)) for x in values]
         if len(set(values.tolist())) <= _MAX_DISCRETE:
             return colors, None
@@ -224,18 +246,16 @@ def _fit_labels(ax, placements, max_labels):
     """Draw the labels which fit in their box, and drop the rest."""
     if len(placements) > max_labels:
         return
-    ax.get_figure().canvas.draw_idle()
+    figure = ax.get_figure()
+    # Lay the figure out before measuring: a label is compared against its
+    # box in pixels, and both move when the axes does.
+    figure.draw_without_rendering()
+    renderer = figure.canvas.get_renderer()
     transform = ax.transData
     for text, x_mid, y_mid, width in placements:
         if not text:
             continue
-        # Measure the box in pixels; a label wider than its box is noise.
-        left = transform.transform((x_mid - width / 2, y_mid))[0]
-        right = transform.transform((x_mid + width / 2, y_mid))[0]
-        needed = len(text) * plt.rcParams["font.size"] * 0.6
-        if (right - left) < needed:
-            continue
-        ax.text(
+        artist = ax.text(
             x_mid,
             y_mid,
             text,
@@ -244,7 +264,13 @@ def _fit_labels(ax, placements, max_labels):
             fontsize=plt.rcParams["font.size"] * 0.8,
             zorder=4,
             clip_on=True,
+            # A dark fill would otherwise swallow the text sitting on it.
+            path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
         )
+        left = transform.transform((x_mid - width / 2, y_mid))[0]
+        right = transform.transform((x_mid + width / 2, y_mid))[0]
+        if artist.get_window_extent(renderer).width > (right - left):
+            artist.remove()
 
 
 def _gap_rows(rows, limits):
@@ -280,6 +306,7 @@ def plot_lanes(
     label: str | None = None,
     lanes: Sequence[str] | None = None,
     color=None,
+    vocabulary: Sequence | None = None,
     gaps: bool = False,
     pack: bool = True,
     legend: bool | str = "auto",
@@ -287,6 +314,7 @@ def plot_lanes(
     x_limits: tuple | None = None,
     x_label: str = "",
     lane_height: float = 0.8,
+    colorbar_axes: Sequence[plt.Axes] | None = None,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -308,22 +336,27 @@ def plot_lanes(
         Column deciding each row's color. Strings are categorical,
         numbers continuous, and booleans state membership of the lane.
     label
-        Column holding the text drawn in each box; defaults to the value
-        where the value is text.
+        Column holding the text drawn in each box. Values supply it by
+        default: text as itself, a number as its digits, a boolean as
+        nothing, since the lane it sits in already names it.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.
     color
         A color for every row, a mapping of value to color, or a mapping
         of lane name to such a mapping. A lane whose values are numbers
-        reads a color string as the name of a colormap.
+        reads a color string as the name of a colormap, or as a color
+        where it names no colormap.
+    vocabulary
+        Values to reserve colors for beyond those this frame holds, so a
+        figure of part of a subject colors it as a figure of all of it.
     gaps
         Whether to also draw what each lane does not cover.
     pack
         Whether overlapping intervals are packed into sub-rows.
     legend
-        Whether to draw a legend or colorbar. "auto" draws one when the
-        colors mean something beyond the lane they are in.
+        Whether to draw a legend and any colorbars. False, or "off",
+        draws neither; anything else draws what the colors earn.
     max_labels
         Draw no text at all past this many intervals.
     x_limits
@@ -332,6 +365,10 @@ def plot_lanes(
         Label for the x axis.
     lane_height
         Fraction of a lane's row filled by its bars.
+    colorbar_axes
+        The axes a colorbar takes its room from; the drawn axes alone by
+        default. Pass every axes of a shared-x figure, or the others keep
+        a width this one gives up.
     show
         Whether to call plt.show.
 
@@ -367,15 +404,23 @@ def plot_lanes(
     if lanes is not None and len(set(order)) != len(order):
         msg = f"lanes names a lane twice; each lane is drawn once. Got {lanes}."
         raise ParameterError(msg)
-    string_map = _string_colors(frame)
+    # A lane given its own mapping is colored from that, so its values
+    # must not also spend slots in the palette the other lanes draw from.
+    pinned = set()
+    if isinstance(color, Mapping):
+        pinned = {k for k, v in color.items() if isinstance(v, Mapping)}
+    unpinned = frame[~frame["lane"].isin(pinned)] if pinned else frame
+    string_map = _string_colors(unpinned, vocabulary)
     # Fix the x limits before any text, since a label is measured in pixels.
     if x_limits is None:
         low = float(np.nanmin(frame["start"]))
         high = float(np.nanmax(frame["end"]))
         pad = (high - low) * 0.02 or 0.5
-        x_limits = (low - pad, high + pad)
+        # Gaps are asked of the data, not of the margin drawn around it.
+        gap_limits, x_limits = (low, high), (low - pad, high + pad)
     else:
         x_limits = tuple(float(x) for x in _as_numeric(np.asarray(x_limits)))
+        gap_limits = x_limits
     ax.set_xlim(*x_limits)
     span = x_limits[1] - x_limits[0]
 
@@ -404,7 +449,7 @@ def plot_lanes(
         elif described and described[0] == "colorbar":
             colorbars.append(described[1])
         if gaps:
-            gap_spans = _gap_rows(rows, x_limits)
+            gap_spans = _gap_rows(rows, gap_limits)
             if gap_spans:
                 ax.add_collection(
                     PatchCollection(
@@ -452,11 +497,11 @@ def plot_lanes(
                 [x, x],
                 [low, low + tall],
                 color=point_color,
-                linewidth=1.5,
+                linewidth=2.0,
                 zorder=3,
                 solid_capstyle="butt",
             )
-            ax.plot([x], [low + tall], marker="v", markersize=4, color=point_color)
+            ax.plot([x], [low + tall], marker="v", markersize=5, color=point_color)
         _draw_open_edges(
             ax, rows, y_centre - lane_height / 2, lane_height, colors, span
         )
@@ -465,18 +510,20 @@ def plot_lanes(
     ax.set_ylim(-(len(order) - 1) - lane_height, lane_height)
     if x_label:
         ax.set_xlabel(x_label)
-    ax.grid(axis="x", color="0.9", linewidth=0.5, zorder=0)
+    ax.grid(axis="x", color="0.85", linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
+    # The left spine is hidden, so its tick marks are dashes after a name.
+    ax.tick_params(axis="y", length=0, pad=4)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
     if dated:
         _format_time_axis(ax, x_label or "time", "x")
     _fit_labels(ax, placements, max_labels)
-    if legend:
+    if legend and legend != "off":
         for name, cmap, norm in colorbars:
             bar = ax.get_figure().colorbar(
                 plt.cm.ScalarMappable(norm=norm, cmap=cmap),
-                ax=ax,
+                ax=list(colorbar_axes) if colorbar_axes else ax,
                 fraction=0.05,
                 pad=0.02,
             )
@@ -488,10 +535,12 @@ def plot_lanes(
         ]
         if gaps:
             handles.append(PatchArtist(facecolor=GAP_COLOR, label="not covered"))
+        # A colorbar already occupies the strip beside the axes.
+        offset = 1.01 + 0.17 * len(colorbars)
         ax.legend(
             handles=handles,
             loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
+            bbox_to_anchor=(offset, 1.0),
             frameon=False,
             fontsize="small",
         )
@@ -517,11 +566,25 @@ def lane_gaps(intervals, *, start="start", end="end", lane=None, limits=None):
     >>> lane_gaps(frame)[["start", "end"]].to_numpy().tolist()
     [[10.0, 20.0]]
     """
-    frame, _ = _read_frame(intervals, start, end, lane, None, None)
+    frame, dated = _read_frame(intervals, start, end, lane, None, None)
     out = []
     for name in dict.fromkeys(frame["lane"]):
         rows = frame[frame["lane"] == name]
-        span = limits or (rows["start"].min(), rows["end"].max())
+        span = (
+            _as_numeric(np.asarray(limits))
+            if limits is not None
+            else (
+                rows["start"].min(),
+                rows["end"].max(),
+            )
+        )
         for low, high in _gap_rows(rows, tuple(float(x) for x in span)):
             out.append({"lane": name, "start": low, "end": high})
-    return pd.DataFrame(out, columns=["lane", "start", "end"])
+    frame_out = pd.DataFrame(out, columns=["lane", "start", "end"])
+    if dated and len(frame_out):
+        # Answer in the units the question was asked in.
+        for column in ("start", "end"):
+            frame_out[column] = pd.to_datetime(
+                mdates.num2date(frame_out[column])
+            ).tz_localize(None)
+    return frame_out

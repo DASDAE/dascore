@@ -366,6 +366,67 @@ class TestColors:
         # The lane the mapping does not name takes the default string colors.
         assert not np.allclose(other.get_facecolors()[0][:3], [0, 0, 1])
 
+    def test_color_name_on_a_numeric_lane(self, kinds_frame):
+        """A color which names no colormap is a color, not an error."""
+        ax = plot_lanes(
+            kinds_frame, lane="lane", value="value", lanes=("count",), color="red"
+        )
+        colors = _collections(ax)[0].get_facecolors()
+        assert np.allclose(colors[:, :3], [1, 0, 0])
+
+    def test_a_value_which_is_not_a_value(self):
+        """A lane value of NaN is refused, the way the model refuses it."""
+        n = 10
+        values = [float(x) for x in range(n)]
+        values[3] = float("nan")
+        frame = pd.DataFrame(
+            {"start": np.arange(n) * 1.0, "end": np.arange(n) + 1.0, "v": values}
+        )
+        with pytest.raises(ParameterError, match="must be finite"):
+            plot_lanes(frame, value="v")
+
+    def test_legend_off_suppresses_the_colorbar(self):
+        """legend='off' means no colorbar either."""
+        n = 10
+        frame = pd.DataFrame(
+            {"start": np.arange(n) * 1.0, "end": np.arange(n) + 1.0, "v": range(n)}
+        )
+        ax = plot_lanes(frame, value="v", legend="off")
+        assert len(ax.get_figure().axes) == 1
+
+    def test_vocabulary_widens_the_palette(self, string_frame):
+        """A value the frame lacks still reserves its color."""
+        partial = string_frame[string_frame["group"] == "zone"]
+        alone = plot_lanes(partial, lane="group", value="value")
+        plt.close("all")
+        together = plot_lanes(partial, lane="group", value="value", vocabulary=["west"])
+        # 'west' sorts after 'south', so reserving it must not move north.
+        assert np.allclose(
+            _collections(alone)[0].get_facecolors()[0],
+            _collections(together)[0].get_facecolors()[0],
+        )
+        shifted = plot_lanes(partial, lane="group", value="value", vocabulary=["a"])
+        assert not np.allclose(
+            _collections(alone)[0].get_facecolors()[0],
+            _collections(shifted)[0].get_facecolors()[0],
+        )
+
+    def test_labels_decided_the_same_at_any_dpi(self):
+        """Whether a label fits is a question about the figure, not its dpi."""
+        frame = pd.DataFrame(
+            {"start": [0.0], "end": [1.0], "v": ["a rather long label"]}
+        )
+        drawn = []
+        for dpi in (50, 200):
+            _, ax = plt.subplots(figsize=(2, 1), dpi=dpi)
+            plot_lanes(frame, ax=ax, value="v")
+            drawn.append(_texts(ax))
+            plt.close("all")
+        # Measuring text in points against a box in pixels answers this
+        # differently at each dpi, which is how the same figure saved at
+        # two resolutions loses its labels.
+        assert drawn[0] == drawn[1]
+
     def test_legend_off(self, string_frame):
         """legend=False draws none."""
         ax = plot_lanes(string_frame, lane="group", value="value", legend=False)
@@ -399,6 +460,14 @@ class TestGaps:
         labels = [x.get_text() for x in ax.get_legend().get_texts()]
         assert labels[-1] == "not covered"
 
+    def test_padding_is_not_a_gap(self):
+        """The margin the figure draws around the data is not a hole in it."""
+        frame = pd.DataFrame({"start": [0.0, 20.0], "end": [10.0, 30.0]})
+        ax = plot_lanes(frame, gaps=True)
+        gap = _collections(ax)[0]
+        # Only the real 10-20 hole, not slivers at either end.
+        assert _extents(gap) == [(10.0, 10.0)]
+
     def test_gaps_none_to_draw(self):
         """A fully covered lane adds no gap collection."""
         frame = pd.DataFrame({"start": [0.0], "end": [10.0]})
@@ -418,6 +487,30 @@ class TestGaps:
         assert out.to_dict("records") == [{"lane": "a", "start": 10.0, "end": 20.0}]
         out = lane_gaps(frame, lane="lane", limits=(0.0, 40.0))
         assert len(out[out["lane"] == "b"]) == 2
+
+    def test_lane_gaps_dated(self):
+        """A dated frame is answered in times, not ordinals."""
+        frame = pd.DataFrame(
+            {
+                "start": pd.to_datetime(["2024-01-01", "2024-01-20"]),
+                "end": pd.to_datetime(["2024-01-10", "2024-01-30"]),
+            }
+        )
+        out = lane_gaps(frame)
+        assert len(out) == 1
+        assert out["start"].iloc[0] == pd.Timestamp("2024-01-10")
+        assert out["end"].iloc[0] == pd.Timestamp("2024-01-20")
+
+    def test_lane_gaps_dated_limits(self):
+        """Datetime limits are accepted, as the frame's own bounds are."""
+        frame = pd.DataFrame(
+            {
+                "start": pd.to_datetime(["2024-01-05"]),
+                "end": pd.to_datetime(["2024-01-10"]),
+            }
+        )
+        out = lane_gaps(frame, limits=pd.to_datetime(["2024-01-01", "2024-01-10"]))
+        assert out["end"].iloc[0] == pd.Timestamp("2024-01-05")
 
     def test_lane_gaps_empty(self):
         """Nothing uncovered gives an empty frame with the right columns."""

@@ -11,7 +11,13 @@ import dascore as dc
 from dascore.core import inventory as inv
 from dascore.exceptions import ParameterError
 from dascore.viz import VizInventoryNameSpace
-from dascore.viz.inventory import _distance_window, map_path, path, timeline
+from dascore.viz.inventory import (
+    COMPONENT_COLORS,
+    _distance_window,
+    map_path,
+    path,
+    timeline,
+)
 
 
 def _lanes(ax):
@@ -22,6 +28,12 @@ def _lanes(ax):
 def _boxes(ax):
     """The patch collections on an axes."""
     return [x for x in ax.collections if isinstance(x, PatchCollection)]
+
+
+def _bar_label(ax) -> str:
+    """The label of the colorbar beside an axes, however it is laid out."""
+    bar = ax.get_figure().axes[-1]
+    return bar.get_ylabel() or bar.get_xlabel()
 
 
 def _legend_labels(ax):
@@ -203,14 +215,14 @@ class TestSelectPath:
     def test_address_and_time(self, site):
         """An address plus a time picks one epoch."""
         ax = path(site, "DAS.L1.00", time="2026-08-01")
-        assert ax.get_title().endswith("from 2026-07-01")
+        assert ax.get_title("left").endswith("from 2026-07-01")
         ax = path(site, "DAS.L1.00", time="2026-06-10")
-        assert ax.get_title().endswith("from the beginning")
+        assert ax.get_title("left").endswith("from the beginning")
 
     def test_name(self, site):
         """A path's name works where it is unique."""
         ax = path(site, "spur")
-        assert ax.get_title().startswith("DAS.L1.01")
+        assert ax.get_title("left").startswith("DAS.L1.01")
 
     def test_unknown_name(self, site):
         """An unknown name lists the addresses."""
@@ -220,7 +232,7 @@ class TestSelectPath:
     def test_object(self, site):
         """The path object itself is accepted, and a foreign one refused."""
         spur = site.networks[0].fiber_arrays[0].optical_paths[2]
-        assert path(site, spur).get_title().startswith("DAS.L1.01")
+        assert path(site, spur).get_title("left").startswith("DAS.L1.01")
         foreign = spur.model_copy()
         with pytest.raises(ParameterError, match="not part of this inventory"):
             path(site, foreign)
@@ -233,13 +245,65 @@ class TestSelectPath:
 
     def test_ambiguous_acquisition_key(self, site):
         """A key naming two acquisition epochs asks for a time, in our terms."""
-        with pytest.raises(ParameterError, match="names more than one"):
+        with pytest.raises(ParameterError, match="does not resolve") as info:
             path(site, acquisition_key="DAS.L1.00.RAW")
+        assert "2 acquisitions" in str(info.value)
+        assert "Pass a time" in str(info.value)
+
+    def test_unknown_acquisition_key_keeps_its_error(self, site):
+        """A key which no time can fix reports what actually went wrong."""
+        with pytest.raises(ParameterError, match="does not resolve") as info:
+            path(site, acquisition_key="DAS.L1.00.NOPE")
+        # The count resolve reported, not a story about epochs.
+        assert "0 acquisitions" in str(info.value)
+
+    def test_containers_decide_which_epoch(self):
+        """A path stating no time is effective when its containers are."""
+
+        def build(code, **times):
+            one = inv.OpticalPath(
+                name="main",
+                location_code="00",
+                optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            )
+            array = inv.FiberArray(code="L1", optical_paths=(one,), **times)
+            return inv.Network(code=code, fiber_arrays=(array,), **times)
+
+        inventory = inv.Inventory(
+            networks=(
+                build("AA", start_time="2020-01-01", end_time="2021-01-01"),
+                build("BB", start_time="2021-01-01"),
+            )
+        ).check()
+        # Neither path states a bound, so only their containers can tell
+        # them apart; asking the path alone would call both effective.
+        assert path(inventory, time="2020-06-01").get_title("left").startswith("AA")
+        assert path(inventory, time="2022-06-01").get_title("left").startswith("BB")
+        lanes = timeline(inventory, kind="optical_path")
+        assert lanes.get_xlabel() == "Time"
+        boxes = _boxes(lanes)[0].get_paths()
+        assert len(boxes) == 1
+
+    def test_no_path_effective_then(self):
+        """A time nothing is effective at says so, rather than listing paths."""
+        one = inv.OpticalPath(
+            name="main",
+            location_code="00",
+            start_time="2020-01-01",
+            end_time="2021-01-01",
+            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(one,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),)
+        ).check()
+        with pytest.raises(ParameterError, match="is effective at"):
+            path(inventory, time="1999-01-01")
 
     def test_acquisition_key(self, site):
         """An acquisition key resolves through the inventory."""
         ax = path(site, acquisition_key="DAS.L1.00.RAW", time="2026-06-10")
-        assert ax.get_title().startswith("DAS.L1.00")
+        assert ax.get_title("left").startswith("DAS.L1.00")
 
     def test_acquisition_key_without_path(self, site):
         """An acquisition on a location with no path cannot be drawn."""
@@ -388,11 +452,89 @@ class TestPath:
         assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
         assert np.allclose(_boxes(ax)[0].get_facecolors()[0][:3], [0, 0, 0])
 
+    def test_components_keep_their_own_colors(self, site):
+        """The component vocabulary is closed, so its colors are pinned."""
+        ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="components")
+        colors = _boxes(ax)[0].get_facecolors()
+        expected = plt.matplotlib.colors.to_rgba(COMPONENT_COLORS["FiberSegment"])
+        assert np.allclose(colors[0], expected)
+
+    def test_tracks_do_not_move_the_palette(self, site):
+        """Drawing some tracks colors them as drawing all of them does."""
+        every = path(site, "DAS.L1.00", time="2026-06-10")
+        full = {
+            x.get_text(): tuple(np.round(y.get_facecolor(), 5))
+            for x, y in zip(
+                every.get_legend().get_texts(),
+                every.get_legend().legend_handles,
+                strict=True,
+            )
+        }
+        plt.close("all")
+        some = path(site, "DAS.L1.00", time="2026-06-10", tracks=("zone",))
+        part = {
+            x.get_text(): tuple(np.round(y.get_facecolor(), 5))
+            for x, y in zip(
+                some.get_legend().get_texts(),
+                some.get_legend().legend_handles,
+                strict=True,
+            )
+        }
+        shared = set(full) & set(part)
+        assert shared
+        for name in shared:
+            assert full[name] == part[name], f"{name} changed color with tracks="
+
+    def test_a_refusal_leaves_no_figure(self, site):
+        """A window which clips everything away builds no figure to leak."""
+        plt.close("all")
+        before = plt.get_fignums()
+        with pytest.raises(ParameterError):
+            path(site, "DAS.L1.00", time="2026-06-10", distance=(5000, 6000))
+        assert plt.get_fignums() == before
+
+    def test_columns_stay_aligned_with_the_lanes(self):
+        """A colorbar must not steal width from the lanes alone."""
+        readings = tuple(
+            inv.OpticalPathLabel(
+                start_distance=100.0 + 10 * index,
+                end_distance=110.0 + 10 * index,
+                group="reading",
+                value=float(index),
+            )
+            # Enough distinct numbers to earn a colorbar rather than labels.
+            for index in range(9)
+        )
+        one = inv.OpticalPath(
+            name="main",
+            location_code="00",
+            optical_components=(inv.FiberSegment(name="f", optical_length=300.0),),
+            geometry=(
+                inv.Geometry(
+                    name="run",
+                    distance=(100.0, 300.0),
+                    coordinates={"chainage": (0.0, 200.0)},
+                    units={"chainage": "m"},
+                ),
+            ),
+            labels=readings,
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(one,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),)
+        ).check()
+        ax = path(inventory, columns="chainage")
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        assert len(figure.axes) == 3, "no colorbar was drawn, so nothing is tested"
+        panel = figure.axes[1]
+        assert ax.get_position().x1 == pytest.approx(panel.get_position().x1, abs=1e-6)
+
     def test_tunnel_epochs(self, tunnel):
         """The tunnel's repair splits its path; both epochs draw."""
         before = path(tunnel, time="2024-07-01", distance=(1495, 1780))
         after = path(tunnel, time="2024-10-01", distance=(1495, 1780))
-        assert before.get_title() != after.get_title()
+        assert before.get_title("left") != after.get_title("left")
         assert _lanes(before) == _lanes(after)
 
 
@@ -417,6 +559,56 @@ class TestMap:
         ).get_segments()
         xs = np.concatenate([s[:, 0] for s in segments])
         assert not ((xs > 201.0) & (xs < 249.0)).any()
+        # A bridge is one long segment with no interior point, so looking
+        # only at where samples fell would not see it.
+        crossing = [
+            s for s in segments if s[:, 0].min() < 205.0 < 245.0 < s[:, 0].max()
+        ]
+        assert not crossing, "a segment spans fiber nobody placed"
+
+    def test_a_short_gap_is_still_a_gap(self):
+        """A gap narrower than the sample spacing still breaks the line."""
+        one = inv.OpticalPath(
+            name="long",
+            location_code="00",
+            optical_components=(inv.FiberSegment(name="f", optical_length=100_000.0),),
+            geometry=(
+                inv.Geometry(
+                    name="west",
+                    distance=(0.0, 50_000.0),
+                    coordinates={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                ),
+                inv.Geometry(
+                    name="east",
+                    distance=(50_010.0, 100_000.0),
+                    coordinates={
+                        "x": (600.0, 1000.0),
+                        "y": (0.0, 0.0),
+                        "z": (0.0, 0.0),
+                    },
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(one,))
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        # 10 m of gap on a 100 km path: a 1000-point grid steps over it.
+        ax = map_path(inventory, x="x", y="y")
+        segments = next(
+            x for x in ax.collections if isinstance(x, LineCollection)
+        ).get_segments()
+        crossing = [
+            s for s in segments if s[:, 0].min() < 505.0 < 595.0 < s[:, 0].max()
+        ]
+        assert not crossing
 
     def test_time_filters(self, site):
         """A time keeps only the epochs valid then."""
@@ -442,13 +634,12 @@ class TestMap:
     def test_color_distance_colorbar(self, site):
         """The default coloring earns a distance colorbar."""
         ax = map_path(site, "DAS.L1.00", time="2026-06-10")
-        bar = ax.get_figure().axes[-1]
-        assert "Optical distance" in bar.get_ylabel()
+        assert "Optical distance" in _bar_label(ax)
 
     def test_color_column(self, site):
         """A geometry column colors continuously, labelled by its name."""
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="chainage")
-        assert ax.get_figure().axes[-1].get_ylabel() == "chainage"
+        assert _bar_label(ax) == "chainage"
 
     def test_color_label_group(self, site):
         """A string label group gives a legend, with unplaced fiber named."""
@@ -461,7 +652,7 @@ class TestMap:
     def test_color_numeric_group(self, site):
         """A numeric label group colors continuously."""
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="count")
-        assert ax.get_figure().axes[-1].get_ylabel() == "count"
+        assert _bar_label(ax) == "count"
 
     def test_color_coupling(self, site):
         """Coupling types color the fiber."""
@@ -479,15 +670,208 @@ class TestMap:
         assert bad[3] == pytest.approx(1.0), "unstated fiber would be invisible"
         assert "not stated" in _legend_labels(ax)
 
-    def test_one_palette_for_every_path(self, site):
+    def test_one_palette_for_every_path(self):
         """A value is one color across the paths of one figure."""
-        ax = map_path(site, color="zone")
+
+        def build(location, values):
+            return inv.OpticalPath(
+                name=f"p{location}",
+                location_code=location,
+                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                geometry=(
+                    inv.Geometry(
+                        name="run",
+                        distance=(0.0, 200.0),
+                        coordinates={
+                            "x": (0.0, 100.0),
+                            "y": (float(location), float(location)),
+                            "z": (0.0, 0.0),
+                        },
+                    ),
+                ),
+                labels=tuple(
+                    inv.OpticalPathLabel(
+                        start_distance=100.0 * index,
+                        end_distance=100.0 * (index + 1),
+                        group="zone",
+                        value=value,
+                    )
+                    for index, value in enumerate(values)
+                ),
+            )
+
+        # The two paths state the same two values in opposite order, so a
+        # palette built per path would give each value two colors.
+        array = inv.FiberArray(
+            code="L1",
+            optical_paths=(
+                build("01", ("north", "south")),
+                build("02", ("south", "north")),
+            ),
+        )
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        ax = map_path(inventory, color="zone")
         lines = [x for x in ax.collections if isinstance(x, LineCollection)]
         assert len(lines) == 2
         first, second = (x.get_colors() for x in lines)
-        # Both epochs state north then south, so their colors must agree.
-        assert np.allclose(first[0], second[0])
-        assert len(set(map(tuple, np.vstack([first, second])))) == 3
+        # Path 01 begins in north and ends in south; path 02 is the other
+        # way round. A palette built per path would give both first
+        # segments color zero, so it is the crossed pairs which tell.
+        assert np.allclose(first[0], second[-1]), "north has two colors"
+        assert np.allclose(second[0], first[-1]), "south has two colors"
+        assert not np.allclose(first[0], second[0])
+        assert [x.get_text() for x in ax.get_legend().get_texts()] == ["north", "south"]
+
+    def test_shared_color_scale_across_paths(self):
+        """One numeric scale spans every path, not one scale each."""
+
+        def build(location, value):
+            return inv.OpticalPath(
+                name=f"p{location}",
+                location_code=location,
+                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                geometry=(
+                    inv.Geometry(
+                        name="run",
+                        distance=(0.0, 200.0),
+                        coordinates={
+                            "x": (0.0, 100.0),
+                            "y": (float(location), float(location)),
+                            "z": (0.0, 0.0),
+                        },
+                    ),
+                ),
+                labels=(
+                    inv.OpticalPathLabel(
+                        start_distance=0.0,
+                        end_distance=100.0,
+                        group="reading",
+                        value=value,
+                    ),
+                    inv.OpticalPathLabel(
+                        start_distance=100.0,
+                        end_distance=200.0,
+                        group="reading",
+                        value=value + 1.0,
+                    ),
+                ),
+            )
+
+        # One path states 0-1, the other 100-101. Normalized per path they
+        # would take identical colors despite stating different numbers.
+        array = inv.FiberArray(
+            code="L1", optical_paths=(build("01", 0.0), build("02", 100.0))
+        )
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        ax = map_path(inventory, color="reading")
+        lines = [
+            x
+            for x in ax.collections
+            if isinstance(x, LineCollection) and x.get_array() is not None
+        ]
+        assert len(lines) == 2
+        for line in lines:
+            assert line.norm.vmin == pytest.approx(0.0)
+            assert line.norm.vmax == pytest.approx(101.0)
+
+    def test_a_path_without_the_color_is_unstated(self):
+        """A placed path saying nothing under that name is drawn, not fatal."""
+
+        def build(location, labels=()):
+            return inv.OpticalPath(
+                name=f"p{location}",
+                location_code=location,
+                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                geometry=(
+                    inv.Geometry(
+                        name="run",
+                        distance=(0.0, 200.0),
+                        coordinates={
+                            "x": (0.0, 100.0),
+                            "y": (float(location), float(location)),
+                            "z": (0.0, 0.0),
+                        },
+                    ),
+                ),
+                labels=labels,
+            )
+
+        zoned = build(
+            "01",
+            (
+                inv.OpticalPathLabel(
+                    start_distance=0.0, end_distance=200.0, group="zone", value="north"
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(zoned, build("02")))
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        ax = map_path(inventory, color="zone")
+        assert len([x for x in ax.collections if isinstance(x, LineCollection)]) == 2
+        assert _legend_labels(ax) == ["north", "not stated"]
+
+    def test_map_needs_a_path_effective_then(self):
+        """A time no path is effective at draws nothing, and says why."""
+        one = inv.OpticalPath(
+            name="main",
+            location_code="00",
+            start_time="2020-01-01",
+            end_time="2021-01-01",
+            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            geometry=(
+                inv.Geometry(
+                    name="run",
+                    distance=(0.0, 100.0),
+                    coordinates={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                ),
+            ),
+        )
+        array = inv.FiberArray(code="L1", optical_paths=(one,))
+        inventory = inv.Inventory(
+            coordinate_reference_system=inv.CoordinateReferenceSystem(
+                authority="",
+                code="",
+                name="grid",
+                coordinate_labels=("x", "y", "z"),
+                units=("meter", "meter", "meter"),
+            ),
+            networks=(inv.Network(code="N", fiber_arrays=(array,)),),
+        ).check()
+        with pytest.raises(ParameterError, match="is effective at"):
+            map_path(inventory, time="1999-01-01")
+
+    def test_unknown_color_lists_what_the_inventory_states(self, site):
+        """A name no path states is refused, and the message says what is."""
+        with pytest.raises(ParameterError, match="names neither") as info:
+            map_path(site, color="nope")
+        assert "zone" in str(info.value)
 
     def test_color_unknown(self, site):
         """An unknown coloring lists what would work."""
@@ -572,6 +956,48 @@ class TestTimeline:
         # The repaired path and its acquisition start in July.
         assert len(_boxes(ax)[0].get_paths()) == 1
         assert "DAS.L1.00.RAW" in _lanes(ax)
+
+    def test_open_epochs_are_hatched(self, site):
+        """An epoch stating no bound runs off that side of the axis."""
+        ax = timeline(site, kind="acquisition")
+        hatched = [x for x in _boxes(ax) if x.get_hatch()]
+        assert hatched, "an unbounded epoch drew no open edge"
+
+    def test_half_open_window(self, site):
+        """One end of the window may be left to the data."""
+        ax = timeline(site, time=("2026-06-20", None))
+        low, high = ax.get_xlim()
+        assert low < high
+        ax = timeline(site, time=(None, "2026-06-20"))
+        assert ax.get_xlim()[0] < ax.get_xlim()[1]
+
+    @pytest.mark.parametrize(
+        "bad, match",
+        [
+            (("2026-07-01", "2026-06-01"), "must be increasing"),
+            ("nope", "must be a .start, end. pair"),
+            (("not a time", None), "not a time"),
+        ],
+    )
+    def test_bad_time_window(self, site, bad, match):
+        """A window which is not a window is refused before anything is drawn."""
+        plt.close("all")
+        with pytest.raises(ParameterError, match=match):
+            timeline(site, time=bad)
+        assert plt.get_fignums() == []
+
+    def test_window_on_an_inventory_stating_no_time(self):
+        """A window still works where the epochs state nothing themselves."""
+        undated = dc.get_example_inventory("random_das")
+        low, high = timeline(undated, time=("2026-01-01", None)).get_xlim()
+        assert high > low
+        low, high = timeline(undated, time=(None, "2026-01-01")).get_xlim()
+        assert high > low
+
+    def test_a_bound_which_is_not_a_time(self, site):
+        """A bound which parses to nothing is refused like any other."""
+        with pytest.raises(ParameterError, match="not a time"):
+            timeline(site, time=(float("nan"), None))
 
     def test_time_window_empty(self):
         """A window nothing falls in is an error, not a blank figure."""

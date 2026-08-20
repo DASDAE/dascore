@@ -104,7 +104,7 @@ inventory.viz.map(x="x", y="z", color="section", time="2024-07-01", show=True);
 
 The break near the middle of the trench is the slack coil, which nobody surveyed. Unplaced fiber is left out rather than bridged, since a made-up polyline would be worse than a gap.
 
-`color=` takes optical distance, a geometry column, a label group, or `"coupling"`, which is how a distance read off a waterfall is found on the ground:
+`color=` also takes a geometry column, a label group, or `"coupling"`. Its default is optical distance, which is how a distance read off a waterfall is found on the ground:
 
 ```{python}
 inventory.viz.map(x="x", y="z", time="2024-07-01", show=True);
