@@ -93,7 +93,7 @@ class TestChunk:
             "source_path",
             "source_format",
             "source_version",
-            "source_patch_id",
+            "source_patch_key",
         }
         skip |= {c for c in common if c.endswith("_len")}
         cols = sorted(common - skip)

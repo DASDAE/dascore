@@ -54,8 +54,11 @@ def _assert_patch_round_trip_equal(expected: dc.Patch, observed: dc.Patch) -> No
     assert set(expected.coords.coord_map) == set(observed.coords.coord_map)
     expected_attrs = expected.attrs.model_dump()
     observed_attrs = observed.attrs.model_dump()
-    expected_attrs.pop("_source_patch_id", None)
-    observed_attrs.pop("_source_patch_id", None)
+    # Where the bytes came from is not part of what the data is: a patch
+    # read from a file names its source, one built in memory does not.
+    for attrs in (expected_attrs, observed_attrs):
+        attrs.pop("_source_patch_key", None)
+        attrs.pop("patch_id", None)
     assert expected_attrs == observed_attrs
 
 
@@ -521,7 +524,7 @@ class TestNetCDFIO:
         assert "time" in patch.coords
         assert "distance" in patch.coords
         assert patch.data.ndim == 2
-        assert patch.attrs["_source_patch_id"] == "data"
+        assert patch.attrs["_source_patch_key"] == "data"
 
     def test_scan_netcdf(self, netcdf_path):
         """Test scanning a NetCDF file for metadata."""
@@ -531,7 +534,7 @@ class TestNetCDFIO:
         assert summary.source_format == "NETCDF_CF"
         assert "time" in summary.coords
         assert "distance" in summary.coords
-        assert summary.source_patch_id == "data"
+        assert summary.source_patch_key == "data"
 
     def test_remote_stream_no_download(self, example_patch, netcdf_path):
         """Remote NetCDF should stream via h5netcdf, not download to the cache."""
@@ -904,7 +907,7 @@ class TestNetCDFUtilsAdvanced:
         patch = spool[0]
         assert set(patch.coords.coord_map) == {"time", "distance"}
         assert patch.attrs.tag == ""
-        assert patch.attrs["_source_patch_id"] == "data"
+        assert patch.attrs["_source_patch_key"] == "data"
 
     def test_error_conditions(self, tmp_path):
         """Test various error conditions."""

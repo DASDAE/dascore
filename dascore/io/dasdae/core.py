@@ -10,7 +10,7 @@ import pandas as pd
 import dascore as dc
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader, H5Writer
-from dascore.utils.io import _normalize_source_patch_ids
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
@@ -94,7 +94,7 @@ class DASDAEV1(FiberIO):
         df = (
             dc.scan_to_df(patches)
             .assign(
-                source_patch_id=lambda x: get_patch_names(x),
+                source_patch_key=lambda x: get_patch_names(x),
                 source_format=self.name,
                 source_version=self.version,
             )
@@ -116,10 +116,10 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: H5Reader, source_patch_id=(), **kwargs) -> dc.Spool:
+    def read(self, resource: H5Reader, source_patch_key=(), **kwargs) -> dc.Spool:
         """Read a dascore file."""
         patches = []
-        source_patch_ids = _normalize_source_patch_ids(source_patch_id)
+        source_patch_keys = _normalize_source_patch_keys(source_patch_key)
         try:
             waveform_group = resource["waveforms"]
         except (KeyError, IndexError):
@@ -127,7 +127,7 @@ class DASDAEV1(FiberIO):
         file_legacy = _is_legacy_file(resource)
         for patch_group in waveform_group.values():
             patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
-            if source_patch_ids and patch_name not in source_patch_ids:
+            if source_patch_keys and patch_name not in source_patch_keys:
                 continue
             legacy = _is_legacy_group(patch_group, file_legacy)
             attrs = _get_patch_attrs(patch_group, legacy)

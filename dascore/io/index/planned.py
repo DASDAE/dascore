@@ -31,7 +31,7 @@ from dascore.io.index.catalog import (
     PatchCatalog,
     PatchResolver,
     _adjust_unit_segments,
-    _row_source_patch_id,
+    _row_source_patch_key,
     apply_exact_residuals,
 )
 from dascore.io.index.ingest import (
@@ -338,7 +338,7 @@ def _output_records(
             if typed is not None:
                 attrs[key] = typed
         patch = PatchRecord(
-            source_patch_id=str(output_id),
+            source_patch_key=str(output_id),
             dims=dims,
             # the plan carries the element dtype privately so a chained
             # chunk can still size patches by their memory footprint.
@@ -488,7 +488,7 @@ class PlanResolver(PatchResolver):
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
-        output_id = int(_row_source_patch_id(row))
+        output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         assert len(members), "no plan members found for output row"
         if self.mode == "identity":
@@ -676,7 +676,8 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     members = resolver.member_rows
     if catalog.is_view:
         present = {
-            int(_row_source_patch_id(row)) for row in catalog.to_df().to_dict("records")
+            int(_row_source_patch_key(row))
+            for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
     ranges = _residual_ranges(catalog.residuals)

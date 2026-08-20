@@ -66,7 +66,7 @@ class MSeedV2(FiberIO):
         resource: LocalPath,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         channel: tuple[int | None, int | None] | None = None,
-        source_patch_id=(),
+        source_patch_key=(),
         **kwargs,
     ) -> dc.Spool:
         """Read a MiniSEED file."""
@@ -76,7 +76,7 @@ class MSeedV2(FiberIO):
             pymseed,
             time=time,
             channel=channel,
-            source_patch_id=source_patch_id,
+            source_patch_key=source_patch_key,
         )
         return dc.spool(patches)
 

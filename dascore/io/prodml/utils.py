@@ -18,7 +18,7 @@ from dascore.io.utils import convert_attr_units, get_exact_coord
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
-from dascore.utils.io import _normalize_source_patch_ids
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 
 # --- Getting format/version
@@ -490,7 +490,7 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     t_coord = _get_time_coord(node_info.node, snap=snap)
     info.update(_get_data_unit_and_type(node_info.node))
     info["dtype"] = str(node_info.node["RawData"].dtype)
-    info["_source_patch_id"] = node_info.name
+    info["_source_patch_key"] = node_info.name
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
@@ -505,7 +505,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     out.update(_get_data_unit_and_type(node_info.node))
     out["dtype"] = str(node_info.node.dtype)
-    out["_source_patch_id"] = node_info.name
+    out["_source_patch_key"] = node_info.name
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the
@@ -576,15 +576,15 @@ def _get_dims_from_attrs(attrs):
     return dims
 
 
-def _read_prodml(fi, distance=None, time=None, source_patch_id=None):
+def _read_prodml(fi, distance=None, time=None, source_patch_key=None):
     """Read the prodml values into a patch."""
     out = []
     acq = fi["Acquisition"]
     base_info = _get_root_attrs(acq.attrs)
     d_coord = _get_distance_coord(acq)
-    source_patch_ids = _normalize_source_patch_ids(source_patch_id)
+    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
     for info in _yield_data_nodes(fi):
-        if source_patch_ids and info.name not in source_patch_ids:
+        if source_patch_keys and info.name not in source_patch_keys:
             continue
         attr_func = _NODE_ATTRS_PROCESSORS[info.patch_type]
         attrs, cm = attr_func(info, d_coord, base_info)

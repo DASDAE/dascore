@@ -115,7 +115,7 @@ assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 
-File-backed patches are identified by `(base_uri, source_path, source_patch_id)` instead; their rows resolve through readers rather than the registry.
+File-backed patches are identified by `(base_uri, source_path, source_patch_key)` instead; their rows resolve through readers rather than the registry.
 
 ## Federation
 

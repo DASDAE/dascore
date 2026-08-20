@@ -84,9 +84,11 @@ def _annotate_handle_path(handle, resource):
     return handle
 
 
-def _normalize_source_patch_ids(source_patch_id) -> set[str]:
+def _normalize_source_patch_keys(source_patch_key) -> set[str]:
     """Coerce source patch identifiers into a deduplicated set of strings."""
-    return {str(value) for value in iterate(source_patch_id) if value not in (None, "")}
+    return {
+        str(value) for value in iterate(source_patch_key) if value not in (None, "")
+    }
 
 
 def _read_file_header(path, length: int) -> bytes:

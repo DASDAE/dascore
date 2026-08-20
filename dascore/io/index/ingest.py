@@ -24,7 +24,7 @@ from typing import SupportsInt, TypedDict, cast
 import numpy as np
 import pandas as pd
 
-from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
     KINDS,
@@ -136,7 +136,7 @@ class CoordRecord:
 class PatchRecord:
     """One patch: structural fields, typed attrs, coord rows."""
 
-    source_patch_id: str
+    source_patch_key: str
     dims: str
     dtype: str
     time_min: int | None
@@ -443,7 +443,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
     return PatchRecord(
-        source_patch_id=normalize_source_patch_id(summary.source_patch_id),
+        source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
         dtype=str(summary.dtype or ""),
         time_min=time_min,
@@ -505,9 +505,9 @@ def summaries_to_records(
         patches = []
         for num, summary in enumerate(group):
             record = patch_record(summary)
-            if record.source_patch_id == "" and len(group) > 1:
+            if record.source_patch_key == "" and len(group) > 1:
                 # positional identity within the source, per design doc
-                record = replace(record, source_patch_id=str(num))
+                record = replace(record, source_patch_key=str(num))
             patches.append(record)
         posix_path = path.replace("\\", "/")
         store_path = posix_path
@@ -564,7 +564,7 @@ _COORD_DEF_FIELDS = tuple(
 _PATCH_ROW_FIELDS = tuple(
     f.name
     for f in fields(PatchRecord)
-    if f.name not in ("source_patch_id", "dims", "dtype", "attrs", "coords")
+    if f.name not in ("source_patch_key", "dims", "dtype", "attrs", "coords")
 )
 # Backends with no boolean type hand these columns back as 0/1, which
 # def_key would hash differently than the bool a scan produced.
@@ -674,7 +674,7 @@ def assemble_source_records(
                 )
             patch_records.append(
                 PatchRecord(
-                    source_patch_id=normalize_source_patch_id(patch.source_patch_id),
+                    source_patch_key=normalize_source_patch_key(patch.source_patch_key),
                     dims=_py_scalar(patch.dims) or "",
                     dtype=_py_scalar(patch.dtype) or "",
                     attrs=typed,

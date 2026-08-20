@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
-from dascore.utils.io import _normalize_source_patch_ids
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
@@ -302,7 +302,7 @@ def _yield_attrs_coords(fi) -> Iterator[tuple[dict, CoordManager, _FebusSlice]]:
         yield attr, cm, febus
 
 
-def _get_source_patch_id(feb: _FebusSlice) -> str:
+def _get_source_patch_key(feb: _FebusSlice) -> str:
     """Return a stable patch identifier for Febus multi-patch files."""
     return f"{feb.group_name}:{feb.source_name}:{feb.zone_name}"
 
@@ -383,19 +383,19 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
 
 
 def _read_febus(
-    fi, distance=None, time=None, source_patch_id=None, attr_cls=dc.PatchAttrs
+    fi, distance=None, time=None, source_patch_key=None, attr_cls=dc.PatchAttrs
 ):
     """Read the febus values into a patch."""
     out = []
-    source_patch_ids = _normalize_source_patch_ids(source_patch_id)
+    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
     for attr, cm, febus in _yield_attrs_coords(fi):
-        patch_id = _get_source_patch_id(febus)
-        if source_patch_ids and patch_id not in source_patch_ids:
+        patch_id = _get_source_patch_key(febus)
+        if source_patch_keys and patch_id not in source_patch_keys:
             continue
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
             attr_info = dict(attr)
-            attr_info["_source_patch_id"] = patch_id
+            attr_info["_source_patch_key"] = patch_id
             attrs = attr_cls.from_dict(attr_info)
             patch = dc.Patch(data=data, coords=new_cm, attrs=attrs)
             out.append(patch)

@@ -94,7 +94,7 @@ class TestMergeAttrs:
 
     def test_private_attrs_are_ignored_for_merge_conflicts(self, random_patch):
         """Private attrs should not block attr merging."""
-        attrs1 = random_patch.attrs.update(_source_patch_id="one")
-        attrs2 = random_patch.attrs.update(_source_patch_id="two")
+        attrs1 = random_patch.attrs.update(_source_patch_key="one")
+        attrs2 = random_patch.attrs.update(_source_patch_key="two")
         out = combine_patch_attrs([attrs1, attrs2])
-        assert "_source_patch_id" not in out.model_dump()
+        assert "_source_patch_key" not in out.model_dump()

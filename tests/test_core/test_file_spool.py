@@ -65,7 +65,7 @@ class TestBasic:
         for loaded_patch in spool:
             assert isinstance(loaded_patch, dc.Patch)
 
-    def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
+    def test_sorted_multi_patch_uses_source_patch_key(self, tmp_path):
         """Sorting should not change which source patch gets reloaded."""
         path = tmp_path / "multi_patch.h5"
         patch_2 = dc.get_example_patch()
@@ -75,7 +75,7 @@ class TestBasic:
         loaded_patch = spool[0]
         assert loaded_patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
-    def test_multi_patch_without_source_patch_id_raises(self, tmp_path):
+    def test_multi_patch_without_source_patch_key_raises(self, tmp_path):
         """Multi-patch reload should fail instead of guessing from row index."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)

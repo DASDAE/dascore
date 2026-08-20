@@ -215,32 +215,32 @@ class TestReadDASDAE:
         spool = parser.read(generic_hdf5)
         assert not len(spool)
 
-    def test_read_source_patch_id(self, tmp_path):
+    def test_read_source_patch_key(self, tmp_path):
         """Reading with a source patch id should only load one patch."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "DASDAE", file_version="1")
         scanned = dc.scan(path)
-        target = scanned[1].source_patch_id
-        out = dc.read(path, source_patch_id=target)
+        target = scanned[1].source_patch_key
+        out = dc.read(path, source_patch_key=target)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_id"] == target
-        assert out[0].summary.source_patch_id == out[0].attrs["_source_patch_id"]
+        assert out[0].attrs["_source_patch_key"] == target
+        assert out[0].summary.source_patch_key == out[0].attrs["_source_patch_key"]
         assert (
             out[0].summary.get_coord_summary("time").min
             == scanned[1].get_coord_summary("time").min
         )
 
-    def test_read_multiple_source_patch_ids(self, tmp_path):
+    def test_read_multiple_source_patch_keys(self, tmp_path):
         """Reading with multiple source patch ids should return each match."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=3)
         dc.write(spool, path, "DASDAE", file_version="1")
         scanned = dc.scan(path)
-        targets = [scanned[0].source_patch_id, scanned[2].source_patch_id]
-        out = dc.read(path, source_patch_id=targets)
+        targets = [scanned[0].source_patch_key, scanned[2].source_patch_key]
+        out = dc.read(path, source_patch_key=targets)
         assert len(out) == 2
-        assert {patch.attrs["_source_patch_id"] for patch in out} == set(targets)
+        assert {patch.attrs["_source_patch_key"] for patch in out} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in out} == {
             scanned[0].get_coord_summary("time").min,
             scanned[2].get_coord_summary("time").min,
@@ -310,23 +310,17 @@ class TestScanDASDAE:
         """Ensure scanning returns expected values."""
         info1 = dc.scan(written_dascore_v1_random)[0].attrs.model_dump()
         info2 = random_patch.attrs.model_dump()
-        # The lineage ids are excluded for the same reason history is:
-        # they say where a patch came from and what was done to it, not
-        # what data a file holds, and files do not carry them yet.
-        managed = {"history", "patch_id", "processing_id"}
-        common_keys = set(info1) & set(info2) - managed
-        # Asserted, not merely ignored: the ids are deliberately not
-        # written, because an older DASCore reading a file which carried
-        # them refuses to merge any two patches.
-        assert not info1.get("patch_id")
-        assert not info1.get("processing_id")
+        # History is excluded because writing is not an operation; the
+        # ids are not, because a file carries them and that is the point.
+        common_keys = set(info1) & set(info2) - {"history"}
+        assert info1["patch_id"] == info2["patch_id"]
         for key in common_keys:
             assert info1[key] == info2[key]
 
-    def test_scan_has_source_patch_id(self, written_dascore_v1_random):
+    def test_scan_has_source_patch_key(self, written_dascore_v1_random):
         """Scanned DASDAE patches should expose source patch ids."""
         patch = dc.scan(written_dascore_v1_random)[0]
-        assert patch.source_patch_id
+        assert patch.source_patch_key
 
     def test_copied_fixture_matches_original(
         self,
@@ -345,7 +339,7 @@ class TestScanDASDAE:
         out = DASDAEV1()._get_patch_summary(random_spool)
         assert set(out["source_format"]) == {"DASDAE"}
         assert set(out["source_version"]) == {"1"}
-        assert out["source_patch_id"].notnull().all()
+        assert out["source_patch_key"].notnull().all()
 
 
 class TestAttrsClassRoundTrip:

@@ -299,7 +299,21 @@ other = patch.decimate(time=2).pass_filter(time=(1, 10))
 assert other.attrs.processing_id != one.attrs.processing_id
 ```
 
-That reproducibility is `processing_id`'s today. `patch_id` is minted fresh for each patch built in memory, so two processes reading the same file currently give it two different answers; it becomes reproducible everywhere once patches read from a file derive their id from what they were read from, which is the next piece of this work.
+A patch read from a file derives its `patch_id` from what it was read from — the format and version, the path, which patch it is within the file, and the file's size and modification time — so two processes reading the same file agree on which data it is:
+
+```{python}
+import tempfile
+from pathlib import Path
+
+path = Path(tempfile.mkdtemp()) / "patch.h5"
+patch.io.write(path, "dasdae")
+
+assert dc.read(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
+```
+
+Those fields are the ones the spool index already keeps, and they are the ones it already uses to decide whether a file changed: data written over a path is a new datum rather than the old one wearing its id. The price is the other way round — the same bytes copied to a second path, or re-fetched over the first, are a new datum too. A missed match is the safe failure; two different data claiming to be one is not.
+
+The path is part of the id, so a derived id is not stable across machines. A stored one is: DASDAE writes both ids into the file, and a patch read back from it keeps the id it was written with rather than deriving a new one. A patch built in memory names no source, so its `patch_id` is minted, and stable only within the process which built it.
 
 An operation which hands the patch straight back did nothing, and records nothing. Neither id is part of `Patch.equals`: two patches holding the same data are equal however they were made.
 

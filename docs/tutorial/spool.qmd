@@ -213,7 +213,7 @@ from IPython.display import display
 display(contents.drop(columns=[c for c in contents.columns if c.startswith('_')]))
 ```
 
-The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `source_path`, `source_format`, and `source_patch_id` are also available for file-backed spools.
+The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `source_path`, `source_format`, and `source_patch_key` are also available for file-backed spools.
 
 # select
 

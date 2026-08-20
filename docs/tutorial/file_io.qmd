@@ -91,7 +91,7 @@ loaded_patch = dc.read(
     scan_patch.source_path,
     file_format=scan_patch.source_format,
     file_version=scan_patch.source_version,
-    source_patch_id=scan_patch.source_patch_id or None,
+    source_patch_key=scan_patch.source_patch_key or None,
 )[0]
 print(loaded_patch.data.shape)
 ```
