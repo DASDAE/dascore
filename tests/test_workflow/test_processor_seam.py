@@ -62,6 +62,23 @@ class TestPatchMeta:
         """The metadata and some data make a patch again."""
         assert meta.to_patch(patch.data).equals(patch)
 
+    def test_a_patch_subclass_survives(self, patch):
+        """
+        An operation on a subclass gives back that subclass.
+
+        A patch function used to build its result with `patch.new`, which
+        constructs `self.__class__`; naming `Patch` in the metadata would
+        have taken a subclass's own behaviour away from it silently.
+        """
+
+        class _Sub(dc.Patch):
+            """A patch which is more than a patch."""
+
+        sub = _Sub(data=patch.data, coords=patch.coords, dims=patch.dims)
+        assert type(sub.abs()) is _Sub
+        assert type(sub.transpose()) is _Sub
+        assert type(sub.rename_coords(distance="depth")) is _Sub
+
     def test_data_of_the_wrong_shape(self, meta, patch):
         """The coords check the data on the way in, so this cannot pass."""
         with pytest.raises(CoordDataError, match="doesnt match the coordinate"):

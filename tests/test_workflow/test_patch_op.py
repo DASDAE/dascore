@@ -22,6 +22,7 @@ import dascore as dc
 import dascore.workflow.processor as processor_module
 from dascore.exceptions import ParameterError
 from dascore.models.registry import registered_models
+from dascore.proc.basic import Normalize
 from dascore.units import get_quantity
 from dascore.workflow import (
     PatchOp,
@@ -752,8 +753,9 @@ class TestImplementations:
         """
         A hand-written class takes over the name it implements.
 
-        Empty in this PR; the first entry arrives with the first
-        plan/kernel split, and this is what says the routing works.
+        The table already holds the operations which were split into a
+        plan and a kernel; this says the routing which reaches them is
+        the same routing anything else would get.
         """
 
         class Doubler(PatchProcessor):
@@ -781,6 +783,11 @@ class TestImplementations:
         """The test above puts the table back, or the next one is wrong."""
         assert "detrend" not in processor_module._IMPLEMENTATIONS
         assert isinstance(dc.proc.detrend.op("time"), PatchOp)
+        # Stated positively too: were the test above to stop working on a
+        # copy of the table, it would leave its stand-in registered under
+        # a name which already has an implementation, and the absence of
+        # `detrend` would not notice.
+        assert processor_module._IMPLEMENTATIONS["normalize"] is Normalize
 
     def test_registering_something_which_is_not_one(self):
         """Only a PatchProcessor can implement an operation."""

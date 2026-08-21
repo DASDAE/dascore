@@ -53,6 +53,11 @@ class PatchMeta:
     attrs: PatchAttrs
     dtype: Any
     backend: str = "numpy"
+    # What to build the result with. A patch function used to go through
+    # `patch.new`, which builds `self.__class__`, so a subclass survived
+    # its own operations; naming `Patch` here would quietly take that
+    # away. None means whatever `dascore.Patch` is.
+    patch_type: Any = None
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -87,6 +92,7 @@ class PatchMeta:
             attrs=patch.attrs,
             dtype=data.dtype,
             backend=backend_name(data),
+            patch_type=type(patch),
         )
 
     def update(self, **kwargs) -> PatchMeta:
@@ -103,4 +109,5 @@ class PatchMeta:
         """
         import dascore as dc  # noqa: PLC0415
 
-        return dc.Patch(data=data, coords=self.coords, attrs=self.attrs)
+        patch_type = self.patch_type or dc.Patch
+        return patch_type(data=data, coords=self.coords, attrs=self.attrs)

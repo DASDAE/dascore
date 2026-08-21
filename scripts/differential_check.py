@@ -391,14 +391,26 @@ def _timed(call) -> tuple[float, Any]:
 
 
 def _input_digests(calls) -> dict:
-    """Return a fingerprint of the patches the calls close over."""
+    """
+    Return a fingerprint of every patch the calls were given.
+
+    Both ways a call can be holding one: `get_calls` closes over its
+    patches, and `get_matrix_calls` passes them as default arguments.
+    Reading only the closures left the matrix half unchecked, which is
+    the half carrying the dtypes and the special values -- so a call
+    which wrote into one of those would have gone unnoticed.
+
+    Every patch found is digested, not just the first: a call given two
+    of them can spoil either.
+    """
     seen = {}
     for name, call in calls.items():
-        for value in getattr(call, "__closure__", None) or ():
-            contents = value.cell_contents
-            if isinstance(contents, dc.Patch):
-                seen[f"_input_of/{name}"] = _hash(np.asarray(contents.data))
-                break
+        held = [x.cell_contents for x in getattr(call, "__closure__", None) or ()]
+        held.extend(getattr(call, "__defaults__", None) or ())
+        held.extend((getattr(call, "__kwdefaults__", None) or {}).values())
+        patches = [x for x in held if isinstance(x, dc.Patch)]
+        for index, patch in enumerate(patches):
+            seen[f"_input_of/{name}/{index}"] = _hash(np.asarray(patch.data))
     return seen
 
 
