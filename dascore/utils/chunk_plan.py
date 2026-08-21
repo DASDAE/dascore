@@ -1691,8 +1691,10 @@ def build_concat_plan(
     df = df.drop(columns=["_concat_units"], errors="ignore")
     # Order: partitions in order of first appearance, rows within one the
     # way the data run along the dimension (ascending by start, descending
-    # by stop; rows without an envelope, or a partition without a known
-    # step, keep their order and sort last), then cut into runs of `count`.
+    # by stop), then cut into runs of `count`. A partition without a known
+    # step (irregular values, labels) or along a new dimension cannot tell
+    # its orientation from envelopes, so it keeps its order; rows without
+    # an envelope sort last.
     within = np.zeros(len(df))
     if has_envelope:
         starts = _order_key(df[min_name])
@@ -1702,6 +1704,11 @@ def build_concat_plan(
         first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
         descending = np.nan_to_num(first_step, nan=0.0) < 0
         within = np.where(descending, -stops, starts)
+        along = np.ones(len(df), dtype=bool)
+        if "dims" in df.columns:
+            along = df["dims"].astype(str).str.split(",").apply(lambda d: name in d)
+            along = along.to_numpy(dtype=bool)
+        within = np.where(np.isnan(first_step) | ~along, 0.0, within)
         within = np.where(np.isnan(within), np.inf, within)
     perm = np.lexsort((np.arange(len(df)), within, labels))
     sorted_df = df.iloc[perm].reset_index(drop=True)
@@ -1763,13 +1770,16 @@ def build_concat_plan(
             varied = (grouped.nunique(dropna=True) > 1) & everywhere
             # a summary-only identity ("sum:") cannot vouch two coordinates
             # are equal, so such a coordinate is dropped too rather than
-            # advertised and then found to differ on loading
+            # advertised and then found to differ on loading; one member
+            # alone has nothing to differ from
             weak = (
                 sorted_df[aux_keys]
                 .astype(str)
                 .apply(lambda c: c.str.startswith("sum:"))
             )
-            varied |= weak.groupby(codes).any() & everywhere
+            several = grouped.size() > 1
+            weak_any = (weak.groupby(codes).any() & everywhere).where(several, False)
+            varied |= weak_any
             params["dropped_coords"] = {
                 int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
                 for i, row in varied.iterrows()

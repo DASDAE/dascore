@@ -1330,15 +1330,54 @@ class TestConcatenatePartitions:
             contents["latitude_min"].iloc[0]
         )
 
-    def test_string_dimension_orders_lexicographically(self):
-        """A string-valued dimension concatenates in label order."""
+    def test_string_dimension_keeps_input_order(self):
+        """Labels have no orientation, so a string dimension keeps spool order."""
         base = dc.get_example_patch()
         data = base.data[:2]
         coords = {"station": np.array(["c", "d"]), "time": base.get_coord("time")}
         later = dc.Patch(data=data, coords=coords, dims=("station", "time"))
         early = later.update_coords(station=np.array(["a", "b"]))
         out = dc.spool([later, early]).concatenate(station=None)
-        assert list(out[0].get_coord("station").values) == ["a", "b", "c", "d"]
+        assert list(out[0].get_coord("station").values) == ["c", "d", "a", "b"]
+        assert "station_step" not in out.get_contents().columns or pd.isnull(
+            out.get_contents()["station_step"].iloc[0]
+        )
+
+    def test_irregular_descending_data_keep_input_order(self):
+        """Without a step the envelopes cannot tell orientation; order is kept."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        rng = np.random.default_rng(0)
+        gaps = np.sort(rng.uniform(0.5, 1.5, n))[::-1].cumsum()
+        high = base.update_coords(distance=2 * n + 10 - gaps)
+        low = base.update_coords(distance=-gaps)
+        out = dc.spool([high, low]).concatenate(distance=None)
+        values = out[0].get_coord("distance").values
+        assert np.all(np.diff(values) < 0)
+        assert np.allclose(values[:n], high.get_coord("distance").values)
+
+    def test_new_dimension_over_auxiliary_name_keeps_input_order(self, pair):
+        """The vanishing coordinate's values do not order the new dimension."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        high = first.update_coords(sensor=("distance", np.arange(n) + 100.0))
+        low = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        out = dc.spool([high, low]).concatenate(sensor=None)
+        patch = out[0]
+        axis = patch.get_axis("sensor")
+        assert np.allclose(np.take(patch.data, 0, axis=axis), high.data)
+        assert np.allclose(np.take(patch.data, 1, axis=axis), low.data)
+
+    def test_singleton_outputs_keep_weak_coordinates(self, pair):
+        """An output of one member has nothing to conflict with, so nothing drops."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        irregular = np.arange(n, dtype=float)
+        irregular[1], irregular[2] = 2.0, 1.0
+        aux = first.update_coords(latitude=("distance", irregular))
+        out = dc.spool([aux, aux.new()]).concatenate(time=1, conflict="drop")
+        assert len(out) == 2
+        assert all("latitude" in x.coords.coord_map for x in out)
 
     def test_replanning_after_a_drop_keeps_the_drop(self, pair):
         """Concatenating again along the same dimension does not resurrect metadata."""

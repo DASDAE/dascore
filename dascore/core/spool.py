@@ -1928,7 +1928,8 @@ class Spool(NamespaceOwner):
         [patch compatibility note](`docs/notes/patch_compatibility`)),
         dimensions, the identity of every other dimension, and the
         concatenated dimension's units — and each partition's patches are
-        then joined by the requested count in the order of the dimension,
+        then joined by the requested count in the order of the dimension
+        (spool order when its step is unknown, or along a new dimension),
         contiguous or not. Patches which cannot be concatenated together
         land in separate outputs; nothing is skipped and nothing raises.
         Remaining attributes and non-dimensional coordinates must agree
