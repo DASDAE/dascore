@@ -1625,6 +1625,79 @@ class TestConcatenatePartitions:
         assert pd.isnull(gapped.get_contents()["clock_step"].iloc[0])
         assert gapped[0].get_coord("clock").step is None
 
+    def test_drop_settles_incomparable_coordinates(self, pair):
+        """A coordinate numeric on one member and text on another drops cleanly."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        numbers = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        labels = np.array([f"p{i:03d}" for i in range(n)])
+        text = other.update_coords(latitude=("distance", labels))
+        out = dc.spool([numbers, text]).concatenate(time=None, conflict="drop")
+        assert len(out) == 1
+        assert "latitude" not in out[0].coords.coord_map
+        contents = out.get_contents()
+        assert "latitude_min" not in contents.columns or pd.isnull(
+            contents["latitude_min"].iloc[0]
+        )
+
+    def test_rider_units_normalize_beside_another_kind(self, pair):
+        """A text rider elsewhere does not stop seconds meeting milliseconds."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", (ticks + nt) * 1000)).convert_units(
+            clock="ms"
+        )
+        words = np.array([f"t{i:04d}" for i in range(nt)])
+        c = first.update_attrs(tag="b").update_coords(clock=("time", words))
+        d = other.update_attrs(tag="b").update_coords(
+            clock=("time", np.array([f"u{i:04d}" for i in range(nt)]))
+        )
+        out = dc.spool([a, b, c, d]).concatenate(time=None)
+        row = out.get_contents().set_index("tag").loc["random"]
+        assert dc.get_quantity(row["clock_units"]) == dc.get_quantity("s")
+        assert row["clock_max"] == 2 * nt - 1
+        assert out.select(tag="random")[0].get_coord("clock").units == dc.get_quantity(
+            "s"
+        )
+
+    def test_keep_first_converts_the_data_it_labels(self, pair):
+        """Keeping the first data units converts the members stated otherwise."""
+        first, other = pair
+        metres = first.set_units("m")
+        km = other.set_units("km")
+        out = dc.spool([metres, km]).concatenate(time=None, conflict="keep_first")[0]
+        assert out.attrs.data_units == dc.get_quantity("m")
+        nt = first.shape[first.get_axis("time")]
+        assert np.allclose(out.data[:, nt:], km.data * 1000)
+        assert np.allclose(out.data[:, :nt], metres.data)
+
+    def test_rider_of_two_kinds_still_concatenates(self, pair):
+        """Numeric and text rider segments join, the catalog claiming no envelope."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        words = np.array([f"t{i:04d}" for i in range(nt)])
+        b = other.update_coords(clock=("time", words))
+        out = dc.spool([a, b]).concatenate(time=None)
+        contents = out.get_contents()
+        assert "clock_min" not in contents.columns or pd.isnull(
+            contents["clock_min"].iloc[0]
+        )
+        assert out[0].get_array("clock").shape == (2 * nt,)
+
+    def test_descending_rider_keeps_its_sign(self, pair):
+        """A descending rider is described as descending, not as ascending."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", (2 * nt - 1) - ticks))
+        b = other.update_coords(clock=("time", (nt - 1) - ticks))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert out.get_contents()["clock_step"].iloc[0] == -1.0
+        assert out[0].get_coord("clock").step == -1.0
+
     def test_all_null_rider_is_not_partial(self, pair):
         """A rider every member states, though all its values are NaN, stays."""
         first, other = pair

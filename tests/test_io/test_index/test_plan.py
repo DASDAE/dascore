@@ -20,6 +20,7 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.utils.chunk_plan import (
     ChunkPlan,
     _directions,
+    _normalize_numeric_units,
     _order_key,
     _sampling_group,
     _value_family,
@@ -903,6 +904,11 @@ class TestConcatPlan:
         got = _directions(steps)
         assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
         assert np.isnan(got[3]) and np.isnan(got[4])
+
+    def test_normalize_numeric_units_without_an_envelope(self):
+        """A coordinate the relation gives no envelope needs no conversion."""
+        df = pd.DataFrame({"_sensor_units": ["m", "cm"]})
+        assert _normalize_numeric_units(df, "sensor") is df
 
     def test_value_family(self):
         """Envelope values sort into four families; a missing one into none."""

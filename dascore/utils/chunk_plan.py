@@ -1866,17 +1866,22 @@ def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     rows still deserve one spelling per dimensionality.
     """
     min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    if min_name not in df.columns:
+        return df
     numeric = df[min_name].map(_value_family).to_numpy() == "number"
-    if numeric.all():
-        return _normalize_chunk_units(df, name)
     if not numeric.any():
         return df
     cols = [x for x in (min_name, max_name, step_name, f"_{name}_units") if x in df]
+    # the numeric rows are coerced from the column's kind-agnostic dtype;
+    # otherwise the chunk normalizer, which reads the dtype, would pass
+    # over rows which are numbers in an object column
     part = df.loc[numeric, :].copy()
     for col in (min_name, max_name, step_name):
         if col in part:
             part[col] = pd.to_numeric(part[col])
     part = _normalize_chunk_units(part, name)
+    if numeric.all():
+        return df.assign(**{c: part[c] for c in cols})
     out = df.copy()
     for col in cols:
         out[col] = out[col].astype(object)

@@ -1906,6 +1906,13 @@ def concatenate_planned(
         )
         raise CoordMergeError(msg)
     attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
+    if (kept := attrs.data_units) is not None:
+        # keep_first keeps one spelling of the data units; the data must
+        # then say the same thing, so members stated otherwise convert
+        patches = [
+            x if x.attrs.data_units in (None, kept) else x.convert_units(kept)
+            for x in patches
+        ]
     task = Concatenate(
         arguments=((dim, count),), check_behavior=None, conflict=conflict
     )

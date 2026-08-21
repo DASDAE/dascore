@@ -46,7 +46,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_id,
-    _normalize_chunk_units,
+    _normalize_numeric_units,
 )
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
@@ -179,7 +179,8 @@ def _coord_record_from_row(
         dtype = "timedelta64[ns]"
     else:
         lo, hi = float(lo), float(hi)
-        step = None if step is None else abs(float(step))
+        # the sign says which way the coordinate runs, as ingest records it
+        step = None if step is None else float(step)
         dtype = "float64"
     if isinstance(step, pd.Timedelta):
         step = step.to_timedelta64()
@@ -197,7 +198,8 @@ def _coord_record_from_row(
     if step is not None:
         # lo, hi, and step always share a time kind (or are all floats), but
         # ty unions the branch types and rejects the mixed combinations.
-        length = round((hi - lo) / step) + 1  # ty: ignore[unsupported-operator]
+        span = (hi - lo) / step  # ty: ignore[unsupported-operator]
+        length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = _def_key_fingerprint(key)
     summary = CoordSummary(
@@ -213,6 +215,28 @@ def _coord_record_from_row(
     return _coord_record(name, summary)
 
 
+def _extrema(grouped, how: str, skip: np.ndarray) -> np.ndarray:
+    """
+    One end of each group's envelope, None for the groups to skip.
+
+    Groups are taken one at a time when the column holds more than one
+    kind of value (a name numeric in one output and text in another),
+    which pandas cannot aggregate whole.
+    """
+    values: list = []
+    for (_, group), drop in zip(grouped, skip, strict=True):
+        if drop:
+            values.append(None)
+            continue
+        stated = group.dropna()
+        try:
+            values.append(getattr(stated, how)() if len(stated) else None)
+        except TypeError:
+            # even within the output the values do not compare
+            values.append(None)
+    return np.array(values, dtype=object)
+
+
 def _aux_coord_info(
     source_rows: pd.DataFrame,
     members: pd.DataFrame,
@@ -220,6 +244,7 @@ def _aux_coord_info(
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
+    removed: Mapping[int, set[str]] | None = None,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -236,7 +261,13 @@ def _aux_coord_info(
     A concatenation joins a rider's segments rather than merging them, so
     a rider whose members share one step and meet end to end keeps that
     step (its values still differ member by member, so not its identity).
+
+    `removed` names, per output, coordinates the output does not carry;
+    they are not described, so their members are not even aggregated —
+    an output dropped a coordinate exactly when its values could not be
+    reconciled, and reconciling them is what would raise.
     """
+    removed = removed or {}
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
         return out
@@ -263,8 +294,9 @@ def _aux_coord_info(
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
         unit_col = f"_{name}_units"
-        lows = grouped[cmin].min().to_numpy()
-        highs = grouped[cmax].max().to_numpy()
+        gone = np.array([name in removed.get(int(x), ()) for x in output_ids])
+        lows = _extrema(grouped[cmin], "min", gone)
+        highs = _extrema(grouped[cmax], "max", gone)
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
@@ -707,7 +739,7 @@ def _rider_spellings(
     for output_id, rows in joined.groupby("output_id", sort=False):
         for coord in riders:
             unit_col = f"_{coord}_units"
-            rows = _normalize_chunk_units(rows, coord)
+            rows = _normalize_numeric_units(rows, coord)
             units = rows.get(unit_col, pd.Series(dtype=object)).dropna()
             units = units[units != ""]
             quantities = [get_quantity(u) for u in set(units)]
@@ -728,7 +760,12 @@ def _rider_spellings(
     ]
     normalized = pd.concat(pieces).drop_duplicates("_patch_id").set_index("_patch_id")
     sources = sources.set_index("_patch_id")
-    sources.loc[normalized.index, cols] = normalized[cols]
+    for col in cols:
+        # through object, so a converted value cannot be refused by the
+        # column's old dtype; the column takes its dtype back afterwards
+        updated = sources[col].astype(object)
+        updated.loc[normalized.index] = normalized[col]
+        sources[col] = updated.infer_objects()
     return sources.reset_index(), chosen, incompatible
 
 
@@ -861,16 +898,19 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    aux_info = _aux_coord_info(
-        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
-    )
     # a coordinate the plan drops from an output is not advertised for it
     removed: dict[int, set[str]] = {k: set(v) for k, v in partial_drops.items()}
     for output_id, names in dropped.items():
         removed.setdefault(output_id, set()).update(names)
-    for output_id, coords in removed.items():
-        for coord in coords:
-            aux_info.get(output_id, {}).pop(coord, None)
+    aux_info = _aux_coord_info(
+        sources,
+        trims,
+        name,
+        coord_dims_map,
+        trimmed_dims,
+        concat=mode == "concat",
+        removed=removed,
+    )
     records = _output_records(outputs, token, aux_info=aux_info, removed_coords=removed)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
