@@ -437,8 +437,8 @@ class TestSelectingWithinAMembership:
         """
         spool = dc.get_example_spool("diverse_das")
         picked = spool[np.array([3, 1, 0])]
-        before = picked.get_contents()["_patch_id"].tolist()
-        assert picked.select(tag="*").get_contents()["_patch_id"].tolist() == before
+        before = picked._df["_patch_id"].tolist()
+        assert picked.select(tag="*")._df["_patch_id"].tolist() == before
 
 
 class TestGlobTranslation:

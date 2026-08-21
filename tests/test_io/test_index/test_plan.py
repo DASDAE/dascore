@@ -451,7 +451,7 @@ class TestChunkPlanAccessor:
         # with the same tag; a missing key matches, so they are one kind and
         # overlap removal keeps one copy of each span.
         assert len(plan.members) == len(spool) - 3
-        assert set(plan.members["_patch_id"]) <= set(spool.get_contents()["_patch_id"])
+        assert set(plan.members["_patch_id"]) <= set(spool._df["_patch_id"])
         # The plan rows and the assembled patches agree on the key.
         out = spool.chunk(time=None)
         keys = out.get_contents()["acquisition_key"]

@@ -171,9 +171,8 @@ class TestHiveIndexing:
         patch.io.write(tmp_path / "plain_file.h5", "dasdae")
         spool = Spool.from_directory(tmp_path).update(progress=None)
         try:
-            df = spool.get_contents()
-            assert df["_path_attrs"].isnull().all()
-            assert "cable" not in df.columns
+            assert spool._df["_path_attrs"].isnull().all()
+            assert "cable" not in spool.get_contents().columns
         finally:
             spool.indexer.close()
 
@@ -295,7 +294,7 @@ class TestMoveDetection:
 
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
         """Renaming a partition directory never re-reads file contents."""
-        df_before = hive_spool.get_contents()
+        ids_before = list(hive_spool._df["_patch_id"])
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
@@ -305,7 +304,7 @@ class TestMoveDetection:
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
-        assert list(df["_patch_id"]) == list(df_before["_patch_id"])
+        assert list(updated._df["_patch_id"]) == ids_before
         assert updated[0].attrs.station == "Q"
 
     def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):
@@ -433,9 +432,9 @@ class TestEdgeCases:
         _stamp_index_version(tmp_path, _SOURCE_NAME_INDEX_VERSION)
         reopened = Spool.from_directory(tmp_path).update(progress=None)
         try:
-            df = reopened.get_contents()
-            assert "cable" not in df.columns
-            assert json.loads(df["_path_attrs"].iloc[0]) == {"station": "A"}
+            assert "cable" not in reopened.get_contents().columns
+            stored = reopened._df["_path_attrs"].iloc[0]
+            assert json.loads(stored) == {"station": "A"}
         finally:
             reopened.indexer.close()
 
@@ -462,7 +461,7 @@ class TestEdgeCases:
         (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(rand.tobytes())
         spool = Spool.from_directory(tmp_path).update(progress=None)
         try:
-            stored = spool.get_contents()["_path_attrs"].iloc[0]
+            stored = spool._df["_path_attrs"].iloc[0]
             assert json.loads(stored) == {"cable": "north"}
         finally:
             spool.indexer.close()

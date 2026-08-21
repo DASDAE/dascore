@@ -98,7 +98,7 @@ from dascore.utils.patch import (
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 from dascore.utils.pd import (
     drop_selector_names,
-    present_units_columns,
+    present_columns,
     requested_selector_names,
     resolve_selector_namespaces,
     selector_spec_names,
@@ -237,15 +237,20 @@ class Spool(NamespaceOwner):
         changes the spool. Use ``frame.copy(deep=True)`` when an eager
         block copy is needed.
 
+        The columns the index keeps for itself are not part of the
+        frame: everything returned is public, so no column name starts
+        with an underscore.
+
         Examples
         --------
         >>> import dascore as dc
         >>> spool = dc.get_example_spool("random_das")
         >>> df = spool.get_contents()
+        >>> assert not [x for x in df.columns if str(x).startswith("_")]
         """
         # Shallow: copy-on-write is always on from pandas 3, so the
         # caller's frame detaches from the cached one on its first write.
-        return present_units_columns(self._df.copy(deep=False))
+        return present_columns(self._df.copy(deep=False))
 
     def __len__(self) -> int:
         """Return len of spool."""
@@ -1723,7 +1728,7 @@ class Spool(NamespaceOwner):
             group=group,
             missing_dim=missing_dim,
         )
-        return present_units_columns(out)
+        return present_columns(out)
 
     def get_coverage(
         self,
@@ -1797,7 +1802,7 @@ class Spool(NamespaceOwner):
             group=group,
             missing_dim=missing_dim,
         )
-        return present_units_columns(out)
+        return present_columns(out)
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(

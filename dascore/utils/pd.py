@@ -69,6 +69,22 @@ def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=renames) if renames else df
 
 
+def present_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return the public view of a flat relation.
+
+    The index carries private columns the spool needs and a caller does
+    not: the row id, per-coordinate identity keys, the element dtype,
+    the raw path attrs. A leading underscore means private everywhere
+    else in DASCore, so a frame handed out publicly should not carry
+    them. The unit columns are the exception and are renamed first, so
+    ``_time_units`` leaves as ``time_units`` rather than being dropped.
+    """
+    df = present_units_columns(df)
+    private = [col for col in df.columns if str(col).startswith("_")]
+    return df.drop(columns=private) if private else df
+
+
 @cache
 def get_regex(seed_str):
     """Compile, and cache regex for str queries."""
