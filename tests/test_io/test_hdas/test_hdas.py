@@ -58,6 +58,10 @@ class TestHDASV1:
             "strain/s"
         )
 
+    def test_v2_does_not_claim(self, hdas_v1_path):
+        """The V2 reader must not claim a V1 file."""
+        assert not HDASV2().get_format(hdas_v1_path)
+
 
 class TestHDASV2:
     """Tests for the attr-timed (hdas_header) variant."""
@@ -77,6 +81,15 @@ class TestHDASV2:
         """V2 data is (distance, time) with units unset."""
         assert hdas_v2_patch.dims == ("distance", "time")
         assert not hdas_v2_patch.attrs.data_units
+
+    def test_v1_does_not_claim(self, hdas_v2_path):
+        """The V1 reader must not claim a V2 file.
+
+        The common contract cannot say this: HDASV2 subclasses HDASV1, so
+        test_all_other_files_arent_format skips the V2 files while it is
+        testing V1.
+        """
+        assert not HDASV1().get_format(hdas_v2_path)
 
 
 class TestHDASDetection:
