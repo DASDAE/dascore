@@ -107,10 +107,12 @@ class TestTauP:
         """Ensures correct slowness and tau values are computed"""
         pytest.importorskip("numba")
         test_vels = np.linspace(1000, 3000, 101)
-        # Small enough to be quick, large enough that the winning slowness
-        # still stands clear of its neighbours in every case below.
-        nch = 200
-        nt = 600
+        # The assertions below allow 20 m/s, which is exactly one step of
+        # test_vels, so argmax has to land on the right bin outright. At this
+        # aperture the runner-up peaks at 0.73 of the winner across the four
+        # cases; at 200x600 it reaches 0.996, close enough to tie.
+        nch = 400
+        nt = 1000
 
         # positive slope
         vel = 1500

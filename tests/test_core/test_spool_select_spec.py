@@ -33,11 +33,13 @@ def spool(request, tmp_path_factory):
     parity net proving one selector engine serves identity and
     restructured spools alike.
     """
-    # A tenth of the default patches' pixels, at a step which keeps each of
-    # them 8 seconds long: the specs below select windows in seconds, and a
-    # window narrower than one patch is what several of them are about.
+    # 8,000 samples per patch rather than 600,000, at a step which keeps
+    # each of them 8 seconds long: the specs select windows in seconds, and
+    # a window narrower than one patch is what several of them are about.
+    # Distance stays wider than the 10-sample window TestSamples asks for,
+    # or that trim would be a no-op.
     base = dc.get_example_spool(
-        "random_das", shape=(10, 200), time_step=dc.to_timedelta64(0.04)
+        "random_das", shape=(40, 200), time_step=dc.to_timedelta64(0.04)
     )
     if request.param.startswith("memory"):
         out = dc.spool(list(base))
@@ -163,9 +165,10 @@ class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
 
     def test_length_preserved(self, spool):
-        """The spool keeps every patch."""
+        """The spool keeps every patch, and the window is a real trim."""
         out = spool.select(distance=(0, 10), samples=True)
         assert len(out) == len(spool)
+        assert len(spool[0].get_coord("distance")) > 10
 
     def test_patch_trimmed_on_load(self, spool):
         """Loaded patches carry the sample trim."""

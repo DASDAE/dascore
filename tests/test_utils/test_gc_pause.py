@@ -92,11 +92,15 @@ class TestDeadlockProperty:
 
         server = threading.Thread(target=loop_thread, daemon=True)
         server.start()
+        # A collection has to be due for the pause to be what prevents it.
+        # Counting on the default gen-0 threshold means counting rounds
+        # against a number CPython is free to change -- and 8 rounds of 200
+        # under the current 2000 never reaches it, so the test would pass
+        # whether or not gc was paused.
+        threshold = gc.get_threshold()
+        gc.set_threshold(100)
         pause_gc()
         try:
-            # Eight rounds of 200 allocations, so the round which would
-            # collect (the threshold is 2000 on 3.13) is well inside the
-            # loop rather than the last one.
             for _ in range(8):
                 with phil:  # h5py holds its lock across the fetch
                     request.release()
@@ -104,6 +108,7 @@ class TestDeadlockProperty:
         finally:
             stop.set()
             resume_gc()
+            gc.set_threshold(*threshold)
             server.join(timeout=5)
         gc.collect()
 

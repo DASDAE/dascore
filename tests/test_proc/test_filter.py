@@ -228,6 +228,18 @@ class TestSobelFilter:
         assert not np.any(pd.isnull(out.data))
 
 
+@pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
+def test_filters_validate_their_dims(random_patch, name):
+    """Each filter routes its dimension arguments through the shared check.
+
+    pass_filter has its own check and its own error (TestPassFilterChecks),
+    so it cannot stand in for these three.
+    """
+    kwargs = {"savgol_filter": {"polyorder": 2}, "notch_filter": {"q": 30}}
+    with pytest.raises(ParameterError, match="You must"):
+        getattr(random_patch, name)(**kwargs.get(name, {}))
+
+
 class TestMedianFilter:
     """Simple tests on median filter."""
 

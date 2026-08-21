@@ -23,35 +23,39 @@ def patch_ones(random_patch):
     return patch
 
 
-# Three shapes rather than all thirteen: the taper machinery is what these
-# tests are about, and scipy owns the windows themselves (that every name in
-# the table reaches one is asserted in test_every_window_is_a_function).
+# Three shapes run through taper, rather than all thirteen; the window each
+# name resolves to is checked for every entry in test_every_window_tapers.
 TAPER_WINDOWS = ("hann", "triang", "blackmanharris")
 
 
 @pytest.fixture(scope="session", params=TAPER_WINDOWS)
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
-    if "boxcar" in str(request.param):
-        pytest.skip("boxcar doesn't actually apply taper.")
     # first get a patch with all ones for easy testing
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
 
 
-def test_every_window_resolves_to_a_scipy_window():
-    """Each name in the table reaches a window scipy actually has.
+def test_every_window_tapers():
+    """Each name in the table reaches the window scipy has for it.
 
-    The entries are lazy imports, so a misspelled scipy symbol is not
-    found until one is called; calling each for a short window is what
-    makes this fail rather than the taper tests below, which only run
-    three of them.
+    The entries are lazy imports, and two of them are aliases (`cos` for
+    hann, `ramp` for triang), so a name pointing at the wrong scipy symbol
+    resolves fine and returns an array of the right length. Asserting the
+    shape of the window is what catches that: every one of them tapers to
+    near zero at both ends, hamming's 0.08 being the highest, and boxcar
+    is the one which does not taper at all.
     """
     assert set(TAPER_WINDOWS) <= set(WINDOW_FUNCTIONS)
     for name, func in WINDOW_FUNCTIONS.items():
-        window = np.asarray(func(8))
-        assert window.shape == (8,), name
+        window = np.asarray(func(64))
+        assert window.shape == (64,), name
+        assert np.max(window) <= 1.0 + 1e-9, name
+        if name == "boxcar":
+            assert np.all(window == 1.0), name
+        else:
+            assert window[0] < 0.09 and window[-1] < 0.09, name
 
 
 def _get_start_end_indices(patch, dim):

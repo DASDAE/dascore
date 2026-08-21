@@ -160,10 +160,9 @@ def coord(request) -> BaseCoord:
 def long_coord(coord) -> BaseCoord:
     """The coord meta-fixture, for tests which need one longer than 7.
 
-    Every coord in COORDS is at least 100 long, so this is `coord` under
-    the name the tests which need the length use. Parametrizing it over
-    COORDS as well ran each of those tests once per pair of coords while
-    still only ever seeing twelve.
+    Every coord in COORDS is at least 100 long. Do not add `params=COORDS`
+    here: `coord` is already parametrized over them, so a second pass runs
+    each test once per pair of coords to see the same twelve.
     """
     assert len(coord) > 7
     return coord

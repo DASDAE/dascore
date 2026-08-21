@@ -55,11 +55,17 @@ REMOTE_FORMATS = {
     ("MSEED", "2"),
     ("NETCDF_CF", "1.8"),
 }
+# One file each: what is under test is the streaming path, and a second file
+# of the same format goes down the same one.
 REMOTE_COMMON_IO_READ_TESTS = {
     io: next(iter(iterate(fetch_names)))
     for io, fetch_names in COMMON_IO_READ_TESTS.items()
     if (io.name, io.version) in REMOTE_FORMATS
 }
+# A rename or a version bump would otherwise drop that format out of the
+# matrix silently, leaving a shorter run and no failure.
+_matched = {(io.name, io.version) for io in REMOTE_COMMON_IO_READ_TESTS}
+assert _matched == REMOTE_FORMATS, f"no reader for {sorted(REMOTE_FORMATS - _matched)}"
 REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
 REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)
 

@@ -74,8 +74,8 @@ def directory_spool_redundant_index(random_spool, tmp_path_factory):
     path = Path(tmp_path_factory.mktemp("redundant_index_spool"))
     dascore.examples.spool_to_directory(random_spool, path, "dasdae")
     spool = dc.spool(path).update()
-    # Touch, then re-index: the row count is the same after one round as
-    # after twelve, so one is what this needs.
+    # Touch, then re-index: one round is what puts an already-indexed file
+    # through the indexer again, which is the state under test.
     for file_path in path.glob("*"):
         file_path.touch()
     return spool.update()
@@ -328,8 +328,8 @@ class TestDirectoryIndex:
 
     def test_nested_directories(self, random_spool, tmp_path_factory):
         """Ensure files in nested directories work up to 3 levels."""
-        # One patch per level: what is under test is the walk, and the
-        # diverse spool's 20-odd patches only made the writing slower.
+        # One patch per level: what is under test is the walk, not how many
+        # files each level holds.
         sp_len = len(random_spool)
         num = 3
         spools = [
@@ -466,11 +466,15 @@ class TestBasicChunk:
             # samples shorter than what was asked for. Maybe revisit this?
             assert diff <= 2 * (time_coord.step / ONE_SECOND)
 
-    def test_chunk_redundant_index(self, directory_spool_redundant_index):
+    def test_chunk_redundant_index(self, directory_spool_redundant_index, random_spool):
         """Ensure redundant indices are handled effectively with chunking"""
-        spool = directory_spool_redundant_index.chunk(time=None)
-        patch = spool[0]
-        assert isinstance(patch, dc.Patch)
+        spool = directory_spool_redundant_index
+        # Re-indexing unchanged files adds no rows, so the contiguous
+        # patches still merge into one rather than into one per index pass.
+        assert len(spool.get_contents()) == len(random_spool)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        assert isinstance(merged[0], dc.Patch)
 
 
 class TestGetContents:

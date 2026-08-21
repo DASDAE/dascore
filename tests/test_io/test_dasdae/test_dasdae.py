@@ -53,15 +53,6 @@ def written_dascore_v1_random(random_patch, tmp_path_factory):
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dascore_v1_random_copy(written_dascore_v1_random, tmp_path_factory):
-    """Copy the previous DASDAE file for compatibility-oriented tests."""
-    new_path = tmp_path_factory.mktemp("dasdae_test_path") / "copied_dasdae.h5"
-    shutil.copy(written_dascore_v1_random, new_path)
-    return new_path
-
-
-@pytest.fixture(scope="class")
-@register_func(WRITTEN_FILES)
 def written_dascore_v1_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
     path = tmp_path_factory.mktemp("empty_patch") / "empty.hdf5"
@@ -80,12 +71,6 @@ def written_dascore_correlate(tmp_path_factory, random_patch):
     cc_pa = dft_pa.correlate(distance=[0, 1, 2], samples=True)
     dc.write(cc_pa, path, "DASDAE", file_version="1")
     return path
-
-
-@pytest.fixture(params=WRITTEN_FILES, scope="class")
-def dasdae_v1_file_path(request):
-    """Gatherer fixture to iterate through each written dasdae format."""
-    return request.getfixturevalue(request.param)
 
 
 class TestWriteDASDAE:

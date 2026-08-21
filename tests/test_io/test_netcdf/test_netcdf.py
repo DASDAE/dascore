@@ -694,15 +694,6 @@ class TestNetCDFEdgeCases:
         return dc.spool([patch1, patch2])
 
     @pytest.fixture
-    def invalid_hdf5_file(self, tmp_path):
-        """Create an invalid HDF5 file (not NetCDF)."""
-        path = tmp_path / "invalid.nc"
-        with h5py.File(path, "w") as h5file:
-            rng = np.random.default_rng()
-            h5file.create_dataset("random_data", data=rng.standard_normal((100, 50)))
-        return path
-
-    @pytest.fixture
     def compressed_netcdf_file(self, tmp_path):
         """Create a compressed NetCDF file for testing."""
         _require_xarray_netcdf_engine()

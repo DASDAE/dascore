@@ -193,17 +193,6 @@ class TestSegmentPlan:
         assert plan.outputs["time_step"].iloc[0] == time.step
 
 
-class TestMissingDim:
-    """Spec section 7 (D2): patches lacking the chunk dim."""
-
-    @pytest.fixture()
-    def flat_with_null(self, random_flat):
-        """A flat relation with one null time envelope."""
-        df = random_flat.copy()
-        df.loc[df.index[0], ["time_min", "time_max"]] = (pd.NaT, pd.NaT)
-        return df
-
-
 class TestConflict:
     """Spec 2.5: attr policing within a partition."""
 

@@ -4,7 +4,6 @@ Tests for dascore's import behavior.
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 from textwrap import dedent
@@ -34,22 +33,15 @@ class TestLazyImports:
         """Walk one clean interpreter from a bare import through to viz.
 
         Every check needs a process which has not yet imported what the
-        check before it pulls in, so they are ordered rather than split
-        across processes: each subprocess costs more than a second of
-        interpreter startup, and this used to be eight of them.
+        check before it pulls in, so they run in order inside one
+        subprocess rather than one process each.
         """
-        has_numba = importlib.util.find_spec("numba") is not None
-        code = dedent(f"""
+        code = dedent("""
             import sys
             import dascore
 
             for name in ("matplotlib", "scipy.signal", "numba"):
                 assert name not in sys.modules, name + " imported by dascore"
-
-            # The kernels import without numba; the assertion is what needs it.
-            if {has_numba}:
-                import dascore.transform._kurtosis_kernels
-                assert "numba" in sys.modules, "jit kernels left numba unimported"
 
             from dascore.utils.imports import lazy_import
 
@@ -71,6 +63,23 @@ class TestLazyImports:
             assert callable(dascore.viz.waterfall), "viz attribute hook did not work"
             assert "matplotlib" in sys.modules, "viz left matplotlib unimported"
         """)
+        _run_snippet(code)
+
+    @pytest.mark.concurrency
+    def test_jit_kernels_import_numba(self):
+        """The jit kernel modules pull numba in when they are imported.
+
+        Its own subprocess, and its own importorskip: folded into the test
+        above it would report as passed on a job without numba installed,
+        where what it says is nothing at all.
+        """
+        pytest.importorskip("numba")
+        code = (
+            "import sys, dascore; "
+            "assert 'numba' not in sys.modules; "
+            "import dascore.transform._kurtosis_kernels; "
+            "assert 'numba' in sys.modules"
+        )
         _run_snippet(code)
 
     def test_lazy_import_proxy_forwards_calls_and_attrs(self):

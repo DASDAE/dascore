@@ -1218,16 +1218,9 @@ class TestSizeChunk:
         }
         return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
-    @pytest.fixture(scope="class")
-    def mixed_dtype_spool(self):
-        """Two contiguous patches whose element types differ."""
-        start = np.datetime64("2020-01-01T00:00:00")
-        second = start + np.timedelta64(1600, "ms")
-        return dc.spool([self._make("float64", start), self._make("float32", second)])
-
     @pytest.mark.parametrize(
-        # One of each: a decimal unit and a binary one, at a size which
-        # splits the spool and a size which does not.
+        # One decimal unit and one binary one; the four sizes all split the
+        # spool, so what the other two added was the arithmetic.
         "size",
         ("1 MiB", "500 kB"),
         ids=lambda x: x.replace(" ", ""),
